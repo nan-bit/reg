@@ -17,6 +17,10 @@ format is part of the argument rather than an implementation detail:
   trajectory recorded twice can differ in bytes. A benchmark measured against a
   file whose size depends on which digits happened to come out is not a
   benchmark. Same frames in, byte-identical file out.
+* **An optional `#` provenance block above the header**, written by the producer
+  and skipped by the reader (`COMMENT_PREFIX`, `read_comments`). docs/lossiness.md
+  retains the run's provenance once per artifact, and a sidecar file is
+  provenance that can be separated from the artifact it describes.
 
 LAYER
 -----
@@ -38,7 +42,8 @@ from __future__ import annotations
 import csv
 import math
 import os
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
+from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -59,6 +64,17 @@ FLOAT_PRECISION = 6
 # the machine that produced a run and the machine auditing it.
 LINE_TERMINATOR = "\n"
 ENCODING = "utf-8"
+
+# A stream may carry a block of provenance lines above the header, each marked
+# with this prefix. docs/lossiness.md retains "the run's provenance — scenario
+# name, seed, ... once per artifact. Determinism is only checkable if the
+# artifact says what produced it", and a sidecar file is provenance that can be
+# separated from the thing it describes. CSV has no comment convention, so this
+# is one, and it lives here rather than in the producer because the reader has
+# to agree with the writer about it or the artifact stops being readable by the
+# codec that wrote it. Only the leading block is treated as comments; after the
+# header every line is a row.
+COMMENT_PREFIX = "#"
 
 _HUMAN_COLUMNS = ("human_x", "human_y", "human_vx", "human_vy")
 
@@ -93,13 +109,23 @@ def expected_header(n_joints: int, n_obstacles: int) -> list[str]:
     return columns
 
 
-def write_frames(frames: Iterable[StateFrame], path: str | os.PathLike[str]) -> Path:
+def write_frames(
+    frames: Iterable[StateFrame],
+    path: str | os.PathLike[str],
+    *,
+    comments: Sequence[str] = (),
+) -> Path:
     """Write a state stream to CSV. Returns the path, for `read_frames(write_frames(x))`.
 
     The schema comes from the frames: joint count and obstacle count are read off
     the first frame and every later frame must agree. A stream whose shape changes
     mid-run cannot be described by one header, and quietly padding it would put
     numbers under column names they do not belong to.
+
+    `comments` is written above the header as a `#`-prefixed block — the run's
+    provenance, and nothing that varies between two runs of the same command. A
+    wall-clock time or an output path in here would make "same seed, same bytes"
+    a statement about the clock instead of about the simulator.
     """
     frames = tuple(frames)
     if not frames:
@@ -114,9 +140,13 @@ def write_frames(frames: Iterable[StateFrame], path: str | os.PathLike[str]) -> 
     header = expected_header(n_joints, n_obstacles)
 
     rows = [_row(frame, index, n_joints, n_obstacles) for index, frame in enumerate(frames)]
+    # Built before the file is opened, so a rejected comment leaves no partial
+    # artifact behind — same posture as the row checks above.
+    banner = [_comment(text, index) for index, text in enumerate(comments)]
 
     path = Path(path)
     with path.open("w", newline="", encoding=ENCODING) as handle:
+        handle.writelines(banner)
         writer = csv.writer(handle, lineterminator=LINE_TERMINATOR)
         writer.writerow(header)
         writer.writerows(rows)
@@ -128,21 +158,80 @@ def read_frames(path: str | os.PathLike[str]) -> Iterator[StateFrame]:
 
     Eagerly on purpose: a generator that only rejects a bad header once someone
     iterates it hands the caller a wrong answer at a distance from the cause.
+
+    A leading `#` block is provenance and is skipped; `read_comments` is how you
+    get at it. Skipping it here is not leniency — the block is part of the format
+    (see `COMMENT_PREFIX`), and line numbers in errors below still refer to lines
+    in the file, not to lines after the block.
     """
     handle = Path(path).open("r", newline="", encoding=ENCODING)
     try:
-        reader = csv.reader(handle)
-        header = next(reader, None)
-        if header is None:
+        n_comments, first = _skip_comments(handle)
+        if first is None:
             raise StreamFormatError(
                 f"{path}: file is empty. An empty file is a stream that could "
                 "not be read, not a stream of zero frames."
+                if n_comments == 0
+                else f"{path}: {n_comments} provenance line(s) and no header row. "
+                "A file that says what produced it but carries no stream is a "
+                "stream that could not be read, not a stream of zero frames."
             )
+        reader = csv.reader(chain([first], handle))
+        header = next(reader, None)
+        if header is None:  # pragma: no cover - `first` is a line, so there is one
+            raise StreamFormatError(f"{path}: file is empty.")
         n_joints, n_obstacles = _schema_from_header(header, path)
     except BaseException:
         handle.close()
         raise
-    return _iter_frames(handle, reader, n_joints, n_obstacles, path)
+    return _iter_frames(handle, reader, n_joints, n_obstacles, path, n_comments)
+
+
+def read_comments(path: str | os.PathLike[str]) -> list[str]:
+    """The provenance block above the header, prefixes stripped. Order preserved.
+
+    An empty list means the file states nothing about what produced it. That is a
+    could-not-evaluate for every question about provenance — in particular it does
+    not mean the run used whatever seed the caller would have used.
+    """
+    out: list[str] = []
+    with Path(path).open("r", newline="", encoding=ENCODING) as handle:
+        for line in handle:
+            if not line.startswith(COMMENT_PREFIX):
+                break
+            out.append(_uncomment(line))
+    return out
+
+
+def _skip_comments(handle) -> tuple[int, str | None]:
+    """Consume the leading comment block. Returns (how many, first line after)."""
+    n_comments = 0
+    for line in handle:
+        if line.startswith(COMMENT_PREFIX):
+            n_comments += 1
+            continue
+        return n_comments, line
+    return n_comments, None
+
+
+def _comment(text: str, index: int) -> str:
+    if not isinstance(text, str):
+        raise StreamFormatError(
+            f"comment {index} is a {type(text).__name__}, not a str: {text!r}"
+        )
+    if "\n" in text or "\r" in text:
+        raise StreamFormatError(
+            f"comment {index} contains a line break: {text!r}. It would be written "
+            "as two lines, the second of which is neither a comment nor a valid "
+            "row — a file that no longer parses as the stream it claims to be."
+        )
+    return f"{COMMENT_PREFIX} {text}{LINE_TERMINATOR}"
+
+
+def _uncomment(line: str) -> str:
+    """Exact inverse of `_comment`: drop the prefix, one space, and the newline."""
+    text = line[len(COMMENT_PREFIX) :].rstrip("\r\n")
+    return text[1:] if text.startswith(" ") else text
 
 
 def _schema_from_header(
@@ -196,11 +285,16 @@ def _iter_frames(
     n_joints: int,
     n_obstacles: int,
     path: str | os.PathLike[str],
+    line_offset: int = 0,
 ) -> Iterator[StateFrame]:
     width = 1 + 2 * n_joints + len(_HUMAN_COLUMNS) + n_obstacles * len(_OBSTACLE_COLUMNS)
     try:
         for row in reader:
-            line = reader.line_num
+            # The reader never saw the provenance block, so its line numbers are
+            # short by exactly that many. An error that names a line the reader
+            # counted rather than a line of the file sends someone to the wrong
+            # row of a 300-row artifact.
+            line = reader.line_num + line_offset
             if len(row) != width:
                 raise StreamFormatError(
                     f"{path} line {line}: {len(row)} field(s), header declares "

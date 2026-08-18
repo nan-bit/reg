@@ -13,3 +13,13 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .DS_Store
+
+# Virtualenvs. The unattended writer builds one inside its worktree to run the
+# test suite — 205 MB of it — and a `git add -A` would commit the lot into a
+# public repo, where it is in history from then on. Ignored here rather than left
+# to each agent to notice, because "remember not to commit it" is not a mechanism.
+.venv/
+venv/
+env/
+ENV/
+.tox/

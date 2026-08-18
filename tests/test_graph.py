@@ -16,6 +16,17 @@ compressor that collapses everything also passes the test above; what
 distinguishes a discard from a lossy mess is that a relationship which moved by
 more than `DISTANCE_TOL_M` is *never* folded into the previous interval.
 
+WHAT THAT TEST DOES NOT COVER, AND WHERE THE REST OF IT IS
+----------------------------------------------------------
+It builds from a robot holding still, so the envelope is one polygon for the
+whole run and it says nothing about the case issue #28 measured: an arm in
+continuous motion, where every frame is a material envelope change and the
+geometry was stored per frame. `test_geometry_rows_are_far_fewer_than_frames_in_a
+_moving_scenario` measures that case, and
+`test_envelope_at_recomputes_the_stored_polygon_exactly` is the gate on the
+discard being lossless — everything else in the retention section is bookkeeping
+around those two.
+
 Envelopes are computed with deliberately coarse parameters throughout (`_FAST`).
 Cost is linear in `n_samples * horizon / substep_dt` and these tests are about
 interval bookkeeping, not about envelope fidelity — `tests/test_envelope.py` owns
@@ -26,6 +37,7 @@ depends on a default staying put.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -38,10 +50,13 @@ from reg import graph, store
 from reg.envelope import compute_envelope
 from reg.graph import HUMAN_ENTITY_ID, GraphBuildError, build
 from reg.kinematics import link_polygons
+from reg.scenarios import SCENARIOS
+from reg.sim import simulate
 from reg.stream import write_frames
 from reg.tolerances import (
     DISTANCE_TOL_M,
     distance_bucket,
+    quantize_area,
     quantize_time,
     simplify_geometry,
 )
@@ -443,6 +458,21 @@ def test_two_builds_of_one_stream_are_byte_identical(tmp_path: Path) -> None:
     assert a.read_bytes() == b.read_bytes()
 
 
+def test_two_builds_of_a_moving_stream_are_byte_identical(tmp_path: Path) -> None:
+    """The held-still stream never exercises the writes `GEOMETRY_RETENTION`
+    added: an envelope row written without a polygon and updated with one a
+    frame later. An `UPDATE` lands differently in a SQLite file than an
+    `INSERT` does, so the determinism claim has to be made against a stream that
+    does both."""
+    inside, outside = (0.55, 0.0), (2.4, 0.0)
+    frames = _creep_frames(12, lambda i: inside if 3 <= i <= 6 else outside)
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    a, b = tmp_path / "a.sqlite", tmp_path / "b.sqlite"
+    _build(csv, a)
+    _build(csv, b)
+    assert a.read_bytes() == b.read_bytes()
+
+
 def test_building_over_an_existing_artifact_replaces_it(tmp_path: Path) -> None:
     """Merging into a stale schema would describe two runs at once."""
     out = tmp_path / "out.sqlite"
@@ -572,17 +602,18 @@ def seeded(tmp_path: Path):
     """A store with one node of each kind, so edge tests have endpoints."""
     conn = store.create(tmp_path / "store.sqlite")
     store.insert_timestep(conn, "ts_0", 0, 0.0)
+    store.insert_robot_config(conn, "cfg_0", "0.000000,0.000000", "0.000000,0.000000")
     store.insert_envelope(
         conn,
         "env_0",
         envelope_hash="abc",
         area=0.25,
         geometry=Point(0.0, 0.0).buffer(0.5),
+        config_id="cfg_0",
         horizon=0.2,
         source="computed",
     )
     store.insert_entity(conn, "obs_a", "crate", geometry=Point(2.0, 0.0).buffer(0.25))
-    store.insert_robot_config(conn, "cfg_0", "0.000000,0.000000", "0.000000,0.000000")
     yield conn
     conn.close()
 
@@ -686,9 +717,434 @@ def test_an_out_of_vocabulary_envelope_source_is_refused(seeded) -> None:
             envelope_hash="def",
             area=0.25,
             geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id="cfg_0",
             horizon=0.2,
             source="guessed",
         )
+
+
+# --------------------------------------------------------------------------
+# GEOMETRY_RETENTION: envelope geometry is stored where it is evidence and
+# recomputed everywhere else (issue #28, docs/lossiness.md Discarded #9).
+# --------------------------------------------------------------------------
+
+
+def _envelope_rows(path: Path) -> list[sqlite3.Row]:
+    conn = store.connect(path)
+    try:
+        return list(conn.execute("SELECT * FROM envelope").fetchall())
+    finally:
+        conn.close()
+
+
+def _frames_with_geometry(path: Path) -> set[int]:
+    """Frame ids whose envelope row holds a polygon, via the HAS_ENVELOPE edges.
+
+    Through the edges rather than off the `envelope` table's row order, because
+    the retention rule is stated in terms of *frames* and the correspondence
+    between a frame and an envelope row is exactly what the edges record.
+    """
+    conn = store.connect(path)
+    try:
+        rows = conn.execute(
+            "SELECT edge.t_start AS t_start, e.geometry_wkb AS geometry_wkb "
+            "FROM edge JOIN envelope e ON e.envelope_id = edge.dst_id "
+            "WHERE edge.type = 'HAS_ENVELOPE' ORDER BY edge.t_start"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        int(round(row["t_start"] / DT))
+        for row in rows
+        if row["geometry_wkb"] is not None
+    }
+
+
+def _creep_frames(n_frames: int, human_at: Callable[[int], tuple[float, float]]):
+    """A stream whose envelope changes materially every frame.
+
+    The arm creeps by 1e-6 rad per frame — above the raw stream's own float
+    precision and far above the nanometre `envelope_hash` resolves, so every
+    frame is a distinct envelope and therefore a distinct `envelope` row. Without
+    that, a single row would serve every frame and nothing below would be
+    measuring per-frame retention at all.
+    """
+    return [
+        _frame(i, human_at(i), q=(1e-6 * i, 0.0), qd=(0.0, 0.0))
+        for i in range(n_frames)
+    ]
+
+
+def test_geometry_is_stored_only_at_transitions_and_the_ends(tmp_path: Path) -> None:
+    """The rule, asserted as the exact set of frames it names.
+
+    `reg.graph.GEOMETRY_RETENTION`: the first and last frame of the run, and
+    every frame at which an `INTERSECTS` or `CONTACT` relationship begins or
+    ceases to hold — `test_an_overlap_that_moves_a_quantum_is_not_a_transition`
+    is the other half of that distinction and the reason it is drawn there. The
+    human here is inside the envelope for frames 3-6 and clear of it otherwise,
+    so the transitions are 3 (start) and 6 (last instant it held), and the ends
+    are 0 and 11. Every other frame's envelope row must hold a NULL geometry —
+    an assertion on the *set* rather than on a count, because a rule that kept
+    the right number of polygons at the wrong frames would answer an incident
+    report about a different moment.
+    """
+    n_frames = 12
+    inside, outside = (0.55, 0.0), (2.4, 0.0)
+    frames = _creep_frames(n_frames, lambda i: inside if 3 <= i <= 6 else outside)
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    out = tmp_path / "creep.sqlite"
+    _build(csv, out)
+
+    intersects = _edges(out, edge_type="INTERSECTS", dst_id=HUMAN_ENTITY_ID)
+    assert len(intersects) == 1, (
+        "precondition failed: the human was expected to intersect the envelope "
+        "over exactly one interval, so that the transition frames are 3 and 6."
+    )
+    assert intersects[0]["t_start"] == pytest.approx(quantize_time(3 * DT))
+    assert intersects[0]["t_end"] == pytest.approx(quantize_time(6 * DT))
+
+    assert len(_envelope_rows(out)) == n_frames, (
+        "precondition failed: the envelope did not change every frame, so the "
+        "rows do not correspond to frames one for one."
+    )
+    assert _frames_with_geometry(out) == {0, 3, 6, n_frames - 1}
+
+
+def test_an_overlap_that_moves_a_quantum_is_not_a_transition(tmp_path: Path) -> None:
+    """The rule counts *relationships* starting and ending, not edge rows.
+
+    An `INTERSECTS` edge also closes and reopens whenever the overlap area moves
+    a quantum, and the human here never leaves the envelope while doing exactly
+    that. Counting those endpoints is the reading that keeps geometry on half of
+    `sustained_overlap` (150 of 301 frames, measured — `reg.graph`); counting the
+    relationship's keeps it on the two ends of the run, which is what this
+    asserts. Without this test the two readings are indistinguishable on any
+    fixture where the overlap happens to hold steady.
+    """
+    n_frames = 12
+    frames = _creep_frames(n_frames, lambda i: (0.95 - 0.03 * i, 0.0))
+    csv = _write_stream(tmp_path / "slide.csv", frames)
+    out = tmp_path / "slide.sqlite"
+    _build(csv, out)
+
+    rows = _edges(out, edge_type="INTERSECTS", dst_id=HUMAN_ENTITY_ID)
+    assert len(rows) > 2, (
+        "precondition failed: the overlap area did not move enough quanta to "
+        "reopen the INTERSECTS edge, so this test cannot distinguish the two "
+        "readings of 'an edge starts or ends'."
+    )
+    assert rows[0]["t_start"] == pytest.approx(0.0), (
+        "precondition failed: the human was expected to be inside the envelope "
+        "from the first frame, so that no relationship begins mid-run."
+    )
+    assert max(r["t_end"] for r in rows) == pytest.approx(
+        quantize_time((n_frames - 1) * DT)
+    ), "precondition failed: the relationship ceased to hold before the run ended"
+
+    assert _frames_with_geometry(out) == {0, n_frames - 1}
+
+
+def test_envelope_scalars_stay_per_frame_while_geometry_does_not(
+    tmp_path: Path,
+) -> None:
+    """The half of the rule that is easy to lose: the scalars are not discarded.
+
+    `envelope_hash`, `area`, `horizon` and `source` are what queries read and
+    they cost a few dozen bytes; deleting them along with the polygon would make
+    the artifact smaller and answerless.
+    """
+    n_frames = 12
+    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    csv = _write_stream(tmp_path / "scalars.csv", frames)
+    out = tmp_path / "scalars.sqlite"
+    _build(csv, out)
+
+    rows = _envelope_rows(out)
+    assert len(rows) == n_frames
+    assert len({row["envelope_hash"] for row in rows}) == n_frames
+    for row in rows:
+        assert row["envelope_hash"]
+        assert row["area"] > 0.0
+        assert row["horizon"] == pytest.approx(_FAST["horizon"])
+        assert row["source"] == graph.ENVELOPE_SOURCE
+        # ...and every row can still be turned back into a region, which is the
+        # only thing that makes the discard a discard rather than a deletion.
+        assert row["geometry_wkb"] is not None or row["config_id"] is not None
+
+
+def test_envelope_at_recomputes_the_stored_polygon_exactly(tmp_path: Path) -> None:
+    """**THE GATE.** If recomputation and storage disagree, the discard is not
+    lossless and the whole approach fails.
+
+    The frames where geometry *was* stored are the only ones where both answers
+    exist, so they are where the two can be compared at all. The stored blob is
+    blanked in a copy of the artifact and `envelope_at` is asked the same
+    question again; the polygon must come back identical at zero tolerance, not
+    merely equal within a tolerance — `GEOM_SIMPLIFY_TOL_M` is already spent on
+    the stored boundary and a second helping of it here would hide exactly the
+    drift this test exists to catch.
+    """
+    n_frames = 12
+    inside, outside = (0.55, 0.0), (2.4, 0.0)
+    frames = _creep_frames(n_frames, lambda i: inside if 3 <= i <= 6 else outside)
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    out = tmp_path / "creep.sqlite"
+    _build(csv, out)
+
+    stored = {
+        str(row["envelope_id"]): store.from_wkb(row["geometry_wkb"])
+        for row in _envelope_rows(out)
+        if row["geometry_wkb"] is not None
+    }
+    assert stored, "precondition failed: no geometry was stored at all"
+
+    blanked = tmp_path / "blanked.sqlite"
+    blanked.write_bytes(out.read_bytes())
+    conn = store.connect(blanked)
+    try:
+        conn.execute("UPDATE envelope SET geometry_wkb = NULL")
+        conn.commit()
+        for envelope_id, polygon in stored.items():
+            edge = conn.execute(
+                "SELECT t_start FROM edge WHERE type = 'HAS_ENVELOPE' AND dst_id = ?",
+                (envelope_id,),
+            ).fetchone()
+            assert edge is not None
+            recomputed = graph.envelope_at(conn, edge["t_start"])
+            assert shapely.equals_exact(recomputed, polygon, tolerance=0.0), (
+                "recomputation did not reproduce the polygon the artifact stored "
+                f"at t={edge['t_start']}; the discard is not lossless."
+            )
+    finally:
+        conn.close()
+
+
+def test_envelope_at_answers_the_same_way_whether_stored_or_recomputed(
+    tmp_path: Path,
+) -> None:
+    """A caller cannot tell which happened, except by timing.
+
+    Every frame of the run is asked for, including the ones whose geometry was
+    discarded, and every answer is a non-empty polygon of the right area. A
+    version of this that only queried the stored frames would pass against an
+    `envelope_at` that could not recompute at all.
+    """
+    n_frames = 8
+    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    out = tmp_path / "creep.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        discarded = conn.execute(
+            "SELECT count(*) AS n FROM envelope WHERE geometry_wkb IS NULL"
+        ).fetchone()["n"]
+        assert discarded > 0, "precondition failed: nothing was discarded"
+        for frame_id in range(n_frames):
+            polygon = graph.envelope_at(conn, quantize_time(frame_id * DT))
+            row = conn.execute(
+                "SELECT e.area AS area FROM envelope e JOIN edge ON "
+                "edge.dst_id = e.envelope_id WHERE edge.type = 'HAS_ENVELOPE' "
+                "AND edge.t_start = ?",
+                (quantize_time(frame_id * DT),),
+            ).fetchone()
+            assert not polygon.is_empty
+            # The area the artifact reports is the quantized area of this exact
+            # polygon, so they must agree after quantization.
+            assert quantize_area(polygon.area) == pytest.approx(row["area"])
+    finally:
+        conn.close()
+
+
+def test_geometry_rows_are_far_fewer_than_frames_in_a_moving_scenario(
+    tmp_path: Path,
+) -> None:
+    """THE MEASUREMENT, on the case the held-still test cannot speak for.
+
+    `test_edge_rows_do_not_grow_with_frame_count` builds from a robot that never
+    moves, so it says nothing about the artifact issue #28 measured: a real
+    scenario in continuous motion, where every frame is a material envelope
+    change. Here the scalar rows do track the frame count — they are meant to —
+    and the geometry rows must not.
+
+    A real scenario rather than a synthetic one, at coarse envelope parameters:
+    the number of envelope *rows* is a property of the motion, and the motion is
+    what `reg.scenarios` defines.
+    """
+    csv = tmp_path / "sustained_overlap.csv"
+    simulate("sustained_overlap", 0, csv)
+    out = tmp_path / "sustained_overlap.sqlite"
+    world = SCENARIOS["sustained_overlap"].world
+    result = build(
+        csv, out, world.limits, human_radius=world.human_radius, **_FAST
+    )
+
+    rows = _envelope_rows(out)
+    with_geometry = [row for row in rows if row["geometry_wkb"] is not None]
+
+    # The scalars still cover every frame: one envelope row per material change,
+    # and this arm changes every frame.
+    assert len(rows) == result.frames
+    assert len(_edges(out, edge_type="HAS_ENVELOPE")) == result.frames
+
+    # ...and the geometry does not. An order of magnitude is the bar, not a
+    # golden count: the exact number is a property of the scenario's transitions
+    # and would go red on any harmless change to it.
+    assert len(with_geometry) * 10 < result.frames, (
+        f"{len(with_geometry)} of {result.frames} frames kept their envelope "
+        "geometry; the per-frame storage issue #28 measured is back."
+    )
+    # Every one of them can still be answered, stored or not.
+    conn = store.connect(out)
+    try:
+        for row in _edges(out, edge_type="HAS_ENVELOPE"):
+            assert not graph.envelope_at(conn, row["t_start"]).is_empty
+    finally:
+        conn.close()
+
+
+# --- the negatives: what envelope_at refuses rather than approximates ------
+
+
+def test_envelope_at_refuses_an_instant_with_no_envelope(tmp_path: Path) -> None:
+    """THE NEGATIVE TEST for the reader. An instant the artifact says nothing
+    about must not be answered with the neighbouring frame's polygon: that is a
+    region the robot could reach, reported for a time it could not."""
+    n_frames = 8
+    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    out = tmp_path / "creep.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        # Well past the end of the run...
+        with pytest.raises(graph.GraphQueryError, match="no envelope"):
+            graph.envelope_at(conn, 99.0)
+        # ...and between two frames: the period is 20 ms and the graph's own
+        # quantum is 10 ms, so t = 0.01 s falls in the gap between frame 0 and
+        # frame 1 and belongs to neither.
+        with pytest.raises(graph.GraphQueryError, match="no envelope"):
+            graph.envelope_at(conn, 0.01)
+    finally:
+        conn.close()
+
+
+def test_envelope_at_refuses_when_a_parameter_it_needs_is_missing(
+    tmp_path: Path,
+) -> None:
+    """THE NEGATIVE TEST for the recomputation contract, and it is the
+    never-invent-a-default rule in its most dangerous form.
+
+    A missing `envelope_n_samples` does not stop `compute_envelope` from
+    returning a polygon; it stops it from returning *this* polygon. A plausible
+    value substituted here would produce a region indistinguishable from the
+    recorded one at every point downstream.
+    """
+    n_frames = 8
+    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    out = tmp_path / "creep.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        discarded = conn.execute(
+            "SELECT t_start FROM edge WHERE type = 'HAS_ENVELOPE' AND dst_id IN "
+            "(SELECT envelope_id FROM envelope WHERE geometry_wkb IS NULL) "
+            "ORDER BY t_start"
+        ).fetchone()
+        assert discarded is not None, "precondition failed: nothing was discarded"
+        conn.execute("DELETE FROM meta WHERE key = ?", (graph.META_N_SAMPLES,))
+        conn.commit()
+        with pytest.raises(graph.GraphQueryError, match=graph.META_N_SAMPLES):
+            graph.envelope_at(conn, discarded["t_start"])
+    finally:
+        conn.close()
+
+
+def test_envelope_at_refuses_when_the_config_it_names_is_gone(tmp_path: Path) -> None:
+    """The other half of the same refusal: the inputs are recorded, but the
+    configuration they apply to is not."""
+    n_frames = 8
+    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    out = tmp_path / "creep.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        row = conn.execute(
+            "SELECT edge.t_start AS t_start, e.config_id AS config_id FROM envelope e "
+            "JOIN edge ON edge.dst_id = e.envelope_id "
+            "WHERE e.geometry_wkb IS NULL AND edge.type = 'HAS_ENVELOPE' "
+            "ORDER BY edge.t_start"
+        ).fetchone()
+        assert row is not None, "precondition failed: nothing was discarded"
+        conn.execute(
+            "DELETE FROM robot_config WHERE config_id = ?", (row["config_id"],)
+        )
+        conn.commit()
+        with pytest.raises(graph.GraphQueryError, match="not in this artifact"):
+            graph.envelope_at(conn, row["t_start"])
+    finally:
+        conn.close()
+
+
+def test_an_envelope_with_neither_geometry_nor_config_is_refused(seeded) -> None:
+    """A row that holds no region and names nothing to recompute one from
+    answers every query with "there was no envelope", which is what a frame
+    without one looks like. Refused in Python and by the schema."""
+    with pytest.raises(store.StoreError, match="neither geometry nor"):
+        store.insert_envelope(
+            seeded,
+            "env_empty",
+            envelope_hash="fed",
+            area=0.25,
+            geometry=None,
+            config_id=None,
+            horizon=0.2,
+            source="computed",
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        seeded.execute(
+            "INSERT INTO envelope (envelope_id, envelope_hash, area, horizon, "
+            "source) VALUES ('env_empty', 'fed', 0.25, 0.2, 'computed')"
+        )
+
+
+def test_attaching_a_different_geometry_to_one_envelope_id_is_refused(
+    seeded,
+) -> None:
+    """The id is content-derived from the envelope hash, so two distinct
+    polygons under it is a collision, not an update — and an update would leave
+    the artifact holding whichever was written last."""
+    store.attach_envelope_geometry(seeded, "env_0", Point(0.0, 0.0).buffer(0.5))
+    with pytest.raises(store.StoreError, match="different geometry"):
+        store.attach_envelope_geometry(seeded, "env_0", Point(1.0, 0.0).buffer(0.5))
+    with pytest.raises(store.StoreError, match="no envelope"):
+        store.attach_envelope_geometry(seeded, "env_nope", Point(0.0, 0.0).buffer(0.5))
+
+
+def test_geometry_attached_later_fills_a_row_written_without_it(seeded) -> None:
+    """The write order the retention rule forces: a row exists before the run
+    knows whether its frame is a transition."""
+    store.insert_envelope(
+        seeded,
+        "env_late",
+        envelope_hash="late",
+        area=0.25,
+        geometry=None,
+        config_id="cfg_0",
+        horizon=0.2,
+        source="computed",
+    )
+    assert store.envelope_row(seeded, "env_late")["geometry_wkb"] is None
+    store.attach_envelope_geometry(seeded, "env_late", Point(0.0, 0.0).buffer(0.5))
+    assert store.envelope_row(seeded, "env_late")["geometry_wkb"] is not None
+    assert store.envelope_row(seeded, "env_missing") is None
 
 
 def test_conflicting_provenance_is_refused(seeded) -> None:

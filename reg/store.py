@@ -43,6 +43,10 @@ would otherwise be indistinguishable from a right one:
   threshold, so an incident reads as a non-incident.
 * geometry present exactly for entities whose geometry is time-invariant — see
   `insert_entity`.
+* an envelope with neither geometry nor a `config_id` — an envelope row that
+  stores no polygon and does not say what it was computed from is a row nobody
+  can turn back into a region, and `reg.graph.envelope_at` would have to answer
+  "no envelope" for a frame that had one. See `insert_envelope`.
 
 DETERMINISM
 -----------
@@ -82,6 +86,8 @@ __all__ = [
     "all_meta",
     "insert_timestep",
     "insert_envelope",
+    "attach_envelope_geometry",
+    "envelope_row",
     "insert_entity",
     "insert_robot_config",
     "open_edge",
@@ -95,7 +101,12 @@ __all__ = [
 #: `meta` so a reader that meets an unfamiliar artifact can say it does not
 #: understand it, rather than querying a column that has since changed meaning
 #: and getting a confident wrong answer.
-SCHEMA_VERSION = 1
+#:
+#: 2: `envelope.geometry_wkb` became nullable and `envelope.config_id` arrived.
+#: A v1 reader meeting a v2 file would read a NULL geometry as "no envelope"
+#: rather than as "recompute it" (issue #28, docs/lossiness.md Discarded #9),
+#: which is exactly the confident wrong answer the version exists to prevent.
+SCHEMA_VERSION = 2
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -172,15 +183,42 @@ CREATE TABLE timestep (
     t           REAL    NOT NULL
 );
 
--- Stored on material change only, keyed on `envelope_hash` (reg.envelope).
+-- Created only when it anchors a retained relationship (docs/lossiness.md
+-- Discarded #1), or when an envelope was computed from it. The interpolated
+-- path between two of these is gone.
+CREATE TABLE robot_config (
+    config_id TEXT PRIMARY KEY,
+    q         TEXT NOT NULL,
+    qd        TEXT NOT NULL
+);
+
+-- A row per material change of the envelope, keyed on `envelope_hash`
+-- (reg.envelope). The scalars are per material change; `geometry_wkb` is NOT
+-- (docs/lossiness.md Discarded #9, issue #28).
+--
+-- WHY THE GEOMETRY MAY BE NULL. The polygon is a deterministic function of
+-- `(q, qd, horizon, n_samples, envelope_seed, substep_dt)` — the config this
+-- row names plus four numbers in `meta` — so storing it on every frame stores
+-- the same information twice, once cheaply and once expensively. It is retained
+-- only where it is evidence in its own right: `reg.graph.GEOMETRY_RETENTION`
+-- states the rule, `reg.graph.envelope_at` is the reader that makes the absence
+-- invisible, and the artifact records the rule in `meta` so nothing has to
+-- infer it from the pattern of NULLs.
+--
+-- `config_id` is what makes that recoverable, so the CHECK requires one or the
+-- other: a row with neither stores no region and names nothing to recompute one
+-- from, and a query hitting it could only answer "no envelope at t", which is
+-- indistinguishable from a frame that genuinely had none.
 CREATE TABLE envelope (
     envelope_id   TEXT PRIMARY KEY,
     envelope_hash TEXT NOT NULL,
     area          REAL NOT NULL,
-    geometry_wkb  BLOB NOT NULL,
+    geometry_wkb  BLOB,
+    config_id     TEXT REFERENCES robot_config (config_id),
     horizon       REAL NOT NULL,
     source        TEXT NOT NULL CHECK (source IN ({_SQL_ENVELOPE_SOURCES})),
-    UNIQUE (envelope_hash, source, horizon)
+    UNIQUE (envelope_hash, source, horizon),
+    CHECK (geometry_wkb IS NOT NULL OR config_id IS NOT NULL)
 );
 
 -- `geometry_wkb` is the entity's world-frame boundary and is present exactly
@@ -192,14 +230,6 @@ CREATE TABLE entity (
     is_static    INTEGER NOT NULL CHECK (is_static IN (0, 1)),
     geometry_wkb BLOB,
     CHECK ((is_static = 1) = (geometry_wkb IS NOT NULL))
-);
-
--- Created only when it anchors a retained relationship (docs/lossiness.md
--- Discarded #1). The interpolated path between two of these is gone.
-CREATE TABLE robot_config (
-    config_id TEXT PRIMARY KEY,
-    q         TEXT NOT NULL,
-    qd        TEXT NOT NULL
 );
 
 CREATE TABLE edge (
@@ -467,7 +497,8 @@ def insert_envelope(
     *,
     envelope_hash: str,
     area: float,
-    geometry: BaseGeometry,
+    geometry: BaseGeometry | None,
+    config_id: str | None,
     horizon: float,
     source: str,
 ) -> str:
@@ -478,6 +509,20 @@ def insert_envelope(
     not quantize on the caller's behalf, because a store that silently rounds
     makes the tolerance in force a property of the writer rather than of the
     contract.
+
+    `geometry` and `config_id` are both required arguments and either may be
+    `None`, but not both. Neither has a default: "store the polygon" and
+    "recompute it from this configuration" are different retention decisions with
+    different costs, and a caller that did not state which one it made would have
+    the schema make it silently. Passing both is normal — the geometry is what a
+    reader gets, the config is what makes the *next* build able to check it.
+
+    Re-inserting an id whose row already exists fills in a geometry or a
+    `config_id` the first insert left `NULL`, and refuses a *different* value for
+    any scalar column. A second `config_id` for a row that already has one is
+    kept out rather than refused: the id is derived from the envelope hash, so
+    two configurations reaching it produce the same polygon to
+    `reg.envelope.HASH_COORD_PRECISION`, and recomputation from either yields it.
     """
     if source not in ENVELOPE_SOURCES:
         raise StoreError(
@@ -486,19 +531,119 @@ def insert_envelope(
             "source would make a clamped bound indistinguishable from a declared "
             "one."
         )
-    return _insert_node(
-        conn,
-        "envelope",
-        "envelope_id",
-        {
-            "envelope_id": str(envelope_id),
-            "envelope_hash": str(envelope_hash),
-            "area": float(area),
-            "geometry_wkb": to_wkb(geometry),
-            "horizon": float(horizon),
-            "source": str(source),
-        },
+    if geometry is None and config_id is None:
+        raise StoreError(
+            f"envelope {envelope_id!r} would be stored with neither geometry nor "
+            "a config_id. Then it holds no region and names nothing to recompute "
+            "one from, so every query for the envelope in force at that time "
+            "answers 'there was none' — which is what a frame with no envelope "
+            "at all looks like."
+        )
+
+    envelope_id = str(envelope_id)
+    scalars = {
+        "envelope_id": envelope_id,
+        "envelope_hash": str(envelope_hash),
+        "area": float(area),
+        "horizon": float(horizon),
+        "source": str(source),
+    }
+
+    existing = conn.execute(
+        "SELECT * FROM envelope WHERE envelope_id = ?", (envelope_id,)
+    ).fetchone()
+    if existing is None:
+        row = {
+            **scalars,
+            "geometry_wkb": None if geometry is None else to_wkb(geometry),
+            "config_id": None if config_id is None else str(config_id),
+        }
+        columns = ", ".join(row)
+        placeholders = ", ".join("?" for _ in row)
+        conn.execute(
+            f"INSERT INTO envelope ({columns}) VALUES ({placeholders})",  # noqa: S608
+            tuple(row.values()),
+        )
+        return envelope_id
+
+    clash = {
+        column: (existing[column], value)
+        for column, value in scalars.items()
+        if existing[column] != value
+    }
+    if clash:
+        raise StoreError(
+            f"envelope.envelope_id={envelope_id!r} already exists with different "
+            f"contents: {clash}. Node ids are content-derived, so this is either "
+            "a hash collision or two different things given one id; either way "
+            "the two histories would merge into an answer about neither."
+        )
+    if config_id is not None and existing["config_id"] is None:
+        conn.execute(
+            "UPDATE envelope SET config_id = ? WHERE envelope_id = ?",
+            (str(config_id), envelope_id),
+        )
+    if geometry is not None:
+        attach_envelope_geometry(conn, envelope_id, geometry)
+    return envelope_id
+
+
+def attach_envelope_geometry(
+    conn: sqlite3.Connection, envelope_id: str, geometry: BaseGeometry
+) -> None:
+    """Store the polygon on an envelope row that was written without one.
+
+    The retention rule (`reg.graph.GEOMETRY_RETENTION`) marks a frame as evidence
+    for a reason that is only known one frame later — an interval ends at the
+    last instant it held — so the row is written when the envelope changes and
+    the geometry is attached when the run turns out to need it. Doing it the
+    other way round would mean holding the whole stream in memory to decide.
+
+    Refuses an unknown id, and refuses to *replace* a geometry that is already
+    stored. Two different polygons under one content-derived id is a collision;
+    overwriting would leave the artifact holding whichever one was written last,
+    with nothing to say the other existed.
+    """
+    envelope_id = str(envelope_id)
+    row = conn.execute(
+        "SELECT geometry_wkb FROM envelope WHERE envelope_id = ?", (envelope_id,)
+    ).fetchone()
+    if row is None:
+        raise StoreError(
+            f"no envelope with envelope_id={envelope_id!r} to attach geometry to. "
+            "An envelope row is written when the envelope changes; attaching to "
+            "an id that was never written means the geometry belongs to a frame "
+            "the artifact has no record of."
+        )
+    blob = to_wkb(geometry)
+    if row["geometry_wkb"] is not None:
+        if bytes(row["geometry_wkb"]) != blob:
+            raise StoreError(
+                f"envelope {envelope_id!r} already stores a different geometry. "
+                "The id is derived from the envelope hash, so two distinct "
+                "polygons under it is a collision, not an update."
+            )
+        return
+    conn.execute(
+        "UPDATE envelope SET geometry_wkb = ? WHERE envelope_id = ?",
+        (blob, envelope_id),
     )
+
+
+def envelope_row(
+    conn: sqlite3.Connection, envelope_id: str
+) -> sqlite3.Row | None:
+    """One envelope row, or `None` if the artifact has no such envelope.
+
+    `None` is a could-not-evaluate — the artifact holds no envelope under that
+    id — and is never an empty region. Readers get the row rather than the
+    geometry because `geometry_wkb` being `NULL` is a fact about *how the
+    artifact was written*, and the decision of what to do about it belongs to
+    `reg.graph.envelope_at`, which can recompute.
+    """
+    return conn.execute(
+        "SELECT * FROM envelope WHERE envelope_id = ?", (str(envelope_id),)
+    ).fetchone()
 
 
 def insert_entity(
@@ -538,7 +683,12 @@ def insert_entity(
 def insert_robot_config(
     conn: sqlite3.Connection, config_id: str, q: str, qd: str
 ) -> str:
-    """A joint configuration that anchors a retained relationship.
+    """A joint configuration that anchors a retained relationship, or an envelope.
+
+    "Or an envelope" is issue #28: an envelope whose geometry was discarded is
+    recomputed from the configuration it was computed from, so that configuration
+    has to survive. It is the cheaper half of the same information — a few dozen
+    characters of joint text against a WKB polygon.
 
     `q` and `qd` are text, formatted by the caller. Text rather than a float
     column per joint because the joint count is a property of the robot and not

@@ -242,6 +242,16 @@ def _sample(times: np.ndarray, values: np.ndarray, t: float) -> tuple[np.ndarray
 # 0.4, body radius 0.05 (so 0.95 m of workspace), human disc radius 0.25. The
 # human's disc therefore overlaps the workspace disc below 1.20 m from the base,
 # and touches the arm below 0.30 m from a link segment.
+#
+# The forward reachable envelope is much tighter than the workspace disc, and
+# that is what the overlap fixtures are placed against. Over the 200 ms horizon
+# of docs/plan.md Phase 2, and at the joint speeds these scripted trajectories
+# actually command, the envelope extends only about 0.1-0.25 m beyond the body,
+# mostly tangentially — the arm sweeps, it does not lunge. So a human who is
+# inside the envelope without being touched sits in a band roughly 0.30-0.45 m
+# from a link segment. `approach_and_retreat`, `near_miss` and
+# `sustained_overlap` are all positioned in that band; standing merely inside
+# the workspace disc is not the same claim and does not imply it.
 # --------------------------------------------------------------------------
 
 APPROACH_AND_RETREAT = Scenario(
@@ -253,17 +263,22 @@ APPROACH_AND_RETREAT = Scenario(
     ),
     world=DEMO_WORLD,
     duration=6.0,
-    # Arm works up and to the left throughout, away from the approach line.
+    # Arm works up and to the left throughout; the elbow is out around
+    # (-0.37, 0.34) and the tip around (-0.70, 0.55) at the midpoint.
     joint_waypoints=(
         Waypoint(0.0, (2.00, 0.40)),
         Waypoint(3.0, (2.40, 0.20)),
         Waypoint(6.0, (2.00, 0.40)),
     ),
-    # In from 2.4 m (clear), to 0.85 m (well inside the workspace disc), back out.
+    # Straight down onto the outside of that sweep and back out: 1.65 m from the
+    # base (clear of the envelope, and clear of the workspace disc too) to
+    # 0.95 m, which puts the disc inside the envelope with ~0.11 m of body
+    # clearance left. Not along the +x axis: an approach from the right would
+    # have to cross the arm to reach the band the envelope occupies.
     human_waypoints=(
-        Waypoint(0.0, (2.40, 0.00)),
-        Waypoint(3.0, (0.85, 0.00)),
-        Waypoint(6.0, (2.40, 0.00)),
+        Waypoint(0.0, (-0.41, 1.60)),
+        Waypoint(3.0, (-0.41, 0.86)),
+        Waypoint(6.0, (-0.41, 1.60)),
     ),
     q_jitter=0.01,
     human_jitter=0.01,
@@ -345,10 +360,11 @@ STATIC_BYSTANDER = Scenario(
 SUSTAINED_OVERLAP = Scenario(
     name="sustained_overlap",
     description=(
-        "Human standing inside the workspace disc for the whole run while the arm "
-        "works away from them. Every frame overlaps, so the incremental graph "
-        "should emit one long edge rather than 300 short ones — this is the "
-        "fixture the compression claim is most exposed to."
+        "Human standing inside the arm's forward reachable set for the whole run, "
+        "shifting slightly as the arm sweeps past them, and never touched. Every "
+        "frame overlaps, so the incremental graph should emit one long edge rather "
+        "than 300 short ones — this is the fixture the compression claim is most "
+        "exposed to."
     ),
     world=DEMO_WORLD,
     duration=6.0,
@@ -358,11 +374,15 @@ SUSTAINED_OVERLAP = Scenario(
         Waypoint(3.0, (-1.70, 0.90)),
         Waypoint(6.0, (-1.30, 0.50)),
     ),
-    # 0.93 m from the base: inside the workspace disc, far from the arm.
+    # Just outside the arm on the far side of the tip, drifting with it: the tip
+    # runs (0.41, -0.77) -> (0.21, -0.78) -> back, and the human tracks that with
+    # a 0.16 m shuffle. ~0.84 m from the base, so inside the workspace disc, but
+    # the claim this fixture makes is the tighter one — inside the 200 ms
+    # envelope on every frame, with ~0.08 m of body clearance left over.
     human_waypoints=(
-        Waypoint(0.0, (0.75, 0.55)),
-        Waypoint(3.0, (0.78, 0.50)),
-        Waypoint(6.0, (0.75, 0.55)),
+        Waypoint(0.0, (0.69, -0.48)),
+        Waypoint(3.0, (0.53, -0.55)),
+        Waypoint(6.0, (0.69, -0.48)),
     ),
     q_jitter=0.01,
     human_jitter=0.01,

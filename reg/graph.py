@@ -43,6 +43,49 @@ reproduces the polygon **exactly for the same code and the same shapely
 version**, and not necessarily for an assessor opening the file in five years.
 docs/limitations.md states it as the cost of the trade.
 
+NOR DOES IT REACH ENVELOPE *IDENTITY*, WHICH IS ISSUE #29
+---------------------------------------------------------
+#28 moved the polygons out and left the scalars: one `envelope` row and one
+`Timestep` row per frame, because the hash a row is keyed on genuinely differs
+every frame when the arm moves. That is linear in the frame count by
+construction, and linear-in, linear-out caps the compression ratio in single
+digits however small the rows are made. Emit-on-change had been applied to edges
+and not to nodes.
+
+The fix is not a harder quantizer — widening a tolerance to make more things
+"unchanged" buys the ratio by discarding resolution the lossiness contract
+advertises, which is that contract's own named failure mode. It is to stop
+treating "the envelope changed" as a reason to write a row. **A row is written
+where it anchors something the artifact retains**, which is the rule
+`RobotConfig` has followed since issue #14 (docs/lossiness.md Discarded #1),
+applied to `Envelope` as well:
+
+    ENVELOPE_RETENTION, below. An envelope row exists at a frame iff an
+    INTERSECTS edge names it, or an entity relationship transitions there, or it
+    is one of the two ends of the run.
+
+and `Timestep` is gone entirely — every edge already carries `t_start`/`t_end`,
+so a node per instant was a second and denser representation of time beside the
+interval representation that does the work. docs/plan.md Phase 5's node table
+lists it; Phase 7's query set does not need it. The two queries that name frames
+at all — `frames_at_risk` and the incident report's "(27 frames)" — divide an
+interval by `meta[frame_period_s]`, which is recorded once and checked uniform
+at build time, and which is a *better* answer than counting rows: a row count
+would depend on which frames happened to anchor an edge.
+
+WHAT A FRAME WITH NO ROW MEANS
+------------------------------
+It means the artifact does not retain that frame's envelope, and `envelope_at`
+**refuses** it. That is not new lossiness arriving at this line; it is
+docs/lossiness.md Unanswerable #1 reaching where it always applied. The envelope
+is a deterministic function of `(q, qd)` and the graph has never stored `q` at
+every frame, so an envelope at every frame was only ever available by storing a
+configuration per frame — which is the linearity being removed. Answering such a
+frame with the neighbouring interval's polygon would be interpolation: a region
+the robot demonstrably could reach, reported for an instant at which it could
+not. docs/lossiness.md Discarded #10 states the rule and the artifact carries it
+in `meta` under `envelope_row_retention`.
+
 WHAT IS NOT HERE
 ----------------
 Declarations and verdicts. They are Milestone 3, and the `DECLARED`,
@@ -108,12 +151,14 @@ from reg.types import Limits, Obstacle, ProprioState, StateFrame
 __all__ = [
     "ENVELOPE_HORIZON",
     "ENVELOPE_N_SAMPLES",
+    "ENVELOPE_RETENTION",
     "ENVELOPE_SEED",
     "ENVELOPE_SOURCE",
     "GEOMETRY_EVIDENCE_EDGES",
     "GEOMETRY_RETENTION",
     "HUMAN_ENTITY_ID",
     "HUMAN_KIND",
+    "META_ENVELOPE_RETENTION",
     "META_GEOMETRY_RETENTION",
     "BuildResult",
     "GraphBuildError",
@@ -188,7 +233,8 @@ ENVELOPE_SEED: int = 0
 #: among them: it changes on every centimetre of a walking human, so keeping
 #: geometry at its transitions would keep it nearly everywhere, and its own
 #: metric already travels on the edge. `HAS_ENVELOPE` is not among them either —
-#: it transitions on *every* frame of a moving arm, which is the whole problem.
+#: the envelope's own change is not evidence *about an entity*, and it is the
+#: quantity that moves every frame.
 GEOMETRY_EVIDENCE_EDGES: frozenset[str] = frozenset({"INTERSECTS", "CONTACT"})
 
 # WHAT "STARTS OR ENDS" IS COUNTED OVER. The *relationship*, not the edge row.
@@ -224,6 +270,40 @@ GEOMETRY_RETENTION = (
 
 #: Where `GEOMETRY_RETENTION` lands in `meta`.
 META_GEOMETRY_RETENTION = "envelope_geometry_retention"
+
+
+# --------------------------------------------------------------------------
+# The envelope-row retention rule (issue #29, docs/lossiness.md Discarded #10).
+# The outer of the two rules: GEOMETRY_RETENTION decides which retained rows
+# carry a polygon, this one decides which frames get a row at all.
+#
+# Both are in the artifact for the same reason. A reader meeting a run of frames
+# with no envelope row has to be able to tell "not retained, on a stated rule"
+# from "this build stopped writing", and the pattern of absences does not
+# distinguish them — an artifact whose gaps mean nothing in particular is an
+# artifact whose silences cannot be read at all.
+# --------------------------------------------------------------------------
+
+#: The rule, in one sentence, as it is recorded in the artifact's meta table.
+#: Prose rather than a code reference: the artifact is what an assessor holds,
+#: and `reg.graph.ENVELOPE_RETENTION` means nothing to someone holding the file.
+ENVELOPE_RETENTION = (
+    "an envelope row is stored on the first and last frame of the run, on every "
+    "frame at which an INTERSECTS or CONTACT relationship with an entity begins "
+    "or ceases to hold, and on every frame at which an INTERSECTS edge opens. On "
+    "every other frame no envelope and no robot_config row is written, and the "
+    "frame is addressed by the intervals that span it; there is no per-frame "
+    "node in this schema. A frame the HAS_ENVELOPE intervals do not cover is a "
+    "frame whose envelope this artifact does not retain, and reg.graph."
+    "envelope_at refuses it rather than returning a neighbouring frame's polygon "
+    "(docs/lossiness.md Discarded #10, Unanswerable #1). A HAS_ENVELOPE interval "
+    "that spans several frames asserts the envelope was unchanged across all of "
+    "them: the builder computes it at every frame and compares the hash, and "
+    "only extends where the hash held."
+)
+
+#: Where `ENVELOPE_RETENTION` lands in `meta`.
+META_ENVELOPE_RETENTION = "envelope_row_retention"
 
 #: The `meta` keys `envelope_at` reads back to recompute a discarded polygon.
 #: Named constants because the writer and the reader are one contract now: a key
@@ -359,23 +439,25 @@ def _array_text(values: np.ndarray) -> str:
 
 
 class _FrameNodes:
-    """Lazily writes the nodes one frame *would* need, if an edge opens.
+    """Lazily writes the nodes one frame *would* need, if an edge anchors one.
 
-    Nothing here is written on construction. `HAS_ENVELOPE` extending across 150
-    frames must leave one `Timestep`, one `Envelope` and no `RobotConfig` beyond
-    whatever the separation edges anchored — which only holds if the writes
-    happen at edge-open time and nowhere else.
+    Nothing here is written on construction, and that is the whole compression
+    mechanism on the node side (`ENVELOPE_RETENTION`, issue #29). A frame at
+    which no relationship transitions and no `INTERSECTS` edge opens must leave
+    **no rows at all** — not an `Envelope`, not a `RobotConfig` — and that only
+    holds if every write happens at edge-anchor time and nowhere else. A frame
+    over which `HAS_ENVELOPE` merely extends writes nothing either: extending is
+    an `UPDATE` to one edge row.
 
-    The ids are derived on construction, which is not a write: `keep_geometry`
-    has to be able to name a row the builder may not have written yet, and a
-    content hash of values already in hand costs nothing.
+    The ids are derived on construction, which is not a write: a content hash of
+    values already in hand costs nothing, and the builder has to be able to name
+    a row it may never write.
     """
 
     def __init__(
         self,
         conn,
         *,
-        frame_id: int,
         t: float,
         envelope: BaseGeometry,
         envelope_digest: str,
@@ -384,7 +466,6 @@ class _FrameNodes:
         qd_text: str,
     ) -> None:
         self._conn = conn
-        self._frame_id = frame_id
         self._t = t
         self._envelope = envelope
         self._envelope_digest = envelope_digest
@@ -396,14 +477,35 @@ class _FrameNodes:
         )
         self._config_id = "cfg_" + _digest(q_text, qd_text)
         self._keep_geometry = False
+        self._retained = False
 
-    def timestep(self) -> str:
-        return store.insert_timestep(
-            self._conn, f"ts_{self._frame_id}", self._frame_id, self._t
-        )
+    @property
+    def t(self) -> float:
+        """This frame's timestamp, already quantized to `TIME_TOL_S`."""
+        return self._t
+
+    @property
+    def digest(self) -> str:
+        """The envelope's identity at this frame. What `HAS_ENVELOPE` compares."""
+        return self._envelope_digest
+
+    @property
+    def retained(self) -> bool:
+        """Whether this frame's `Envelope` row was written.
+
+        `False` means the frame anchors nothing and the artifact keeps no node
+        for it — the state `ENVELOPE_RETENTION` describes and `envelope_at`
+        refuses. It is read rather than predicted: the frame's own edges decide
+        it, and they are opened by the caller.
+        """
+        return self._retained
 
     def envelope_node(self) -> str:
         """The `Envelope` row for this frame, with the config it came from.
+
+        Calling this is what makes the frame *retained*: an envelope row is the
+        artifact's record that this instant existed, and `HAS_ENVELOPE` is
+        emitted for exactly the frames that have one.
 
         The config is written alongside it and not only when a `SEPARATION` or
         `CONTACT` edge anchors one: it is what `envelope_at` recomputes the
@@ -411,6 +513,7 @@ class _FrameNodes:
         frame whose envelope nobody can reconstruct. It is also the cheap half of
         that information — joint text against a WKB polygon.
         """
+        self._retained = True
         config_id = self.config()
         return store.insert_envelope(
             self._conn,
@@ -431,17 +534,18 @@ class _FrameNodes:
     def keep_geometry(self) -> None:
         """This frame is one `GEOMETRY_RETENTION` keeps the polygon for.
 
-        Idempotent, and callable *after* the envelope row has been written — a
+        Retention of the polygon implies retention of the row: a frame worth a
+        polygon is a frame worth an `Envelope`, and there is no way to store the
+        first without the second. So this writes the row if nothing else has.
+
+        Idempotent, and callable *after* the row has been written — a
         relationship's last instant is only known one frame later, so the builder
-        reaches back to the previous frame and says so then. If the row exists
-        the geometry is attached; if it does not, the flag makes the write that
-        eventually creates it carry the polygon.
+        reaches back to the previous frame and says so then. `insert_envelope`
+        attaches the polygon to a row that already exists without one, which is
+        why the two orders end in the same file.
         """
         self._keep_geometry = True
-        if store.envelope_row(self._conn, self._envelope_id) is not None:
-            store.attach_envelope_geometry(
-                self._conn, self._envelope_id, self._envelope
-            )
+        self.envelope_node()
 
 
 # --------------------------------------------------------------------------
@@ -567,9 +671,10 @@ def build(
 
     Returns:
         A `BuildResult` with the row counts and the artifact's size.
-        `nodes["Envelope"]` counts envelope *rows*, one per material change;
-        most of them carry no polygon (`GEOMETRY_RETENTION`), so it is not a
-        count of stored geometries.
+        `nodes["Envelope"]` counts envelope *rows*, one per frame the artifact
+        retains (`ENVELOPE_RETENTION`) and **not** one per frame nor one per
+        material change; most of them carry no polygon (`GEOMETRY_RETENTION`),
+        so it is not a count of stored geometries either.
 
     Raises:
         GraphBuildError: the stream could not be understood — too short, a
@@ -619,14 +724,57 @@ def build(
         store.insert_entity(conn, HUMAN_ENTITY_ID, HUMAN_KIND, geometry=None)
 
         active: dict[tuple[str, str], _Active] = {}
+        has_envelope: _Active | None = None
         previous: _FrameNodes | None = None
         last_frame_id = len(frames) - 1
+
+        def envelope_timeline(nodes: _FrameNodes) -> None:
+            """One frame's entry in the envelope's own timeline. Layer A.
+
+            Deliberately *not* an `_Observation`: unlike every relationship, this
+            one opens only where the artifact retains a node to hang it on
+            (`ENVELOPE_RETENTION`), so it is emitted a frame late — a frame's
+            retention is not final until the frame after it has been read and
+            the relationships that ended there have reached back.
+
+            Three cases, and the third is the one that does the compressing:
+
+            * the envelope is the one already on the open interval -> extend it.
+              No row is written; a robot holding still leaves one HAS_ENVELOPE
+              edge whether it holds for 6 frames or 600.
+            * it changed and this frame is retained -> close and open a new
+              interval at the instant it changed.
+            * it changed and this frame is not retained -> close, and open
+              nothing. The gap is the artifact saying it does not hold this
+              frame's envelope, which `envelope_at` reports as a refusal.
+
+            The extend case is safe against an envelope that changes and later
+            comes back: `has_envelope` is cleared on any frame whose digest
+            differs from it, and this runs once per frame in order, so a
+            non-`None` `has_envelope` always names the immediately preceding
+            frame. An interval therefore never spans a frame it did not hold at.
+            """
+            nonlocal has_envelope
+            if has_envelope is not None and has_envelope.compare == nodes.digest:
+                store.extend_edge(conn, has_envelope.edge_id, nodes.t)
+                return
+            has_envelope = None
+            if not nodes.retained:
+                return
+            edge_id = store.open_edge(
+                conn,
+                "HAS_ENVELOPE",
+                nodes.config(),
+                nodes.envelope_node(),
+                nodes.t,
+            )
+            has_envelope = _Active(edge_id, nodes.digest, "HAS_ENVELOPE")
+
         for frame_id, frame in enumerate(frames):
             t = quantize_time(frame.t)
             nodes, observations = _observe(
                 conn,
                 frame=frame,
-                frame_id=frame_id,
                 t=t,
                 limits=limits,
                 human_radius=human_radius,
@@ -653,6 +801,13 @@ def build(
                 if cited and previous is not None:
                     previous.keep_geometry()
                 del active[key]
+
+            # ...and that backward reach is the last thing that can retain the
+            # previous frame, so its timeline entry is settled now and not
+            # before. Emitted here rather than after this frame's own edges so
+            # that edge ids stay in time order.
+            if previous is not None:
+                envelope_timeline(previous)
 
             for key, observation in observations.items():
                 current = active.get(key)
@@ -682,6 +837,11 @@ def build(
 
             previous = nodes
 
+        # The last frame has no successor to settle it; `_frame_period` has
+        # already refused a stream too short to have one.
+        if previous is not None:  # pragma: no branch - >= 2 frames, checked above
+            envelope_timeline(previous)
+
         conn.commit()
         result = _summarize(conn, Path(out_path), len(frames))
     except BaseException:
@@ -701,7 +861,6 @@ def _observe(
     conn,
     *,
     frame: StateFrame,
-    frame_id: int,
     t: float,
     limits: Limits,
     human_radius: float,
@@ -711,16 +870,22 @@ def _observe(
     seed: int,
     substep_dt: float,
 ) -> tuple[_FrameNodes, dict[tuple[str, str], _Observation]]:
-    """Every relationship at one frame, quantized, in a fixed order.
+    """Every entity relationship at one frame, quantized, in a fixed order.
 
     Fixed order because insertion order decides `edge_id`, and `edge_id` is the
     tie-break in every ordered read (`reg.store.read_edges`). Two builds of one
     stream must produce identical files, so nothing here may iterate a set.
 
-    The frame's `_FrameNodes` comes back with the observations because the caller
-    is the only place that knows whether this frame is one `GEOMETRY_RETENTION`
-    keeps a polygon for — that depends on which edges open and close, which is
-    the caller's decision, and on where the frame sits in the run.
+    `HAS_ENVELOPE` is **not** among the observations, and that absence is issue
+    #29. Every relationship here is a fact about an entity and is emitted by the
+    same rule; the envelope's own timeline is emitted by a different one — only
+    at frames the artifact retains a node for — so it cannot be decided here,
+    where nothing yet knows which edges will open.
+
+    The frame's `_FrameNodes` comes back with the observations for the same
+    reason: whether this frame is one `GEOMETRY_RETENTION` keeps a polygon for
+    depends on which edges open and close, which is the caller's decision, and
+    on where the frame sits in the run.
     """
     proprio = frame.proprio()
 
@@ -747,7 +912,6 @@ def _observe(
 
     nodes = _FrameNodes(
         conn,
-        frame_id=frame_id,
         t=t,
         envelope=envelope,
         envelope_digest=digest,
@@ -757,16 +921,6 @@ def _observe(
     )
 
     observations: dict[tuple[str, str], _Observation] = {}
-
-    # Layer A. The envelope's own identity over time: one edge per material
-    # change of the geometry, keyed on the hash (docs/plan.md Phase 5, "store
-    # envelope geometry only on material change").
-    observations[("HAS_ENVELOPE", "")] = _Observation(
-        edge_type="HAS_ENVELOPE",
-        src=nodes.timestep,
-        dst=nodes.envelope_node,
-        compare=digest,
-    )
 
     geometries: list[tuple[str, BaseGeometry]] = [
         (entity_id, static_geoms[entity_id]) for entity_id in static_geoms
@@ -874,10 +1028,12 @@ def _write_provenance(
     store.put_meta(conn, META_ENVELOPE_SEED, str(int(seed)))
     store.put_meta(conn, META_SUBSTEP_DT, _float_text(substep_dt))
 
-    # The rule under which envelope geometry is absent from most rows. Recorded
-    # in the artifact and not only in this module, because the file is the thing
-    # handed over: a NULL geometry has to read as "discarded on a stated rule and
-    # recomputable" rather than as "this build wrote nothing there".
+    # The two retention rules, in the artifact and not only in this module,
+    # because the file is the thing handed over. A NULL geometry has to read as
+    # "discarded on a stated rule and recomputable" rather than as "this build
+    # wrote nothing there", and a frame with no row at all has to read as "not
+    # retained, on a stated rule" rather than as "the build stopped".
+    store.put_meta(conn, META_ENVELOPE_RETENTION, ENVELOPE_RETENTION)
     store.put_meta(conn, META_GEOMETRY_RETENTION, GEOMETRY_RETENTION)
 
     store.put_meta(conn, "tolerance_distance_tol_m", _float_text(DISTANCE_TOL_M))
@@ -1038,9 +1194,10 @@ def envelope_at(conn, t: float) -> BaseGeometry:
         would have stored.
 
     Raises:
-        GraphQueryError: no `HAS_ENVELOPE` interval covers `t` (including the
-            gaps *between* frames, which the artifact does not claim to fill —
-            docs/lossiness.md Unanswerable #1); two intervals cover it and their
+        GraphQueryError: no `HAS_ENVELOPE` interval covers `t` — the gaps
+            *between* frames, and, since issue #29, the frames the artifact does
+            not retain a node for (`ENVELOPE_RETENTION`, docs/lossiness.md
+            Discarded #10 and Unanswerable #1); two intervals cover it and their
             order is not retained (Unanswerable #5); or the geometry was
             discarded and something needed to recompute it is not in the file.
             Every one is a could-not-evaluate, and none of them resolves to some
@@ -1059,9 +1216,15 @@ def envelope_at(conn, t: float) -> BaseGeometry:
                 if edges
                 else ""
             )
-            + ". An instant between two frames is not covered by either of them, "
-            "and the envelope at such an instant is not something this artifact "
-            "retains."
+            + ". Two kinds of instant fall outside them and neither is answered "
+            "here: one between two frames, which belongs to neither, and one at "
+            "a frame the artifact retains no node for. The second is the rule in "
+            f"meta[{META_ENVELOPE_RETENTION!r}] — the envelope is a function of "
+            "the configuration, the graph stores configurations only where they "
+            "anchor something, and the envelope at a frame whose configuration "
+            "is gone is not something this artifact holds. The neighbouring "
+            "interval's polygon is a region the robot could reach at a different "
+            "instant, which is not an answer to this question."
         )
     if len(covering) > 1:
         raise GraphQueryError(

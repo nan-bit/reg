@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reg"
+version = "0.1.0"
+description = "Reachability evidence graph — a retainable evidence artifact for robot autonomy"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "shapely>=2.0",
+    "matplotlib>=3.8",
+]
+
+# Only shapely is load-bearing: polygon union and intersection is the actual
+# math. Everything else is substitutable, and a swap must be noted in the README
+# because reproducibility is part of what this project claims. sqlite3, hmac and
+# hashlib are stdlib on purpose — the artifact must open without a runtime.
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["reg*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# -q keeps unattended logs readable; the runner pastes this output into PR bodies.
+addopts = "-q"

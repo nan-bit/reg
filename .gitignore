@@ -3,4 +3,13 @@
 .runner-state/
 .runner-logs/
 
+# Generated output. runs/ and bench/results.md are reproducible from a seed, and
+# committing them would make the compression numbers look like fixtures.
+runs/
+bench/results.md
+*.sqlite
+
+__pycache__/
+*.egg-info/
+.pytest_cache/
 .DS_Store

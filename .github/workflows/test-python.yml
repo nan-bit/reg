@@ -1,0 +1,53 @@
+name: Tests
+
+# The writer reads main's CI verdict before cutting a branch: a pass started on a
+# red base manufactures PRs that are red for a reason that is not theirs. Until
+# this workflow existed that verdict was UNKNOWN every pass, and the runner
+# proceeded loudly — correct, but blind. This is what makes the gate mean anything.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Tests
+        run: pytest
+
+      - name: Determinism — the same seed must give the same bytes
+        # An audit artifact that is not reproducible is not an audit artifact
+        # (docs/plan.md). Once `reg.sim` exists this runs it twice and compares.
+        # It is written to skip loudly rather than silently pass while absent:
+        # a check that cannot fail yet must at least say so.
+        run: |
+          if python -c "import reg.sim" 2>/dev/null; then
+            python -m reg.sim --scenario contact --seed 0 --out /tmp/a.csv
+            python -m reg.sim --scenario contact --seed 0 --out /tmp/b.csv
+            if cmp -s /tmp/a.csv /tmp/b.csv; then
+              echo "deterministic: identical output across runs"
+            else
+              echo "NOT DETERMINISTIC — same seed produced different bytes"
+              diff <(head -20 /tmp/a.csv) <(head -20 /tmp/b.csv) || true
+              exit 1
+            fi
+          else
+            echo "reg.sim does not exist yet — determinism check SKIPPED, not passed."
+          fi

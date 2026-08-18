@@ -4,9 +4,52 @@ Read this before writing code here. The unattended writer tells every agent it
 launches to follow this file, so it is the contract for work that lands while
 nobody is watching.
 
-> **Stack section pending.** The language, layout, build and test commands land
-> here once the project is defined, together with the matching CI workflow in
-> `.github/workflows/`. Everything below is independent of that choice.
+`reg` is a **reachability evidence graph** — a retainable evidence artifact for
+robot autonomy. Read [`docs/plan.md`](docs/plan.md) before writing code, and
+[`docs/prior-art.md`](docs/prior-art.md) before claiming anything is novel.
+
+## Stack
+
+Python 3.11+ · `numpy` · `shapely` · `sqlite3` (stdlib) · `matplotlib` ·
+`hmac`/`hashlib` (stdlib) · `pytest`
+
+```bash
+pip install -e ".[dev]"
+pytest                      # the whole suite; CI runs exactly this
+```
+
+Layout: `reg/` is the package, `tests/` mirrors it, `docs/` holds the argument,
+`runs/` and `bench/` hold generated output and are not committed.
+
+**Do not add dependencies.** Only `shapely` is load-bearing — polygon union and
+intersection is the actual math. No `networkx`, no `pyarrow`, no PyBullet, no
+DuckDB; each was considered and rejected in `docs/plan.md`. If you believe one is
+needed, say so in the PR and do not add it.
+
+## The three rules specific to this project
+
+**1. The Layer A / Layer B boundary is structural, not conventional.** Layer A
+(certifiable) is proprioception, actuation limits, declarations, verdicts, the
+chain. Layer B (uncertifiable) is where anything else in the world is. The
+envelope takes a `ProprioState`, which has no field naming any entity — that
+absence *is* the enforcement, and `tests/test_layer_boundary.py` fails if it
+erodes. Widening Layer A changes what this project can claim; it is never a
+refactor.
+
+**2. Determinism is non-negotiable.** Seed everything; take the seed as an
+argument and record it. Same seed, same bytes. An audit artifact that is not
+reproducible is not an audit artifact, and CI compares two runs.
+
+**3. Enforcement must not trust the policy.** When `enforce/` arrives it computes
+its own envelope and imports from `declare/` no further than the dataclass. A
+constraint layer supplied by the same party as the policy has common-cause failure
+with it — that independence is the mechanism, not a style preference.
+
+## Scope
+
+`docs/plan.md` has a non-goals table. It is binding. If a task does not serve one
+of the four claims, it is out of scope — say so in the PR rather than building it.
+When a phase's success criterion is met, stop; do not gold-plate.
 
 ## Writing code
 

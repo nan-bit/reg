@@ -1,0 +1,6 @@
+# Runner working state — per-host and per-attempt: leases, claims, flock files and
+# the append-only ledger. Evidence about a run on one machine, not shared history.
+.runner-state/
+.runner-logs/
+
+.DS_Store

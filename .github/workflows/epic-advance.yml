@@ -1,0 +1,96 @@
+name: Epic advance
+
+# Flips the next tier of an epic to `agent-ready` when its dependencies close.
+#
+# WHY THIS EXISTS
+#   runner.sh re-reads the `agent-ready` queue every pass, but nothing puts the NEXT
+#   tier of an epic into it. An epic of ~18 tasks across ~6 dependency tiers would
+#   otherwise produce the first tier's PRs and stop, with no sign that it had. This
+#   is the advancing half, and it lives in Actions rather than on the worker host so
+#   it runs whether or not any session, laptop or tmux pane is alive, and leaves an
+#   audit trail.
+#
+#   The contract is a `Depends-on:` trailer in the issue body:
+#       Depends-on: #12, #14
+#   An issue with no trailer is never touched. An issue is flipped only when EVERY
+#   listed dependency is closed — and never if it carries `needs-human`, `blocked`
+#   or `epic`, which are the labels that mean "a person decides this".
+#
+#   Merging is deliberately NOT here. Whether a PR may merge can depend on checks
+#   only the worker host can run against a live system, so the merge decision — if
+#   there is one at all — belongs beside that host, not in Actions.
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report what would flip without labelling'
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  advance:
+    name: Flip unblocked issues to agent-ready
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate dependency trailers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # Every open issue, with its body and labels. The trailer lives in the
+          # body so it is visible to a human reading the issue, not hidden in
+          # metadata a reader would have to know to look for.
+          gh issue list --repo "$GH_REPO" --state open --limit 200 \
+            --json number,title,body,labels > /tmp/open.json
+
+          flipped=0
+          while read -r num; do
+            body=$(jq -r --argjson n "$num" '.[] | select(.number == $n) | .body // ""' /tmp/open.json)
+            labels=$(jq -r --argjson n "$num" '.[] | select(.number == $n) | [.labels[].name] | join(",")' /tmp/open.json)
+
+            case ",$labels," in
+              *,agent-ready,*) continue ;;                       # already queued
+              *,needs-human,*|*,blocked,*|*,epic,*) continue ;;  # a person decides
+            esac
+
+            deps=$(printf '%s' "$body" \
+              | grep -iE '^[[:space:]]*Depends-on:' \
+              | grep -oE '#[0-9]+' | tr -d '#' | sort -u || true)
+            [ -n "$deps" ] || continue
+
+            unmet=""
+            for d in $deps; do
+              state=$(gh issue view "$d" --repo "$GH_REPO" --json state --jq .state 2>/dev/null || echo UNKNOWN)
+              # UNKNOWN counts as unmet: a dependency we cannot verify is not met.
+              [ "$state" = "CLOSED" ] || unmet="$unmet #$d($state)"
+            done
+
+            if [ -n "$unmet" ]; then
+              echo "#$num still blocked by:$unmet"
+              continue
+            fi
+
+            echo "#$num — all dependencies closed ($(echo $deps | tr '\n' ' '))"
+            if [ "${DRY_RUN:-false}" = "true" ]; then
+              echo "  (dry run — not labelling)"
+              continue
+            fi
+            gh issue edit "$num" --repo "$GH_REPO" --add-label agent-ready
+            gh issue comment "$num" --repo "$GH_REPO" --body \
+              "Dependencies closed ($(echo $deps | sed 's/^/#/;s/ / #/g')) — flipped to \`agent-ready\` by the epic-advance workflow. The worker host's runner will pick it up on its next pass."
+            flipped=$((flipped + 1))
+          done < <(jq -r '.[].number' /tmp/open.json)
+
+          echo "flipped $flipped issue(s) to agent-ready"
+          echo "### Epic advance: $flipped issue(s) flipped to \`agent-ready\`" >> "$GITHUB_STEP_SUMMARY"

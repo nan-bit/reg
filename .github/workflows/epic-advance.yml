@@ -40,6 +40,133 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
+      - name: Detect dependency cycles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # WHY THIS STEP EXISTS
+          #   A `Depends-on:` cycle is the one grooming mistake that produces NO
+          #   symptom. Every issue in it waits for another issue in it, so none is
+          #   ever flipped, the advance step reports "0 flipped" exactly as it does
+          #   on a healthy quiet day, and the writer reports "nothing to do". The
+          #   epic simply stops, and the logs of a stalled queue and an idle one are
+          #   identical. Deadlock through a dependency cycle is a known failure mode
+          #   of agent workflow orchestration; here it is silent as well.
+          #
+          #   So it is detected, not waited on. A cycle is a definite fact rather
+          #   than a suspicion — it cannot resolve itself, and nothing else in the
+          #   system can see it — so it escalates on the first pass that finds it.
+
+          gh issue list --repo "$GH_REPO" --state open --limit 200 \
+            --json number,title,body > /tmp/cyc.json
+
+          python3 - <<'EOF' > /tmp/cycles.txt
+          import json, re, sys
+
+          issues = json.load(open("/tmp/cyc.json"))
+          open_nums = {i["number"] for i in issues}
+          titles = {i["number"]: i.get("title", "") for i in issues}
+
+          # Edges point from an issue to what it waits ON, and only among OPEN
+          # issues: a dependency that is closed is satisfied, so it cannot be part
+          # of a live cycle. Excluding them is what keeps a historical loop between
+          # two finished issues from being reported forever.
+          dep_re = re.compile(r"^[ \t]*Depends-on:(.*)$", re.I | re.M)
+          deps = {}
+          for i in issues:
+              found = set()
+              for m in dep_re.finditer(i.get("body") or ""):
+                  for n in re.findall(r"#(\d+)", m.group(1)):
+                      n = int(n)
+                      if n in open_nums:
+                          found.add(n)
+              deps[i["number"]] = found
+
+          # Peel every node whose dependencies are all satisfiable. What survives is
+          # exactly the set that can never advance: the cycles, plus anything whose
+          # path to readiness runs through one.
+          remaining = dict(deps)
+          changed = True
+          while changed:
+              changed = False
+              for n in list(remaining):
+                  if not (remaining[n] & set(remaining)):
+                      del remaining[n]
+                      changed = True
+
+          if not remaining:
+              print("CLEAN")
+              sys.exit(0)
+
+          # Name one concrete loop per component; "these five are stuck" is much
+          # harder to act on than "#12 -> #14 -> #12".
+          def find_cycle(start):
+              path, seen = [], set()
+              node = start
+              while node not in seen:
+                  seen.add(node); path.append(node)
+                  nxt = sorted(remaining[node] & set(remaining))
+                  if not nxt:
+                      return None
+                  node = nxt[0]
+              return path[path.index(node):] + [node]
+
+          printed = set()
+          for n in sorted(remaining):
+              if n in printed:
+                  continue
+              cyc = find_cycle(n)
+              if not cyc:
+                  continue
+              printed.update(cyc)
+              print("CYCLE " + " -> ".join("#%d" % c for c in cyc))
+          for n in sorted(set(remaining) - printed):
+              print("BLOCKED %d %s" % (n, titles.get(n, "")))
+          EOF
+
+          if grep -qx CLEAN /tmp/cycles.txt; then
+            echo "No dependency cycles among open issues."
+            echo "### Dependency graph: no cycles" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "### :warning: Dependency cycles detected" >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' /tmp/cycles.txt | tee -a "$GITHUB_STEP_SUMMARY"
+
+          stuck=$(grep -oE '#[0-9]+' /tmp/cycles.txt | tr -d '#' | sort -un)
+          stuck="$stuck $(awk '/^BLOCKED/{print $2}' /tmp/cycles.txt)"
+
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            echo "(dry run — not labelling)"
+            exit 0
+          fi
+
+          # Escalate to a human. `needs-human` is also what the advance step below
+          # refuses to touch, so labelling here cannot fight with flipping there.
+          # The comment carries a marker and is posted at most once per issue: a
+          # workflow that runs on every merged PR would otherwise re-comment on the
+          # same deadlock all week.
+          marker="<!-- epic-advance:cycle -->"
+          for n in $(printf '%s\n' $stuck | sort -un); do
+            [ -n "$n" ] || continue
+            if gh issue view "$n" --repo "$GH_REPO" --json comments \
+                 --jq '.comments[].body' 2>/dev/null | grep -qF "$marker"; then
+              echo "#$n already flagged"
+              continue
+            fi
+            gh issue edit "$n" --repo "$GH_REPO" --add-label needs-human >/dev/null || true
+            gh issue comment "$n" --repo "$GH_REPO" --body "$(printf '%s\n%s\n\n```\n%s\n```\n\n%s' \
+              "$marker" \
+              "**This issue cannot advance.** Its \`Depends-on:\` chain contains a cycle, so no issue in it will ever be flipped to \`agent-ready\` — the queue would simply look idle." \
+              "$(cat /tmp/cycles.txt)" \
+              "Labelled \`needs-human\`. Break the cycle by editing a \`Depends-on:\` trailer, then remove the label.")" >/dev/null || true
+            echo "#$n flagged needs-human"
+          done
+
       - name: Evaluate dependency trailers
         env:
           GH_TOKEN: ${{ github.token }}

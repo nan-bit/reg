@@ -3,6 +3,7 @@
     from reg import store
     conn = store.create("runs/contact.sqlite")
     store.insert_entity(conn, "obs_crate", "crate", geometry=disc)
+    cfg_id = store.insert_robot_config(conn, "cfg_0", "0.0,0.0", "0.0,0.0")
     edge_id = store.open_edge(conn, "SEPARATION", cfg_id, "obs_crate", t_start=0.0,
                               min_distance=0.41)
     store.extend_edge(conn, edge_id, t_end=2.98)
@@ -84,7 +85,6 @@ __all__ = [
     "put_meta",
     "get_meta",
     "all_meta",
-    "insert_timestep",
     "insert_envelope",
     "attach_envelope_geometry",
     "envelope_row",
@@ -106,7 +106,13 @@ __all__ = [
 #: A v1 reader meeting a v2 file would read a NULL geometry as "no envelope"
 #: rather than as "recompute it" (issue #28, docs/lossiness.md Discarded #9),
 #: which is exactly the confident wrong answer the version exists to prevent.
-SCHEMA_VERSION = 2
+#:
+#: 3: the `timestep` table is gone and `HAS_ENVELOPE` runs `RobotConfig ->
+#: Envelope` (issue #29, docs/lossiness.md Discarded #10). A v2 reader meeting a
+#: v3 file would find `HAS_ENVELOPE` intervals covering only part of the run and
+#: read the gaps as "the robot had no envelope then" rather than as "that frame
+#: is not retained"; same confident wrong answer, one level up.
+SCHEMA_VERSION = 3
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -148,8 +154,18 @@ class EdgeSpec:
 #: actuation limits alone (`reg.envelope`). The other three are Layer B without
 #: exception, because each one names an entity, and where an entity is comes
 #: from perception in any real system.
+#:
+#: `HAS_ENVELOPE` runs `RobotConfig -> Envelope` and not `Timestep -> Envelope`
+#: (issue #29). docs/plan.md Phase 5's table originally said `Timestep`; it now
+#: records the change, and so does this line, because it is a decision and not a
+#: slip. The envelope is a deterministic function of the configuration it was
+#: computed from, so the configuration is the thing it *has an envelope of*, and
+#: the edge's own `t_start`/`t_end` are where time lives. A `Timestep` node was a
+#: second, denser representation of time sitting beside the interval
+#: representation that does the work — one row per frame, which is exactly what
+#: the incremental principle forbids.
 EDGE_SPECS: dict[str, EdgeSpec] = {
-    "HAS_ENVELOPE": EdgeSpec("A", "Timestep", "Envelope", None),
+    "HAS_ENVELOPE": EdgeSpec("A", "RobotConfig", "Envelope", None),
     "INTERSECTS": EdgeSpec("B", "Envelope", "Entity", "overlap_area"),
     "SEPARATION": EdgeSpec("B", "RobotConfig", "Entity", "min_distance"),
     "CONTACT": EdgeSpec("B", "RobotConfig", "Entity", None),
@@ -158,7 +174,6 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
 #: Node kind -> (table, primary key column). Used to check that an edge's
 #: endpoints exist before the edge is written.
 NODE_TABLES: dict[str, tuple[str, str]] = {
-    "Timestep": ("timestep", "timestep_id"),
     "Envelope": ("envelope", "envelope_id"),
     "Entity": ("entity", "entity_id"),
     "RobotConfig": ("robot_config", "config_id"),
@@ -174,26 +189,33 @@ CREATE TABLE meta (
     value TEXT NOT NULL
 );
 
--- An instant that anchors at least one interval. NOT one row per frame: the
--- incremental principle (docs/plan.md Phase 5) is the entire compression story,
--- and a Timestep per frame would put 150 rows back where the graph promises ~1.
-CREATE TABLE timestep (
-    timestep_id TEXT    PRIMARY KEY,
-    frame_id    INTEGER NOT NULL UNIQUE,
-    t           REAL    NOT NULL
-);
+-- THERE IS NO `timestep` TABLE. Every edge carries `t_start` and `t_end`, so
+-- time is already an interval here; a node per instant would be a second and
+-- denser representation of it, one row per frame, which is the thing the
+-- incremental principle (docs/plan.md Phase 5) exists to prevent. Nothing in
+-- docs/plan.md Phase 7's query set needs a per-frame anchor: the two questions
+-- that name frames at all ("frames at risk", "27 frames") divide an interval by
+-- `frame_period_s` in `meta`, which is recorded once and checked uniform at
+-- build time. Issue #29; docs/lossiness.md Discarded #10.
 
 -- Created only when it anchors a retained relationship (docs/lossiness.md
--- Discarded #1), or when an envelope was computed from it. The interpolated
--- path between two of these is gone.
+-- Discarded #1), or when an envelope the artifact retains was computed from it.
+-- The interpolated path between two of these is gone.
 CREATE TABLE robot_config (
     config_id TEXT PRIMARY KEY,
     q         TEXT NOT NULL,
     qd        TEXT NOT NULL
 );
 
--- A row per material change of the envelope, keyed on `envelope_hash`
--- (reg.envelope). The scalars are per material change; `geometry_wkb` is NOT
+-- A row per envelope the artifact retains, keyed on `envelope_hash`
+-- (reg.envelope). NOT one per frame and not one per material change: a moving
+-- arm has a materially different envelope on every frame, so "on material
+-- change" is "on every frame" for exactly the runs that matter, and it put the
+-- node count back in step with the frame count (issue #29). The rule is
+-- `reg.graph.ENVELOPE_RETENTION`, it is recorded in `meta`, and it keeps the
+-- envelope where it anchors something — where an `INTERSECTS` edge names it,
+-- where an entity relationship transitions, and at the two ends of the run.
+-- `geometry_wkb` is retained on a second and narrower rule again
 -- (docs/lossiness.md Discarded #9, issue #28).
 --
 -- WHY THE GEOMETRY MAY BE NULL. The polygon is a deterministic function of
@@ -479,18 +501,6 @@ def _insert_node(
     return node_id
 
 
-def insert_timestep(
-    conn: sqlite3.Connection, timestep_id: str, frame_id: int, t: float
-) -> str:
-    """An instant that anchors at least one interval. Idempotent."""
-    return _insert_node(
-        conn,
-        "timestep",
-        "timestep_id",
-        {"timestep_id": str(timestep_id), "frame_id": int(frame_id), "t": float(t)},
-    )
-
-
 def insert_envelope(
     conn: sqlite3.Connection,
     envelope_id: str,
@@ -502,7 +512,7 @@ def insert_envelope(
     horizon: float,
     source: str,
 ) -> str:
-    """An envelope at a material change. Idempotent on `envelope_id`.
+    """An envelope the artifact retains. Idempotent on `envelope_id`.
 
     `area` is expected already quantized (`reg.tolerances.quantize_area`) and the
     geometry already simplified — this module stores what it is given and does

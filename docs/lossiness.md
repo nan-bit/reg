@@ -77,14 +77,22 @@ Each entry is a claim that the graph can be tested against.
    not a retained fault.
 7. **The complete hash chain** — every `FOLLOWS` link between consecutive records,
    unbroken, so `verify_chain()` is answerable from the graph alone.
-8. **Envelope *identity and scalars* at every material change** — whenever the
-   envelope hash changes under `GEOM_SIMPLIFY_TOL_M`, the artifact records
-   `envelope_hash`, `area`, `horizon`, and `source` (`computed` / `declared` /
-   `clamped`). All three sources are retained separately; a clamp is only legible if
-   the declared and the computed bound both survive. **The geometry itself is not
-   retained at every material change** — see *Discarded* #9, which is the one place
-   this contract discards something it can prove is recoverable rather than
-   something it can prove is irrelevant.
+8. **Envelope *identity and scalars* on every envelope the artifact keeps** — every
+   `envelope` row records `envelope_hash`, `area`, `horizon`, and `source`
+   (`computed` / `declared` / `clamped`). There is no such thing here as a row that
+   says less. All three sources are retained separately; a clamp is only legible if
+   the declared and the computed bound both survive.
+
+   Two narrower clauses sit under this one and both are in *Discarded*, because both
+   are things the contract could have kept and does not: **which frames get a row at
+   all** is #10, and **which of those rows carry the polygon** is #9.
+
+   This clause read "at every material change" until 2026-08-18, when issue #29
+   replaced it. A moving arm has a materially different envelope on *every* frame,
+   so that reading put one row per frame into the artifact for exactly the runs this
+   project exists to record — linear in the frame count, and no amount of shrinking a
+   row changes the shape of linear-in, linear-out. The replacement narrows *when a
+   row exists*; it does not narrow what a row says.
 9. **The layer tag on every edge** — `A` or `B`, per Phase 9. Claim 3 is a query
    over these tags, so an untagged edge is an unusable edge.
 10. **The run's provenance** — scenario name, seed, tolerance constants in force,
@@ -169,6 +177,77 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    make the polygons smaller — that changes what the envelope *is* in order to move
    a storage number, which is the move this whole document forbids.
 
+10. **The envelope at frames that anchor nothing, and the per-frame node itself.**
+    Added 2026-08-18 (issue #29). #9 stopped storing the polygon on every frame and
+    left the row; this stops storing the row.
+
+    **The rule.** An `envelope` row is written on the first and last frame of the
+    run, on every frame at which an `INTERSECTS` or `CONTACT` relationship with an
+    entity begins or ceases to hold, and on every frame at which an `INTERSECTS`
+    edge opens. On every other frame **no `envelope` and no `robot_config` row is
+    written at all**. There is no per-frame node type either: the `Timestep` node in
+    [`docs/plan.md`](plan.md) Phase 5's table is gone, `HAS_ENVELOPE` runs
+    `RobotConfig → Envelope`, and time exists in this artifact only as the
+    `t_start`/`t_end` carried by every edge. The rule is written into every
+    artifact's `meta` table under `envelope_row_retention`, so a reader holding only
+    the file can tell a discard on a stated rule from a build that stopped writing —
+    the pattern of absences does not distinguish them.
+
+    **What a frame with no row means.** That the artifact does not hold that frame's
+    envelope. Not that the robot had none, and not that nothing happened.
+
+    One qualification, because it is the difference between the two rules doing
+    different work: a `HAS_ENVELOPE` interval **extends** across frames at which the
+    envelope hash did not change, and every frame it covers *is* retained — the
+    builder computes the envelope at every frame and compares, so the interval is an
+    assertion about each frame under it. A robot holding still for 3 s at 50 Hz
+    therefore leaves one row covering 150 frames, which is the sentence in
+    [`docs/plan.md`](plan.md) Phase 5 that started all of this. The frames with
+    nothing are the ones a *moving* arm leaves between transitions, where the
+    envelope was different and the artifact kept no record of it.
+
+    **How a question about such a frame is answered.** Two different ways, and the
+    split is the whole point:
+
+    * *Every query in the supported set above answers normally.* All nine are
+      interval queries over edges, and the intervals cover the whole run — a
+      relationship that held at an unretained frame is inside an edge that spans it,
+      with its metric on the edge. Nothing in queries 1–9 reads a per-frame node,
+      which is why removing it is a discard rather than a change of what the
+      artifact can say. `tests/test_graph.py::test_the_separation_timeline_answers_
+      every_frame_within_tolerance` is the gate: query 1, at every frame of a real
+      scenario, against the raw stream, under this document's own predicate.
+    * *The two questions that name frames* — `frames_at_risk` and the incident
+      report's "27 frames" — divide an interval by `frame_period_s` in `meta`, which
+      is recorded once per artifact and refused at build time unless the stream's
+      period is uniform to `TIME_TOL_S`. That is a better answer than counting node
+      rows would have been: a row count would depend on which frames happened to
+      anchor an edge.
+    * *`reg.graph.envelope_at(conn, t)` refuses*, naming the rule. It does not
+      return the neighbouring interval's polygon. See *Unanswerable* #1 — this is
+      that item reaching a sampled frame rather than an instant between two, and for
+      the same reason: the envelope is a function of the configuration, `q` has never
+      been stored at every frame (*Discarded* #1), so an envelope at every frame was
+      only ever available by storing a configuration at every frame. That is the
+      linearity being removed.
+
+    **Why it is a discard and not a deletion.** The test that distinguishes them is
+    whether a run in which something genuinely changes every frame still costs a row
+    every frame. It does: a human walking steadily across the scene crosses a
+    `DISTANCE_TOL_M` bucket at every frame and gets a `SEPARATION` interval and a
+    `robot_config` row at every frame; a human sliding out of the envelope crosses an
+    `AREA_QUANT_SIGFIGS` boundary at every frame and gets an `envelope` row at every
+    frame. `tests/test_graph.py::test_a_stream_that_changes_every_frame_still_emits_
+    a_row_per_frame` and its envelope counterpart assert exactly that. A rule that
+    capped the row count instead of tracking the transitions would pass every
+    sub-linearity measurement in this project and would be dropping evidence.
+
+    **What it does not license.** Widening `DISTANCE_TOL_M`, `TIME_TOL_S` or
+    `AREA_QUANT_SIGFIGS` so that more things count as unchanged. That buys the row
+    count by discarding resolution this contract advertises, which is its own named
+    failure mode — see *What the tolerances do not license* below, and the sentence
+    about editing a constant to make a red test go green.
+
 ---
 
 ## Unanswerable
@@ -177,10 +256,16 @@ Questions the artifact cannot answer, and must refuse rather than approximate. A
 query that hits one of these returns *could-not-evaluate*; it never returns a
 plausible interpolated number.
 
-1. **Exact pose at an arbitrary unsampled instant.** "Where was the end effector at
-   t = 12.3471 s?" The graph has the enclosing interval and the configurations at
-   its endpoints. It cannot reconstruct the pose between them, and interpolating one
-   would produce a number indistinguishable from a recorded one.
+1. **Exact pose at an instant the graph retains no configuration for.** "Where was
+   the end effector at t = 12.3471 s?" The graph has the enclosing interval and the
+   configurations at its endpoints. It cannot reconstruct the pose between them, and
+   interpolating one would produce a number indistinguishable from a recorded one.
+
+   This covers instants *between* two frames and, since issue #29, sampled frames
+   that anchor no relationship (*Discarded* #10) — the same refusal for the same
+   reason, since a frame whose `robot_config` was never written is exactly as
+   unreconstructable as an instant between two that were. The envelope inherits it:
+   `reg.graph.envelope_at` refuses both.
 2. **Anything about entities outside the entity set.** An object nobody declared as
    an entity leaves no trace. Absence of an entity from the graph is not evidence of
    its absence from the room.

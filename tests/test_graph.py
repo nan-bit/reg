@@ -19,13 +19,24 @@ more than `DISTANCE_TOL_M` is *never* folded into the previous interval.
 WHAT THAT TEST DOES NOT COVER, AND WHERE THE REST OF IT IS
 ----------------------------------------------------------
 It builds from a robot holding still, so the envelope is one polygon for the
-whole run and it says nothing about the case issue #28 measured: an arm in
-continuous motion, where every frame is a material envelope change and the
-geometry was stored per frame. `test_geometry_rows_are_far_fewer_than_frames_in_a
-_moving_scenario` measures that case, and
-`test_envelope_at_recomputes_the_stored_polygon_exactly` is the gate on the
-discard being lossless — everything else in the retention section is bookkeeping
-around those two.
+whole run. That is the easy case for both halves of the rule, and the two issues
+after it were both about the *moving* arm, where the envelope genuinely differs
+every frame:
+
+* issue #28 — the polygon was stored per frame. `test_geometry_rows_are_far_
+  fewer_than_frames_in_a_moving_scenario` measures it and
+  `test_envelope_at_recomputes_the_stored_polygon_exactly` is the gate on the
+  discard being lossless.
+* issue #29 — the *rows* were still per frame, so the artifact stayed linear in
+  the frame count whatever the rows contained.
+  `test_node_rows_do_not_grow_with_frame_count` and
+  `test_node_rows_are_sub_linear_for_every_fixture` are the invariant, and
+  `test_a_stream_that_changes_every_frame_still_emits_a_row_per_frame` is the
+  negative that separates compression from deletion: a run in which something
+  genuinely changes every frame must still cost a row every frame.
+  `test_the_separation_timeline_answers_every_frame_within_tolerance` is the
+  gate — the supported query still agrees with the raw stream frame by frame,
+  which is what makes the missing rows a discard and not a hole.
 
 Envelopes are computed with deliberately coarse parameters throughout (`_FAST`).
 Cost is linear in `n_samples * horizon / substep_dt` and these tests are about
@@ -38,6 +49,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -47,12 +59,12 @@ from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from reg import graph, store
-from reg.envelope import compute_envelope
+from reg.envelope import compute_envelope, envelope_hash
 from reg.graph import HUMAN_ENTITY_ID, GraphBuildError, build
 from reg.kinematics import link_polygons
 from reg.scenarios import SCENARIOS
-from reg.sim import simulate
-from reg.stream import write_frames
+from reg.sim import provenance, simulate
+from reg.stream import read_frames, write_frames
 from reg.tolerances import (
     DISTANCE_TOL_M,
     distance_bucket,
@@ -65,6 +77,11 @@ from reg.world import DEMO_WORLD
 
 LIMITS = DEMO_WORLD.limits
 HUMAN_RADIUS = DEMO_WORLD.human_radius
+
+#: The seed every scenario stream in this file is generated at. Stated once
+#: rather than passed as a literal: `reg.sim` records it in the provenance block
+#: and a test that used a different one per call would be comparing two runs.
+SIM_SEED = 0
 
 #: 50 Hz, the rate the scenarios are generated at.
 DT = 0.02
@@ -128,6 +145,34 @@ def _edges(path: Path, **filters) -> list[sqlite3.Row]:
         conn.close()
 
 
+def _scenario_stream(scn, dt: float, path: Path) -> Path:
+    """One scenario's stream at a stated frame period. The same run, resampled.
+
+    `Scenario` is frozen and carries `dt` as a field, so a copy at half the
+    period is the same waypoints interpolated twice as often — the same
+    trajectory and the same human walk, sampled finer. That is what makes the
+    two builds comparable: nothing about the run changed, only how often it was
+    looked at.
+    """
+    scn = replace(scn, dt=dt)
+    return write_frames(scn.states(SIM_SEED), path, comments=provenance(scn, SIM_SEED))
+
+
+def _envelope_digests(frames) -> list[str]:
+    """The envelope's identity at each frame, computed the way `build` does.
+
+    Several tests need "the envelope changed materially every frame" to be true
+    before they say anything, and since issue #29 that fact can no longer be read
+    off the row count — the artifact deliberately no longer keeps a row per
+    frame. Reading it off the rows would also mean inferring the precondition
+    from the thing under test.
+    """
+    return [
+        envelope_hash(simplify_geometry(compute_envelope(f.proprio(), LIMITS, **_FAST)))
+        for f in frames
+    ]
+
+
 # --------------------------------------------------------------------------
 # The compression claim, and its negative
 # --------------------------------------------------------------------------
@@ -153,11 +198,115 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "SEPARATION": 2,
         "CONTACT": 0,
     }
-    # And the nodes those edges anchor, once each — not per frame.
-    assert result.nodes["Timestep"] == 1
-    assert result.nodes["Envelope"] == 1
-    assert result.nodes["RobotConfig"] == 1
-    assert result.nodes["Entity"] == 2
+    # And the nodes those edges anchor, once each — not per frame. There is no
+    # `Timestep` kind to check: issue #29 removed it, and its absence from
+    # `store.NODE_TABLES` is asserted in `test_there_is_no_per_frame_node_kind`.
+    assert result.nodes == {"Envelope": 1, "RobotConfig": 1, "Entity": 2}
+
+
+@pytest.mark.parametrize("n_frames", [12, 24, 240])
+def test_node_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -> None:
+    """The same invariant one level down, on the case that used to fail it.
+
+    THIS IS ISSUE #29. The test above holds the arm still, so the envelope is one
+    polygon and one row for the whole run whatever the rule is. Here the arm
+    creeps: every frame is a materially different envelope, which under
+    "emit on material change" meant a `Timestep` row and an `envelope` row per
+    frame — linear in the frame count however small the rows were made, and a
+    single-digit ceiling on the compression ratio by construction.
+
+    Nothing about the *relationships* changes across these frames, so the node
+    count must be a property of the relationships. Asserted as equality across a
+    twentyfold range rather than as a ratio: a bound like "fewer than half the
+    frames" would go green for a rule that still scaled, just more slowly.
+    """
+    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    assert len(set(_envelope_digests(frames))) == n_frames, (
+        "precondition failed: the envelope did not change every frame, so this "
+        "is the held-still case again and says nothing about issue #29."
+    )
+    csv = _write_stream(tmp_path / f"creep_{n_frames}.csv", frames)
+    result = _build(csv, tmp_path / f"creep_{n_frames}.sqlite")
+
+    assert result.frames == n_frames
+    # Two envelopes and two configurations — the two ends of the run, which
+    # `GEOMETRY_RETENTION` keeps and nothing else here anchors. The same numbers
+    # at 12 frames and at 240.
+    assert result.nodes == {"Envelope": 2, "RobotConfig": 2, "Entity": 2}
+    assert result.edges == {
+        "HAS_ENVELOPE": 2,
+        "INTERSECTS": 0,
+        "SEPARATION": 2,
+        "CONTACT": 0,
+    }
+
+
+@pytest.mark.parametrize("name", sorted(SCENARIOS))
+def test_node_rows_are_sub_linear_for_every_fixture(tmp_path: Path, name: str) -> None:
+    """Every fixture, sampled twice as fast: same trajectory, twice the frames.
+
+    The acceptance shape issue #14 used for edges, applied to nodes. Doubling the
+    sample rate changes nothing about the run — the arm follows the same path and
+    the human walks the same walk — so it changes nothing about which
+    relationships hold or when they transition. A node count that tracked the
+    frame count would double; one that is a property of the motion must not.
+
+    The bar is **strictly slower than the frames**, not a fixed number, and the
+    two reasons it cannot be tighter are both real. Doubling the rate genuinely
+    does add transitions at the margin: a metric that crossed a quantum between
+    two old frames now crosses it at a frame in between, and a quantity that
+    drifted over a boundary and back inside one old frame period is now seen
+    doing it. And a human walking steadily across the scene crosses a
+    `DISTANCE_TOL_M` bucket every frame at either rate — that is the case
+    `test_a_stream_that_changes_every_frame_still_emits_a_row_per_frame` exists
+    to protect, so a bound that forbade it here would forbid the artifact from
+    recording what happened.
+
+    What must not happen is the count *following* the frames. Before this change
+    it followed them exactly — one `Timestep` and one `envelope` row per frame,
+    2.0x for 2.0x — so the strict inequality is the assertion that would have
+    gone red, and it is the one the issue's acceptance criterion names.
+    """
+    scn = SCENARIOS[name]
+    coarse = _scenario_stream(scn, scn.dt, tmp_path / f"{name}_coarse.csv")
+    fine = _scenario_stream(scn, scn.dt / 2.0, tmp_path / f"{name}_fine.csv")
+
+    a = build(
+        coarse,
+        tmp_path / f"{name}_coarse.sqlite",
+        scn.world.limits,
+        human_radius=scn.world.human_radius,
+        **_FAST,
+    )
+    b = build(
+        fine,
+        tmp_path / f"{name}_fine.sqlite",
+        scn.world.limits,
+        human_radius=scn.world.human_radius,
+        **_FAST,
+    )
+
+    assert b.frames == 2 * a.frames - 1, (
+        "precondition failed: halving dt did not roughly double the frame count, "
+        "so there is no frame-count increase to be sub-linear in."
+    )
+    total_a = sum(a.nodes.values())
+    total_b = sum(b.nodes.values())
+    frame_growth = b.frames / a.frames
+    node_growth = total_b / total_a
+    assert node_growth < frame_growth, (
+        f"{name}: {total_a} nodes at {a.frames} frames and {total_b} at "
+        f"{b.frames} — {node_growth:.2f}x for {frame_growth:.2f}x more frames. "
+        "The node count is tracking the frame count, which is the linearity "
+        "issue #29 exists to remove."
+    )
+    # The `Envelope` row is what issue #29 moved, so it is asserted on its own
+    # rather than left to hide inside a total that the entity rows and the
+    # separation-anchoring configs also contribute to.
+    assert b.nodes["Envelope"] / a.nodes["Envelope"] < frame_growth, (
+        f"{name}: {a.nodes['Envelope']} envelope rows at {a.frames} frames and "
+        f"{b.nodes['Envelope']} at {b.frames}."
+    )
 
 
 def test_the_single_interval_spans_the_whole_hold(tmp_path: Path) -> None:
@@ -248,22 +397,23 @@ def test_an_interval_is_an_interval_of_the_relationship_not_the_envelope(
     own `FLOAT_PRECISION` can carry, and far above the 1 nm resolution
     `envelope_hash` distinguishes, so every frame is a material envelope change,
     and far below `DISTANCE_TOL_M`, so no separation moves a bucket. The
-    precondition on the HAS_ENVELOPE count is asserted, because if the envelope
-    ever stopped changing this test would pass while proving nothing.
+    precondition that the envelope really did change every frame is asserted,
+    because if it ever stopped changing this test would pass while proving
+    nothing.
     """
     n_frames = 12
     frames = [
         _frame(i, (2.0, 0.0), q=(1e-6 * i, 0.0), qd=(0.0, 0.0))
         for i in range(n_frames)
     ]
+    assert len(set(_envelope_digests(frames))) == n_frames, (
+        "precondition failed: the envelope did not change every frame, so this "
+        "test says nothing about relationships outliving envelopes."
+    )
     csv = _write_stream(tmp_path / "creep.csv", frames)
     out = tmp_path / "creep.sqlite"
     _build(csv, out)
 
-    assert len(_edges(out, edge_type="HAS_ENVELOPE")) == n_frames, (
-        "precondition failed: the envelope did not change every frame, so this "
-        "test says nothing about relationships outliving envelopes."
-    )
     assert len(_edges(out, edge_type="SEPARATION")) == 2
 
 
@@ -601,7 +751,6 @@ def test_human_radius_has_no_default() -> None:
 def seeded(tmp_path: Path):
     """A store with one node of each kind, so edge tests have endpoints."""
     conn = store.create(tmp_path / "store.sqlite")
-    store.insert_timestep(conn, "ts_0", 0, 0.0)
     store.insert_robot_config(conn, "cfg_0", "0.000000,0.000000", "0.000000,0.000000")
     store.insert_envelope(
         conn,
@@ -620,7 +769,7 @@ def seeded(tmp_path: Path):
 
 def test_a_backwards_interval_is_refused(seeded) -> None:
     with pytest.raises(store.StoreError, match="backwards"):
-        store.open_edge(seeded, "HAS_ENVELOPE", "ts_0", "env_0", 1.0, t_end=0.5)
+        store.open_edge(seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 1.0, t_end=0.5)
 
 
 def test_the_schema_itself_refuses_a_backwards_interval(seeded) -> None:
@@ -629,7 +778,7 @@ def test_the_schema_itself_refuses_a_backwards_interval(seeded) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
             "INSERT INTO edge (type, layer, src_kind, src_id, dst_kind, dst_id, "
-            "t_start, t_end) VALUES ('HAS_ENVELOPE','A','Timestep','ts_0',"
+            "t_start, t_end) VALUES ('HAS_ENVELOPE','A','RobotConfig','cfg_0',"
             "'Envelope','env_0', 1.0, 0.0)"
         )
 
@@ -638,13 +787,13 @@ def test_the_schema_refuses_an_untagged_layer(seeded) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
             "INSERT INTO edge (type, layer, src_kind, src_id, dst_kind, dst_id, "
-            "t_start, t_end) VALUES ('HAS_ENVELOPE','?','Timestep','ts_0',"
+            "t_start, t_end) VALUES ('HAS_ENVELOPE','?','RobotConfig','cfg_0',"
             "'Envelope','env_0', 0.0, 1.0)"
         )
 
 
 def test_extending_an_edge_backwards_is_refused(seeded) -> None:
-    edge_id = store.open_edge(seeded, "HAS_ENVELOPE", "ts_0", "env_0", 0.0)
+    edge_id = store.open_edge(seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0)
     store.extend_edge(seeded, edge_id, 2.0)
     with pytest.raises(store.StoreError, match="backwards"):
         store.extend_edge(seeded, edge_id, 1.0)
@@ -656,7 +805,7 @@ def test_an_unknown_edge_type_is_refused(seeded) -> None:
     with pytest.raises(store.StoreError, match="not an edge type"):
         store.layer_of("DECLARED")
     with pytest.raises(store.StoreError, match="not an edge type"):
-        store.open_edge(seeded, "DECLARED", "ts_0", "env_0", 0.0)
+        store.open_edge(seeded, "DECLARED", "cfg_0", "env_0", 0.0)
 
 
 def test_a_missing_metric_is_refused(seeded) -> None:
@@ -760,19 +909,55 @@ def _frames_with_geometry(path: Path) -> set[int]:
     }
 
 
+def _frames_with_envelope(path: Path) -> set[int]:
+    """Frame ids the artifact retains an `Envelope` row for, via HAS_ENVELOPE.
+
+    Every other frame of the run is one `ENVELOPE_RETENTION` keeps nothing for,
+    and `envelope_at` refuses it. An interval spanning several frames retains all
+    of them: it asserts the envelope was unchanged throughout, which is a
+    statement about each frame it covers.
+    """
+    conn = store.connect(path)
+    try:
+        rows = conn.execute(
+            "SELECT t_start, t_end FROM edge WHERE type = 'HAS_ENVELOPE'"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        frame_id
+        for row in rows
+        for frame_id in range(
+            int(round(row["t_start"] / DT)), int(round(row["t_end"] / DT)) + 1
+        )
+    }
+
+
 def _creep_frames(n_frames: int, human_at: Callable[[int], tuple[float, float]]):
     """A stream whose envelope changes materially every frame.
 
     The arm creeps by 1e-6 rad per frame — above the raw stream's own float
     precision and far above the nanometre `envelope_hash` resolves, so every
-    frame is a distinct envelope and therefore a distinct `envelope` row. Without
-    that, a single row would serve every frame and nothing below would be
-    measuring per-frame retention at all.
+    frame is a distinct envelope. Without that, a single row would serve every
+    frame and nothing below would be measuring per-frame retention at all.
     """
     return [
         _frame(i, human_at(i), q=(1e-6 * i, 0.0), qd=(0.0, 0.0))
         for i in range(n_frames)
     ]
+
+
+def _sliding_frames(n_frames: int):
+    """A creeping arm with the human inside the envelope, sliding out of it.
+
+    The overlap area crosses an `AREA_QUANT_SIGFIGS` boundary every frame, so
+    `INTERSECTS` reopens every frame and every frame is therefore one the
+    artifact retains an `Envelope` row for — while `GEOMETRY_RETENTION` still
+    keeps a polygon on only two of them. It is the one shape in this file where
+    a retained row with a *discarded* polygon exists, which is what the
+    recomputation refusals need in order to have anything to refuse about.
+    """
+    return _creep_frames(n_frames, lambda i: (0.95 - 0.03 * i, 0.0))
 
 
 def test_geometry_is_stored_only_at_transitions_and_the_ends(tmp_path: Path) -> None:
@@ -804,11 +989,19 @@ def test_geometry_is_stored_only_at_transitions_and_the_ends(tmp_path: Path) -> 
     assert intersects[0]["t_start"] == pytest.approx(quantize_time(3 * DT))
     assert intersects[0]["t_end"] == pytest.approx(quantize_time(6 * DT))
 
-    assert len(_envelope_rows(out)) == n_frames, (
-        "precondition failed: the envelope did not change every frame, so the "
-        "rows do not correspond to frames one for one."
+    assert len(set(_envelope_digests(frames))) == n_frames, (
+        "precondition failed: the envelope did not change every frame, so a "
+        "single row could serve several of them and the frame a polygon belongs "
+        "to would be ambiguous."
     )
     assert _frames_with_geometry(out) == {0, 3, 6, n_frames - 1}
+
+    # ...and since issue #29 those are also the only frames with a row at all:
+    # nothing else in this run anchors one, and a polygon is only storable on a
+    # row that exists. The two sets coinciding here is the narrow case, not the
+    # rule — `test_a_stream_that_changes_every_frame_still_emits_a_row_per_frame`
+    # is the run where rows far outnumber polygons.
+    assert _frames_with_envelope(out) == {0, 3, 6, n_frames - 1}
 
 
 def test_an_overlap_that_moves_a_quantum_is_not_a_transition(tmp_path: Path) -> None:
@@ -823,7 +1016,7 @@ def test_an_overlap_that_moves_a_quantum_is_not_a_transition(tmp_path: Path) -> 
     fixture where the overlap happens to hold steady.
     """
     n_frames = 12
-    frames = _creep_frames(n_frames, lambda i: (0.95 - 0.03 * i, 0.0))
+    frames = _sliding_frames(n_frames)
     csv = _write_stream(tmp_path / "slide.csv", frames)
     out = tmp_path / "slide.sqlite"
     _build(csv, out)
@@ -845,24 +1038,29 @@ def test_an_overlap_that_moves_a_quantum_is_not_a_transition(tmp_path: Path) -> 
     assert _frames_with_geometry(out) == {0, n_frames - 1}
 
 
-def test_envelope_scalars_stay_per_frame_while_geometry_does_not(
-    tmp_path: Path,
-) -> None:
+def test_every_retained_envelope_carries_its_scalars(tmp_path: Path) -> None:
     """The half of the rule that is easy to lose: the scalars are not discarded.
 
     `envelope_hash`, `area`, `horizon` and `source` are what queries read and
     they cost a few dozen bytes; deleting them along with the polygon would make
-    the artifact smaller and answerless.
+    the artifact smaller and answerless. Issue #29 changed *which frames* get a
+    row — it did not license a row that says less. Asserted over the sliding
+    fixture, where rows outnumber polygons ten to one, so the rows being checked
+    are mostly the geometry-less ones.
     """
     n_frames = 12
-    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    frames = _sliding_frames(n_frames)
     csv = _write_stream(tmp_path / "scalars.csv", frames)
     out = tmp_path / "scalars.sqlite"
     _build(csv, out)
 
     rows = _envelope_rows(out)
-    assert len(rows) == n_frames
-    assert len({row["envelope_hash"] for row in rows}) == n_frames
+    assert len(rows) > len(_frames_with_geometry(out)), (
+        "precondition failed: every retained row kept its polygon, so this says "
+        "nothing about what a row without one still carries."
+    )
+    # Content-derived ids, so distinct rows are distinct envelopes.
+    assert len({row["envelope_hash"] for row in rows}) == len(rows)
     for row in rows:
         assert row["envelope_hash"]
         assert row["area"] > 0.0
@@ -925,24 +1123,33 @@ def test_envelope_at_answers_the_same_way_whether_stored_or_recomputed(
 ) -> None:
     """A caller cannot tell which happened, except by timing.
 
-    Every frame of the run is asked for, including the ones whose geometry was
-    discarded, and every answer is a non-empty polygon of the right area. A
-    version of this that only queried the stored frames would pass against an
-    `envelope_at` that could not recompute at all.
+    Every frame the artifact *retains* is asked for, including the ones whose
+    geometry was discarded, and every answer is a non-empty polygon of the right
+    area. A version of this that only queried the stored frames would pass
+    against an `envelope_at` that could not recompute at all.
+
+    The sliding fixture, because it is the one where retained rows and stored
+    polygons come apart: `INTERSECTS` reopens every frame so every frame is
+    retained, and `GEOMETRY_RETENTION` keeps a polygon on two of them.
     """
     n_frames = 8
-    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
-    csv = _write_stream(tmp_path / "creep.csv", frames)
-    out = tmp_path / "creep.sqlite"
+    frames = _sliding_frames(n_frames)
+    csv = _write_stream(tmp_path / "slide.csv", frames)
+    out = tmp_path / "slide.sqlite"
     _build(csv, out)
 
+    retained = _frames_with_envelope(out)
     conn = store.connect(out)
     try:
         discarded = conn.execute(
             "SELECT count(*) AS n FROM envelope WHERE geometry_wkb IS NULL"
         ).fetchone()["n"]
         assert discarded > 0, "precondition failed: nothing was discarded"
-        for frame_id in range(n_frames):
+        assert len(retained) > discarded > 0, (
+            "precondition failed: the retained frames and the stored polygons "
+            "are the same set, so recomputation is never exercised."
+        )
+        for frame_id in sorted(retained):
             polygon = graph.envelope_at(conn, quantize_time(frame_id * DT))
             row = conn.execute(
                 "SELECT e.area AS area FROM envelope e JOIN edge ON "
@@ -972,9 +1179,14 @@ def test_geometry_rows_are_far_fewer_than_frames_in_a_moving_scenario(
     A real scenario rather than a synthetic one, at coarse envelope parameters:
     the number of envelope *rows* is a property of the motion, and the motion is
     what `reg.scenarios` defines.
+
+    Since issue #29 both counts are held down, and they are asserted separately
+    because they are two different rules failing in two different ways: rows back
+    in step with the frame count is emit-on-change not reaching the nodes, and
+    polygons back in step with the rows is issue #28 returning.
     """
     csv = tmp_path / "sustained_overlap.csv"
-    simulate("sustained_overlap", 0, csv)
+    simulate("sustained_overlap", SIM_SEED, csv)
     out = tmp_path / "sustained_overlap.sqlite"
     world = SCENARIOS["sustained_overlap"].world
     result = build(
@@ -984,25 +1196,136 @@ def test_geometry_rows_are_far_fewer_than_frames_in_a_moving_scenario(
     rows = _envelope_rows(out)
     with_geometry = [row for row in rows if row["geometry_wkb"] is not None]
 
-    # The scalars still cover every frame: one envelope row per material change,
-    # and this arm changes every frame.
-    assert len(rows) == result.frames
-    assert len(_edges(out, edge_type="HAS_ENVELOPE")) == result.frames
-
-    # ...and the geometry does not. An order of magnitude is the bar, not a
-    # golden count: the exact number is a property of the scenario's transitions
-    # and would go red on any harmless change to it.
+    # A fraction of the frame count, not a golden count: the exact numbers are
+    # properties of this scenario's transitions and would go red on any harmless
+    # change to it. Halving is a low bar for the rows and deliberately so — the
+    # invariant that node counts do not *scale* with the frame count is
+    # `test_node_rows_are_sub_linear_for_every_fixture`, and this is the
+    # measurement on one real fixture beside it.
+    assert len(rows) * 2 < result.frames, (
+        f"{len(rows)} envelope rows for {result.frames} frames; emit-on-change "
+        "is not reaching the nodes (issue #29)."
+    )
     assert len(with_geometry) * 10 < result.frames, (
         f"{len(with_geometry)} of {result.frames} frames kept their envelope "
         "geometry; the per-frame storage issue #28 measured is back."
     )
-    # Every one of them can still be answered, stored or not.
+    # Every retained envelope can still be answered, stored or not.
     conn = store.connect(out)
     try:
         for row in _edges(out, edge_type="HAS_ENVELOPE"):
             assert not graph.envelope_at(conn, row["t_start"]).is_empty
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("n_frames", [12, 30])
+def test_a_stream_that_changes_every_frame_still_emits_a_row_per_frame(
+    tmp_path: Path, n_frames: int
+) -> None:
+    """**THE NEGATIVE TEST FOR ISSUE #29.** Fewer rows must mean less happened.
+
+    Without this, "the artifact shrank" and "the artifact stopped recording
+    transitions" are indistinguishable — a rule that emitted a fixed number of
+    rows however much moved would pass every sub-linearity assertion in this file
+    and would be a cap rather than a compression, silently dropping the
+    transitions an incident report is made of.
+
+    So the condition the rule guards against is constructed deliberately. The
+    human walks steadily at 3 cm per frame, which is three `DISTANCE_TOL_M`
+    quanta, so the quantized separation is different at every frame and no
+    `SEPARATION` interval may extend across two of them. The arm creeps at the
+    same time, so every frame's configuration is distinct too. The row counts
+    must track the frame count here, exactly.
+    """
+    frames = [
+        _frame(i, (2.4 - 0.03 * i, 0.0), q=(1e-6 * i, 0.0), qd=(0.0, 0.0))
+        for i in range(n_frames)
+    ]
+    csv = _write_stream(tmp_path / f"walk_{n_frames}.csv", frames)
+    result = _build(csv, tmp_path / f"walk_{n_frames}.sqlite")
+
+    human = _edges(tmp_path / f"walk_{n_frames}.sqlite", edge_type="SEPARATION",
+                   dst_id=HUMAN_ENTITY_ID)
+    assert len(human) == n_frames, (
+        f"the human moved 3 cm per frame — three quanta — over {n_frames} frames "
+        f"and the artifact holds {len(human)} separation intervals. Transitions "
+        "are being folded away, which is deletion and not compression."
+    )
+    # Each of those intervals is a single instant, and every one names its own
+    # configuration: the RobotConfig rows track the frames too.
+    assert all(row["t_start"] == row["t_end"] for row in human)
+    assert result.nodes["RobotConfig"] == n_frames
+
+
+@pytest.mark.parametrize("n_frames", [8, 12])
+def test_envelope_rows_track_the_frames_when_the_overlap_changes_every_frame(
+    tmp_path: Path, n_frames: int
+) -> None:
+    """The same negative for the `Envelope` row, which is what issue #29 moved.
+
+    `test_a_stream_that_changes_every_frame_still_emits_a_row_per_frame` shows
+    the separation edges and their configurations still costing a row a frame; it
+    does not show it for the envelope, because a human walking *outside* the
+    envelope never opens an `INTERSECTS` edge. Here the human is inside it and
+    sliding out, so the overlap area crosses a quantum boundary every frame and
+    every frame is a frame the artifact must retain.
+    """
+    frames = _sliding_frames(n_frames)
+    csv = _write_stream(tmp_path / f"slide_{n_frames}.csv", frames)
+    out = tmp_path / f"slide_{n_frames}.sqlite"
+    result = _build(csv, out)
+
+    assert result.edges["INTERSECTS"] == n_frames, (
+        "precondition failed: the overlap did not move a quantum every frame, so "
+        "this fixture is not the every-frame-changes case."
+    )
+    assert result.nodes["Envelope"] == n_frames
+    assert _frames_with_envelope(out) == set(range(n_frames))
+
+
+def test_the_separation_timeline_answers_every_frame_within_tolerance(
+    tmp_path: Path,
+) -> None:
+    """**THE GATE ON ISSUE #29.** The supported query still answers, frame by frame.
+
+    Issue #29's acceptance criterion: whatever the graph could answer before must
+    still answer identically after, because that is the whole difference between
+    compression and deletion. Query 1 of docs/lossiness.md's supported set, under
+    that document's own agreement predicate — "per sampled frame,
+    |d_graph - d_csv| <= DISTANCE_TOL_M" — over a real scenario at every frame of
+    it, including all the frames the artifact now keeps no node for.
+
+    Two things are asserted and the first is the one that catches a hole: **every
+    frame must be covered** by some `SEPARATION` interval. A dropped interval
+    makes a frame unanswerable, and an unanswerable frame is exactly what
+    dropping rows too eagerly produces — it would not show up as a wrong distance
+    anywhere.
+    """
+    scn = SCENARIOS["sustained_overlap"]
+    csv = tmp_path / "sustained_overlap.csv"
+    simulate(scn.name, SIM_SEED, csv)
+    out = tmp_path / "sustained_overlap.sqlite"
+    build(csv, out, scn.world.limits, human_radius=scn.world.human_radius, **_FAST)
+
+    intervals = _edges(out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
+    assert intervals, "precondition failed: no separation intervals for the human"
+
+    for frame in read_frames(csv):
+        t = quantize_time(frame.t)
+        covering = [r for r in intervals if r["t_start"] <= t <= r["t_end"]]
+        assert covering, (
+            f"no SEPARATION interval covers t={t}. The graph cannot answer query "
+            "1 at a frame of the run it was built from; a row that should have "
+            "been kept was dropped."
+        )
+        body = unary_union(link_polygons(frame.proprio(), scn.world.limits))
+        truth = float(body.distance(scn.world.human_polygon(frame.human_pos)))
+        assert abs(float(covering[0]["min_distance"]) - truth) <= DISTANCE_TOL_M, (
+            f"at t={t} the graph says {covering[0]['min_distance']} m and the raw "
+            f"stream says {truth} m, outside the {DISTANCE_TOL_M} m budget "
+            "docs/lossiness.md allocates for query 1."
+        )
 
 
 # --- the negatives: what envelope_at refuses rather than approximates ------
@@ -1032,6 +1355,91 @@ def test_envelope_at_refuses_an_instant_with_no_envelope(tmp_path: Path) -> None
         conn.close()
 
 
+def test_envelope_at_refuses_a_frame_the_artifact_does_not_retain(
+    tmp_path: Path,
+) -> None:
+    """THE NEGATIVE TEST FOR ISSUE #29'S READER SIDE.
+
+    A frame with no node is a frame whose envelope the artifact does not hold,
+    and the failure mode of the whole change is answering it anyway with the
+    neighbouring interval's polygon — a region the robot could reach, reported
+    for an instant at which it could not, and indistinguishable from a recorded
+    one. The arm creeps every frame, so the envelope at frame 5 is genuinely
+    unlike the envelope at frame 0, and the artifact retains only the two ends.
+    """
+    n_frames = 12
+    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
+    assert len(set(_envelope_digests(frames))) == n_frames, (
+        "precondition failed: the envelope did not change every frame, so an "
+        "unretained frame's envelope would be the retained one's and this test "
+        "could not tell a refusal from a correct answer."
+    )
+    csv = _write_stream(tmp_path / "creep.csv", frames)
+    out = tmp_path / "creep.sqlite"
+    _build(csv, out)
+
+    retained = _frames_with_envelope(out)
+    assert retained == {0, n_frames - 1}, (
+        "precondition failed: this run was expected to retain only its two ends"
+    )
+
+    conn = store.connect(out)
+    try:
+        for frame_id in range(1, n_frames - 1):
+            with pytest.raises(graph.GraphQueryError, match="no envelope"):
+                graph.envelope_at(conn, quantize_time(frame_id * DT))
+        # ...and the frames it does retain still answer, so the refusal above is
+        # the rule biting rather than `envelope_at` being broken.
+        for frame_id in sorted(retained):
+            assert not graph.envelope_at(
+                conn, quantize_time(frame_id * DT)
+            ).is_empty
+    finally:
+        conn.close()
+
+
+def test_the_artifact_states_the_rule_its_absences_follow(tmp_path: Path) -> None:
+    """A reader holding only the file must be able to read the gaps.
+
+    The pattern of missing frames does not distinguish "not retained, on a stated
+    rule" from "this build stopped writing", so the rule travels in `meta` — the
+    same discipline `GEOMETRY_RETENTION` follows for a NULL polygon, one level
+    out. A key that is absent, or present and empty, is the failure.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        meta = store.all_meta(conn)
+    finally:
+        conn.close()
+
+    assert meta[graph.META_ENVELOPE_RETENTION] == graph.ENVELOPE_RETENTION
+    assert meta[graph.META_GEOMETRY_RETENTION] == graph.GEOMETRY_RETENTION
+    # It has to name what a reader would otherwise have to guess at.
+    assert "envelope_at" in meta[graph.META_ENVELOPE_RETENTION]
+
+
+def test_there_is_no_per_frame_node_kind() -> None:
+    """The vocabulary itself, independent of any run (issue #29).
+
+    `Timestep` is gone: every edge already carries `t_start`/`t_end`, so a node
+    per instant was a denser second representation of time, and docs/plan.md
+    Phase 7's query set needs no per-frame anchor. Asserted against the schema
+    rather than against a build, so re-adding it is a decision someone has to
+    make here and not something that creeps back through a call site.
+    """
+    assert "Timestep" not in store.NODE_TABLES
+    assert not hasattr(store, "insert_timestep")
+    assert store.EDGE_SPECS["HAS_ENVELOPE"].src_kind == "RobotConfig"
+    # Every endpoint kind in the vocabulary must be a table that exists.
+    for edge_type, spec in store.EDGE_SPECS.items():
+        assert spec.src_kind in store.NODE_TABLES, edge_type
+        assert spec.dst_kind in store.NODE_TABLES, edge_type
+
+
 def test_envelope_at_refuses_when_a_parameter_it_needs_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -1044,9 +1452,9 @@ def test_envelope_at_refuses_when_a_parameter_it_needs_is_missing(
     recorded one at every point downstream.
     """
     n_frames = 8
-    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
-    csv = _write_stream(tmp_path / "creep.csv", frames)
-    out = tmp_path / "creep.sqlite"
+    frames = _sliding_frames(n_frames)
+    csv = _write_stream(tmp_path / "slide.csv", frames)
+    out = tmp_path / "slide.sqlite"
     _build(csv, out)
 
     conn = store.connect(out)
@@ -1069,9 +1477,9 @@ def test_envelope_at_refuses_when_the_config_it_names_is_gone(tmp_path: Path) ->
     """The other half of the same refusal: the inputs are recorded, but the
     configuration they apply to is not."""
     n_frames = 8
-    frames = _creep_frames(n_frames, lambda i: (2.4, 0.0))
-    csv = _write_stream(tmp_path / "creep.csv", frames)
-    out = tmp_path / "creep.sqlite"
+    frames = _sliding_frames(n_frames)
+    csv = _write_stream(tmp_path / "slide.csv", frames)
+    out = tmp_path / "slide.sqlite"
     _build(csv, out)
 
     conn = store.connect(out)

@@ -333,7 +333,7 @@ not raw state.
 
 | Type | Fields |
 |---|---|
-| `Timestep` | `t`, `frame_id` |
+| ~~`Timestep`~~ | ~~`t`, `frame_id`~~ — **dropped, issue #29.** Every edge already carries `t_start`/`t_end`; a node per instant was a second and denser representation of time, one row per frame, and nothing in Phase 7's query set reads it. See [`docs/lossiness.md`](lossiness.md) *Discarded* #10 |
 | `Envelope` | `envelope_id`, `area`, `geometry_wkb`, `horizon`, `source` (`computed` / `declared` / `clamped`) |
 | `Entity` | `entity_id`, `kind`, `geometry_wkb` |
 | `RobotConfig` | `config_id`, `q`, `qd` (quantized) |
@@ -345,7 +345,7 @@ compressible
 
 | Type | Semantics |
 |---|---|
-| `HAS_ENVELOPE` | Timestep → Envelope |
+| `HAS_ENVELOPE` | RobotConfig → Envelope (was Timestep → Envelope; issue #29) |
 | `CONTAINS` / `INTERSECTS` | Envelope → Entity (with `overlap_area`) |
 | `SEPARATION` | RobotConfig → Entity (`min_distance`) |
 | `CONTACT` | RobotConfig → Entity |

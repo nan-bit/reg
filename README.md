@@ -23,6 +23,10 @@ when they close.
 An issue is ready when it names its **acceptance criteria**, its **affected
 areas**, and the **command that verifies it**.
 
+Every PR the writer opens carries an **impact report** — what the change touches
+and what that reaches. It is advisory: it informs the human review, it does not
+gate the merge.
+
 The harness is [`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner),
 installed on the worker host. This repo configures it through `.runner.conf`.
 

@@ -22,6 +22,7 @@ from reg.stream import (
     LINE_TERMINATOR,
     StreamFormatError,
     expected_header,
+    read_comments,
     read_frames,
     write_frames,
 )
@@ -361,3 +362,88 @@ def test_a_non_finite_value_is_not_recorded(tmp_path) -> None:
     )
     with pytest.raises(StreamFormatError, match="finite"):
         write_frames([wrong], tmp_path / "run.csv")
+
+
+# --- the provenance block ---------------------------------------------------
+#
+# `reg.sim` writes the scenario and seed above the header (docs/lossiness.md
+# retains the run's provenance once per artifact). The codec has to agree with
+# the producer about that block, or the artifact stops being readable by the
+# thing that wrote it — so both directions are tested here rather than only in
+# tests/test_sim_cli.py.
+
+
+def test_comments_round_trip(tmp_path) -> None:
+    lines = ["reg-sim provenance v1", "scenario=contact", "seed=0"]
+    path = write_frames(frames(), tmp_path / "run.csv", comments=lines)
+    assert read_comments(path) == lines
+
+
+def test_comments_do_not_disturb_the_frames(tmp_path) -> None:
+    want = frames()
+    path = write_frames(want, tmp_path / "run.csv", comments=["seed=0"])
+    assert_frames_close(list(read_frames(path)), want)
+
+
+def test_a_stream_without_comments_reports_none(tmp_path) -> None:
+    """Absence is could-not-evaluate: no block means the file says nothing about
+    what produced it, which must not read as an empty-but-present block."""
+    path = write_frames(frames(), tmp_path / "run.csv")
+    assert read_comments(path) == []
+
+
+def test_the_block_only_changes_the_bytes_it_adds(tmp_path) -> None:
+    """The compression baseline divides by these bytes, so the block must be the
+    only difference — not a reformatting of the rows."""
+    bare = write_frames(frames(), tmp_path / "bare.csv").read_text()
+    with_block = write_frames(
+        frames(), tmp_path / "block.csv", comments=["seed=0"]
+    ).read_text()
+    assert with_block == f"# seed=0{LINE_TERMINATOR}{bare}"
+
+
+def test_a_hash_after_the_header_is_a_row_not_a_comment(tmp_path) -> None:
+    """Only the leading block is provenance. A `#` line among the rows is a
+    malformed row, and skipping it would silently drop a frame from the record."""
+    good = write_frames(frames(), tmp_path / "run.csv")
+    lines = good.read_text().rstrip(LINE_TERMINATOR).split(LINE_TERMINATOR)
+    lines.insert(2, "# not provenance")
+    bad = tmp_path / "mid.csv"
+    bad.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
+    with pytest.raises(StreamFormatError):
+        list(read_frames(bad))
+
+
+def test_row_errors_name_the_line_in_the_file_not_after_the_block(tmp_path) -> None:
+    """Line numbers are for a human opening the file. Counting from the header
+    would send them to the wrong row of a 300-row artifact."""
+    path = write_frames(frames(), tmp_path / "run.csv", comments=["a", "b", "c"])
+    lines = path.read_text().rstrip(LINE_TERMINATOR).split(LINE_TERMINATOR)
+    lines[5] = ",".join(lines[5].split(",")[:-2])  # 3 comments + header + 1 row before
+    bad = tmp_path / "short.csv"
+    bad.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
+    with pytest.raises(StreamFormatError, match="line 6"):
+        list(read_frames(bad))
+
+
+def test_provenance_alone_is_not_a_stream(tmp_path) -> None:
+    """A file that says what produced it and carries no rows is a
+    could-not-evaluate, not a stream of zero frames."""
+    path = tmp_path / "banner-only.csv"
+    path.write_text(f"# scenario=contact{LINE_TERMINATOR}# seed=0{LINE_TERMINATOR}")
+    with pytest.raises(StreamFormatError, match="provenance"):
+        read_frames(path)
+
+
+def test_a_comment_containing_a_newline_is_refused(tmp_path) -> None:
+    """It would be written as two lines, the second of which is neither a comment
+    nor a row — an artifact that no longer parses as what it claims to be."""
+    path = tmp_path / "run.csv"
+    with pytest.raises(StreamFormatError, match="line break"):
+        write_frames(frames(), path, comments=["seed=0\nsomething,else"])
+    assert not path.exists(), "a rejected comment must not leave a partial file"
+
+
+def test_a_non_string_comment_is_refused(tmp_path) -> None:
+    with pytest.raises(StreamFormatError, match="not a str"):
+        write_frames(frames(), tmp_path / "run.csv", comments=[0])

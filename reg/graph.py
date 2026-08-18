@@ -22,6 +22,27 @@ quantizers live in `reg.tolerances` — the only module allowed to assign the fo
 constants (docs/lossiness.md, "One definition"). A literal `0.01` in this file
 would be a defect even if it were the right number.
 
+THE INCREMENTAL RULE DOES NOT REACH ENVELOPE GEOMETRY
+-----------------------------------------------------
+It cannot: when the arm moves, the envelope genuinely *is* different every frame,
+so every hash differs and emit-on-change emits every frame. Issue #28 measured
+the consequence — the polygons were the artifact, and the artifact was 20-30x
+*larger* than a gzipped CSV of the stream it replaced.
+
+So the geometry is discarded on a stated rule (`GEOMETRY_RETENTION`,
+docs/lossiness.md Discarded #9) and recovered by recomputation
+(`envelope_at`). This is the lossiness contract's own logic applied where it had
+not been: the polygon is a deterministic function of `(q, qd, horizon,
+n_samples, seed, substep_dt)`, every one of which the artifact already stores, so
+storing it per frame was storing the same information twice — once cheaply and
+once expensively. What stays per frame is what queries actually read and what
+costs almost nothing: `envelope_hash`, `area`, `horizon`, `source`.
+
+The precondition is real and belongs beside the mechanism: recomputation
+reproduces the polygon **exactly for the same code and the same shapely
+version**, and not necessarily for an assessor opening the file in five years.
+docs/limitations.md states it as the cost of the trade.
+
 WHAT IS NOT HERE
 ----------------
 Declarations and verdicts. They are Milestone 3, and the `DECLARED`,
@@ -82,18 +103,23 @@ from reg.tolerances import (
     quantize_time,
     simplify_geometry,
 )
-from reg.types import Limits, Obstacle, StateFrame
+from reg.types import Limits, Obstacle, ProprioState, StateFrame
 
 __all__ = [
     "ENVELOPE_HORIZON",
     "ENVELOPE_N_SAMPLES",
     "ENVELOPE_SEED",
     "ENVELOPE_SOURCE",
+    "GEOMETRY_EVIDENCE_EDGES",
+    "GEOMETRY_RETENTION",
     "HUMAN_ENTITY_ID",
     "HUMAN_KIND",
+    "META_GEOMETRY_RETENTION",
     "BuildResult",
     "GraphBuildError",
+    "GraphQueryError",
     "build",
+    "envelope_at",
     "main",
 ]
 
@@ -149,12 +175,89 @@ ENVELOPE_N_SAMPLES: int = 512
 ENVELOPE_SEED: int = 0
 
 
+# --------------------------------------------------------------------------
+# The envelope-geometry retention rule (issue #28, docs/lossiness.md Discarded
+# #9). Written down here and in the artifact, never left implicit in the code
+# that applies it: a reader meeting a NULL geometry has to be able to tell
+# "discarded on the rule" from "this build forgot", and the pattern of NULLs
+# does not distinguish them.
+# --------------------------------------------------------------------------
+
+#: The edge types whose endpoints an incident report cites, and therefore the
+#: ones whose transitions are worth a polygon. `SEPARATION` is deliberately not
+#: among them: it changes on every centimetre of a walking human, so keeping
+#: geometry at its transitions would keep it nearly everywhere, and its own
+#: metric already travels on the edge. `HAS_ENVELOPE` is not among them either —
+#: it transitions on *every* frame of a moving arm, which is the whole problem.
+GEOMETRY_EVIDENCE_EDGES: frozenset[str] = frozenset({"INTERSECTS", "CONTACT"})
+
+# WHAT "STARTS OR ENDS" IS COUNTED OVER. The *relationship*, not the edge row.
+# An INTERSECTS edge also closes and reopens whenever the overlap moves a
+# quantum, and those are metric changes rather than topological ones: the overlap
+# an incident report wants is already on the edge, and the polygon at one such
+# frame is the polygon at the next with a slightly different area.
+#
+# This is measured, not a preference. On `sustained_overlap` at the benchmark's
+# own parameters the human is inside the envelope for a single continuous
+# interval carried by 79 INTERSECTS rows: counting every row's endpoints keeps
+# geometry on 150 of 301 frames, counting the relationship's keeps it on 2. A
+# rule whose retention scales with how much the arm moved is the defect issue #28
+# exists to remove, reintroduced one level up. The issue's acceptance text says
+# "an INTERSECTS or CONTACT edge starts or ends" and its parenthesis says "the
+# transitions an incident report cites"; where those two readings differ this
+# takes the second, and says so here rather than in a commit message.
+
+#: The rule, in one sentence, as it is recorded in the artifact's meta table.
+#: Prose rather than a code reference, because the artifact is the thing handed
+#: to an assessor and `reg.graph.GEOMETRY_EVIDENCE_EDGES` means nothing to
+#: someone holding only the file.
+GEOMETRY_RETENTION = (
+    "envelope geometry is stored on the first and last frame of the run and on "
+    "every frame at which an INTERSECTS or CONTACT relationship with an entity "
+    "begins or ceases to hold; on every other frame the envelope row carries its "
+    "hash, area, horizon and source with a NULL geometry_wkb, and the polygon is "
+    "recomputed from config_id and the envelope parameters in this meta table "
+    "(reg.graph.envelope_at, docs/lossiness.md Discarded #9). Exact "
+    "recomputation assumes the same code and the same shapely version — "
+    "docs/limitations.md."
+)
+
+#: Where `GEOMETRY_RETENTION` lands in `meta`.
+META_GEOMETRY_RETENTION = "envelope_geometry_retention"
+
+#: The `meta` keys `envelope_at` reads back to recompute a discarded polygon.
+#: Named constants because the writer and the reader are one contract now: a key
+#: spelled differently on one side turns every recomputable envelope into a
+#: could-not-evaluate, and it surfaces in somebody's query rather than in a build.
+META_N_SAMPLES = "envelope_n_samples"
+META_ENVELOPE_SEED = "envelope_seed"
+META_SUBSTEP_DT = "envelope_substep_dt_s"
+META_LIMITS_LINK_LENGTHS = "limits_link_lengths"
+META_LIMITS_LINK_RADIUS = "limits_link_radius"
+META_LIMITS_Q_MIN = "limits_q_min"
+META_LIMITS_Q_MAX = "limits_q_max"
+META_LIMITS_QD_MAX = "limits_qd_max"
+META_LIMITS_QDD_MAX = "limits_qdd_max"
+
+
 class GraphBuildError(Exception):
     """The stream could not be turned into an evidence graph.
 
     Always a refusal with a named cause and never a partial artifact: a graph
     built from a stream this module did not fully understand would answer audit
     questions, and the answers would be wrong in ways no downstream check sees.
+    """
+
+
+class GraphQueryError(Exception):
+    """A question the artifact cannot answer, named rather than approximated.
+
+    `envelope_at` raises it when there is no envelope at the instant asked
+    about, or when there is one whose geometry was discarded and whose
+    recomputation inputs the artifact does not carry. Both are
+    could-not-evaluate, and the alternative to raising is returning some other
+    frame's polygon — which is a region of the plane the robot demonstrably
+    could reach, at a time it could not.
     """
 
 
@@ -177,10 +280,16 @@ class BuildResult:
 
 @dataclass
 class _Active:
-    """An edge currently being extended, and the quantized value it holds at."""
+    """An edge currently being extended, and the quantized value it holds at.
+
+    `edge_type` is carried because closing an edge is what tells the builder the
+    *previous* frame was a transition, and the retention rule only keeps geometry
+    for some edge types.
+    """
 
     edge_id: int
     compare: object
+    edge_type: str
 
 
 @dataclass(frozen=True)
@@ -256,6 +365,10 @@ class _FrameNodes:
     frames must leave one `Timestep`, one `Envelope` and no `RobotConfig` beyond
     whatever the separation edges anchored — which only holds if the writes
     happen at edge-open time and nowhere else.
+
+    The ids are derived on construction, which is not a write: `keep_geometry`
+    has to be able to name a row the builder may not have written yet, and a
+    content hash of values already in hand costs nothing.
     """
 
     def __init__(
@@ -278,6 +391,11 @@ class _FrameNodes:
         self._horizon = horizon
         self._q_text = q_text
         self._qd_text = qd_text
+        self._envelope_id = "env_" + _digest(
+            ENVELOPE_SOURCE, f"{horizon:.9f}", envelope_digest
+        )
+        self._config_id = "cfg_" + _digest(q_text, qd_text)
+        self._keep_geometry = False
 
     def timestep(self) -> str:
         return store.insert_timestep(
@@ -285,24 +403,45 @@ class _FrameNodes:
         )
 
     def envelope_node(self) -> str:
-        envelope_id = "env_" + _digest(
-            ENVELOPE_SOURCE, f"{self._horizon:.9f}", self._envelope_digest
-        )
+        """The `Envelope` row for this frame, with the config it came from.
+
+        The config is written alongside it and not only when a `SEPARATION` or
+        `CONTACT` edge anchors one: it is what `envelope_at` recomputes the
+        discarded polygon from, so an envelope row whose config is missing is a
+        frame whose envelope nobody can reconstruct. It is also the cheap half of
+        that information — joint text against a WKB polygon.
+        """
+        config_id = self.config()
         return store.insert_envelope(
             self._conn,
-            envelope_id,
+            self._envelope_id,
             envelope_hash=self._envelope_digest,
             area=quantize_area(self._envelope.area),
-            geometry=self._envelope,
+            geometry=self._envelope if self._keep_geometry else None,
+            config_id=config_id,
             horizon=self._horizon,
             source=ENVELOPE_SOURCE,
         )
 
     def config(self) -> str:
-        config_id = "cfg_" + _digest(self._q_text, self._qd_text)
         return store.insert_robot_config(
-            self._conn, config_id, self._q_text, self._qd_text
+            self._conn, self._config_id, self._q_text, self._qd_text
         )
+
+    def keep_geometry(self) -> None:
+        """This frame is one `GEOMETRY_RETENTION` keeps the polygon for.
+
+        Idempotent, and callable *after* the envelope row has been written — a
+        relationship's last instant is only known one frame later, so the builder
+        reaches back to the previous frame and says so then. If the row exists
+        the geometry is attached; if it does not, the flag makes the write that
+        eventually creates it carry the polygon.
+        """
+        self._keep_geometry = True
+        if store.envelope_row(self._conn, self._envelope_id) is not None:
+            store.attach_envelope_geometry(
+                self._conn, self._envelope_id, self._envelope
+            )
 
 
 # --------------------------------------------------------------------------
@@ -423,10 +562,14 @@ def build(
             from the scenario named in the stream's own provenance block.
         horizon, n_samples, seed, substep_dt: envelope parameters. All four are
             recorded in the artifact's meta table, so no consumer has to guess
-            which produced a given file.
+            which produced a given file — and `envelope_at` reads them back to
+            recompute the envelope geometry `GEOMETRY_RETENTION` discards.
 
     Returns:
         A `BuildResult` with the row counts and the artifact's size.
+        `nodes["Envelope"]` counts envelope *rows*, one per material change;
+        most of them carry no polygon (`GEOMETRY_RETENTION`), so it is not a
+        count of stored geometries.
 
     Raises:
         GraphBuildError: the stream could not be understood — too short, a
@@ -476,9 +619,11 @@ def build(
         store.insert_entity(conn, HUMAN_ENTITY_ID, HUMAN_KIND, geometry=None)
 
         active: dict[tuple[str, str], _Active] = {}
+        previous: _FrameNodes | None = None
+        last_frame_id = len(frames) - 1
         for frame_id, frame in enumerate(frames):
             t = quantize_time(frame.t)
-            observations = _observe(
+            nodes, observations = _observe(
                 conn,
                 frame=frame,
                 frame_id=frame_id,
@@ -492,10 +637,21 @@ def build(
                 substep_dt=substep_dt,
             )
 
+            # GEOMETRY_RETENTION, clause 2: the ends of the run. The first frame
+            # is where an incident report starts reading and the last is the
+            # state the run finished in, and neither is a transition, so nothing
+            # else in this loop would keep them.
+            if frame_id == 0 or frame_id == last_frame_id:
+                nodes.keep_geometry()
+
             # A relationship that stopped holding closes its edge. Closing is the
             # absence of an extension, not an edit: t_end already names the last
-            # instant it was observed.
+            # instant it was observed — which is the previous frame, and which is
+            # why GEOMETRY_RETENTION's "ends" clause reaches backwards.
             for key in [k for k in active if k not in observations]:
+                cited = active[key].edge_type in GEOMETRY_EVIDENCE_EDGES
+                if cited and previous is not None:
+                    previous.keep_geometry()
                 del active[key]
 
             for key, observation in observations.items():
@@ -503,6 +659,14 @@ def build(
                 if current is not None and current.compare == observation.compare:
                     store.extend_edge(conn, current.edge_id, t)
                     continue
+                # GEOMETRY_RETENTION, clause 1: the frame a contact-relevant
+                # relationship begins to hold. `current is None` is what makes it
+                # a beginning rather than a metric step — an edge that replaces
+                # one still open is the same relationship with a different
+                # overlap quantum, and its area is already on the edge row.
+                cited = observation.edge_type in GEOMETRY_EVIDENCE_EDGES
+                if current is None and cited:
+                    nodes.keep_geometry()
                 edge_id = store.open_edge(
                     conn,
                     observation.edge_type,
@@ -512,7 +676,11 @@ def build(
                     overlap_area=observation.overlap_area,
                     min_distance=observation.min_distance,
                 )
-                active[key] = _Active(edge_id, observation.compare)
+                active[key] = _Active(
+                    edge_id, observation.compare, observation.edge_type
+                )
+
+            previous = nodes
 
         conn.commit()
         result = _summarize(conn, Path(out_path), len(frames))
@@ -542,12 +710,17 @@ def _observe(
     n_samples: int,
     seed: int,
     substep_dt: float,
-) -> dict[tuple[str, str], _Observation]:
+) -> tuple[_FrameNodes, dict[tuple[str, str], _Observation]]:
     """Every relationship at one frame, quantized, in a fixed order.
 
     Fixed order because insertion order decides `edge_id`, and `edge_id` is the
     tie-break in every ordered read (`reg.store.read_edges`). Two builds of one
     stream must produce identical files, so nothing here may iterate a set.
+
+    The frame's `_FrameNodes` comes back with the observations because the caller
+    is the only place that knows whether this frame is one `GEOMETRY_RETENTION`
+    keeps a polygon for — that depends on which edges open and close, which is
+    the caller's decision, and on where the frame sits in the run.
     """
     proprio = frame.proprio()
 
@@ -660,7 +833,7 @@ def _observe(
                 compare=True,
             )
 
-    return observations
+    return nodes, observations
 
 
 def _write_provenance(
@@ -697,9 +870,15 @@ def _write_provenance(
 
     store.put_meta(conn, "envelope_source", ENVELOPE_SOURCE)
     store.put_meta(conn, "envelope_horizon_s", _float_text(horizon))
-    store.put_meta(conn, "envelope_n_samples", str(int(n_samples)))
-    store.put_meta(conn, "envelope_seed", str(int(seed)))
-    store.put_meta(conn, "envelope_substep_dt_s", _float_text(substep_dt))
+    store.put_meta(conn, META_N_SAMPLES, str(int(n_samples)))
+    store.put_meta(conn, META_ENVELOPE_SEED, str(int(seed)))
+    store.put_meta(conn, META_SUBSTEP_DT, _float_text(substep_dt))
+
+    # The rule under which envelope geometry is absent from most rows. Recorded
+    # in the artifact and not only in this module, because the file is the thing
+    # handed over: a NULL geometry has to read as "discarded on a stated rule and
+    # recomputable" rather than as "this build wrote nothing there".
+    store.put_meta(conn, META_GEOMETRY_RETENTION, GEOMETRY_RETENTION)
 
     store.put_meta(conn, "tolerance_distance_tol_m", _float_text(DISTANCE_TOL_M))
     store.put_meta(conn, "tolerance_area_quant_sigfigs", str(AREA_QUANT_SIGFIGS))
@@ -712,12 +891,12 @@ def _write_provenance(
     # computed from. Without them the geometry cannot be recomputed, and a
     # separation nobody can recompute is not evidence (docs/lossiness.md's whole
     # "how to tell if this contract is being violated" section needs them).
-    store.put_meta(conn, "limits_link_lengths", _array_text(limits.link_lengths))
-    store.put_meta(conn, "limits_link_radius", _float_text(limits.link_radius))
-    store.put_meta(conn, "limits_q_min", _array_text(limits.q_min))
-    store.put_meta(conn, "limits_q_max", _array_text(limits.q_max))
-    store.put_meta(conn, "limits_qd_max", _array_text(limits.qd_max))
-    store.put_meta(conn, "limits_qdd_max", _array_text(limits.qdd_max))
+    store.put_meta(conn, META_LIMITS_LINK_LENGTHS, _array_text(limits.link_lengths))
+    store.put_meta(conn, META_LIMITS_LINK_RADIUS, _float_text(limits.link_radius))
+    store.put_meta(conn, META_LIMITS_Q_MIN, _array_text(limits.q_min))
+    store.put_meta(conn, META_LIMITS_Q_MAX, _array_text(limits.q_max))
+    store.put_meta(conn, META_LIMITS_QD_MAX, _array_text(limits.qd_max))
+    store.put_meta(conn, META_LIMITS_QDD_MAX, _array_text(limits.qdd_max))
 
     store.put_meta(conn, "human_entity_id", HUMAN_ENTITY_ID)
     store.put_meta(conn, "human_radius_m", _float_text(human_radius))
@@ -750,6 +929,198 @@ def _summarize(conn, path: Path, frames: int) -> BuildResult:
         edges=edges,
         nodes=nodes,
         size_bytes=path.stat().st_size,
+    )
+
+
+# --------------------------------------------------------------------------
+# Reading an envelope back. The other half of GEOMETRY_RETENTION: a discard is
+# only a discard rather than a deletion if something can still answer the
+# question, and this is that something.
+# --------------------------------------------------------------------------
+
+
+def _meta_required(conn, key: str) -> str:
+    """One `meta` value, or a refusal naming the key that is missing.
+
+    Never a default. Every value read through here changes the polygon that comes
+    back — a substituted `n_samples` produces a different region with no error
+    anywhere, and it would be indistinguishable from the region that was actually
+    computed at build time.
+    """
+    value = store.get_meta(conn, key)
+    if value is None:
+        raise GraphQueryError(
+            f"the artifact has no meta[{key!r}], so it does not say what the "
+            "envelope was computed with. The geometry of this frame was "
+            "discarded as recomputable (docs/lossiness.md Discarded #9) and "
+            "recomputing it needs that value; a plausible one invented here "
+            "would return a region nobody can tell from the recorded one."
+        )
+    return value
+
+
+def _meta_float(conn, key: str) -> float:
+    raw = _meta_required(conn, key)
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise GraphQueryError(f"meta[{key!r}] is {raw!r}, not a number.") from exc
+
+
+def _meta_int(conn, key: str) -> int:
+    """A meta value that must be a whole number. `512.5` is refused, not floored.
+
+    Flooring would run the recomputation at a sample count the build never used,
+    and produce a polygon that differs from the recorded one for a reason nothing
+    in the file records.
+    """
+    raw = _meta_required(conn, key)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise GraphQueryError(f"meta[{key!r}] is {raw!r}, not an integer.") from exc
+
+
+def _floats(text: str, what: str) -> np.ndarray:
+    try:
+        return np.array([float(part) for part in str(text).split(",")], dtype=float)
+    except ValueError as exc:
+        raise GraphQueryError(
+            f"{what} is {text!r}, not a comma-separated list of numbers."
+        ) from exc
+
+
+def _meta_array(conn, key: str) -> np.ndarray:
+    return _floats(_meta_required(conn, key), f"meta[{key!r}]")
+
+
+def _limits_from_meta(conn) -> Limits:
+    """The robot the artifact was built for, from its own provenance block.
+
+    docs/lossiness.md Retained #10 records the limits precisely so this is
+    possible: "without them the geometry cannot be recomputed, and a separation
+    nobody can recompute is not evidence".
+    """
+    try:
+        return Limits(
+            q_min=_meta_array(conn, META_LIMITS_Q_MIN),
+            q_max=_meta_array(conn, META_LIMITS_Q_MAX),
+            qd_max=_meta_array(conn, META_LIMITS_QD_MAX),
+            qdd_max=_meta_array(conn, META_LIMITS_QDD_MAX),
+            link_lengths=_meta_array(conn, META_LIMITS_LINK_LENGTHS),
+            link_radius=_meta_float(conn, META_LIMITS_LINK_RADIUS),
+        )
+    except ValueError as exc:  # Limits itself refuses a per-joint mismatch
+        raise GraphQueryError(
+            f"the limits recorded in this artifact are not self-consistent: {exc}"
+        ) from exc
+
+
+def envelope_at(conn, t: float) -> BaseGeometry:
+    """The envelope in force at `t`: read back, or recomputed. Same answer.
+
+    A caller cannot tell which happened, except by timing. That is the whole
+    claim of `GEOMETRY_RETENTION`: the polygon is stored where it is evidence in
+    its own right and recomputed everywhere else, and
+    `tests/test_graph.py::test_envelope_at_recomputes_the_stored_polygon_exactly`
+    is the gate on "same answer" — it blanks a stored geometry and asserts the
+    recomputed polygon is identical, at zero tolerance. If that ever fails, the
+    discard is not lossless and this whole approach is wrong.
+
+    Args:
+        conn: an open artifact (`reg.store.connect`).
+        t: seconds. Quantized to `TIME_TOL_S` on the way in, because that is the
+            resolution the artifact's interval endpoints were recorded at and
+            nothing here may report finer.
+
+    Returns:
+        The simplified envelope polygon — the same geometry `build` hashed and
+        would have stored.
+
+    Raises:
+        GraphQueryError: no `HAS_ENVELOPE` interval covers `t` (including the
+            gaps *between* frames, which the artifact does not claim to fill —
+            docs/lossiness.md Unanswerable #1); two intervals cover it and their
+            order is not retained (Unanswerable #5); or the geometry was
+            discarded and something needed to recompute it is not in the file.
+            Every one is a could-not-evaluate, and none of them resolves to some
+            other frame's polygon.
+    """
+    t = quantize_time(t)
+    edges = store.read_edges(conn, edge_type="HAS_ENVELOPE")
+    covering = [row for row in edges if row["t_start"] <= t <= row["t_end"]]
+    if not covering:
+        raise GraphQueryError(
+            f"no envelope is recorded as being in force at t={t}. The artifact "
+            f"holds {len(edges)} HAS_ENVELOPE interval(s)"
+            + (
+                f" spanning [{min(r['t_start'] for r in edges)}, "
+                f"{max(r['t_end'] for r in edges)}]"
+                if edges
+                else ""
+            )
+            + ". An instant between two frames is not covered by either of them, "
+            "and the envelope at such an instant is not something this artifact "
+            "retains."
+        )
+    if len(covering) > 1:
+        raise GraphQueryError(
+            f"{len(covering)} envelopes are recorded as in force at t={t}. Two "
+            "transitions inside one TIME_TOL_S quantum have no retained order "
+            "(docs/lossiness.md Unanswerable #5), so there is no way to say "
+            "which of them this instant belongs to."
+        )
+
+    envelope_id = str(covering[0]["dst_id"])
+    row = store.envelope_row(conn, envelope_id)
+    if row is None:  # pragma: no cover - open_edge refuses a dangling endpoint
+        raise GraphQueryError(
+            f"the HAS_ENVELOPE edge covering t={t} points at envelope "
+            f"{envelope_id!r}, which is not in this artifact."
+        )
+    if row["geometry_wkb"] is not None:
+        return store.from_wkb(row["geometry_wkb"])
+
+    # Discarded, so recompute it. Everything below is a stated input of
+    # `compute_envelope`, read from the artifact and never assumed.
+    source = str(row["source"])
+    if source != ENVELOPE_SOURCE:
+        raise GraphQueryError(
+            f"envelope {envelope_id!r} has source={source!r} and no stored "
+            f"geometry. Only {ENVELOPE_SOURCE!r} envelopes are recomputable — a "
+            "declared or clamped bound came from a policy, not from a "
+            "configuration, and there is nothing in the file to derive it from."
+        )
+    config_id = row["config_id"]
+    if config_id is None:  # pragma: no cover - the schema CHECK forbids it
+        raise GraphQueryError(
+            f"envelope {envelope_id!r} stores neither geometry nor the config it "
+            "was computed from."
+        )
+    config = conn.execute(
+        "SELECT q, qd FROM robot_config WHERE config_id = ?", (str(config_id),)
+    ).fetchone()
+    if config is None:
+        raise GraphQueryError(
+            f"envelope {envelope_id!r} names config {str(config_id)!r}, which is "
+            "not in this artifact. The polygon was discarded as recomputable and "
+            "the thing it was to be recomputed from is missing."
+        )
+
+    state = ProprioState(
+        t=t,
+        q=_floats(config["q"], f"robot_config[{str(config_id)!r}].q"),
+        qd=_floats(config["qd"], f"robot_config[{str(config_id)!r}].qd"),
+    )
+    return simplify_geometry(
+        compute_envelope(
+            state,
+            _limits_from_meta(conn),
+            horizon=float(row["horizon"]),
+            n_samples=_meta_int(conn, META_N_SAMPLES),
+            seed=_meta_int(conn, META_ENVELOPE_SEED),
+            substep_dt=_meta_float(conn, META_SUBSTEP_DT),
+        )
     )
 
 

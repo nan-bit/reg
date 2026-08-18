@@ -77,11 +77,14 @@ Each entry is a claim that the graph can be tested against.
    not a retained fault.
 7. **The complete hash chain** — every `FOLLOWS` link between consecutive records,
    unbroken, so `verify_chain()` is answerable from the graph alone.
-8. **Envelope geometry at every material change** — geometry is stored whenever the
-   envelope hash changes under `GEOM_SIMPLIFY_TOL_M`, together with `area`,
-   `horizon`, and `source` (`computed` / `declared` / `clamped`). All three sources
-   are retained separately; a clamp is only legible if the declared and the computed
-   bound both survive.
+8. **Envelope *identity and scalars* at every material change** — whenever the
+   envelope hash changes under `GEOM_SIMPLIFY_TOL_M`, the artifact records
+   `envelope_hash`, `area`, `horizon`, and `source` (`computed` / `declared` /
+   `clamped`). All three sources are retained separately; a clamp is only legible if
+   the declared and the computed bound both survive. **The geometry itself is not
+   retained at every material change** — see *Discarded* #9, which is the one place
+   this contract discards something it can prove is recoverable rather than
+   something it can prove is irrelevant.
 9. **The layer tag on every edge** — `A` or `B`, per Phase 9. Claim 3 is a query
    over these tags, so an untagged edge is an unusable edge.
 10. **The run's provenance** — scenario name, seed, tolerance constants in force,
@@ -121,6 +124,50 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    general clause and it is subordinate to the specific ones: it licenses discarding
    a *new* quantity nobody queries, never re-litigating something listed as
    Retained.
+9. **Envelope geometry, except where it is evidence — because it is recomputable.**
+   Added 2026-08-18 (issue #28); it comes last because it is the only item here
+   discarded for *recoverability* rather than for irrelevance, and the two must not
+   be confused.
+
+   **The rule.** Geometry is stored on the first and last frame of the run, and on
+   every frame at which an `INTERSECTS` or `CONTACT` relationship with an entity
+   begins or ceases to hold. On every other frame the `envelope` row carries its
+   hash, area, horizon and source with `geometry_wkb = NULL`. The rule is written
+   into every artifact's `meta` table under `envelope_geometry_retention`, so a
+   reader holding only the file can tell a discard on a stated rule from a build
+   that wrote nothing.
+
+   **Relationships, not edge rows.** An `INTERSECTS` edge also closes and reopens
+   whenever the overlap area crosses an `AREA_QUANT_SIGFIGS` boundary. Those are
+   metric steps, and the metric is already on the edge. Counting them as transitions
+   keeps geometry on 150 of `sustained_overlap`'s 301 frames (measured at the
+   benchmark's parameters); counting the relationship's own beginning and end keeps
+   it on 2. A retention rule whose cost scales with how much the arm moved is the
+   defect this item exists to remove.
+
+   **The recomputation contract.** `compute_envelope` is a deterministic function of
+   `(q, qd, horizon, n_samples, seed, substep_dt)`. The artifact stores every one of
+   them — `q` and `qd` in the `robot_config` row each `envelope` row now names, the
+   four parameters in `meta` — so `reg.graph.envelope_at(conn, t)` returns the
+   stored polygon where there is one and recomputes it where there is not, and a
+   caller cannot tell which happened except by timing.
+   `tests/test_graph.py::test_envelope_at_recomputes_the_stored_polygon_exactly`
+   is the gate: it blanks a stored polygon and asserts the recomputed one is
+   identical at **zero tolerance**. If that ever fails, the discard is not lossless
+   and this item is wrong rather than merely expensive.
+
+   **Its precondition, stated rather than assumed.** Recomputation is exact for the
+   same code and the same shapely version. An artifact handed to an assessor years
+   later may not reproduce byte-identical geometry, and on the frames where the
+   polygon was discarded there is then nothing to fall back on. That is a real cost
+   of this trade and it is recorded in [`docs/limitations.md`](limitations.md), not
+   here, because it is a limitation of the project and not a clause of the contract.
+
+   **What it does not license.** Discarding the scalars (Retained #8), discarding
+   the `config_id` that makes recomputation possible (the schema refuses an
+   `envelope` row with neither geometry nor a config), or lowering `n_samples` to
+   make the polygons smaller — that changes what the envelope *is* in order to move
+   a storage number, which is the move this whole document forbids.
 
 ---
 
@@ -251,6 +298,15 @@ about.
 *could-not-evaluate*, and the third never resolves to the first. A query returning
 an empty list, a scenario with no fixture, an entity absent from the graph, and an
 unparsed CSV row are all *could-not-evaluate*. Silence is not agreement.
+
+**The recomputation check.** *Discarded* #9 adds one more, because it is the only
+discard whose soundness is a claim about *equality* rather than about relevance: on
+every frame where geometry was stored, `reg.graph.envelope_at` must reproduce the
+stored polygon **exactly** — `shapely.equals_exact(..., tolerance=0.0)`, no budget,
+because `GEOM_SIMPLIFY_TOL_M` is already spent on the stored boundary and a second
+helping of it here would hide the drift the check exists to find. A disagreement
+means the polygons on the discarded frames are not the polygons that were computed,
+and the response is to stop discarding, not to widen anything.
 
 **Ship the negative test.** The comparison harness is itself a check, so it must be
 shown capable of saying no: feed it a graph with a deliberately perturbed edge —

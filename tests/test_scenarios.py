@@ -7,6 +7,14 @@ happened. So the interesting tests here are the paired ones — `contact` must
 intersect a link polygon and `static_bystander` must never do so — and they run
 across several seeds, because a fixture that only holds for seed 0 is a golden
 value in disguise.
+
+Where a name claims something about the *reachable set*, the claim is checked
+against `reg.envelope.compute_envelope` itself, not against the workspace disc.
+The disc is a superset of the envelope, so asserting a positive claim against it
+proves nothing the name says: a human standing in the disc can be a long way
+from anywhere the arm can get to inside the horizon. That is the direction the
+looseness runs, and it is why three fixtures once passed while overlapping
+nothing (issue #22).
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
+from reg.envelope import compute_envelope
 from reg.scenarios import (
     DEFAULT_DT,
     SCENARIOS,
@@ -75,13 +84,71 @@ def touches_body(frame) -> bool:
 def in_workspace_disc(frame) -> bool:
     """Whether the human disc overlaps the disc the robot body can occupy.
 
-    A deliberately loose stand-in for the Phase 2 envelope, which does not exist
-    yet: the forward reachable set over a horizon is a *subset* of this. Loose in
-    the safe direction for a negative test — `static_bystander` clearing this
-    disc clears every envelope inside it.
+    **Negative claims only.** This is the *workspace* disc — every configuration,
+    no horizon — so it strictly contains the forward reachable envelope for any
+    horizon and any sampling (`reg/world.py`, `World.max_reach`). Clearing it
+    therefore clears every envelope inside it, which is a stronger statement than
+    clearing the one envelope `in_envelope` computes, and that is why
+    `static_bystander` still asserts it.
+
+    In the positive direction it claims nothing a fixture name means: a human
+    standing inside the disc may be nowhere near the region the arm can actually
+    reach within the horizon. Use `in_envelope` for those.
     """
     reach = DEMO_WORLD.max_reach + DEMO_WORLD.human_radius
     return float(np.hypot(*frame.human_pos)) < reach
+
+
+# --------------------------------------------------------------------------
+# The real envelope, and the arguments it is called with.
+#
+# Stated here rather than inherited from `compute_envelope`'s defaults: the
+# fixtures are hand-tuned against these numbers, so a change to the defaults has
+# to surface as a failure in this file rather than silently re-baseline what the
+# fixture names mean. `horizon` and `substep_dt` are the Phase 2 / Phase 1
+# figures from docs/plan.md.
+#
+# `n_samples=4` is the 2**2 corner controls of a two-joint arm, which is the
+# fewest `compute_envelope` accepts and therefore the *smallest* envelope it will
+# return: the sample set for a larger `n_samples` is a strict superset of this
+# one (reg/envelope.py, asserted by tests/test_envelope.py), so a claim of the
+# form "the human is inside the envelope" proved here holds for every richer
+# sampling too. It is also ~250x cheaper than the 1000-sample default, and these
+# checks run per frame, per seed. The direction of that looseness is why
+# `static_bystander`'s negative claim keeps the workspace disc alongside it: the
+# smallest envelope is the weakest thing to be outside of.
+# --------------------------------------------------------------------------
+ENVELOPE_HORIZON = 0.2
+ENVELOPE_SUBSTEP_DT = 0.02
+ENVELOPE_SAMPLES = 4
+ENVELOPE_SEED = 0
+
+
+def envelope_of(frame) -> Polygon:
+    """The frame's forward reachable set, from `reg.envelope`. Layer A in, only.
+
+    `.proprio()` is the narrowing: the envelope never sees `human_pos`, which is
+    the whole point of computing the human's overlap with it afterwards.
+    """
+    return compute_envelope(
+        frame.proprio(),
+        DEMO_WORLD.limits,
+        horizon=ENVELOPE_HORIZON,
+        n_samples=ENVELOPE_SAMPLES,
+        seed=ENVELOPE_SEED,
+        substep_dt=ENVELOPE_SUBSTEP_DT,
+    )
+
+
+def in_envelope(frame) -> bool:
+    """Whether the human disc intersects the arm's forward reachable set.
+
+    This is the check the fixture names are actually about — "reachable within
+    the horizon", not "somewhere in the workspace". Bear in mind that
+    `compute_envelope` is an under-approximation: a `True` here is sound (that
+    region really is reachable), a `False` is not a guarantee of separation.
+    """
+    return human_polygon(frame.human_pos).intersects(envelope_of(frame))
 
 
 def frames(name: str, seed: int) -> list:
@@ -229,20 +296,54 @@ def test_contact_actually_touches_the_robot(seed: int) -> None:
 
 
 @pytest.mark.parametrize("seed", SEEDS)
+def test_a_touched_frame_is_always_an_envelope_frame(seed: int) -> None:
+    """The two checks, tied together on the one fixture that does both.
+
+    `compute_envelope` unions in the body at the current pose, so the envelope
+    contains it and contact implies overlap. Asserting it here does double duty:
+    it would catch an `in_envelope` that has quietly become unable to say yes
+    (`static_bystander` covers the other direction), and it would catch a
+    fixture where "touched" and "reachable" have drifted apart — which is the
+    conflation `near_miss` exists to make visible.
+    """
+    touched = [f for f in frames("contact", seed) if touches_body(f)]
+    assert touched, "no contact frames to check"
+    for f in touched:
+        assert in_envelope(f), (
+            f"contact touched the body at t={f.t} without intersecting the "
+            "envelope; the envelope must contain the pose the robot is in."
+        )
+
+
+@pytest.mark.parametrize("seed", SEEDS)
 def test_static_bystander_never_touches_and_never_enters(seed: int) -> None:
-    """The negative half of the pair: the same check, asserted to say no."""
+    """The negative half of the pair: the same checks, asserted to say no.
+
+    This is what establishes that `in_envelope` can fail. Every other envelope
+    assertion in this file is positive, and a helper stuck at `True` would
+    satisfy all of them.
+    """
     for f in frames("static_bystander", seed):
         assert not touches_body(f), f"static_bystander contacted at t={f.t}"
+        assert not in_envelope(f), (
+            f"static_bystander entered the forward reachable envelope at t={f.t}; "
+            "the name claims the human is present throughout and never reachable."
+        )
+        # Stronger and cheap: the workspace disc contains every envelope, so
+        # clearing it clears the arm at any horizon and any sampling.
         assert not in_workspace_disc(f), (
-            f"static_bystander entered the workspace disc at t={f.t}; the name "
-            "claims the human is present throughout and never reachable."
+            f"static_bystander entered the workspace disc at t={f.t}."
         )
 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_near_miss_overlaps_the_reachable_region_but_never_contacts(seed: int) -> None:
     got = frames("near_miss", seed)
-    assert any(in_workspace_disc(f) for f in got), "near_miss never came near"
+    assert any(in_envelope(f) for f in got), (
+        "near_miss never entered the forward reachable envelope. The fixture "
+        "exists to separate 'was in the reachable set' from 'was touched'; if "
+        "the first never happens there is nothing to separate."
+    )
     assert not any(touches_body(f) for f in got), "near_miss made contact"
     gap = min(
         human_polygon(f.human_pos).distance(p)
@@ -256,13 +357,16 @@ def test_near_miss_overlaps_the_reachable_region_but_never_contacts(seed: int) -
 @pytest.mark.parametrize("seed", SEEDS)
 def test_approach_and_retreat_enters_leaves_and_does_not_touch(seed: int) -> None:
     got = frames("approach_and_retreat", seed)
-    inside = [in_workspace_disc(f) for f in got]
+    inside = [in_envelope(f) for f in got]
     assert not inside[0] and not inside[-1], "the human must start and end clear"
-    assert any(inside), "the human never entered the reachable region"
+    assert any(inside), "the human never entered the forward reachable envelope"
     # One entry and one exit, not a flicker: the temporal graph should see a
     # single interval, and a fixture that flickers would hide a bug that doesn't.
     transitions = sum(1 for a, b in zip(inside, inside[1:]) if a != b)
     assert transitions == 2, f"expected one entry and one exit, saw {transitions}"
+    # An interval wide enough to be an approach rather than a grazing frame that
+    # the timestep happened to land on.
+    assert sum(inside) > 20, f"only {sum(inside)} frames inside the envelope"
     assert not any(touches_body(f) for f in got)
 
 
@@ -270,9 +374,12 @@ def test_approach_and_retreat_enters_leaves_and_does_not_touch(seed: int) -> Non
 def test_sustained_overlap_overlaps_on_every_frame(seed: int) -> None:
     got = frames("sustained_overlap", seed)
     assert len(got) > 100
-    assert all(in_workspace_disc(f) for f in got), (
-        "sustained_overlap must overlap across many frames — it is the fixture "
-        "the incremental-edge compression claim is tested against."
+    outside = [f.t for f in got if not in_envelope(f)]
+    assert not outside, (
+        f"sustained_overlap left the forward reachable envelope at t={outside[:5]}"
+        f" ({len(outside)} of {len(got)} frames). Every frame must overlap — it "
+        "is the fixture the incremental-edge compression claim is tested "
+        "against, and a frame outside the envelope emits no edge to compress."
     )
     assert not any(touches_body(f) for f in got), "overlap is not contact"
 

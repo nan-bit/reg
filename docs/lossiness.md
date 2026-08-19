@@ -78,12 +78,42 @@ Each entry is a claim that the graph can be tested against.
 5. **Every `Verdict`, in full** — `verdict_id`, `declaration_id`, `seq`, `t`,
    `outcome`, `fault`, the clamped envelope where one was applied, `prev_hash`,
    `mac`.
+
+   **Verbatim, and stored 2026-08-19 (issue #45).** "In full" is stronger than it
+   reads: every field goes into the artifact exactly as the record was signed, and
+   nothing is re-signed or re-hashed on the way in. A record read back verifies —
+   or fails to — precisely as it did before it was written, because a store that
+   could recompute a MAC is a store that can quietly repair a broken chain. The
+   two record timestamps are stored unquantized for the same reason: `TIME_TOL_S`
+   is the resolution *observations* are reported at, and a record's `t_issued` is
+   a value the MAC covers.
+
+   **One verdict per commanded action, never one per declaration.** The `Verdict`
+   table and the `ADJUDICATED` edges hold as many rows as there were
+   adjudications: at a 0.5 s replan interval `declared_violation` produces 251
+   verdicts — 122 PERMIT and 129 CLAMP — against 11 declarations that all carry
+   an identical `declared_envelope`, and two of those declarations are
+   adjudicated both ways. Collapsing them would discard *when the violation
+   began*, which is the second clause of the demo sentence.
 6. **Every fault, with full attribution** — the fault code from the Phase 4
    taxonomy, the declaration it was raised against, the record that triggered it,
    and which key signed each side. A fault with no attributable origin is a defect,
    not a retained fault.
 7. **The complete hash chain** — every `FOLLOWS` link between consecutive records,
    unbroken, so `verify_chain()` is answerable from the graph alone.
+
+   There are **two** chains, not one: declarations link to declarations under the
+   policy key and verdicts to verdicts under the enforcement key, each beginning
+   at the genesis hash. "Unbroken" is enforced at build time — a record whose
+   `prev_hash` is not its predecessor's chain hash is refused, artifact and all,
+   because a `FOLLOWS` edge written across a break would let a chain walk cleanly
+   over records nobody ever saw.
+
+   **`Acknowledgment` is not stored yet, and the gap is a refusal rather than a
+   hole.** Acknowledgments share the verdict chain, so a run containing one has a
+   verdict whose `prev_hash` names a record the artifact would not hold — and that
+   stream is refused rather than stored with a link written over it. The fixtures
+   that produce a passivation arrive with issue #46, and so does the row it needs.
 8. **Envelope *identity and scalars* on every envelope the artifact keeps** — every
    `envelope` row records `envelope_hash`, `area`, `horizon`, and `source`
    (`computed` / `declared` / `clamped`). There is no such thing here as a row that
@@ -183,6 +213,13 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    `envelope` row with neither geometry nor a config), or lowering `n_samples` to
    make the polygons smaller — that changes what the envelope *is* in order to move
    a storage number, which is the move this whole document forbids.
+
+   **It reaches computed envelopes only.** A `declared` or a `clamped` bound is
+   stored with its polygon, always. The discard above is licensed by
+   recomputability and by nothing else, and those two regions came from a policy
+   rather than from a configuration in this file: there is nothing here to
+   recompute them from, so discarding one would not be a discard but a deletion.
+   Added 2026-08-19 with issue #45.
 
 10. **The envelope at frames that anchor nothing, and the per-frame node itself.**
     Added 2026-08-18 (issue #29). #9 stopped storing the polygon on every frame and
@@ -285,8 +322,10 @@ not be a measurement.
 
 **Retains.** One row per semantically material event, from a fixed vocabulary
 (`reg.store.OCCURRENCE_SPECS`): `run_began`, `run_ended`, `envelope_entered`,
-`envelope_left`, `contact_began`, `contact_ended`, and one `closest_approach` per
-entity carrying the smallest separation of the run. Each row carries DSSAD's
+`envelope_left`, `contact_began`, `contact_ended`, one `closest_approach` per
+entity carrying the smallest separation of the run, and — added 2026-08-19 with
+issue #45 — the five enforcement events, `declaration_vetoed`, `action_clamped`,
+`safe_state_entered`, `reintegrated` and `escalation_failed`. Each row carries DSSAD's
 elements — the flag (the type), the reason, the timestamp, and a provenance stamp
 binding the event to the `reg` version and the envelope parameters that produced
 it, which is `R157SWIN` in this project's terms. The entity set and the run's
@@ -300,7 +339,19 @@ Nothing is emitted when a metric crosses a quantization boundary — those are t
 transitions level 2 records, and recording them here would reintroduce the
 per-frame cost this level exists to be measured against. A relationship still
 holding at the last frame gets no `..._left` or `..._ended`; `run_ended` bounds
-it.
+it. A PERMIT verdict emits nothing at all, and a SAFE_STATE emitted while the
+enforcer is already passivated emits nothing either — both would be one row per
+frame, the first for a run that went well and the second for a robot that was
+not moving.
+
+**The first attestation question this level can answer.** Until issue #45 every
+occurrence type was Layer B and about an entity, so the coarse layer could say
+who came near the robot and nothing about what the robot was authorised to do.
+The five enforcement events are Layer A: at ±1.0 s the artifact now answers *was
+an action ever clamped, and roughly when* without the edge layer and without a
+perceiver. What it still cannot answer is which declaration, which bound, or by
+how much — those are `declaration`, `verdict` and the four attestation edges,
+all of them level 2.
 
 **There is no date element, and that is a deviation stated rather than hidden.**
 DSSAD records `yyyy/mm/dd` because a recorder in a car has a clock. This artifact

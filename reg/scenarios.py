@@ -76,10 +76,16 @@ class Scenario:
     human_waypoints: tuple[Waypoint, ...]
     q_jitter: float
     human_jitter: float
-    #: The joint-space bound the scripted policy will declare in Phase 3, when
-    #: `declare/` exists. `None` means this scenario declares nothing, which is
-    #: not the same as declaring an unbounded one — a consumer must treat it as
-    #: not-applicable rather than as permission.
+    #: The fixed joint-space bound the scripted policy declares in every replan
+    #: interval of this run, independent of what it then commands
+    #: (`reg.declare.emit_declarations`). That independence is what lets the
+    #: claim be *false*, which is the whole purpose of `declared_violation`.
+    #:
+    #: `None` means this scenario states no fixed bound — not that it declares an
+    #: unbounded one, and not permission for anything. Read as a field it is
+    #: not-applicable; the policy handed a `None` declares exactly the region its
+    #: own upcoming configurations sweep, which is a true statement about itself
+    #: and therefore a compliant run.
     declared_q_bounds: tuple[tuple[float, float], ...] | None = None
     dt: float = DEFAULT_DT
 

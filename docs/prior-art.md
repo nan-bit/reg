@@ -236,3 +236,100 @@ Not resolved in this pass; none block Phase 1.
   sampling envelope proves inadequate.
 - **Whether DSSAD's mid-2026 completion target held.** Affects a date in the site
   piece, nothing in the code.
+
+---
+
+# Second pass — 2026-08-19, after Claim 1 was measured and failed
+
+The first pass ran before any code existed. This one ran after the benchmark
+refuted the compression claim, and it was aimed at one question: **was the claim
+wrong, or was the measurement testing the wrong thing?** Both, in different
+proportions.
+
+## 8. Time-series compression is the baseline `reg` was actually competing with
+
+`reg.bench` compares the SQLite artifact against a **gzipped nine-float CSV**.
+That is not a naive baseline — it is close to the state of the art for this data
+shape. Facebook's **Gorilla** (VLDB 2015) compresses a 16-byte `(timestamp,
+value)` pair to **1.37 bytes per point** in production, via delta-of-delta
+timestamps and XOR'd values; 96% of timestamps compress to a single bit.
+VictoriaMetrics and RedisTimeSeries report the same order.
+
+Gzip on columnar floats gets within reach of that (~21 B/frame for nine values,
+so ~2.3 B/value). So the measured comparison was **a relational store with
+B-tree indexes and 64-character content hashes against a purpose-built float
+codec, at storing floats.** `reg` does not store floats; it stores relationships,
+verdicts and provenance. Losing that comparison is not evidence about the thesis.
+
+**Action taken:** Claim 1 in `plan.md` is restated around an absolute retention
+rate (51.5 MB/hour, measured) plus a resolution curve, rather than a ratio
+against a stream this project was never proposing to replace byte-for-byte.
+
+**What this does not excuse:** the per-frame cost is real and would be real
+against any baseline. §10 is the response to that.
+
+## 9. DSSAD's actual data model — and how far `reg` overshot it
+
+§1 established that DSSAD exists and records events rather than continuous state.
+This pass got the data elements. Per UN R157, for each listed event the recorder
+stores at minimum:
+
+- the **occurrence flag**
+- the **reason** for the occurrence, where applicable
+- the **date**, `yyyy/mm/dd`
+- the **timestamp**, `hh:mm:ss` with timezone, accuracy **±1.0 second**
+- the **R157SWIN** — the software version identifier present when the event
+  occurred
+
+Two consequences.
+
+**`reg` is roughly two orders of magnitude finer than the mandate.** DSSAD:
+occurrences at ±1 s. `reg`: relationships at cm / 10 ms, every frame. The
+per-frame cost that sank Claim 1 is the price of a resolution **no standard
+asks for**, chosen by this project without noticing it was choosing.
+
+**The software-version element is a free gift to Claim 4.** DSSAD already
+requires that a recorded event be bound to the software that produced it. That is
+the same argument as `reg`'s signing keys, one level less cryptographic, and it
+means "bind the record to the thing that made it" is a *requirement in force*
+rather than a nice idea. `reg`'s `meta` should carry the equivalent — code
+version and envelope parameters — which it partly does already.
+
+## 10. Intent attestation now has an active adjacent field — in software, not robots
+
+The first pass found nothing occupying Claim 4. That is no longer true, and the
+writeup must not claim an empty field.
+
+There is a 2026 line of work on **cryptographic runtime governance for AI
+agents**: architectures that bind an agent to an immutable policy layer, require
+it to **declare intent before acting**, evaluate that declaration against runtime
+context, issue a signed authority token when it passes, block execution when it
+does not, and keep a tamper-evident log of the whole exchange. Signed "intent
+attestations" describing an agent's current purpose are a named primitive there.
+
+That is recognisably the same shape as Phases 3–4 of this project.
+
+**What is still distinct, stated carefully:**
+
+- That work governs **software agents** — tool calls, data access, API actions.
+  `reg` governs a **physical control policy**, where the bound is a region of
+  space the body may occupy and the failure is contact with a person.
+- Its lineage is zero-trust and supply-chain security. `reg`'s is **industrial
+  functional safety** — IEC 61784-3's black channel, PROFIsafe's fault taxonomy
+  and passivation, ASTM F3269's Complex/Recovery Function split.
+- It is not answerable to ISO 10218, ISO 25785-1 or DSSAD, and does not have to
+  produce evidence an assessor will accept under a machinery regulation.
+
+**Action for Phase 10:** say "this pattern is emerging for software agents; this
+applies it to a physical policy under machinery-safety precedent" rather than
+"nothing occupies this space". Cite the field. Being second in a field and first
+in a domain is a defensible claim; being wrong about the field is not.
+
+## Changes this pass makes to the plan
+
+| # | Change | Where |
+|---|---|---|
+| 8 | Claim 1 restated as retention rate + resolution curve, not a ratio | `plan.md` Claim 1 |
+| 9 | DSSAD data elements added to the standards table; occurrence layer proposed | `plan.md` standards, Claim 1 |
+| 10 | Claim 4's novelty narrowed from "unoccupied" to "new domain for an emerging pattern" | `plan.md` Phase 10 |
+| — | Claim 2 reframed from speedup to answer-agreement | `plan.md` Claim 2 |

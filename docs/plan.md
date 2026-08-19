@@ -27,9 +27,19 @@ Two halves:
 **The thesis:** safety work tells you a robot probably won't hurt anyone.
 Evidence tells you what happened when it did. Almost all robot safety research is
 runtime; very little addresses reconstruction months later. Full sensor logs from
-a humanoid are terabytes/day and cannot leave an air-gapped site. A scene graph is
-orders of magnitude smaller and may be the only representation you can retain,
-export, and hand to an assessor or insurer.
+a humanoid are terabytes/day and cannot leave an air-gapped site. A scene graph
+may be the only representation you can retain, export, and hand to an assessor or
+insurer.
+
+> **Amended 2026-08-19, after Claim 1 was measured and failed.** This paragraph
+> used to end "a scene graph is orders of magnitude smaller and may be the only
+> representation…". The clause is struck because it is not what was measured: the
+> graph is ~14x *larger* per frame than a gzipped copy of the proprioception
+> stream, at every run length up to 30,000 frames. What survives is the *retention*
+> half — the artifact is 51.5 MB/hour, which is retainable and exportable — and the
+> claim that it answers audit questions the raw stream cannot answer at all
+> (declarations, verdicts, faults, the chain). Size relative to a sensor log
+> remains plausible and remains **unmeasured**; see Claim 1.
 
 **This is not:** a perception system, a safety controller, a physics engine, a
 research contribution to reachability analysis, or a proposed standard. It is an
@@ -52,6 +62,8 @@ project from a toy, and it is the section that belongs on the personal site.
 | Actively controlled stability — de-energize is *not* a safe state; fall-zone and balance hazards | **ISO/CD 25785-1** | Committee Draft, no publication date |
 | Cybersecurity requirements as they pertain to robot safety | **ISO 10218:2025** (Parts 1 & 2) | Published Feb 2025 |
 | Speed and separation monitoring; time-varying protective volume from speed, stopping distance, sensor latency | ISO/TS 15066, now absorbed into **ISO 10218-2:2025** | Published |
+| A mandated, retained evidence recorder for autonomy: **occurrences** with flag, reason, date, timestamp (±1.0 s) and the software version present at the event | **UNECE DSSAD**, UN R157 (ALKS) | Published; the closest existing thing to this project |
+| Automatic event logging over the system lifetime, retained ≥6 months, sufficient for post-hoc reconstruction of individual decisions | **EU AI Act Art. 12** (record-keeping), Art. 19 | In force |
 
 ### Two deviations from precedent, both deliberate — state them prominently
 
@@ -143,9 +155,68 @@ an order of magnitude more than a line of gzipped CSV.
 The original criterion is kept above rather than deleted: it is what the project
 set out to show, and the gap between it and the table is the finding.
 
+#### Why it lost — three things the measurement exposed (2026-08-19)
+
+**1. The baseline was never the thesis.** This document argues from *terabytes/day
+of raw sensor logs* — cameras, LiDAR, tactile, IMU. What `reg.bench` measures
+against is a nine-float proprioception CSV. Gzipped, that lands at ~21 B/frame,
+which is roughly where purpose-built time-series compression lives (Gorilla
+reports **1.37 bytes per point** in production, `docs/prior-art.md` §8). The
+comparison was a relational artifact with indexes and content hashes against a
+float compressor doing what float compressors are for. It was unwinnable, and
+losing it says nothing about the thesis.
+
+**2. The number that is actually about retention is absolute, and we have it.**
+At 30,000 frames / 600 s the artifact is 8.59 MB, i.e. **51.5 MB/hour, 1.24
+GB/day** (390 MB/day gzipped). That is a measured property of this simulator's
+output, quotable without a ratio, and it is comfortably retainable and
+exportable. Whether it is three orders of magnitude below a real sensor log is
+**imported context, not a result** — this simulator has no sensors and cannot
+measure it. Say so wherever the figure appears.
+
+**3. `reg` chose a resolution no standard asks for.** UN R157's DSSAD — the
+mandated evidence recorder for automated driving, and the closest precedent this
+project has — stores **occurrences**: an occurrence flag, a reason, a date, a
+timestamp at **±1.0 second**, and the software version identifier present at the
+event. `reg` stores relationships at **cm / 10 ms, every frame**. Two orders of
+magnitude finer than the only comparable thing that is actually required by law.
+The per-frame cost that sank Claim 1 is the price of a resolution nobody
+specified.
+
+#### What replaces it: resolution as the measured variable
+
+Claim 1 stops being "is the graph smaller than the stream" — that is answered, no
+— and becomes **"what does evidence cost per unit of resolution, and how coarse
+can it get before it stops answering the question?"**
+
+That is a better claim in three ways: it is measurable here, it maps onto a
+mandated schema instead of an invented one, and its answer is useful whichever
+way it comes out. Concretely, the deliverable is one curve with at least three
+points — occurrence-level (DSSAD-aligned), transition-level, and the current
+per-frame level — reporting for each: bytes/hour, and whether the supported
+queries still `AGREE` within their stated tolerance.
+
+If the occurrence level answers the audit questions at a fraction of the bytes,
+that is the commercial argument, properly grounded. If it does not, the finding
+is that the questions this project cares about need finer evidence than the
+regulation currently mandates — which is a more interesting thing to say than a
+compression ratio.
+
 ### Claim 2 — Query (what makes it evidence, not a log)
 Audit questions answered from the graph alone, no access to the original stream.
 **Success:** 4 queries returning answers verifiable against held-out ground truth.
+
+**Reframed 2026-08-19.** The benchmark reports a 264–380x speedup against
+recomputing from the raw CSV, and **that is not the claim worth making** — 70 ms
+is not slow, and nobody retains an evidence artifact to save 70 ms. The claim is
+the `AGREE` column beside it: at every measured length up to 30,000 frames, the
+graph's answer matches ground truth recomputed from the raw stream to within
+0.0–8.2 mm against a 10 mm advertised tolerance.
+
+That is the retention argument, not a performance one: **the answers survive the
+discard.** A smaller artifact that answered differently would be worthless; this
+one answers the same and is the thing you can still hold when the stream is gone.
+Quote the agreement, mention the speed once, and never lead with it.
 
 ### Claim 3 — Sufficiency boundary (the honest one)
 Which claims the proprioception-only layer can support, and which depend on an

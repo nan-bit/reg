@@ -51,7 +51,38 @@ repository as it stands, not the plan.
 | **1** | **Compression** — evidence graph vs. raw logged state, one size ratio per scenario | `not started` — the headline figure is **not yet measured** |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `not started` |
 | **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `in progress` — the Layer A/B type boundary and the test that fails when it erodes have landed (`reg/types.py`, `tests/test_layer_boundary.py`); the taxonomy has not |
-| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `not started` |
+| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `in progress` — the `Declaration` record, the hash chain and the two keyed MACs have landed (`reg/chain.py`, `reg/declare.py`); independent verification, verdicts and chain *verification* have not |
+
+## The honesty note: this is the structure of non-repudiation, not non-repudiation
+
+Every `Declaration` is signed with a policy key and linked to its predecessor by
+a SHA-256 chain, and every `Verdict` will be signed with a separate enforcement
+key. **In this prototype both keys live in the same process.** That demonstrates
+the *structure* of non-repudiation — two parties, two keys, a record neither can
+rewrite without it showing — and not non-repudiation itself, because a process
+holding both keys can forge either side of the exchange.
+
+A real deployment needs the enforcement key in hardware the policy vendor cannot
+reach. That is the same independence argument as the Layer A / Layer B
+separation, one level down: a signature from a key the signer's counterparty also
+holds has common-cause failure with the thing it is supposed to attest, exactly
+as a constraint layer supplied by the policy vendor does.
+
+Two smaller admissions in the same spirit:
+
+- The keyring is a JSON file of two hex keys. There is no PKI, no key rotation
+  and no revocation, and the file's only protection is its filesystem mode.
+- The record commits to floats at the raw stream's fixed precision
+  (`reg.stream.FLOAT_PRECISION`), so the chain is tamper-evident at that
+  resolution and not below it.
+
+Intent attestation of this shape is **not a new idea and this project does not
+claim it as one** — there is a 2026 line of work on cryptographic runtime
+governance in which software agents declare intent before acting and receive
+signed authority tokens ([`docs/prior-art.md` §10](docs/prior-art.md)). What is
+distinct here is the domain (a physical control policy, where the bound is a
+region of space and the failure is contact with a person) and the lineage
+(IEC 61784-3 and machinery safety, not zero-trust).
 
 ## Standards baseline
 
@@ -81,29 +112,31 @@ pip install -e ".[dev]"
 pytest                      # the whole suite; CI runs exactly this
 ```
 
-As of this commit that is `5 passed` — the layer boundary tests, which are the
-only behaviour there is to test so far.
+As of this commit that is `708 passed`.
 
-**There are no CLI entry points yet.** The package currently contains the shared
-types and the layer boundary they enforce, and nothing that can be invoked from a
-shell. The first executable deliverable is the simulator; the build order for it
-and everything after is in [`docs/plan.md`](docs/plan.md). This section will list
-commands when they exist and not before.
+The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`
+and `python -m reg.bench`; each takes `--help`. Declarations are a library API so
+far — `reg.declare.emit_declarations` — because the command that would write a
+declaration stream to disk belongs with the verification CLI, which is the next
+issue. The build order is in [`docs/plan.md`](docs/plan.md).
 
 ## Status
 
-Built: the package skeleton, the CI test workflow, and `reg/types.py` — the
-shared record types and the Layer A / Layer B split, which is the single most
-important structural property in the codebase. Layer A (certifiable) is
-proprioception, actuation limits, declarations, verdicts and the chain; Layer B
-(uncertifiable) is where anything else in the world is. The envelope computation
-takes a `ProprioState`, which has no field naming any entity — that absence *is*
-the enforcement, and [`tests/test_layer_boundary.py`](tests/test_layer_boundary.py)
-fails if it erodes.
+Built: `reg/types.py` — the shared record types and the Layer A / Layer B split,
+which is the single most important structural property in the codebase. Layer A
+(certifiable) is proprioception, actuation limits, declarations, verdicts and the
+chain; Layer B (uncertifiable) is where anything else in the world is. The
+envelope computation takes a `ProprioState`, which has no field naming any entity
+— that absence *is* the enforcement, and
+[`tests/test_layer_boundary.py`](tests/test_layer_boundary.py) fails if it
+erodes. Also built: the simulator and its scenario fixtures, the
+proprioception-only envelope, the evidence graph and its SQLite store, the
+benchmarks, the viz, and — new in this change — the hash chain with its two keyed
+MACs (`reg/chain.py`) and the `Declaration` record with the scripted policy that
+emits it (`reg/declare.py`).
 
-Not built: the simulator, the envelope, declarations, enforcement and the fault
-taxonomy, the evidence graph and its SQLite store, the chain, the query API, the
-benchmarks, the sufficiency taxonomy. That is nine of the ten phases.
+Not built: enforcement and the fault taxonomy, verdicts, chain *verification* and
+the `--tamper` demo, the query API, the sufficiency taxonomy.
 
 No compression number, no incident report output and no GIF appear on this page
 because none of them have been produced yet. A plausible placeholder would be

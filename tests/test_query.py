@@ -265,6 +265,8 @@ def test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes(
         query.META_FRAME_COUNT,
         query.META_OCCURRENCE_RETENTION,
         query.META_OCCURRENCE_RESOLUTION,
+        query.META_ATTESTATION_RECORDS,
+        query.META_ATTESTATION_RETENTION,
         store.META_FRAME_PERIOD,
     ):
         assert key in meta, (
@@ -272,6 +274,15 @@ def test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes(
         )
     assert query.META_OCCURRENCE_RETENTION == graph.META_OCCURRENCE_RETENTION
     assert query.META_OCCURRENCE_RESOLUTION == graph.META_OCCURRENCE_RESOLUTION
+    assert query.META_ATTESTATION_RECORDS == graph.META_ATTESTATION_RECORDS
+    assert query.META_ATTESTATION_RETENTION == graph.META_ATTESTATION_RETENTION
+    # The two counts are written only where a record stream was supplied, so
+    # they are not asserted present in this artifact — which was built without
+    # one. Their *spelling* is still one contract with the builder, and with
+    # `reg.chain`, which names its own copies for the same reason.
+    assert query.META_DECLARATION_COUNT == graph.META_DECLARATION_COUNT
+    assert query.META_VERDICT_COUNT == graph.META_VERDICT_COUNT
+    assert query.ATTESTATION_PRESENT == chain.ATTESTATION_PRESENT
 
 
 # --------------------------------------------------------------------------
@@ -882,17 +893,22 @@ CHAIN_KEYRING = chain.Keyring.from_material(
 )
 
 
-@pytest.fixture(scope="module")
-def attested(tmp_path_factory) -> tuple[Path, Path]:
-    """`(artifact, keyring)` — one build with both record chains in it."""
+def _attested_build(tmp: Path, name: str) -> tuple[Path, Path]:
+    """Build `name` with its own record stream. `(artifact, keyring)`.
+
+    One definition, used by both attested fixtures below. Through
+    `graph._attestation_from_stream` rather than a second copy of the
+    policy/enforcer wiring, for the reason `tests/test_graph.py` gives: a
+    fixture that assembled the records differently from the way the CLI does
+    would be testing a run nobody can produce.
+    """
     from dataclasses import replace as _replace
 
     from reg.sim import provenance
     from reg.stream import write_frames
 
-    tmp = tmp_path_factory.mktemp("verify-chain")
-    scn = _replace(scenario("declared_violation"), dt=CHAIN_DT)
-    csv = write_frames(scn.states(0), tmp / "dv.csv", comments=provenance(scn, 0))
+    scn = _replace(scenario(name), dt=CHAIN_DT)
+    csv = write_frames(scn.states(0), tmp / f"{name}.csv", comments=provenance(scn, 0))
     keyring_path = chain.write_keyring(CHAIN_KEYRING, tmp / "keyring.json")
     records = graph._attestation_from_stream(
         csv,
@@ -902,7 +918,7 @@ def attested(tmp_path_factory) -> tuple[Path, Path]:
         declaration_horizon_s=CHAIN_HORIZON_S,
         watchdog_period_s=CHAIN_WATCHDOG_S,
     )
-    out = tmp / "dv.sqlite"
+    out = tmp / f"{name}.sqlite"
     # The envelope parameters are spelled out rather than taken from `_FAST`,
     # which names them the way `run_scenario` does; every call in this repo
     # passes them explicitly so no test depends on a default staying put.
@@ -918,6 +934,33 @@ def attested(tmp_path_factory) -> tuple[Path, Path]:
         substep_dt=0.05,
     )
     return out, keyring_path
+
+
+@pytest.fixture(scope="module")
+def attested(tmp_path_factory) -> tuple[Path, Path]:
+    """`(artifact, keyring)` — one build with both record chains in it.
+
+    `declared_violation`: the policy declares it will stay inside q0 <= 0.8 and
+    then commands q0 out to 1.5, so the run holds a real
+    `declaration_action_mismatch` and a real CLAMP. The human is parked far away,
+    which is what makes this fixture the **negative** for the assumption check —
+    the report cites no Layer B fact and must therefore carry no assumption.
+    """
+    return _attested_build(tmp_path_factory.mktemp("verify-chain"), "declared_violation")
+
+
+@pytest.fixture(scope="module")
+def clean_attested(tmp_path_factory) -> tuple[Path, Path]:
+    """`(artifact, keyring)` for a run in which the policy kept its word.
+
+    `contact` states no fixed `declared_q_bounds`, so its policy declares exactly
+    the region its own upcoming configurations sweep — a true statement about
+    itself, and every action is PERMITted. It is the fixture two negatives need:
+    an incident report over a run with no incident must not raise, and the human
+    *does* enter the envelope here, so the report cites a Layer B fact and has to
+    populate `assumption` for it.
+    """
+    return _attested_build(tmp_path_factory.mktemp("clean-attested"), "contact")
 
 
 def test_the_chain_import_is_deferred() -> None:
@@ -1099,12 +1142,837 @@ def test_render_chain_report_is_pure_and_names_every_chain(attested) -> None:
         assert result.kind in text
 
 
-def test_the_query_list_names_verify_chain_and_what_is_still_absent() -> None:
-    """`--list` is the vocabulary. A query missing from it reads as a milestone
-    that has not landed, so the one that just landed has to appear — and the
-    four that have not must still say so."""
+def test_the_query_list_names_every_query_and_the_two_that_are_not_queries() -> None:
+    """`--list` is the vocabulary, and since issue #50 nothing on it is absent.
+
+    The three attestation queries print with the rest because they are
+    `Answer`-returning queries now; `--verify-chain` and `--incident` are named
+    below the table because neither returns an `Answer`. A name missing from this
+    list reads as a milestone that has not landed, which is how "no violations"
+    and "this build does not record violations" come to look the same.
+    """
     text = query._list_text()
     assert "--verify-chain" in text
     assert "--tamper" in text
-    for absent in ("declared_bound", "violations", "verdicts", "incident_report"):
-        assert absent in text
+    assert "--incident" in text
+    assert "incident_report" in text
+    for name in ("declared_bound", "violations", "verdicts"):
+        assert "--" + name.replace("_", "-") in text
+        assert name in query.QUERIES
+    assert "not implemented" not in text
+
+
+# --------------------------------------------------------------------------
+# THE ATTESTATION QUERIES AND THE INCIDENT REPORT (issue #50).
+#
+# The tests this section exists for, in order of how much they carry:
+#
+# **1. `test_no_attestation_query_touches_an_entity_bearing_edge`.** Every
+# attestation query is Layer A, and docs/sufficiency.md §2 makes that the
+# strongest claim the project makes: whether the policy honoured its own
+# declaration is answerable from certifiable evidence, independently of whether
+# perception was right. The test traces the SQL each query actually issues, so it
+# is a property of what runs rather than of what a docstring says — and it ships
+# with its negative, a scene query on the same artifact that the same trace
+# catches touching Layer B.
+#
+# **2. `test_the_incident_report_names_the_declaration_the_fault_the_clamp_and_a_
+# verified_chain`.** The money query, against the `declared_violation` fixture
+# and cross-checked against the records that fixture actually produced — not
+# against a synthetic pair, because the property being tested is a fact about
+# that run.
+#
+# **3. The three negatives the issue names.** A clean fixture reports no incident
+# and does not raise; a tampered artifact reports the broken chain *first*; and a
+# report citing a Layer B fact carries its assumption while one citing none
+# carries no assumption, which is what makes the assumption check able to fail at
+# all.
+# --------------------------------------------------------------------------
+
+#: An instant `declared_violation` is violating at and two declarations cover.
+INCIDENT_T = 3.5
+
+#: An instant `contact`'s human is inside the computed envelope at, and a
+#: declaration is in force at. The overlap runs t=2.0-3.4 in that fixture at
+#: these envelope parameters; the midpoint is inside it with room either side.
+CLEAN_T = 2.5
+
+
+def _records_of(path: Path):
+    """`(declarations, verdicts)` as the artifact holds them.
+
+    The tests below assert against the fixture rather than against a rebuilt
+    expectation, and these are the readers the rest of the repo uses. They are
+    deliberately **not** what `reg.query` reads with — see
+    `test_no_attestation_query_touches_an_entity_bearing_edge` and the module
+    header of `reg/query.py`.
+    """
+    conn = store.connect(path)
+    try:
+        return store.read_declarations(conn), store.read_verdicts(conn)
+    finally:
+        conn.close()
+
+
+def _report(path: Path, t: float, keyring) -> query.IncidentReport:
+    conn = store.connect(path)
+    try:
+        return query.incident_report(conn, t, keyring)
+    finally:
+        conn.close()
+
+
+# --- the property this issue exists for -----------------------------------
+
+
+def _traced(path: Path, fn, *args) -> list[str]:
+    """Every SQL statement one query issues, captured off the connection.
+
+    Traced rather than read off the source, because what matters is which tables
+    a query *touches at run time*. A helper that grew an entity join would pass
+    any check made against this file's imports and fail here.
+    """
+    conn = store.connect(path)
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    try:
+        fn(conn, *args)
+    finally:
+        conn.set_trace_callback(None)
+        conn.close()
+    return statements
+
+
+#: Edge types that name an `Entity`, derived from the schema rather than listed
+#: here: `reg.store.EDGE_SPECS` is the vocabulary's single definition and an
+#: edge type added without a layer decision has to fail this test, not slip
+#: through a hand-written tuple.
+LAYER_B_EDGE_TYPES = tuple(
+    name for name, spec in store.EDGE_SPECS.items() if spec.layer == "B"
+)
+
+
+def test_no_attestation_query_touches_an_entity_bearing_edge(attested) -> None:
+    """**THE TEST OF THIS ISSUE.** docs/sufficiency.md §2, held at run time.
+
+    Every attestation query is Layer A, and that is worth more than a comment:
+    it means no perceptual error can make a policy that exceeded its declared
+    bound look like one that did not. So the SQL each one issues is captured and
+    checked — no `entity` table, no `occurrence` join, and no edge type
+    `reg.store.EDGE_SPECS` marks Layer B.
+    """
+    artifact, _ = attested
+    declarations, _ = _records_of(artifact)
+    assert declarations, "precondition failed: this fixture holds no declarations"
+
+    for fn, args in (
+        (query.declared_bound, (INCIDENT_T,)),
+        (query.violations, ((0.0, 5.0),)),
+        (query.verdicts, (declarations[0].declaration_id,)),
+    ):
+        statements = _traced(artifact, fn, *args)
+        assert statements, f"{fn.__name__} issued no SQL at all"
+        blob = " ".join(statements).upper()
+        assert " ENTITY" not in blob and "ENTITY_ID" not in blob, (
+            f"{fn.__name__} reads the entity table. Every attestation answer "
+            "would then be only as strong as whatever supplied that entity's "
+            "position, which is the whole asymmetry docs/sufficiency.md §2 "
+            f"claims: {statements}"
+        )
+        for edge_type in LAYER_B_EDGE_TYPES:
+            assert edge_type not in blob, (
+                f"{fn.__name__} reads {edge_type} edges, which are Layer B "
+                f"(reg.store.EDGE_SPECS): {statements}"
+            )
+
+
+def test_the_layer_check_says_no_when_it_is_pointed_at_a_scene_query(
+    attested,
+) -> None:
+    """NEGATIVE for the test above. A check that only ever passes proves nothing.
+
+    `separation_timeline` is Layer B by construction, so the same trace has to
+    catch it — otherwise the assertion above is passing because it cannot fail.
+    """
+    artifact, _ = attested
+    blob = " ".join(
+        _traced(artifact, query.separation_timeline, graph.HUMAN_ENTITY_ID)
+    ).upper()
+    assert "ENTITY" in blob
+    assert any(edge_type in blob for edge_type in LAYER_B_EDGE_TYPES)
+
+
+def test_every_attestation_query_declares_layer_a(attested) -> None:
+    """And says so in the answer, not only in the SQL it did not issue."""
+    artifact, _ = attested
+    declarations, _ = _records_of(artifact)
+    for name in ("declared_bound", "violations", "verdicts"):
+        spec = query.QUERIES[name]
+        assert spec.layer_tag == query.LAYER_A
+        assert spec.answerable_from == frozenset({query.ATTESTATION_LAYER})
+        assert not spec.tolerance.startswith("|"), (
+            "docs/lossiness.md gives the attestation queries no numeric "
+            "tolerance: they are exact by construction"
+        )
+    for answer in (
+        _ask(artifact, query.declared_bound, INCIDENT_T),
+        _ask(artifact, query.violations, (0.0, 5.0)),
+        _ask(artifact, query.verdicts, declarations[0].declaration_id),
+    ):
+        assert answer.verdict == ANSWERED, answer.reason
+        assert answer.layer == query.ATTESTATION_LAYER
+        assert answer.tolerances == {}
+
+
+# --- query 5: declared_bound ----------------------------------------------
+
+
+def test_declared_bound_reads_the_claim_the_policy_signed(attested) -> None:
+    """Against the fixture's own records, field for field.
+
+    `declared_violation` replans every 0.5 s with a 0.5 s horizon, so two claims
+    are in force at an instant that lands on a replan boundary — and both come
+    back. Picking one would be this module inventing a precedence rule nobody
+    signed.
+    """
+    artifact, _ = attested
+    declarations, _ = _records_of(artifact)
+    answer = _ask(artifact, query.declared_bound, INCIDENT_T)
+    assert answer.verdict == ANSWERED
+
+    value = answer.value
+    assert value.t == INCIDENT_T
+    expected = [
+        d
+        for d in declarations
+        if d.t_issued <= INCIDENT_T <= d.t_issued + d.horizon
+    ]
+    assert expected, "precondition failed: no declaration covers the incident"
+    assert [b.declaration_id for b in value.bounds] == [
+        d.declaration_id for d in expected
+    ]
+    for bound, record in zip(value.bounds, expected, strict=True):
+        assert bound.seq == record.seq
+        assert bound.t_issued == record.t_issued
+        assert bound.horizon == record.horizon
+        assert bound.action_class == record.action_class
+        assert bound.area > 0.0
+        assert bound.t_expires == record.t_issued + record.horizon
+    assert value.window == (
+        min(d.t_issued for d in expected),
+        max(d.t_issued + d.horizon for d in expected),
+    )
+
+
+def test_declared_bound_refuses_an_instant_no_declaration_covers(attested) -> None:
+    """NEGATIVE. A lapsed claim is not a claim, and the nearest one is a
+    statement the policy had stopped standing behind."""
+    artifact, _ = attested
+    answer = _ask(artifact, query.declared_bound, 500.0)
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+    assert "in force" in answer.reason
+
+
+@pytest.mark.parametrize(
+    "fn, args",
+    [
+        (query.declared_bound, (1.0,)),
+        (query.violations, ((0.0, 1.0),)),
+        (query.verdicts, ("anything",)),
+    ],
+)
+def test_an_artifact_with_no_record_layer_refuses_every_attestation_query(
+    artifact: Path, fn, args
+) -> None:
+    """NEGATIVE, and the distinction the whole project is about.
+
+    The `artifact` fixture was built with no record stream. "This build stores
+    no verdicts" and "this run produced none" are the same empty table and
+    different facts, so the refusal names `meta[attestation_records]` rather
+    than coming back as an empty list.
+    """
+    answer = _ask(artifact, fn, *args)
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+    assert query.META_ATTESTATION_RECORDS in answer.reason
+
+
+def test_an_attestation_query_refuses_an_artifact_missing_the_retention_rule(
+    attested, tmp_path: Path
+) -> None:
+    """NEGATIVE. Without the rule in the file, an empty result is silence.
+
+    The closed-world reading — "no commanded action here was refused" — is
+    licensed by `meta[attestation_retention]` saying every record the run
+    produced was stored. Strip it and the answer has to become a refusal, not
+    an empty tuple. Exactly the discipline `did_contact_occur` follows for
+    `occurrence_retention` one layer over.
+    """
+    artifact, _ = attested
+    stripped = _copy(
+        artifact,
+        tmp_path / "no_rule.sqlite",
+        f"DELETE FROM meta WHERE key = '{query.META_ATTESTATION_RETENTION}'",
+    )
+    answer = _ask(stripped, query.violations, (0.0, 5.0))
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None, "silence read as 'nothing was refused'"
+    assert query.META_ATTESTATION_RETENTION in answer.reason
+
+
+# --- query 6: violations ---------------------------------------------------
+
+
+def test_violations_names_every_refused_action_with_its_fault(attested) -> None:
+    """Against the fixture: the exact set of `(t, fault_code)` the record holds.
+
+    docs/lossiness.md's agreement table gives this query no tolerance — a missed
+    or invented fault is a failure, not a near miss — so the comparison is set
+    equality against the verdicts the fixture actually signed.
+    """
+    artifact, _ = attested
+    _, records = _records_of(artifact)
+    answer = _ask(artifact, query.violations, (0.0, 5.0))
+    assert answer.verdict == ANSWERED
+
+    value = answer.value
+    expected = [v for v in records if v.outcome != "PERMIT" and 0.0 <= v.t <= 5.0]
+    assert expected, "precondition failed: this fixture refused nothing"
+    assert {(a.t, a.fault) for a in value.actions} == {
+        (v.t, v.fault) for v in expected
+    }
+    assert value.faults == ("declaration_action_mismatch",)
+    assert value.adjudications == len([v for v in records if 0.0 <= v.t <= 5.0])
+    assert value.began == min(v.t for v in expected)
+    assert all(a.outcome == "CLAMP" for a in value.actions)
+    assert all(a.applied_envelope_id is not None for a in value.actions), (
+        "a CLAMP applied a bound and the ENFORCED edge is where it is recorded"
+    )
+
+
+def test_violations_on_a_clean_run_is_an_answer_and_not_a_refusal(
+    clean_attested,
+) -> None:
+    """The other half of the three-state discipline. `contact`'s policy declares
+    exactly what it goes on to do, so the honest answer is an empty set —
+    ANSWERED with no actions, never a could-not-evaluate and never a raise."""
+    artifact, _ = clean_attested
+    answer = _ask(artifact, query.violations, (0.0, 5.0))
+    assert answer.verdict == ANSWERED
+    assert answer.value.actions == ()
+    assert answer.value.faults == ()
+    assert answer.value.adjudications > 0, (
+        "an empty window would make this vacuous: the run has to have been "
+        "adjudicated for 'nothing was refused' to mean anything"
+    )
+    assert answer.value.began is None
+
+
+def test_violations_refuses_a_backwards_window(attested) -> None:
+    """NEGATIVE. A backwards window matches no verdict, so it would come back as
+    'no action was refused' rather than as the mistake it is."""
+    artifact, _ = attested
+    with pytest.raises(QueryError, match="backwards"):
+        _ask(artifact, query.violations, (4.0, 1.0))
+
+
+# --- query 7: verdicts -----------------------------------------------------
+
+
+def test_verdicts_does_not_flatten_one_declaration_into_one_verdict(
+    attested,
+) -> None:
+    """Issue #43's property, read back out through the query API.
+
+    A verdict is per commanded action, so one declaration of this fixture is
+    adjudicated PERMIT and later CLAMP. A query that returned one verdict per
+    declaration would pass every other test here and would have lost *when* the
+    violation began — the demo sentence's second clause.
+    """
+    artifact, _ = attested
+    declarations, records = _records_of(artifact)
+    by_declaration: dict[str, set[str]] = {}
+    for verdict in records:
+        if verdict.declaration_id is not None:
+            by_declaration.setdefault(verdict.declaration_id, set()).add(
+                verdict.outcome
+            )
+    both = sorted(k for k, o in by_declaration.items() if len(o) > 1)
+    assert both, (
+        "precondition failed: no declaration in this fixture is adjudicated "
+        "more than one way, so the property below is not being tested"
+    )
+
+    answer = _ask(artifact, query.verdicts, both[0])
+    assert answer.verdict == ANSWERED
+    value = answer.value
+    assert value.declaration_id == both[0]
+    assert len(value.adjudications) == len(
+        [v for v in records if v.declaration_id == both[0]]
+    )
+    assert set(value.outcomes) == by_declaration[both[0]]
+    assert {"PERMIT", "CLAMP"} <= set(value.outcomes)
+    assert [a.seq for a in value.adjudications] == sorted(
+        a.seq for a in value.adjudications
+    )
+
+
+def test_verdicts_refuses_an_unknown_declaration_and_names_what_is_present(
+    attested,
+) -> None:
+    """NEGATIVE. Not an empty list: an empty adjudication list for a record
+    nobody signed reads as a claim enforcement never checked, which is a finding
+    and not an absence."""
+    artifact, _ = attested
+    declarations, _ = _records_of(artifact)
+    with pytest.raises(QueryError) as exc:
+        _ask(artifact, query.verdicts, "no-such-declaration")
+    message = str(exc.value)
+    assert "no-such-declaration" in message
+    assert declarations[0].declaration_id in message
+
+
+# --- query 8: verify_chain, reachable from the query API -------------------
+
+
+def test_verify_chain_is_reachable_from_the_query_api(attested) -> None:
+    """docs/plan.md Phase 7 lists it beside the other three, so it is beside
+    them — and it is the same walk, not a second one."""
+    artifact, _ = attested
+    conn = store.connect(artifact)
+    try:
+        report = query.verify_chain(conn, CHAIN_KEYRING)
+        assert report.state is chain.ChainState.VERIFIED
+        assert report == chain.verify_chain(conn, CHAIN_KEYRING)
+    finally:
+        conn.close()
+
+
+def test_the_vocabularies_this_module_names_are_the_ones_that_define_them() -> None:
+    """`reg.query` cannot import `reg.enforce` or `reg.chain` at module level, so
+    it spells `PERMIT` and `VERIFIED` itself. The cost of that is paid here: a
+    rename on either side fails now rather than turning every incident report
+    into a false pass months later."""
+    from reg import enforce
+
+    assert query.PERMITTED_OUTCOME in enforce.OUTCOMES
+    assert query.CHAIN_VERIFIED == chain.ChainState.VERIFIED.value
+    assert query.LAYER_A == "A" and query.LAYER_B == "B"
+    assert {spec.layer for spec in store.EDGE_SPECS.values()} == {
+        query.LAYER_A,
+        query.LAYER_B,
+    }
+
+
+# --- the money query -------------------------------------------------------
+
+
+def test_the_incident_report_names_the_declaration_the_fault_the_clamp_and_a_verified_chain(
+    attested,
+) -> None:
+    """**THE MONEY TEST**, against the fixture and not a synthetic record.
+
+    docs/plan.md Phase 7's demo sentence, in four clauses and in order: what the
+    policy declared, where the commanded action left it, what enforcement did
+    about it, and that neither side rewrote the record.
+    """
+    artifact, _ = attested
+    declarations, records = _records_of(artifact)
+    report = _report(artifact, INCIDENT_T, CHAIN_KEYRING)
+
+    assert report.answered
+    assert report.incident
+    assert report.integrity == chain.ChainState.VERIFIED.value
+    assert report.integrity_verified
+
+    # ...the declaration.
+    covered = [
+        d
+        for d in declarations
+        if d.t_issued <= INCIDENT_T <= d.t_issued + d.horizon
+    ]
+    assert [b.declaration_id for b in report.bounds] == [
+        d.declaration_id for d in covered
+    ]
+
+    # ...the fault, and the CLAMP.
+    assert report.violation is not None
+    assert report.violation.fault == "declaration_action_mismatch"
+    assert report.violation.outcome == "CLAMP"
+    assert report.violation.applied_envelope_id is not None
+    signed = {v.verdict_id: v for v in records}[report.violation.verdict_id]
+    assert (signed.outcome, signed.fault, signed.t) == (
+        report.violation.outcome,
+        report.violation.fault,
+        report.violation.t,
+    )
+
+    # ...the time the violation began, over the whole record and not over a
+    # window this report chose for itself.
+    refused = [v for v in records if v.outcome != "PERMIT"]
+    assert report.first_refusal is not None
+    assert report.first_refusal.t == min(v.t for v in refused)
+
+    # ...and all of it in the prose, in docs/plan.md Phase 7's shape.
+    text = query.render_incident(report)
+    assert covered[0].declaration_id in text
+    assert "DECLARATION_ACTION_MISMATCH" in text
+    assert "CLAMP" in text
+    assert "Chain verified" in text
+    assert f"{report.violation.t:.4f}" in text
+
+    # ...under GSN field names, which is what makes it liftable into a safety
+    # case rather than transcribable into one (docs/prior-art.md §7).
+    for field in query.GSN_FIELDS:
+        assert hasattr(report, field)
+        assert f"{field}:" in text
+    assert report.goal and report.strategy and report.justification
+    assert any(item.kind == "declaration" for item in report.solution)
+    assert any(item.kind == "verdict" for item in report.solution)
+    assert any(item.kind == "chain" for item in report.solution)
+
+
+def test_a_clean_fixture_reports_no_incident_and_does_not_raise(
+    clean_attested,
+) -> None:
+    """NEGATIVE. "There was no incident" is an answer, and a query that raised on
+    a clean run could not be used to check whether a run was clean."""
+    artifact, _ = clean_attested
+    report = _report(artifact, CLEAN_T, CHAIN_KEYRING)
+
+    assert report.answered
+    assert not report.incident
+    assert report.violation is None
+    assert report.first_refusal is None
+    assert report.integrity_verified
+    assert report.bounds, "a clean report still says what was declared"
+    text = query.render_incident(report)
+    assert "No incident" in text
+    assert "incident:   no" in text
+
+
+def test_a_t_incident_no_declaration_covers_is_a_could_not_evaluate_report(
+    attested,
+) -> None:
+    """NEGATIVE, and the distinction issue #41 already enforces for the scene
+    queries: an empty report and a refusal are different facts."""
+    artifact, _ = attested
+    report = _report(artifact, 500.0, CHAIN_KEYRING)
+    assert report.verdict == COULD_NOT_EVALUATE
+    assert not report.answered
+    assert not report.incident
+    assert report.bounds == ()
+    assert report.reason.strip()
+    text = query.render_incident(report)
+    assert COULD_NOT_EVALUATE in text
+    assert "cannot say what the policy declared" in text
+
+
+def test_a_tampered_artifact_reports_the_broken_chain_first(
+    attested, tmp_path: Path
+) -> None:
+    """NEGATIVE, and the ordering rule the issue makes explicit.
+
+    Produced with issue #49's `--tamper` rather than by editing a row here, so
+    the artifact under test is one the shipped tool makes. Every other line of
+    the report is a claim about a record whose integrity is now in question, and
+    a report that buried that at the bottom would be misleading in exactly the
+    way this project exists to prevent.
+    """
+    artifact, _ = attested
+    tampered = chain.tamper(
+        artifact,
+        tmp_path / "tampered.sqlite",
+        "declaration:first:horizon=9.5",
+    )
+    assert tampered.field == "horizon", "precondition: one field, one record"
+
+    report = _report(tampered.copy, INCIDENT_T, CHAIN_KEYRING)
+    assert report.integrity == chain.ChainState.BROKEN.value
+    assert not report.integrity_verified
+    assert report.clauses[0].name == query.CLAUSE_INTEGRITY, (
+        f"the integrity clause is at index "
+        f"{[c.name for c in report.clauses].index(query.CLAUSE_INTEGRITY)}, not "
+        "first. Every clause after it is a claim about this record."
+    )
+    # The integrity clause carries the chain's own state. BROKEN is a finding
+    # rather than a failure to look — what it must never be is a pass.
+    assert report.clauses[0].verdict == chain.ChainState.BROKEN.value
+    assert report.clauses[0].answered
+
+    text = query.render_incident(report)
+    assert "INTEGRITY BROKEN" in text
+    assert text.index("INTEGRITY BROKEN") < text.index("the policy declared"), (
+        "the integrity failure has to precede every claim that depends on it"
+    )
+    assert tampered.record_id in text
+
+
+def test_a_report_over_a_verified_chain_puts_the_integrity_clause_last(
+    attested,
+) -> None:
+    """The positive half of the ordering rule, so "first" is a decision the
+    report makes rather than a constant it always emits."""
+    artifact, _ = attested
+    report = _report(artifact, INCIDENT_T, CHAIN_KEYRING)
+    assert report.clauses[-1].name == query.CLAUSE_INTEGRITY
+    assert report.clauses[-1].verdict == chain.ChainState.VERIFIED.value
+    assert report.clauses[0].name == query.CLAUSE_DECLARED
+
+
+def test_a_report_with_no_keyring_is_not_a_pass(attested) -> None:
+    """NEGATIVE. Not having checked a MAC is not the same as having checked it.
+
+    The links are still walked, no MAC is checked, and the chain comes back
+    COULD-NOT-EVALUATE — which moves the integrity clause to the front, because
+    a report over a record nobody authenticated is exactly a report whose
+    integrity is in question.
+    """
+    artifact, _ = attested
+    report = _report(artifact, INCIDENT_T, None)
+    assert report.integrity == chain.ChainState.COULD_NOT_EVALUATE.value
+    assert not report.integrity_verified
+    assert report.clauses[0].name == query.CLAUSE_INTEGRITY
+    assert not report.clauses[0].answered, (
+        "an unchecked chain learned nothing, which is the one verdict that is "
+        "neither a pass nor a finding"
+    )
+    assert "no key" in query.render_incident(report).lower()
+
+
+# --- Claim 3: the assumption slot, and the negative that makes it real -----
+
+
+def test_a_layer_b_fact_in_the_report_carries_its_assumption(
+    clean_attested,
+) -> None:
+    """`contact` puts the human inside the computed envelope during the window,
+    so the report cites a Layer B fact — and an incident report that quoted a
+    conditional claim as certifiable is the one thing Claim 3 exists to stop."""
+    artifact, _ = clean_attested
+    report = _report(artifact, CLEAN_T, CHAIN_KEYRING)
+
+    assert report.scene, (
+        "precondition failed: no entity is inside the envelope in this window, "
+        "so there is no Layer B fact for the report to be honest about"
+    )
+    assert any(item.layer == query.LAYER_B for item in report.solution)
+    assert report.assumption, (
+        "the report cites a Layer B evidence item and carries no assumption, "
+        "which quotes a conditional claim as certifiable"
+    )
+    assert any(graph.HUMAN_ENTITY_ID in text for text in report.assumption)
+
+    text = query.render_incident(report)
+    assert "[B]" in text
+    assert "Layer B" in text
+    # And the attestation half is unaffected by it — docs/sufficiency.md §2,
+    # visible in the output rather than asserted in a paragraph.
+    assert report.clause(query.CLAUSE_DECLARED).layer == query.LAYER_A
+    assert report.clause(query.CLAUSE_DECLARED).answered
+
+
+def test_a_report_citing_no_layer_b_fact_carries_no_assumption(attested) -> None:
+    """NEGATIVE for the test above, and the reason the check can fail at all.
+
+    `declared_violation` parks the human far away, so nothing intersects the
+    envelope and the report cites no Layer B evidence. An `assumption` that were
+    always populated would make the positive test vacuous — and would attach a
+    perception caveat to a finding that does not rest on perception, which is
+    the same error in the other direction.
+    """
+    artifact, _ = attested
+    report = _report(artifact, INCIDENT_T, CHAIN_KEYRING)
+    assert report.scene == ()
+    assert all(item.layer == query.LAYER_A for item in report.solution)
+    assert report.assumption == ()
+    assert report.incident, (
+        "and the finding is still made: an all-Layer-A report is the strong "
+        "case, not a degraded one"
+    )
+    assert "carries no assumption" in query.render_incident(report)
+
+
+def test_the_assumption_slot_is_populated_exactly_by_the_layer_b_evidence(
+    attested, clean_attested
+) -> None:
+    """The invariant both tests above are instances of, stated once."""
+    for fixture, t in ((attested, INCIDENT_T), (clean_attested, CLEAN_T)):
+        artifact, _ = fixture
+        report = _report(artifact, t, CHAIN_KEYRING)
+        layer_b = [item for item in report.solution if item.layer == query.LAYER_B]
+        assert bool(report.assumption) == bool(layer_b)
+        assert len(report.assumption) == len(layer_b)
+
+
+def test_a_report_over_an_artifact_with_no_layer_b_edge_refuses_the_scene_clause(
+    attested, tmp_path: Path
+) -> None:
+    """NEGATIVE, and the third state for the Layer B clause specifically.
+
+    Strip the Layer B edges — leaving the record and its four Layer A edges
+    intact — and the scene clause must say it cannot tell, not that nobody was
+    there, while every attestation clause beside it still answers. That
+    asymmetry is the claim; here it is as two verdicts in one report.
+
+    Deleting the whole edge table would not test this: it would take the
+    `DECLARED` edges with it and the report would refuse for a different reason.
+    """
+    artifact, _ = attested
+    stripped = _copy(
+        artifact, tmp_path / "no_edges.sqlite", "DELETE FROM edge WHERE layer = 'B'"
+    )
+    report = _report(stripped, INCIDENT_T, CHAIN_KEYRING)
+    scene = report.clause(query.CLAUSE_SCENE)
+    assert scene.verdict == COULD_NOT_EVALUATE
+    assert report.scene == ()
+    assert report.assumption == ()
+    assert report.clause(query.CLAUSE_DECLARED).answered, (
+        "the attestation clause is unaffected by the missing scene layer"
+    )
+
+
+# --- determinism and purity ------------------------------------------------
+
+
+def test_the_incident_report_is_deterministic(attested) -> None:
+    """Same artifact, same report. An audit artifact that answers differently on
+    two reads is not an audit artifact."""
+    artifact, _ = attested
+    first = _report(artifact, INCIDENT_T, CHAIN_KEYRING)
+    second = _report(artifact, INCIDENT_T, CHAIN_KEYRING)
+    assert first == second
+    assert query.render_incident(first) == query.render_incident(second)
+
+
+def test_render_incident_is_pure_and_never_empty(attested) -> None:
+    """The CLI formats and the query returns. `render_incident` reads no file, so
+    a caller can format a report it did not fetch."""
+    artifact, _ = attested
+    report = _report(artifact, INCIDENT_T, CHAIN_KEYRING)
+    text = query.render_incident(report)
+    assert text.strip()
+    assert query.render_incident(report) == text
+
+
+def test_an_incident_report_refuses_a_non_finite_t(attested) -> None:
+    """NEGATIVE. The only thing this query raises for is a caller error."""
+    artifact, _ = attested
+    with pytest.raises(QueryError, match="t_incident"):
+        _report(artifact, float("nan"), CHAIN_KEYRING)
+
+
+# --- the CLI ---------------------------------------------------------------
+
+
+def test_the_cli_prints_the_incident_report(attested, capsys) -> None:
+    artifact, keyring = attested
+    code = query.main(
+        [str(artifact), "--incident", str(INCIDENT_T), "--keyring", str(keyring)]
+    )
+    out = capsys.readouterr().out
+    assert code == query.EXIT_OK
+    assert "incident report:" in out
+    assert "DECLARATION_ACTION_MISMATCH" in out
+    assert "Chain verified" in out
+    for field in query.GSN_FIELDS:
+        assert f"{field}:" in out
+
+
+def test_the_cli_exits_could_not_evaluate_without_a_keyring(attested, capsys) -> None:
+    """Exit `1`, not `0`. A script that treated "could not check" as "checked and
+    fine" is the failure mode the three-state discipline exists to prevent."""
+    artifact, _ = attested
+    code = query.main([str(artifact), "--incident", str(INCIDENT_T)])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_COULD_NOT_EVALUATE
+    assert COULD_NOT_EVALUATE in out
+
+
+def test_the_cli_exits_broken_for_a_report_over_a_tampered_artifact(
+    attested, tmp_path: Path, capsys
+) -> None:
+    """Exit `3`. A broken chain outranks everything else the report managed to
+    say: the one thing a caller must not be able to do is read a report over an
+    altered record as a clean pass."""
+    artifact, keyring = attested
+    tampered = chain.tamper(
+        artifact, tmp_path / "cli_tampered.sqlite", "verdict:first:t=99.0"
+    )
+    code = query.main(
+        [
+            str(tampered.copy),
+            "--incident",
+            str(INCIDENT_T),
+            "--keyring",
+            str(keyring),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == query.EXIT_BROKEN
+    assert "INTEGRITY BROKEN" in out
+
+
+def test_the_cli_reports_an_artifact_with_no_record_layer_rather_than_failing(
+    artifact: Path, capsys
+) -> None:
+    """The verification command of issue #50 runs `--incident` against an
+    artifact built without `--keyring`, which holds no attestation layer at all.
+    That is a could-not-evaluate with a stated reason and exit `1` — not a
+    crash, and emphatically not an empty report."""
+    code = query.main([str(artifact), "--incident", "3.5"])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_COULD_NOT_EVALUATE
+    assert query.META_ATTESTATION_RECORDS in out
+    assert out.strip()
+
+
+@pytest.mark.parametrize(
+    "argv_tail, match",
+    [
+        (["--incident", "not-a-number"], "not a number"),
+        (["--incident", "3.5", "--tamper", "verdict:last:delete"], "--tamper"),
+        (["--incident", "3.5", "--keyring", "no-such-keyring.json"], "keyring"),
+    ],
+)
+def test_the_incident_cli_refuses_rather_than_ignores(
+    attested, capsys, argv_tail: list[str], match: str
+) -> None:
+    """NEGATIVE. A flag silently dropped reads as one that was applied."""
+    artifact, _ = attested
+    code = query.main([str(artifact), *argv_tail])
+    err = capsys.readouterr().err
+    assert code == query.EXIT_USAGE
+    assert match in err
+
+
+@pytest.mark.parametrize(
+    "argv_tail",
+    [
+        ["--declared-bound", str(INCIDENT_T)],
+        ["--violations", "0", "5"],
+    ],
+)
+def test_the_cli_answers_an_attestation_query(
+    attested, capsys, argv_tail: list[str]
+) -> None:
+    artifact, _ = attested
+    code = query.main([str(artifact), *argv_tail])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_OK
+    assert "verdict:    ANSWERED" in out
+    assert f"layer:      {query.ATTESTATION_LAYER}" in out
+    assert "evidence layer A" in out
+
+
+def test_the_cli_answers_the_verdicts_query(attested, capsys) -> None:
+    artifact, _ = attested
+    declarations, _ = _records_of(artifact)
+    code = query.main(
+        [str(artifact), "--verdicts", declarations[0].declaration_id]
+    )
+    out = capsys.readouterr().out
+    assert code == query.EXIT_OK
+    assert declarations[0].declaration_id in out
+    assert "adjudication(s)" in out

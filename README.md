@@ -49,15 +49,14 @@ repository as it stands, not the plan.
 | | Claim | Status |
 |---|---|---|
 | **1** | **Compression** — evidence graph vs. raw logged state, one size ratio per scenario | `not started` — the headline figure is **not yet measured** |
-| **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `not started` |
+| **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
 | **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `in progress` — the Layer A/B type boundary and the test that fails when it erodes have landed (`reg/types.py`, `tests/test_layer_boundary.py`); the taxonomy has not |
-| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `in progress` — the `Declaration` record, the hash chain and the two keyed MACs have landed (`reg/chain.py`, `reg/declare.py`); independent verification, verdicts and chain *verification* have not |
+| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no |
 
 ## The honesty note: this is the structure of non-repudiation, not non-repudiation
 
 Every `Declaration` is signed with a policy key and linked to its predecessor by
-a SHA-256 chain, and every `Verdict` will be signed with a separate enforcement
-key. **In this prototype both keys live in the same process.** That demonstrates
+a SHA-256 chain, and every `Verdict` is signed with a separate enforcement key. **In this prototype both keys live in the same process.** That demonstrates
 the *structure* of non-repudiation — two parties, two keys, a record neither can
 rewrite without it showing — and not non-repudiation itself, because a process
 holding both keys can forge either side of the exchange.
@@ -112,13 +111,73 @@ pip install -e ".[dev]"
 pytest                      # the whole suite; CI runs exactly this
 ```
 
-As of this commit that is `708 passed`.
+As of this commit that is `1144 passed`.
 
-The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`
-and `python -m reg.bench`; each takes `--help`. Declarations are a library API so
-far — `reg.declare.emit_declarations` — because the command that would write a
-declaration stream to disk belongs with the verification CLI, which is the next
-issue. The build order is in [`docs/plan.md`](docs/plan.md).
+The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`,
+`python -m reg.query` and `python -m reg.bench`; each takes `--help`. The build
+order is in [`docs/plan.md`](docs/plan.md).
+
+## Reading an incident
+
+The demo sentence of [`docs/plan.md`](docs/plan.md) Phase 7, answered end to end
+as one query. Reproduce it with a keyring of your own — key material is the one
+thing in this project that is deliberately **not** derivable from a seed:
+
+```bash
+python -c "from reg.chain import generate_keyring, write_keyring; write_keyring(generate_keyring(), 'keyring.json')"
+python -m reg.sim   --scenario declared_violation --seed 0 --out dv.csv
+python -m reg.graph build dv.csv --out dv.sqlite --keyring keyring.json \
+    --replan-interval 0.5 --declaration-horizon 0.5 --watchdog-period 1.0
+python -m reg.query dv.sqlite --incident 3.5 --keyring keyring.json
+```
+
+which prints, on the run above. **Abridged**: `…` marks an elided line, and the
+`[scene]` clause and the whole GSN block follow what is shown.
+
+```
+incident report: t=3.5000 s
+verdict:    ANSWERED
+integrity:  VERIFIED
+incident:   yes
+note:       2 declaration(s) in force at t=3.5; 51 of 51 adjudication(s) in [3.0, 4.0] were not permitted …
+
+[declared] ANSWERED (evidence layer A)
+At t=3.0000s the policy declared envelope env_95506a4e3d27bc96 (area 0.83 m²)
+  action_class: reach, horizon 500ms, seq 6, declaration declared_violation-decl-00006
+  in force from t=3.0000s to t=3.5000s
+…
+
+[violation] ANSWERED (evidence layer A)
+At t=3.0000s a commanded action was not permitted as issued
+  fault: DECLARATION_ACTION_MISMATCH
+  51 of 51 adjudication(s) in [3.0000, 4.0000] s were refused; fault(s) present: …
+  how far outside the bound the action lay is not retained: …
+  the earliest refused action in the whole record is at t=2.1000s (verdict …
+
+[enforcement] ANSWERED (evidence layer A)
+Enforcement adjudicated verdict declared_violation-verdict-00150 at t=3.0000s
+  outcome: CLAMP to envelope env_55ad010616fe70b3 (area 0.83 m²)
+
+[integrity] VERIFIED (evidence layer A)
+Chain verified: 262 records, 0 breaks
+```
+
+Three things about that output are the point rather than decoration. It carries
+**GSN-compatible field names** (`goal`, `strategy`, `solution`, `assumption`,
+`justification`) beside the prose, per
+[`docs/prior-art.md` §7](docs/prior-art.md), so it drops into a UL 4600 safety
+case rather than needing transcription — field names only, no diagram. It
+**populates `assumption` exactly when it cites a Layer B fact**, so a report that
+rests on perception says so and one that does not is not made to look
+conditional. And if the chain does not verify it says so **first**: every other
+line is a claim about a record whose integrity is then in question. Tamper with a
+copy and watch it —
+
+```bash
+python -m reg.query dv.sqlite --verify-chain --keyring keyring.json \
+    --tamper declaration:first:horizon=9.5 --tamper-out tampered.sqlite
+python -m reg.query tampered.sqlite --incident 3.5 --keyring keyring.json  # exit 3
+```
 
 ## Status
 
@@ -131,17 +190,22 @@ envelope computation takes a `ProprioState`, which has no field naming any entit
 [`tests/test_layer_boundary.py`](tests/test_layer_boundary.py) fails if it
 erodes. Also built: the simulator and its scenario fixtures, the
 proprioception-only envelope, the evidence graph and its SQLite store, the
-benchmarks, the viz, and — new in this change — the hash chain with its two keyed
-MACs (`reg/chain.py`) and the `Declaration` record with the scripted policy that
-emits it (`reg/declare.py`).
+benchmarks, the viz, the hash chain with its two keyed MACs (`reg/chain.py`), the
+`Declaration` record and the scripted policy that emits it (`reg/declare.py`),
+independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), chain
+verification with the `--tamper` demonstration that it can fail, and — new in
+this change — the query API in full (`reg/query.py`): the four scene questions,
+the four attestation questions, and `incident_report()` above them.
 
-Not built: enforcement and the fault taxonomy, verdicts, chain *verification* and
-the `--tamper` demo, the query API, the sufficiency taxonomy.
+Not built: the headline compression figure of [`docs/plan.md`](docs/plan.md)
+Phase 8 — the harness exists (`reg/bench.py`), the per-scenario number has not
+been published here — the GIF, and the write-up.
 
-No compression number, no incident report output and no GIF appear on this page
-because none of them have been produced yet. A plausible placeholder would be
-indistinguishable from a measured result to every later reader, and this project's
-whole argument is about the difference.
+No compression number and no GIF appear on this page because neither has been
+produced yet. A plausible placeholder would be indistinguishable from a measured
+result to every later reader, and this project's whole argument is about the
+difference. The incident report above **is** real output, reproduced by the four
+commands beside it.
 
 Read [`docs/plan.md`](docs/plan.md) for the argument and the full build order, and
 [`docs/prior-art.md`](docs/prior-art.md) before claiming anything here is novel.

@@ -3,6 +3,7 @@
     python -m reg.query runs/contact.sqlite --list
     python -m reg.query runs/contact.sqlite --separation-timeline human
     python -m reg.query runs/contact.sqlite --frames-at-risk human 0.5
+    python -m reg.query runs/dv.sqlite --incident 3.5 --keyring runs/keyring.json
 
 Claim 2 is *"audit questions answered from the graph alone, no access to the
 original stream."* The word doing the work in that sentence is **alone**, and a
@@ -71,13 +72,52 @@ benchmark, where only the benchmark got it. `QUERIES` states it per query, and
 `available_layers` reads what a given artifact actually holds, so **any** caller
 gets the refusal rather than a plausible answer assembled from the wrong layer.
 
-WHAT IS NOT HERE
-----------------
-The attestation *queries* of docs/plan.md Phase 7 — `declared_bound`,
-`violations`, `verdicts` — and `incident_report`, which composes them. A stub
-returning an empty list would make "no violation occurred" indistinguishable
-from "this build does not record violations", which is the one confusion this
-whole project is about, so they are absent rather than empty.
+THE ATTESTATION QUERIES, AND WHY THEY ARE THE STRONGER HALF (ISSUE #50)
+------------------------------------------------------------------------
+`declared_bound(t)`, `violations(window)`, `verdicts(declaration_id)` and
+`verify_chain(conn, keyring)` read the record layer — the declarations the
+policy signed, the verdicts enforcement signed back, the regions each named, and
+the chain links between them. **Every one of them is Layer A**, and that is the
+asymmetry docs/sufficiency.md §2 is about: whether the policy honoured its own
+declaration is answerable from certifiable evidence, independently of whether
+perception was right. Not one of these queries touches an `Entity`-bearing edge,
+and `tests/test_query.py::test_no_attestation_query_touches_an_entity` holds the
+line, because that property is the strongest claim the project makes.
+
+They read the record tables with SQL and **never** through
+`reg.store.read_declarations` / `read_verdicts`, which reconstruct the record
+dataclasses and therefore import `reg.declare` and `reg.enforce` — and through
+them `reg.stream`. The only function here that reaches those is `verify_chain`,
+which has to: recomputing a MAC means recomputing the preimage, and a second
+copy of the canonicalization here would be a second definition of what every
+signature in the record covers.
+
+`incident_report(t_incident, keyring)` composes them into docs/plan.md Phase 7's
+demo sentence, and emits GSN-compatible field names beside the prose
+(docs/prior-art.md §7): `goal`, `strategy`, `solution`, `assumption`,
+`justification`. Field names only — there is no renderer and no new dependency.
+Three honesty rules travel with it, each with a test that feeds it the condition
+it guards against:
+
+* **A run with no incident is not an error.** It reports that there was none. A
+  query that raised on a clean run could not be used to check whether a run was
+  clean.
+* **A `t_incident` no declaration covers is a could-not-evaluate**, not an empty
+  report — the same distinction every query above draws.
+* **If the chain does not verify, the report says so first.** Every other line
+  in it is a claim about a record whose integrity is in question, and a report
+  that buried that at the bottom would be misleading in exactly the way this
+  project exists to prevent.
+
+The `assumption` slot is where Claim 3 is paid out: the report cites a Layer B
+fact only when there is one to cite, and when it does, `assumption` names the
+dependence. A report whose evidence is all Layer A carries no assumption, and
+its attestation clauses are unchanged — which is the asymmetry, visible in the
+output rather than in a paragraph somebody has to remember.
+
+What the report does **not** do: read the CSV to fill a gap, invent a severity,
+or draw a recommendation. It states what the record holds; an assessor draws
+conclusions.
 
 `--verify-chain` and `--tamper` (issue #49) are here, and they are not queries:
 they return a `reg.chain.ChainReport`, not an `Answer`, because a chain walk is
@@ -89,9 +129,10 @@ prevent.
 
 LAYER
 -----
-Layer B, mostly, and it says so per query: every scene question names an entity,
-and where an entity is comes from perception in any real system (docs/plan.md
-Phase 9). The layer tag travels on every edge and this module never invents one.
+Split, and it says so per query. Every *scene* question names an entity, and
+where an entity is comes from perception in any real system (docs/plan.md Phase
+9), so those are Layer B. Every *attestation* question is Layer A. The layer tag
+travels on every edge and this module never invents one.
 """
 
 from __future__ import annotations
@@ -114,43 +155,78 @@ from reg.tolerances import (
 
 __all__ = [
     "ANSWERED",
+    "ATTESTATION_LAYER",
+    "ATTESTATION_PRESENT",
+    "CHAIN_VERIFIED",
+    "CLAUSES",
+    "CLAUSE_DECLARED",
+    "CLAUSE_ENFORCEMENT",
+    "CLAUSE_INTEGRITY",
+    "CLAUSE_SCENE",
+    "CLAUSE_VIOLATION",
     "COULD_NOT_EVALUATE",
     "EDGE_LAYER",
     "EXIT_BROKEN",
     "EXIT_COULD_NOT_EVALUATE",
     "EXIT_OK",
     "EXIT_USAGE",
+    "GSN_FIELDS",
+    "LAYER_A",
+    "LAYER_B",
+    "META_ATTESTATION_RECORDS",
+    "META_ATTESTATION_RETENTION",
+    "META_DECLARATION_COUNT",
     "META_FRAME_COUNT",
     "META_OCCURRENCE_RESOLUTION",
     "META_OCCURRENCE_RETENTION",
     "META_T_FIRST",
     "META_T_LAST",
+    "META_VERDICT_COUNT",
     "OCCURRENCE_LAYER",
+    "PERMITTED_OUTCOME",
     "QUERIES",
+    "Adjudication",
     "Answer",
+    "Clause",
+    "DeclarationVerdicts",
+    "DeclaredBound",
+    "DeclaredBounds",
     "EnvelopeIntersection",
+    "Evidence",
     "FramesAtRisk",
+    "IncidentReport",
     "OverlapInterval",
     "QueryError",
     "QuerySpec",
     "ReachableEntities",
     "RiskInterval",
+    "SceneVisit",
     "SeparationTimeline",
+    "ViolatingAction",
+    "Violations",
+    "attestation_state",
     "available_layers",
+    "declared_bound",
+    "declaration_ids",
     "did_contact_occur",
     "entity_ids",
     "first_envelope_intersection",
     "frame_period",
     "frame_times",
     "frames_at_risk",
+    "incident_report",
     "main",
     "min_separation",
     "reachable_entities",
     "render",
     "render_chain_report",
+    "render_incident",
     "run_interval",
     "separation_timeline",
     "time_of_closest_approach",
+    "verdicts",
+    "verify_chain",
+    "violations",
 ]
 
 #: The query was answered from the artifact.
@@ -194,6 +270,24 @@ EDGE_LAYER = "edge"
 #: `occurrence` table.
 OCCURRENCE_LAYER = "occurrence"
 
+#: The record: the `declaration` and `verdict` tables, the regions those records
+#: named, and the four Layer A edges between them (issue #45).
+#:
+#: **Deliberately not part of `available_layers`.** That function answers "which
+#: of the two resolutions of the *scene* does this artifact hold", and
+#: `reg.bench` subtracts its result from the level a view claims to be — a third
+#: member would make every attested artifact look like a contaminated view. The
+#: record layer is not a resolution of the scene at all: it is beside both, it is
+#: never coarsened, and whether it is present is a different question with a
+#: different reader (`attestation_state`).
+ATTESTATION_LAYER = "attestation"
+
+#: The two evidence layers of docs/plan.md Phase 9, as the artifact spells them.
+#: `A` is proprioception, actuation limits and the record; `B` is anything whose
+#: answer depends on where something else in the world was.
+LAYER_A = "A"
+LAYER_B = "B"
+
 # --------------------------------------------------------------------------
 # The `meta` keys this module reads.
 #
@@ -232,6 +326,45 @@ META_OCCURRENCE_RETENTION = "occurrence_retention"
 #: rather than assumed — the whole point of the layer is that the resolution is
 #: a parameter of the build.
 META_OCCURRENCE_RESOLUTION = "occurrence_time_resolution_s"
+
+#: Whether the build that wrote this artifact was handed a record stream at all,
+#: and the value of that key meaning it was. `absent` and a run that genuinely
+#: produced no records are different facts, and this key is the only thing that
+#: separates them: an empty `declaration` table on its own does not say which
+#: (`reg.graph.ATTESTATION_RETENTION`). Spelled here rather than imported for the
+#: reason the four keys above are, and checked against the writer by
+#: `tests/test_query.py::test_the_meta_keys_this_module_reads_are_the_ones_the_
+#: builder_writes`.
+META_ATTESTATION_RECORDS = "attestation_records"
+ATTESTATION_PRESENT = "present"
+
+#: The record-layer retention rule, in prose, in the artifact. It is what makes
+#: the *negative* answers below legible: "no verdict in this window refused an
+#: action" means no such action only because the file says every verdict the run
+#: produced is stored. Without the rule the absence of a row is silence, and
+#: silence is not a negative — the same argument `did_contact_occur` makes about
+#: `occurrence_retention`, one layer over.
+META_ATTESTATION_RETENTION = "attestation_retention"
+
+#: How many records the build says each chain holds. Read by the report only to
+#: quote the record count beside the chain verdict — the walk itself compares
+#: them (`reg.chain`), and this module never re-derives that comparison.
+META_DECLARATION_COUNT = "declaration_count"
+META_VERDICT_COUNT = "verdict_count"
+
+#: The one outcome that is not a finding against the commanded action. Named
+#: here rather than imported from `reg.enforce.OUTCOMES`, which is the
+#: vocabulary's single definition, because importing it would pull `reg.declare`
+#: and `reg.chain` — and through them the raw stream — into this module at import
+#: time. `tests/test_query.py::test_the_outcome_vocabulary_is_the_enforcers`
+#: compares the two sides and fails on a rename, which is the same bargain the
+#: `meta` keys above are held to.
+PERMITTED_OUTCOME = "PERMIT"
+
+#: `reg.chain.ChainState.VERIFIED`'s value, for the same reason and under the
+#: same test. A report that compared against a misspelled state would report
+#: every intact chain as unverified — or, far worse, the reverse.
+CHAIN_VERIFIED = "VERIFIED"
 
 #: Slack for deciding whether two intervals are frame-adjacent. Half a frame
 #: period, so one frame's gap merges and two frames' gap does not, whatever the
@@ -288,7 +421,15 @@ class QuerySpec:
     layer_tag: str
 
 
-_SCENE_LAYER = "B"
+_SCENE_LAYER = LAYER_B
+
+#: Every attestation query's evidence layer, and it is not a coincidence that it
+#: is the same letter for all three: a declaration is a statement the policy made
+#: about a region it computed from its own state, a verdict is what an
+#: independent enforcement layer computed from proprioception and actuation
+#: limits, and the chain is a hash and a MAC over those records. None of them
+#: names an entity (docs/sufficiency.md §2).
+_RECORD_LAYER = LAYER_A
 
 QUERIES: dict[str, QuerySpec] = {
     "separation_timeline": QuerySpec(
@@ -396,6 +537,64 @@ QUERIES: dict[str, QuerySpec] = {
         tolerance="exact — a missed or invented contact is a failure",
         why_not="",
         layer_tag=_SCENE_LAYER,
+    ),
+    # The attestation half (docs/plan.md Phase 7, queries 5-7; issue #50). No
+    # numeric tolerance on any of the three, and that is docs/lossiness.md's
+    # agreement table rather than an omission: they are Layer A and exact by
+    # construction, and a tolerance on them would mean the record is fuzzy about
+    # what the policy declared — the one thing this artifact must be certain of.
+    "declared_bound": QuerySpec(
+        name="declared_bound",
+        question="what the policy claimed, and signed, was in force at time t",
+        answerable_from=frozenset({ATTESTATION_LAYER}),
+        arguments=("T",),
+        tolerance=(
+            "none — exact field equality. Record timestamps are stored as the "
+            "record carries them and are not quantized to TIME_TOL_S: the MAC "
+            "covers the instant the policy signed, and a rounded version of it "
+            "is an instant nobody signed"
+        ),
+        why_not=(
+            "Neither scene layer holds a declaration. The edge layer records "
+            "where the reachable set was, which is a fact about the robot; what "
+            "the policy *claimed* about it is a signed record, and an artifact "
+            "built without one holds no answer at any resolution."
+        ),
+        layer_tag=_RECORD_LAYER,
+    ),
+    "violations": QuerySpec(
+        name="violations",
+        question=(
+            "every commanded action in a window that enforcement did not permit "
+            "as issued, with its fault code"
+        ),
+        answerable_from=frozenset({ATTESTATION_LAYER}),
+        arguments=("T_START", "T_END"),
+        tolerance=(
+            "none — the exact set of (t, fault_code) the record holds. A missed "
+            "or invented fault is a failure, not a near miss"
+        ),
+        why_not=(
+            "A fault is a finding an independent enforcement layer signed. It "
+            "is in the verdict stream or it is nowhere; no density of scene "
+            "edges reconstructs one."
+        ),
+        layer_tag=_RECORD_LAYER,
+    ),
+    "verdicts": QuerySpec(
+        name="verdicts",
+        question=(
+            "every adjudication of one declaration — what enforcement did about "
+            "it, and why. Many, not one"
+        ),
+        answerable_from=frozenset({ATTESTATION_LAYER}),
+        arguments=("DECLARATION_ID",),
+        tolerance="none — exact field equality against the stored record",
+        why_not=(
+            "The verdict stream is the answer and the scene layers hold none of "
+            "it."
+        ),
+        layer_tag=_RECORD_LAYER,
     ),
 }
 
@@ -541,6 +740,348 @@ class ReachableEntities:
     t_end: float
     entity_ids: tuple[str, ...]
     declared: tuple[str, ...]
+
+
+# --------------------------------------------------------------------------
+# The attestation answer shapes (issue #50). Every one of them is Layer A and
+# not one carries an entity id — the property `tests/test_query.py` asserts
+# against the dataclasses as well as against the SQL, because a field added here
+# that named an entity would widen Layer A silently.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DeclaredBound:
+    """One declaration and the region it claimed, as the record carries them.
+
+    `t_issued` and `horizon` are **not** quantized: they are values the MAC
+    covers, and the artifact stores them as signed (`reg.graph`, module header).
+    `area` is the stored area of the declared region, which is retained in full
+    — `GEOMETRY_RETENTION` discards a polygon only where the artifact could
+    recompute it from a configuration it holds, and a bound that came from a
+    policy is not a function of any configuration in the file.
+    """
+
+    declaration_id: str
+    seq: int
+    t_issued: float
+    horizon: float
+    action_class: str
+    envelope_id: str
+    area: float
+
+    @property
+    def t_expires(self) -> float:
+        """The last instant the policy claimed this statement was good for."""
+        return self.t_issued + self.horizon
+
+
+@dataclass(frozen=True)
+class DeclaredBounds:
+    """docs/plan.md Phase 7, query 5 — what the policy claimed at time `t`.
+
+    **A tuple, not one bound.** A run whose declaration horizon exceeds its
+    replan interval has overlapping validity windows, so more than one signed
+    claim is genuinely in force at some instants. That is a fact about the
+    record, and picking one of them here — the newest, the tightest, the
+    first — would be this module inventing a precedence rule nobody signed.
+
+    An empty `bounds` never reaches a caller: no declaration in force at `t` is
+    a `COULD-NOT-EVALUATE` one level up, because "the policy claimed nothing
+    here" and "this artifact cannot say what the policy claimed here" are the
+    same row count and different facts.
+    """
+
+    t: float
+    bounds: tuple[DeclaredBound, ...]
+
+    @property
+    def window(self) -> tuple[float, float]:
+        """The union span of every claim in force: `(earliest, latest)`."""
+        return (
+            min(b.t_issued for b in self.bounds),
+            max(b.t_expires for b in self.bounds),
+        )
+
+
+@dataclass(frozen=True)
+class ViolatingAction:
+    """One commanded action enforcement did not permit as issued.
+
+    `declaration_id` is `None` when the verdict named none, and that `None` is
+    the finding rather than a gap: it is what `no_declaration` and
+    `watchdog_expiry` look like in the record (`reg.enforce`).
+
+    `applied_envelope_id` is the bound the verdict actually applied, and exists
+    only for a CLAMP — a VETO or a SAFE_STATE permits no action to bound, and a
+    bound reported beside one would read as though something had been allowed
+    inside it.
+    """
+
+    verdict_id: str
+    seq: int
+    t: float
+    outcome: str
+    fault: str | None
+    declaration_id: str | None
+    applied_envelope_id: str | None
+    applied_area: float | None
+
+
+@dataclass(frozen=True)
+class Violations:
+    """docs/plan.md Phase 7, query 6, over a window.
+
+    **Every outcome that is not `PERMIT`**, and not only the mismatch fault. The
+    question is "every commanded action outside its declared bound", and an
+    action adjudicated against a *stale* declaration, or against none at all, was
+    not inside a valid declared bound either — narrowing this to one fault code
+    would report "no violations" for a run that was passivated from end to end,
+    which is the worst false negative this query could produce. The fault code
+    travels on every row, so a caller wanting exactly the mismatches filters for
+    them and can see what it filtered out.
+
+    An empty `actions` **is** an answer — "no commanded action in this window was
+    refused" — and it is legitimate only because the artifact carries
+    `attestation_retention` in its own `meta` saying every verdict the run
+    produced is stored. An artifact missing that rule refuses instead.
+    """
+
+    t_start: float
+    t_end: float
+    actions: tuple[ViolatingAction, ...]
+    #: Every fault code present in `actions`, sorted. A vocabulary summary a
+    #: caller can test against without walking the rows.
+    faults: tuple[str, ...]
+    #: How many verdicts the window holds in total, permitted ones included. The
+    #: denominator: "3 refused" is not a reading without it.
+    adjudications: int
+
+    @property
+    def began(self) -> float | None:
+        """The instant of the earliest refused action, or `None` if there were
+        none. This is the demo sentence's second clause."""
+        return self.actions[0].t if self.actions else None
+
+
+@dataclass(frozen=True)
+class Adjudication:
+    """One verdict against one declaration: what enforcement did, and why."""
+
+    verdict_id: str
+    seq: int
+    t: float
+    outcome: str
+    fault: str | None
+    applied_envelope_id: str | None
+    applied_area: float | None
+
+
+@dataclass(frozen=True)
+class DeclarationVerdicts:
+    """docs/plan.md Phase 7, query 7. **Many verdicts, not one.**
+
+    A verdict is per commanded action, not per declaration (#43), so one
+    declaration is routinely adjudicated PERMIT dozens of times and then CLAMP —
+    and `outcomes` carrying more than one value is exactly the case a
+    one-row-per-declaration schema would have destroyed, along with the ability
+    to say *when* the violation began.
+
+    An empty `adjudications` is "this declaration was never adjudicated", which
+    is a legitimate answer under `attestation_retention` and a finding in its own
+    right: a signed claim nothing ever checked.
+    """
+
+    declaration_id: str
+    adjudications: tuple[Adjudication, ...]
+
+    @property
+    def outcomes(self) -> tuple[str, ...]:
+        """Every distinct outcome this declaration received, sorted."""
+        return tuple(sorted({a.outcome for a in self.adjudications}))
+
+
+@dataclass(frozen=True)
+class SceneVisit:
+    """One entity inside the computed envelope for one span. **Layer B.**
+
+    The only shape in this section that names an entity, and it is the only one
+    that is not Layer A. It exists so that the incident report can carry
+    docs/plan.md Phase 7's fourth prose line — and so that carrying it obliges
+    the report to populate `assumption`.
+    """
+
+    entity_id: str
+    t_start: float
+    t_end: float
+    frames: int
+
+
+# --------------------------------------------------------------------------
+# The incident report (docs/plan.md Phase 7's money query, docs/prior-art.md §7).
+#
+# GSN-compatible field names alongside the prose, and **field names only**: no
+# diagram, no renderer, no new dependency. The payoff is that the output drops
+# into a UL 4600 safety case rather than needing transcription.
+# --------------------------------------------------------------------------
+
+#: The GSN elements this report emits, in the order docs/prior-art.md §7 lists
+#: them. Named so a consumer can enumerate them rather than hard-coding five
+#: attribute names, and so a field added without a mapping fails a test here.
+GSN_FIELDS: tuple[str, ...] = (
+    "goal",
+    "strategy",
+    "solution",
+    "assumption",
+    "justification",
+)
+
+#: The report's clauses. The four content ones are in the order the issue states
+#: — what was declared, where the action left it, what enforcement did, and the
+#: scene context — and `integrity` moves to the **front** whenever the chain did
+#: not verify, because every other clause is a claim about a record whose
+#: integrity is then in question.
+CLAUSE_INTEGRITY = "integrity"
+CLAUSE_DECLARED = "declared"
+CLAUSE_VIOLATION = "violation"
+CLAUSE_ENFORCEMENT = "enforcement"
+CLAUSE_SCENE = "scene"
+
+#: Every clause name, in content order. `integrity` is listed last because that
+#: is where it sits on a verified record; `_ordered_clauses` is what moves it.
+CLAUSES: tuple[str, ...] = (
+    CLAUSE_DECLARED,
+    CLAUSE_VIOLATION,
+    CLAUSE_ENFORCEMENT,
+    CLAUSE_SCENE,
+    CLAUSE_INTEGRITY,
+)
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """A GSN **solution**: one evidence item, and the layer it is read from.
+
+    `layer` is `A` or `B` and is never invented here — it comes from what the
+    item *is*: a record, a region a record named, or a chain segment is Layer A;
+    a relationship with an entity is Layer B. It is the field `assumption` is
+    derived from, so an item mislabelled here would quote a conditional claim as
+    certifiable, which is the one thing this report exists not to do.
+    """
+
+    kind: str
+    ref: str
+    layer: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class Clause:
+    """One ordered clause of the report: what it says, and whether it could say it.
+
+    `verdict` is per clause on purpose. The Layer B clause can be a
+    could-not-evaluate — an artifact with no relationship to an entity holds
+    nothing to cite — while every attestation clause beside it answers, and that
+    is docs/sufficiency.md §2 visible in the output rather than asserted in a
+    paragraph.
+
+    Two vocabularies meet in this field and they agree where it matters. A
+    content clause carries `ANSWERED` or `COULD-NOT-EVALUATE`; the integrity
+    clause carries `reg.chain.ChainState`'s value — `VERIFIED`, `BROKEN` or
+    `COULD-NOT-EVALUATE` — because a chain that broke *answered* the question,
+    with a no. The third state is spelled identically in both
+    (`tests/test_query.py::test_the_could_not_evaluate_spelling_is_one_string`),
+    which is what lets `answered` below be one rule rather than two.
+    """
+
+    name: str
+    verdict: str
+    layer: str
+    text: str
+    solution: tuple[Evidence, ...] = ()
+
+    @property
+    def answered(self) -> bool:
+        """Whether this clause reached a finding at all.
+
+        `BROKEN` is a finding — the record was altered — and it is emphatically
+        not a pass; what it is not is a *failure to look*. The one verdict that
+        means nothing was learned is `COULD-NOT-EVALUATE`, and it never resolves
+        to either of the others.
+        """
+        return self.verdict != COULD_NOT_EVALUATE
+
+
+@dataclass(frozen=True)
+class IncidentReport:
+    """docs/plan.md Phase 7's demo sentence, as structured output.
+
+    Structured, not prose: `render_incident` formats and this holds fields a
+    caller can test against. The GSN names (`goal`, `strategy`, `solution`,
+    `assumption`, `justification`) are docs/prior-art.md §7's, so the object
+    drops into an assurance case without transcription.
+
+    Three states, and they are separate fields because they are separate facts.
+    `verdict` is whether the attestation question could be answered at all;
+    `integrity` is what the chain walk said about the record those answers are
+    read from; `incident` is whether anything was found. A run with no incident
+    is `ANSWERED`, `VERIFIED` and `incident=False` — not an error, because a
+    query that raised on a clean run could not be used to check whether a run was
+    clean.
+    """
+
+    t_incident: float
+    verdict: str
+    reason: str
+    #: `reg.chain.ChainState`'s value, as a string. Never a bool: an unchecked
+    #: chain is not a checked one, and neither is a broken one.
+    integrity: str
+    clauses: tuple[Clause, ...]
+
+    # --- GSN (docs/prior-art.md §7). Field names only; no renderer. ---
+    goal: str
+    strategy: str
+    solution: tuple[Evidence, ...]
+    assumption: tuple[str, ...]
+    justification: str
+
+    #: What was found, or `None` where nothing was or nothing could be. The
+    #: earliest refused action inside the window this report is scoped to, which
+    #: is the demo sentence's second clause.
+    violation: ViolatingAction | None = None
+    #: The earliest refused action in the **whole** record, which is where the
+    #: sequence this incident belongs to began — often before the declaration in
+    #: force at `t_incident` was even issued. Reported beside `violation` rather
+    #: than instead of it, and with no claim that the two are the same incident:
+    #: whether an earlier fault caused a later one is an inference, and this
+    #: report states what the record holds.
+    first_refusal: ViolatingAction | None = None
+    bounds: tuple[DeclaredBound, ...] = ()
+    scene: tuple[SceneVisit, ...] = ()
+
+    @property
+    def answered(self) -> bool:
+        return self.verdict == ANSWERED
+
+    @property
+    def integrity_verified(self) -> bool:
+        return self.integrity == CHAIN_VERIFIED
+
+    @property
+    def incident(self) -> bool:
+        """Whether the record holds a refused action in the window. `False` is an
+        answer — "there was none" — and never a failure to look."""
+        return self.violation is not None
+
+    def clause(self, name: str) -> Clause:
+        """One clause by name, or a `QueryError` naming the clauses present."""
+        for item in self.clauses:
+            if item.name == name:
+                return item
+        raise QueryError(
+            f"this report has no {name!r} clause; it has "
+            f"{[c.name for c in self.clauses]}."
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1240,6 +1781,960 @@ def did_contact_occur(conn: sqlite3.Connection, entity_id: str) -> Answer:
 
 
 # --------------------------------------------------------------------------
+# The attestation queries. docs/plan.md Phase 7, queries 5-8 (issue #50).
+#
+# All Layer A. Read with SQL over the record tables and the four Layer A edges,
+# and **never** through `reg.store.read_declarations` / `read_verdicts`: those
+# reconstruct the record dataclasses and therefore import `reg.declare` and
+# `reg.enforce`, which reach `reg.stream`. `verify_chain` is the one function
+# below that does reach them, and it has to — see the module header.
+# --------------------------------------------------------------------------
+
+
+def attestation_state(conn: sqlite3.Connection) -> str | None:
+    """What the artifact says about being handed a record stream, or `None`.
+
+    `None` is a build from before the record layer existed, or one that was
+    given no stream and did not say so. Either way it is not `present`, and
+    nothing below will read an empty table as a run that produced nothing.
+    """
+    return store.get_meta(conn, META_ATTESTATION_RECORDS)
+
+
+def declaration_ids(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Every declaration this artifact holds, in chain order."""
+    rows = conn.execute(
+        "SELECT declaration_id FROM declaration ORDER BY seq, declaration_id"
+    ).fetchall()
+    return tuple(str(row["declaration_id"]) for row in rows)
+
+
+def _refuse_record(spec: QuerySpec, detail: str) -> Answer:
+    """A `COULD-NOT-EVALUATE` about the record layer, naming what is missing."""
+    return Answer(
+        query=spec.name,
+        verdict=COULD_NOT_EVALUATE,
+        layer=None,
+        value=None,
+        tolerances={},
+        reason=(
+            f"{spec.name} is answerable from the {ATTESTATION_LAYER} layer. "
+            f"{detail}"
+        ),
+    )
+
+
+def _no_record_layer(conn: sqlite3.Connection, spec: QuerySpec) -> Answer | None:
+    """The refusal owed by an artifact with no record layer, or `None`.
+
+    Two distinct refusals, and they are two sentences because they are two
+    facts. `meta[attestation_records]` absent or not `present` means this build
+    was never handed a record stream — the tables are empty because nothing was
+    ever offered to them. The retention rule missing means the artifact does not
+    state that every record was kept, and without that statement an empty result
+    is silence rather than a negative.
+    """
+    state = attestation_state(conn)
+    if state != ATTESTATION_PRESENT:
+        return _refuse_record(
+            spec,
+            f"meta[{META_ATTESTATION_RECORDS!r}] is {state!r}: this build was "
+            "given no record stream at all, so it holds no declarations and no "
+            "verdicts to read. That is a different fact from a run that produced "
+            "none, and an empty answer here would be indistinguishable from one. "
+            "Build with `python -m reg.graph build ... --keyring` to store one.",
+        )
+    if store.get_meta(conn, META_ATTESTATION_RETENTION) is None:
+        return _refuse_record(
+            spec,
+            f"this artifact does not state meta[{META_ATTESTATION_RETENTION!r}], "
+            "so it does not say that every declaration and every verdict the run "
+            "produced was stored. Without that rule the absence of a row is "
+            "silence, and silence is not a negative.",
+        )
+    return None
+
+
+def _declaration_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every declaration with the region it claimed, in chain order.
+
+    A `LEFT JOIN` rather than an inner one, deliberately: a declaration whose
+    `DECLARED` edge is missing has to come back and be *refused*, because an
+    inner join would drop it and the caller would be told the policy claimed
+    nothing at an instant where it claimed something this artifact has lost.
+    """
+    return list(
+        conn.execute(
+            """
+            SELECT d.declaration_id AS declaration_id,
+                   d.seq            AS seq,
+                   d.t_issued       AS t_issued,
+                   d.horizon        AS horizon,
+                   d.action_class   AS action_class,
+                   e.dst_id         AS envelope_id,
+                   n.area           AS area
+            FROM declaration d
+            LEFT JOIN edge e
+                   ON e.type = 'DECLARED' AND e.src_id = d.declaration_id
+            LEFT JOIN envelope n
+                   ON n.envelope_id = e.dst_id
+            ORDER BY d.seq, d.declaration_id
+            """
+        ).fetchall()
+    )
+
+
+def _verdict_rows(
+    conn: sqlite3.Connection, *, declaration_id: str | None = None
+) -> list[sqlite3.Row]:
+    """Every verdict with the bound it applied, in chain order.
+
+    The bound comes off the `ENFORCED` edge, which exists only for a CLAMP: a
+    PERMIT bounds nothing and a VETO or SAFE_STATE permits no action to bound, so
+    a NULL here is the record's own silence and not a lost row.
+    """
+    clause = "" if declaration_id is None else "WHERE v.declaration_id = ?"
+    params: tuple[object, ...] = () if declaration_id is None else (declaration_id,)
+    return list(
+        conn.execute(
+            f"""
+            SELECT v.verdict_id     AS verdict_id,
+                   v.declaration_id AS declaration_id,
+                   v.seq            AS seq,
+                   v.t              AS t,
+                   v.outcome        AS outcome,
+                   v.fault          AS fault,
+                   e.dst_id         AS envelope_id,
+                   n.area           AS area
+            FROM verdict v
+            LEFT JOIN edge e
+                   ON e.type = 'ENFORCED' AND e.src_id = v.verdict_id
+            LEFT JOIN envelope n
+                   ON n.envelope_id = e.dst_id
+            {clause}
+            ORDER BY v.seq, v.verdict_id
+            """,  # noqa: S608 - `clause` is a literal, the id is a bound param
+            params,
+        ).fetchall()
+    )
+
+
+def _violating(row: sqlite3.Row) -> ViolatingAction:
+    return ViolatingAction(
+        verdict_id=str(row["verdict_id"]),
+        seq=int(row["seq"]),
+        t=float(row["t"]),
+        outcome=str(row["outcome"]),
+        fault=None if row["fault"] is None else str(row["fault"]),
+        declaration_id=(
+            None if row["declaration_id"] is None else str(row["declaration_id"])
+        ),
+        applied_envelope_id=(
+            None if row["envelope_id"] is None else str(row["envelope_id"])
+        ),
+        applied_area=None if row["area"] is None else float(row["area"]),
+    )
+
+
+def _adjudication(row: sqlite3.Row) -> Adjudication:
+    return Adjudication(
+        verdict_id=str(row["verdict_id"]),
+        seq=int(row["seq"]),
+        t=float(row["t"]),
+        outcome=str(row["outcome"]),
+        fault=None if row["fault"] is None else str(row["fault"]),
+        applied_envelope_id=(
+            None if row["envelope_id"] is None else str(row["envelope_id"])
+        ),
+        applied_area=None if row["area"] is None else float(row["area"]),
+    )
+
+
+def declared_bound(conn: sqlite3.Connection, t: float) -> Answer:
+    """Query 5 — what the policy claimed, and signed, was in force at time `t`.
+
+    **Layer A.** A declaration is a statement the policy made about a region it
+    computed from its own state; no perceptual error can change what it said.
+
+    Returns every claim in force at `t`, because a run whose horizon exceeds its
+    replan interval genuinely has more than one — see `DeclaredBounds`. No
+    declaration in force is a `COULD-NOT-EVALUATE` and not an empty tuple: "the
+    policy claimed nothing about this instant" is a serious finding and it must
+    not arrive looking like an empty list, which is what an unbuilt query
+    returns.
+
+    The window test is `t_issued <= t <= t_issued + horizon` on the values the
+    record carries, with **no tolerance**. docs/lossiness.md's agreement table
+    gives the attestation queries none: they are exact by construction, and a
+    tolerance here would mean the record is fuzzy about what the policy declared.
+    """
+    spec = QUERIES["declared_bound"]
+    t = _finite(t, "t")
+    refusal = _no_record_layer(conn, spec)
+    if refusal is not None:
+        return refusal
+
+    rows = _declaration_rows(conn)
+    if not rows:
+        return _refuse_record(
+            spec,
+            "this artifact was built with a record stream and holds no "
+            "declaration in it, so there is nothing at any instant to read. A "
+            "policy that never declared is a finding the verdict stream "
+            "records as no_declaration; it is not something this query can "
+            "report as a bound.",
+        )
+
+    covering = [
+        row
+        for row in rows
+        if float(row["t_issued"]) <= t <= float(row["t_issued"]) + float(row["horizon"])
+    ]
+    if not covering:
+        first = min(float(r["t_issued"]) for r in rows)
+        last = max(float(r["t_issued"]) + float(r["horizon"]) for r in rows)
+        return _refuse_record(
+            spec,
+            f"no declaration in this artifact is in force at t={t}. Its "
+            f"{len(rows)} declaration(s) span [{first}, {last}], and a claim "
+            "that had lapsed is not a claim: reporting the nearest one would "
+            "report a statement the policy had stopped standing behind.",
+        )
+
+    missing = [
+        str(row["declaration_id"]) for row in covering if row["envelope_id"] is None
+    ]
+    if missing:
+        return _refuse_record(
+            spec,
+            f"declaration(s) {missing} are in force at t={t} and this artifact "
+            "holds no DECLARED edge to the region they claimed. The claim is a "
+            "region; without it there is nothing to report, and reporting the "
+            "declaration's other fields would answer a smaller question in the "
+            "shape of this one.",
+        )
+
+    bounds = tuple(
+        DeclaredBound(
+            declaration_id=str(row["declaration_id"]),
+            seq=int(row["seq"]),
+            t_issued=float(row["t_issued"]),
+            horizon=float(row["horizon"]),
+            action_class=str(row["action_class"]),
+            envelope_id=str(row["envelope_id"]),
+            area=float(row["area"]),
+        )
+        for row in covering
+    )
+    return Answer(
+        query=spec.name,
+        verdict=ANSWERED,
+        layer=ATTESTATION_LAYER,
+        value=DeclaredBounds(t=t, bounds=bounds),
+        tolerances={},
+        reason=(
+            f"{len(bounds)} signed declaration(s) in force at t={t}, of "
+            f"{len(rows)} in the record"
+        ),
+    )
+
+
+def violations(conn: sqlite3.Connection, window: tuple[float, float]) -> Answer:
+    """Query 6 — every commanded action in `window` that was not permitted.
+
+    **Layer A**, and the window is a pair rather than two arguments because
+    docs/plan.md Phase 7 spells the query `violations(window)`.
+
+    The window is **not** checked against the run interval, unlike
+    `reachable_entities`. A record's instants are not observations: a
+    declaration's validity window can legitimately run past the last frame, and
+    a verdict is a statement about an action rather than a sample of the scene.
+    What is checked is that the window is a window — finite, and not backwards,
+    which would match no record and come back as "nothing was refused".
+
+    An empty result is an answer, licensed by `meta[attestation_retention]`, and
+    an artifact without that rule refuses instead. See `Violations` for why the
+    filter is "not PERMIT" rather than one fault code.
+    """
+    spec = QUERIES["violations"]
+    t_start = _finite(window[0], "t_start")
+    t_end = _finite(window[1], "t_end")
+    if t_end < t_start:
+        raise QueryError(
+            f"the window [{t_start}, {t_end}] runs backwards. A backwards window "
+            "matches no verdict, so it would come back as 'no action was "
+            "refused' rather than as the mistake it is."
+        )
+    refusal = _no_record_layer(conn, spec)
+    if refusal is not None:
+        return refusal
+
+    rows = [
+        row for row in _verdict_rows(conn) if t_start <= float(row["t"]) <= t_end
+    ]
+    refused = [row for row in rows if str(row["outcome"]) != PERMITTED_OUTCOME]
+    actions = tuple(_violating(row) for row in refused)
+    return Answer(
+        query=spec.name,
+        verdict=ANSWERED,
+        layer=ATTESTATION_LAYER,
+        value=Violations(
+            t_start=t_start,
+            t_end=t_end,
+            actions=actions,
+            faults=tuple(sorted({a.fault for a in actions if a.fault is not None})),
+            adjudications=len(rows),
+        ),
+        tolerances={},
+        reason=(
+            f"{len(refused)} of {len(rows)} adjudication(s) in "
+            f"[{t_start}, {t_end}] were not permitted as issued, read "
+            f"closed-world under meta[{META_ATTESTATION_RETENTION!r}]"
+        ),
+    )
+
+
+def verdicts(conn: sqlite3.Connection, declaration_id: str) -> Answer:
+    """Query 7 — what enforcement did about one declaration, and why. **Many.**
+
+    A verdict is per commanded action, not per declaration (#43), so this
+    routinely returns tens of them against one claim and `DeclarationVerdicts.
+    outcomes` routinely holds more than one value. That is the point: the
+    instant a run of PERMITs becomes a CLAMP is when the violation began, and a
+    query that collapsed to one verdict per declaration could not say it.
+
+    A `declaration_id` this artifact does not hold is a `QueryError` naming what
+    it does hold — a caller error, not an empty answer, for exactly the reason
+    `_require_entity` gives: an empty adjudication list for a declaration nobody
+    signed would read as a claim that was never checked.
+    """
+    spec = QUERIES["verdicts"]
+    declaration_id = str(declaration_id)
+    refusal = _no_record_layer(conn, spec)
+    if refusal is not None:
+        return refusal
+
+    known = declaration_ids(conn)
+    if declaration_id not in known:
+        if not known:
+            raise QueryError(
+                f"{declaration_id!r} is not in this artifact, which holds no "
+                "declarations at all. Nothing was ever signed into its record "
+                "layer, so it holds no adjudication of anything."
+            )
+        raise QueryError(
+            f"{declaration_id!r} is not a declaration in this artifact. It holds "
+            f"{len(known)}, beginning {list(known[:5])}. An empty adjudication "
+            "list for a record nobody signed would read as a claim enforcement "
+            "never checked, which is a finding and not an absence."
+        )
+
+    rows = _verdict_rows(conn, declaration_id=declaration_id)
+    adjudications = tuple(_adjudication(row) for row in rows)
+    return Answer(
+        query=spec.name,
+        verdict=ANSWERED,
+        layer=ATTESTATION_LAYER,
+        value=DeclarationVerdicts(
+            declaration_id=declaration_id, adjudications=adjudications
+        ),
+        tolerances={},
+        reason=(
+            f"{len(adjudications)} adjudication(s) of {declaration_id!r}, read "
+            f"closed-world under meta[{META_ATTESTATION_RETENTION!r}]"
+        ),
+    )
+
+
+def verify_chain(conn: sqlite3.Connection, keyring: object) -> object:
+    """Query 8 — integrity over the full record. `reg.chain.verify_chain`, here.
+
+    A thin re-export and deliberately nothing more: the walk is `reg.chain`'s
+    and a second implementation of it here would be a second definition of the
+    preimage every MAC in the record is taken over. What this adds is that the
+    query API's caller does not have to know which module the walk lives in —
+    docs/plan.md Phase 7 lists `verify_chain()` beside the other three, so it is
+    reachable beside them.
+
+    **The import is inside this function and must stay there.** `reg.chain`
+    reaches `reg.stream` for the float precision its canonical serialization
+    commits to, and hoisting it would put the raw stream one attribute away from
+    every scene query — see the module header and
+    `tests/test_query.py::test_the_chain_import_is_deferred`.
+
+    Args:
+        conn: an artifact opened with `reg.store.connect`.
+        keyring: the keyring the records were signed under, or `None`.
+            **Required, with no default**: `None` is could-not-evaluate for
+            every MAC, and a caller that had not thought about the key would
+            otherwise get something that looks like a verification and checked no
+            signature.
+
+    Returns:
+        A `reg.chain.ChainReport`. Annotated `object` because naming the type
+        would mean importing `reg.chain` at module level.
+    """
+    from reg import chain
+
+    return chain.verify_chain(conn, keyring)
+
+
+# --------------------------------------------------------------------------
+# The money query. docs/plan.md Phase 7, and docs/prior-art.md §7 for the shape.
+# --------------------------------------------------------------------------
+
+#: The GSN **justification** every report carries: why proprioception-only
+#: evidence suffices for the claim being audited. Constant because it is an
+#: argument about the artifact's structure rather than about one run, and a
+#: sentence assembled per report would be one an assessor could not diff.
+_JUSTIFICATION = (
+    "Every clause above except the scene clause is Layer A. A declaration is a "
+    "statement the policy made about a region it computed from its own state; a "
+    "verdict is what an independent enforcement layer computed from "
+    "proprioception and actuation limits alone, importing from the policy no "
+    "further than the record; the chain is a hash and a MAC over both. Not one "
+    "of them names an entity, so no perceptual error can make a policy that "
+    "exceeded its declared bound look like one that did not "
+    "(docs/sufficiency.md §2). The independence is structural: enforcement "
+    "computes its own bound and does not trust the declared one. Its honest "
+    "limit is that both keys live in one process in this prototype, which "
+    "demonstrates the structure of non-repudiation and not non-repudiation "
+    "(reg/chain.py, README)."
+)
+
+_STRATEGY = (
+    "Argue over the signed record: read what the policy declared and was in "
+    "force at the instant asked about, then every commanded action an "
+    "independent enforcement layer adjudicated inside that declaration's own "
+    "validity window, then the bound enforcement actually applied — and walk "
+    "both hash chains to establish that neither party's record was altered "
+    "after it was signed."
+)
+
+
+def _integrity_clause(report: object) -> tuple[Clause, str]:
+    """The chain walk as a clause, and the state it reached.
+
+    A report whose record may have been altered is a report of claims about a
+    record whose integrity is in question, so the text says so in its first line
+    rather than in a footnote, and `_ordered_clauses` puts it first.
+
+    The state is returned beside the clause rather than parsed back out of its
+    prose: an `IncidentReport.integrity` recovered by splitting a sentence would
+    change meaning the next time somebody reworded the sentence.
+    """
+    state = report.state.value
+    walked = sum(result.records_walked for result in report.chains)
+    failures = report.failures
+    evidence = tuple(
+        Evidence(
+            kind="chain",
+            ref=result.chain,
+            layer=LAYER_A,
+            detail=(
+                f"{result.kind} chain: {result.state.value}, "
+                f"{result.records_walked} record(s) walked, "
+                f"{result.links_checked} link(s) and {result.macs_checked} "
+                f"MAC(s) checked, {len(result.failures)} failure(s)"
+            ),
+        )
+        for result in report.chains
+    )
+
+    if state == CHAIN_VERIFIED:
+        return (
+            Clause(
+                name=CLAUSE_INTEGRITY,
+                verdict=state,
+                layer=LAYER_A,
+                text=f"Chain verified: {walked:,} records, 0 breaks",
+                solution=evidence,
+            ),
+            state,
+        )
+
+    lines = [
+        f"INTEGRITY {state} — READ THIS FIRST. Every other claim in this report "
+        "is a claim about this record, and the walk over it did not come back "
+        "verified.",
+        f"  {walked:,} record(s) walked, {len(failures)} failure(s):",
+    ]
+    lines.extend(f"    - {failure.describe()}" for failure in failures)
+    return (
+        Clause(
+            # The chain's own state, verbatim. BROKEN is a finding about the
+            # record and COULD-NOT-EVALUATE is a finding about the walk, and
+            # collapsing the two would let "could not check" read as "checked
+            # and found a fault" — or, far worse, the reverse.
+            name=CLAUSE_INTEGRITY,
+            verdict=state,
+            layer=LAYER_A,
+            text="\n".join(lines),
+            solution=evidence,
+        ),
+        state,
+    )
+
+
+def _scene_clause(
+    conn: sqlite3.Connection, t_start: float, t_end: float
+) -> tuple[Clause, tuple[SceneVisit, ...]]:
+    """docs/plan.md Phase 7's fourth prose line. **Layer B, and it says so.**
+
+    Three outcomes, and they are three because they are three different facts:
+
+    * entities were inside the computed envelope in this window -> a Layer B
+      claim, cited as Layer B evidence, and the report's `assumption` is
+      populated from it;
+    * the edge layer holds relationships and none of them is an intersection in
+      this window -> **no Layer B fact is cited**, which is a statement about the
+      report rather than about the world, and `assumption` stays empty. That is
+      what makes the assumption check able to fail;
+    * there is no edge layer -> could-not-evaluate. An artifact holding only the
+      record cannot say where anybody was, and an empty visit list from one would
+      read as "nobody was near the robot".
+    """
+    # `layer = 'B'` and not merely "the edge table has rows in it". An artifact
+    # holding only the record still has DECLARED, ADJUDICATED, ENFORCED and
+    # FOLLOWS edges — all Layer A — so `available_layers` would call its edge
+    # layer present and this clause would report "no entity intersected the
+    # envelope" for a file that holds no relationship with an entity at all.
+    # That is silence read as a negative, which is the one reading every query
+    # here refuses.
+    if conn.execute(
+        f"SELECT 1 FROM edge WHERE layer = '{LAYER_B}' LIMIT 1"  # noqa: S608
+    ).fetchone() is None:
+        return (
+            Clause(
+                name=CLAUSE_SCENE,
+                verdict=COULD_NOT_EVALUATE,
+                layer=LAYER_B,
+                text=(
+                    "This artifact holds no Layer B edge, so it cannot say which "
+                    "entities were inside the computed envelope during the "
+                    "window. That is a could-not-evaluate and not 'none were': "
+                    "the attestation clauses above are unaffected by it, which "
+                    "is the asymmetry docs/sufficiency.md §2 states."
+                ),
+            ),
+            (),
+        )
+
+    try:
+        period = frame_period(conn)
+    except QueryError as exc:
+        return (
+            Clause(
+                name=CLAUSE_SCENE,
+                verdict=COULD_NOT_EVALUATE,
+                layer=LAYER_B,
+                text=(
+                    "The scene clause counts frames by dividing an interval by "
+                    f"the frame period, and this artifact does not state one: "
+                    f"{exc}"
+                ),
+            ),
+            (),
+        )
+
+    rows = [
+        row
+        for row in store.read_edges(conn, edge_type="INTERSECTS")
+        if float(row["t_start"]) <= t_end and float(row["t_end"]) >= t_start
+    ]
+    visits: list[SceneVisit] = []
+    for entity_id in sorted({str(row["dst_id"]) for row in rows}):
+        for group in _merge_adjacent(
+            [row for row in rows if str(row["dst_id"]) == entity_id], period
+        ):
+            start = float(group[0]["t_start"])
+            end = float(group[-1]["t_end"])
+            visits.append(
+                SceneVisit(
+                    entity_id=entity_id,
+                    t_start=start,
+                    t_end=end,
+                    frames=_frames_in(start, end, period),
+                )
+            )
+
+    if not visits:
+        return (
+            Clause(
+                name=CLAUSE_SCENE,
+                verdict=ANSWERED,
+                layer=LAYER_B,
+                text=(
+                    "No entity intersected the computed physical envelope during "
+                    f"[{t_start:.4f}, {t_end:.4f}] s, so this report cites no "
+                    "Layer B fact and carries no assumption. The finding above "
+                    "rests on the record alone."
+                ),
+            ),
+            (),
+        )
+
+    lines: list[str] = []
+    evidence: list[Evidence] = []
+    for visit in visits:
+        lines.append(
+            f"Entity {visit.entity_id} was inside the computed physical envelope"
+        )
+        lines.append(
+            f"  from t={visit.t_start:.4f}s to t={visit.t_end:.4f}s "
+            f"({visit.frames:,} frames) [Layer B]"
+        )
+        evidence.append(
+            Evidence(
+                kind="intersects",
+                ref=visit.entity_id,
+                layer=LAYER_B,
+                detail=(
+                    f"INTERSECTS interval [{visit.t_start:.4f}, "
+                    f"{visit.t_end:.4f}] s, {visit.frames} frame(s), endpoints "
+                    f"at TIME_TOL_S={TIME_TOL_S:g} s"
+                ),
+            )
+        )
+    return (
+        Clause(
+            name=CLAUSE_SCENE,
+            verdict=ANSWERED,
+            layer=LAYER_B,
+            text="\n".join(lines),
+            solution=tuple(evidence),
+        ),
+        tuple(visits),
+    )
+
+
+def _assumption_for(item: Evidence) -> str:
+    return (
+        f"Where {item.ref!r} was comes from perception — simulator ground truth "
+        "in this prototype, a perception stack in any real system — so every "
+        "claim in the scene clause is conditional on it, and is no stronger than "
+        "whatever supplied that position (docs/sufficiency.md §1). The "
+        "attestation clauses of this report do not depend on it."
+    )
+
+
+def _ordered_clauses(
+    clauses: Mapping[str, Clause], integrity: Clause
+) -> tuple[Clause, ...]:
+    """The clauses in reading order, integrity first unless it **verified**.
+
+    The whole ordering rule in one place, because "prominent" is not a property
+    a caller can test and "index 0" is. The test is `== VERIFIED` and not "did
+    it answer": a BROKEN chain answered, and it is the case that most needs to
+    be read first.
+    """
+    content = tuple(
+        clauses[name]
+        for name in CLAUSES
+        if name != CLAUSE_INTEGRITY and name in clauses
+    )
+    if integrity.verdict == CHAIN_VERIFIED:
+        return (*content, integrity)
+    return (integrity, *content)
+
+
+def incident_report(
+    conn: sqlite3.Connection, t_incident: float, keyring: object
+) -> IncidentReport:
+    """docs/plan.md Phase 7's demo sentence, answered end to end as one query.
+
+    > The model declared it would stay inside this bound. Here is where it tried
+    > to exceed it. Here is what the enforcement layer did. Here is the signature
+    > chain proving neither side rewrote the record.
+
+    In that order — what was declared, where the action left it, what enforcement
+    did, the scene context, and whether the record is intact — **except** that a
+    chain which did not verify moves to the front, because every other clause is
+    then a claim about a record whose integrity is in question.
+
+    Args:
+        conn: an artifact opened with `reg.store.connect`.
+        t_incident: the instant to report on. The declaration(s) in force at it
+            fix the window every other clause is read over, so a `t_incident` no
+            declaration covers is a could-not-evaluate for the whole report.
+        keyring: the keyring the records were signed under, or `None`.
+            **Required, no default.** `None` is honest and is not a pass: the
+            links are still walked, no MAC is checked, the chain comes back
+            COULD-NOT-EVALUATE, and the report says so in its first line.
+
+    Returns:
+        An `IncidentReport`. **Never raises for a run with no incident** — that
+        report is `ANSWERED` with `incident=False`, because a query that raised
+        on a clean run could not be used to check whether a run was clean.
+
+    Raises:
+        QueryError: `t_incident` is not a finite number. A caller error, and the
+            only one: everything about the artifact is reported rather than
+            raised.
+    """
+    t_incident = _finite(t_incident, "t_incident")
+    integrity, chain_state = _integrity_clause(verify_chain(conn, keyring))
+
+    bound_answer = declared_bound(conn, t_incident)
+    if not bound_answer.answered:
+        declared = Clause(
+            name=CLAUSE_DECLARED,
+            verdict=COULD_NOT_EVALUATE,
+            layer=LAYER_A,
+            text=(
+                f"This artifact cannot say what the policy declared at "
+                f"t={t_incident:.4f}s, so there is no bound for the clauses "
+                f"below to be about: {bound_answer.reason}"
+            ),
+        )
+        return IncidentReport(
+            t_incident=t_incident,
+            verdict=COULD_NOT_EVALUATE,
+            reason=bound_answer.reason,
+            integrity=chain_state,
+            clauses=_ordered_clauses({CLAUSE_DECLARED: declared}, integrity),
+            goal=(
+                f"the policy stayed inside the bound it declared and had in "
+                f"force at t={t_incident:.4f}s"
+            ),
+            strategy=_STRATEGY,
+            solution=integrity.solution,
+            assumption=(),
+            justification=_JUSTIFICATION,
+        )
+
+    claimed: DeclaredBounds = bound_answer.value  # type: ignore[assignment]
+    window = claimed.window
+
+    declared_lines: list[str] = []
+    declared_evidence: list[Evidence] = []
+    for item in claimed.bounds:
+        declared_lines.append(
+            f"At t={item.t_issued:.4f}s the policy declared envelope "
+            f"{item.envelope_id} (area {item.area:g} m²)"
+        )
+        declared_lines.append(
+            f"  action_class: {item.action_class}, horizon "
+            f"{item.horizon * 1000:g}ms, seq {item.seq}, declaration "
+            f"{item.declaration_id}"
+        )
+        declared_lines.append(
+            f"  in force from t={item.t_issued:.4f}s to t={item.t_expires:.4f}s"
+        )
+        declared_evidence.append(
+            Evidence(
+                kind="declaration",
+                ref=item.declaration_id,
+                layer=LAYER_A,
+                detail=(
+                    f"signed by the policy at t={item.t_issued}, horizon "
+                    f"{item.horizon}, action_class {item.action_class}, seq "
+                    f"{item.seq}"
+                ),
+            )
+        )
+        declared_evidence.append(
+            Evidence(
+                kind="envelope",
+                ref=item.envelope_id,
+                layer=LAYER_A,
+                detail=f"the declared region, area {item.area} m²",
+            )
+        )
+    declared = Clause(
+        name=CLAUSE_DECLARED,
+        verdict=ANSWERED,
+        layer=LAYER_A,
+        text="\n".join(declared_lines),
+        solution=tuple(declared_evidence),
+    )
+
+    violation_answer = violations(conn, window)
+    found: Violations = violation_answer.value  # type: ignore[assignment]
+    first = found.actions[0] if found.actions else None
+    # The whole record, not the window: "when did the violation begin" is not
+    # answered by the first refusal inside a window the report itself chose.
+    # Ordered by instant and not by `seq`, because a reordered or replayed `seq`
+    # is a fault the artifact is required to be able to hold (`reg.store`), and
+    # the question here is about time.
+    earliest_rows = sorted(
+        (
+            row
+            for row in _verdict_rows(conn)
+            if str(row["outcome"]) != PERMITTED_OUTCOME
+        ),
+        key=lambda row: (float(row["t"]), int(row["seq"])),
+    )
+    earliest = _violating(earliest_rows[0]) if earliest_rows else None
+
+    if first is None:
+        violation_clause = Clause(
+            name=CLAUSE_VIOLATION,
+            verdict=ANSWERED,
+            layer=LAYER_A,
+            text=(
+                f"No incident. All {found.adjudications:,} commanded action(s) "
+                f"adjudicated in [{window[0]:.4f}, {window[1]:.4f}] s were "
+                "permitted as issued, and this artifact states that every "
+                "verdict the run produced is stored — so this is the record "
+                "saying nothing happened, not the record being silent."
+                + (
+                    ""
+                    if earliest is None
+                    else (
+                        f" The record does hold a refused action elsewhere, at "
+                        f"t={earliest.t:.4f}s (verdict {earliest.verdict_id}); "
+                        "it is outside this report's window."
+                    )
+                )
+            ),
+        )
+        enforcement_clause = Clause(
+            name=CLAUSE_ENFORCEMENT,
+            verdict=ANSWERED,
+            layer=LAYER_A,
+            text=(
+                "Enforcement bounded nothing in this window: a PERMIT applies no "
+                "bound, and there is no verdict here that applied one."
+            ),
+        )
+    else:
+        fault_text = "none" if first.fault is None else first.fault.upper()
+        violation_lines = [
+            f"At t={first.t:.4f}s a commanded action was not permitted as issued",
+            f"  fault: {fault_text}",
+            f"  {len(found.actions):,} of {found.adjudications:,} adjudication(s) "
+            f"in [{window[0]:.4f}, {window[1]:.4f}] s were refused; "
+            f"fault(s) present: {', '.join(f.upper() for f in found.faults) or 'none'}",
+            "  how far outside the bound the action lay is not retained: the "
+            "Verdict states the fault and the bound applied, and this report "
+            "will not compute a difference the record does not hold",
+        ]
+        if earliest is not None and earliest.verdict_id != first.verdict_id:
+            violation_lines.append(
+                f"  the earliest refused action in the whole record is at "
+                f"t={earliest.t:.4f}s (verdict {earliest.verdict_id}, fault "
+                f"{(earliest.fault or 'none').upper()}), before the window this "
+                "report is scoped to. Whether it is the same incident is an "
+                "inference, and the record states only that both are refusals"
+            )
+        else:
+            violation_lines.append(
+                "  this is also the earliest refused action in the whole record"
+            )
+        if first.declaration_id is None:
+            violation_lines.append(
+                "  this verdict names no declaration, which is the finding "
+                "itself — it is what no_declaration and watchdog_expiry look "
+                "like in the record"
+            )
+        violation_clause = Clause(
+            name=CLAUSE_VIOLATION,
+            verdict=ANSWERED,
+            layer=LAYER_A,
+            text="\n".join(violation_lines),
+            solution=(
+                Evidence(
+                    kind="verdict",
+                    ref=first.verdict_id,
+                    layer=LAYER_A,
+                    detail=(
+                        f"outcome {first.outcome}, fault {first.fault}, at "
+                        f"t={first.t}, seq {first.seq}"
+                    ),
+                ),
+            ),
+        )
+
+        enforcement_lines = [
+            f"Enforcement adjudicated verdict {first.verdict_id} at "
+            f"t={first.t:.4f}s"
+        ]
+        enforcement_evidence = [
+            Evidence(
+                kind="verdict",
+                ref=first.verdict_id,
+                layer=LAYER_A,
+                detail=(
+                    f"signed by enforcement: outcome {first.outcome}, fault "
+                    f"{first.fault}, declaration "
+                    f"{first.declaration_id!r}"
+                ),
+            )
+        ]
+        if first.applied_envelope_id is None:
+            enforcement_lines.append(
+                f"  outcome: {first.outcome}, no bound applied — only a CLAMP "
+                "bounds an action, and a VETO or a SAFE_STATE permits none to "
+                "bound"
+            )
+        else:
+            enforcement_lines.append(
+                f"  outcome: {first.outcome} to envelope "
+                f"{first.applied_envelope_id} (area {first.applied_area:g} m²)"
+            )
+            enforcement_evidence.append(
+                Evidence(
+                    kind="envelope",
+                    ref=first.applied_envelope_id,
+                    layer=LAYER_A,
+                    detail=(
+                        f"the bound enforcement actually applied, area "
+                        f"{first.applied_area} m²"
+                    ),
+                )
+            )
+        enforcement_clause = Clause(
+            name=CLAUSE_ENFORCEMENT,
+            verdict=ANSWERED,
+            layer=LAYER_A,
+            text="\n".join(enforcement_lines),
+            solution=tuple(enforcement_evidence),
+        )
+
+    scene_clause, visits = _scene_clause(conn, window[0], window[1])
+
+    clauses = {
+        CLAUSE_DECLARED: declared,
+        CLAUSE_VIOLATION: violation_clause,
+        CLAUSE_ENFORCEMENT: enforcement_clause,
+        CLAUSE_SCENE: scene_clause,
+    }
+    ordered = _ordered_clauses(clauses, integrity)
+    solution = tuple(item for clause in ordered for item in clause.solution)
+    # Derived from the evidence rather than written beside it: an assumption a
+    # caller had to remember to attach is one that goes missing, and the
+    # invariant a test can hold is "assumption is non-empty exactly when some
+    # evidence item is Layer B".
+    assumption = tuple(
+        _assumption_for(item) for item in solution if item.layer == LAYER_B
+    )
+
+    return IncidentReport(
+        t_incident=t_incident,
+        verdict=ANSWERED,
+        reason=(
+            f"{len(claimed.bounds)} declaration(s) in force at "
+            f"t={t_incident}; {violation_answer.reason}"
+        ),
+        integrity=chain_state,
+        clauses=ordered,
+        goal=(
+            f"the policy stayed inside the bound it declared and had in force at "
+            f"t={t_incident:.4f}s"
+        ),
+        strategy=_STRATEGY,
+        solution=solution,
+        assumption=assumption,
+        justification=_JUSTIFICATION,
+        violation=first,
+        first_refusal=earliest,
+        bounds=claimed.bounds,
+        scene=visits,
+    )
+
+
+# --------------------------------------------------------------------------
 # Argument validation. Every refusal names the value it refused.
 # --------------------------------------------------------------------------
 
@@ -1337,6 +2832,17 @@ def render_chain_report(report: object) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _column_width(header: str, values: object) -> int:
+    """Width for a column of record ids. Measured, not guessed.
+
+    Record ids carry the scenario name (`reg.declare`, `reg.enforce`), so they
+    are long and their length is a property of the run. A fixed width truncates
+    or misaligns the one column an assessor copies out of the output to look a
+    record up by.
+    """
+    return max(len(header), *(len(str(v)) for v in values), 1)
+
+
 def _render_value(value: object) -> list[str]:
     if isinstance(value, SeparationTimeline):
         out = [
@@ -1390,6 +2896,70 @@ def _render_value(value: object) -> list[str]:
             else "inside the envelope: none of them"
         )
         return out
+    if isinstance(value, DeclaredBounds):
+        width = _column_width("declaration", (b.declaration_id for b in value.bounds))
+        out = [
+            f"at t={value.t:.4f} s the record holds {len(value.bounds)} signed "
+            "claim(s) in force",
+            f"{'declaration':<{width}} seq  t_issued   horizon  action_class  "
+            "area_m2   envelope",
+        ]
+        out.extend(
+            f"{b.declaration_id:<{width}} {b.seq:<4} {b.t_issued:<10.4f} "
+            f"{b.horizon:<8.4f} {b.action_class:<13} {b.area:<9g} {b.envelope_id}"
+            for b in value.bounds
+        )
+        return out
+    if isinstance(value, Violations):
+        out = [
+            f"window [{value.t_start:.4f}, {value.t_end:.4f}] s: "
+            f"{len(value.actions):,} of {value.adjudications:,} adjudication(s) "
+            "were not permitted as issued"
+        ]
+        if not value.actions:
+            out.append(
+                "no commanded action in this window was refused — read "
+                f"closed-world under meta[{META_ATTESTATION_RETENTION!r}]"
+            )
+            return out
+        width = _column_width("verdict", (a.verdict_id for a in value.actions))
+        out.append(f"fault(s) present: {', '.join(value.faults)}")
+        out.append(
+            f"{'verdict':<{width}} seq  t          outcome     "
+            f"{'fault':<28} declaration"
+        )
+        out.extend(
+            f"{a.verdict_id:<{width}} {a.seq:<4} {a.t:<10.4f} {a.outcome:<11} "
+            f"{(a.fault or '-'):<28} {a.declaration_id or '-'}"
+            for a in value.actions
+        )
+        return out
+    if isinstance(value, DeclarationVerdicts):
+        out = [
+            f"declaration {value.declaration_id}: "
+            f"{len(value.adjudications):,} adjudication(s), outcome(s) "
+            + (", ".join(value.outcomes) or "none")
+        ]
+        if not value.adjudications:
+            out.append(
+                "this declaration was never adjudicated — a signed claim "
+                "nothing checked, read closed-world under "
+                f"meta[{META_ATTESTATION_RETENTION!r}]"
+            )
+            return out
+        width = _column_width(
+            "verdict", (a.verdict_id for a in value.adjudications)
+        )
+        out.append(
+            f"{'verdict':<{width}} seq  t          outcome     "
+            f"{'fault':<28} bound_applied"
+        )
+        out.extend(
+            f"{a.verdict_id:<{width}} {a.seq:<4} {a.t:<10.4f} {a.outcome:<11} "
+            f"{(a.fault or '-'):<28} {a.applied_envelope_id or '-'}"
+            for a in value.adjudications
+        )
+        return out
     if isinstance(value, bool):
         return [str(value)]
     if isinstance(value, float):
@@ -1399,17 +2969,62 @@ def _render_value(value: object) -> list[str]:
     )
 
 
+def render_incident(report: IncidentReport) -> str:
+    """An `IncidentReport` as text. Reads nothing but the report.
+
+    The clauses come out in the order the report put them in — which is where
+    "the integrity failure is stated first" lives, so that this function has no
+    ordering rule of its own to get wrong. The GSN block is printed under its own
+    field names (docs/prior-art.md §7) so the output can be lifted into an
+    assurance case without transcription; there is no diagram and no renderer for
+    one.
+    """
+    lines = [
+        f"incident report: t={report.t_incident:.4f} s",
+        f"verdict:    {report.verdict}",
+        f"integrity:  {report.integrity}",
+        f"incident:   {'yes' if report.incident else 'no'}",
+        f"note:       {report.reason}",
+        "",
+    ]
+    for clause in report.clauses:
+        lines.append(f"[{clause.name}] {clause.verdict} (evidence layer {clause.layer})")
+        lines.extend(clause.text.splitlines())
+        lines.append("")
+
+    lines.append("-- GSN (docs/prior-art.md §7): field names, no renderer --")
+    lines.append(f"goal:          {report.goal}")
+    lines.append(f"strategy:      {report.strategy}")
+    lines.append("solution:")
+    if not report.solution:
+        lines.append("  none — this report cites no evidence item")
+    lines.extend(
+        f"  [{item.layer}] {item.kind} {item.ref}: {item.detail}"
+        for item in report.solution
+    )
+    lines.append("assumption:")
+    if not report.assumption:
+        lines.append(
+            "  none — every evidence item above is Layer A, so nothing in this "
+            "report rests on perception"
+        )
+    lines.extend(f"  - {text}" for text in report.assumption)
+    lines.append(f"justification: {report.justification}")
+    return "\n".join(lines)
+
+
 def _list_text() -> str:
     """`--list`: the supported queries, what each needs, and what it is good to.
 
     The whole vocabulary, so a caller who got a name wrong sees the set rather
-    than being told their name is not in it. Queries 5-8 of
-    docs/lossiness.md's supported set are named as *absent* at the bottom: an
-    attestation query missing from this list is a milestone that has not landed,
-    and leaving it unmentioned would let "no violations" and "this build does
-    not record violations" look the same.
+    than being told their name is not in it. Queries 5-7 of docs/lossiness.md's
+    supported set are in `QUERIES` since issue #50 and print with the rest;
+    `verify_chain` and `incident_report` are not `Answer`-returning queries and
+    are described below the table, because a name missing from this list reads as
+    a milestone that has not landed and would let "no violations" and "this build
+    does not record violations" look the same.
     """
-    lines = ["supported queries (docs/plan.md Phase 7, scene half):", ""]
+    lines = ["supported queries (docs/plan.md Phase 7):", ""]
     for spec in QUERIES.values():
         flag = "--" + spec.name.replace("_", "-")
         args = " ".join(spec.arguments)
@@ -1433,10 +3048,15 @@ def _list_text() -> str:
     )
     lines.append("")
     lines.append(
-        "not implemented, and absent rather than empty: declared_bound, "
-        "violations, verdicts and incident_report (docs/lossiness.md queries "
-        "5-9). A stub returning an empty list would make 'it did not happen' "
-        "indistinguishable from 'this build does not record it'."
+        "not a query, and not an Answer: --incident T composes the four above "
+        "into docs/plan.md Phase 7's incident_report — what was declared, where "
+        "the action left it, what enforcement did, the Layer B scene context, "
+        "and whether the record is intact — and emits GSN-compatible field "
+        "names (goal, strategy, solution, assumption, justification) beside the "
+        "prose. Pass --keyring or the chain comes back COULD-NOT-EVALUATE and "
+        "the report says so in its first line, which is not a pass. A run with "
+        "no incident reports that there was none; a t no declaration covers is "
+        "a could-not-evaluate and never an empty report."
     )
     return "\n".join(lines)
 
@@ -1506,6 +3126,33 @@ def _parser() -> argparse.ArgumentParser:
         "--did-contact-occur",
         metavar="ENTITY_ID",
         help=QUERIES["did_contact_occur"].question,
+    )
+    group.add_argument(
+        "--declared-bound",
+        metavar="T",
+        help=QUERIES["declared_bound"].question,
+    )
+    group.add_argument(
+        "--violations",
+        nargs=2,
+        metavar=("T_START", "T_END"),
+        help=QUERIES["violations"].question,
+    )
+    group.add_argument(
+        "--verdicts",
+        metavar="DECLARATION_ID",
+        help=QUERIES["verdicts"].question,
+    )
+    group.add_argument(
+        "--incident",
+        metavar="T",
+        help=(
+            "the incident report at T (docs/plan.md Phase 7): what was "
+            "declared, where the action left it, what enforcement did, the "
+            "Layer B scene context, and whether the record is intact — with "
+            "GSN-compatible field names. Pass --keyring or no MAC is checked "
+            "and the report says so first"
+        ),
     )
     group.add_argument(
         "--verify-chain",
@@ -1587,6 +3234,15 @@ def _dispatch(conn: sqlite3.Connection, args: argparse.Namespace) -> Answer:
         return time_of_closest_approach(conn, args.time_of_closest_approach)
     if args.did_contact_occur is not None:
         return did_contact_occur(conn, args.did_contact_occur)
+    if args.declared_bound is not None:
+        return declared_bound(conn, _number(args.declared_bound, "T"))
+    if args.violations is not None:
+        t_start, t_end = args.violations
+        return violations(
+            conn, (_number(t_start, "T_START"), _number(t_end, "T_END"))
+        )
+    if args.verdicts is not None:
+        return verdicts(conn, args.verdicts)
     raise QueryError(
         "no query was named. Nothing is answered by default — a query layer "
         "that picked one for you would answer a question nobody asked.\n"
@@ -1666,6 +3322,65 @@ def _verify_chain_cli(args: argparse.Namespace) -> int:
     }[report.state]
 
 
+def _incident_cli(args: argparse.Namespace) -> int:
+    """`--incident T`. Exit `0` / `1` / `2` / `3`, and `3` outranks the rest.
+
+    A BROKEN chain is exit `3` whatever else the report managed to say, because
+    the one thing a caller must not be able to do is read a report over an
+    altered record as a clean pass. An unchecked chain — no `--keyring` — is
+    exit `1`: not having checked is not the same as having found a fault, and it
+    is not the same as having found none either.
+
+    The import is deferred for the reason `_verify_chain_cli`'s is.
+    """
+    from reg import chain
+
+    if args.tamper is not None or args.tamper_out is not None or args.tamper_resign:
+        print(
+            "error: --tamper, --tamper-out and --tamper-resign belong to "
+            "--verify-chain. An incident report over an artifact this command "
+            "had just altered would be a report about a file nobody produced. "
+            "Run --verify-chain --tamper to make the copy, then point "
+            "--incident at the copy.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    keyring = None
+    if args.keyring is not None:
+        try:
+            keyring = chain.load_keyring(args.keyring)
+        except chain.KeyringError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+
+    try:
+        t_incident = _number(args.incident, "T")
+    except QueryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        conn = store.connect(Path(args.artifact))
+    except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        report = incident_report(conn, t_incident, keyring)
+    except QueryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    finally:
+        conn.close()
+
+    print(render_incident(report))
+    if report.integrity == chain.ChainState.BROKEN.value:
+        return EXIT_BROKEN
+    if not report.answered or not report.integrity_verified:
+        return EXIT_COULD_NOT_EVALUATE
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Exit `0` answered, `1` could-not-evaluate, `2` refused, `3` chain broken.
 
@@ -1688,6 +3403,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.verify_chain:
         return _verify_chain_cli(args)
 
+    if args.incident is not None:
+        return _incident_cli(args)
+
     stray = [
         flag
         for flag, given in (
@@ -1700,8 +3418,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     if stray:
         print(
-            f"error: {', '.join(stray)} belong(s) to --verify-chain, which was "
-            "not asked for. No scene query reads a key, and --tamper exists to "
+            f"error: {', '.join(stray)} belong(s) to --verify-chain or "
+            "--incident, neither of which was asked for. No scene query and no "
+            "attestation query reads a key, and --tamper exists to "
             "show the chain walk saying no — on its own it would alter a copy "
             "of an artifact and report nothing about the result. Refusing "
             "rather than ignoring them: a flag that is silently dropped reads "

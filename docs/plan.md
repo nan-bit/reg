@@ -102,8 +102,46 @@ If a task doesn't serve one of the four claims, cut it.
 Build in order. Each is independently shippable.
 
 ### Claim 1 — Compression (the commercial argument)
-Graph vs. raw logged state, size ratio, per scenario.
-**Success:** 2–4 orders of magnitude, one number, one chart.
+Graph vs. raw logged state, size ratio, per scenario and — since issue #30 — as
+a function of run length.
+
+**Success, as originally stated:** 2–4 orders of magnitude, one number, one chart.
+
+**What was measured** (`python -m reg.bench --scaling`, long-run fixture, seed 0,
+16 envelope samples, 200 ms horizon):
+
+| frames | robot time | x gz CSV |
+|---|---|---|
+| 300 | 6 s | 0.05x |
+| 3,000 | 60 s | 0.07x |
+| 30,000 | 600 s | 0.07x |
+
+The ratio *does* improve with run length — the fixed schema cost amortises — and
+then flattens. **It does not reach 1.0 anywhere in the measured range.** The
+marginal cost of one more frame is constant across every measured interval:
+~21 B of gzipped CSV against ~285 B of SQLite. The artifact is roughly 14x
+*larger* than a gzipped copy of the stream it replaces, and no amount of run
+length changes that, because it is the per-frame cost that dominates, not the
+fixed one.
+
+**Why, and it is structural rather than an encoding detail:** the incremental
+rule compresses relationships that hold still. An arm in motion changes its
+distance to every entity continuously, so `SEPARATION` edges are emitted at a
+rate set by how fast the arm moves, and a row in SQLite with its indexes costs
+an order of magnitude more than a line of gzipped CSV.
+
+**Success, restated to something a measurement can meet or miss:**
+
+1. The ratio is measured **across run lengths**, and the report states the
+   crossover at 1.0 or states plainly that there is none. Measured points only.
+2. Until a measured length clears 1.0, **the retainable-artifact argument does
+   not rest on compression.** It rests on Claims 2–4 — query, sufficiency
+   boundary, attestation — none of which needs the artifact to be smaller than
+   the stream. Nothing in this repository may quote a compression ratio as the
+   commercial argument while the measured one is below 1.
+
+The original criterion is kept above rather than deleted: it is what the project
+set out to show, and the gap between it and the table is the finding.
 
 ### Claim 2 — Query (what makes it evidence, not a log)
 Audit questions answered from the graph alone, no access to the original stream.
@@ -480,7 +518,20 @@ from this sim.
 Also report query wall-clock: graph vs. computing from raw. Secondary argument, but
 real.
 
-**Deliverable:** `python -m reg.bench --all --out bench/results.md`
+And across run lengths (issue #30), because Claim 1 is a claim about *scaling*
+and six seconds is the one length at which it cannot be tested — a near-constant
+schema-and-index cost dominates the artifact there:
+
+| Metric | |
+|---|---|
+| Ratio vs. run length | one fixture (`reg.scenarios.long_run`) at 300, 1k, 3k, 10k, 30k frames |
+| Crossover | the measured length at which the ratio passes 1.0 — or, plainly, that it does not |
+| Marginal cost | Δ bytes per frame between two measured lengths, both sides |
+
+**Measured points only.** No fitted curve, and no projected crossover quoted as
+if it were measured — the same rule the sensor projection follows.
+
+**Deliverable:** `python -m reg.bench --all --scaling --out bench/results.md`
 
 ---
 

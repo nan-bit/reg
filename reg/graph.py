@@ -1307,7 +1307,7 @@ def _resolve_world(csv_path: str | os.PathLike[str]):
     does not say what produced it, and "the defaults were used" is not a reading
     of silence (`reg.sim.parse_provenance` says the same).
     """
-    from reg.scenarios import SCENARIOS, scenario
+    from reg.scenarios import scenario
     from reg.sim import parse_provenance
 
     fields = parse_provenance(csv_path)
@@ -1320,12 +1320,18 @@ def _resolve_world(csv_path: str | os.PathLike[str]):
             "it; there is nothing here to build a graph from without inventing "
             "both. Regenerate the stream with `python -m reg.sim`."
         )
-    if name not in SCENARIOS:
+    # Through `scenario()` rather than a `SCENARIOS` membership test, because
+    # since issue #30 not every scenario is a registered one: the scaling
+    # fixture is generated per length and `scenario()` resolves its names.
+    # Testing membership here would leave a long-run stream as the one kind of
+    # file whose own provenance block names something this build cannot resolve.
+    try:
+        return scenario(name).world
+    except KeyError as exc:
         raise GraphBuildError(
-            f"{csv_path} says scenario={name!r}, which this build does not know. "
-            f"Known scenarios: {', '.join(SCENARIOS)}."
-        )
-    return scenario(name).world
+            f"{csv_path} says scenario={name!r}, which this build does not "
+            f"know: {exc.args[0]}"
+        ) from None
 
 
 def _positive_float(raw: str) -> float:

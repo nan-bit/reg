@@ -62,6 +62,47 @@ THREE STATES, NOT A BOOL
 serialize — is neither valid nor invalid, and the third state must not collapse
 into either. `MacCheck.__bool__` raises for exactly that reason: `if verify(...)`
 is a bug this module refuses to let compile into behaviour.
+
+THE VERIFICATION HALF: `verify_chain` AND `tamper` (issue #49)
+--------------------------------------------------------------
+Everything above produces a chain. `verify_chain(conn, keyring)` is the thing an
+assessor actually runs over one: it walks **both** chains a `reg.store` artifact
+holds — declarations under the policy key, verdicts under the enforcement key,
+kept separate because they are two parties — and reports, per chain, how many
+records it walked, how many links and MACs it checked, and every failure with the
+record it belongs to.
+
+`ChainState` has the same three values `MacCheck` has, for the same reason, and
+`ChainReport.__bool__` raises for the same reason. **An artifact with nothing in
+it is not a verified artifact**: no record stream, no stated count, an empty
+chain, an unreadable row and an absent key are all COULD-NOT-EVALUATE, and none
+of them is VERIFIED. A verifier that reported an empty file as verified would be
+the check-that-cannot-fail this repository is built against.
+
+`tamper` is the demonstration that it *can* fail, and it is not a convenience:
+a tamper-evidence mechanism never shown to detect tampering is worth nothing. It
+mutates exactly one record — a field, a `mac`, a `prev_hash`, or the record
+itself — in a **copy**, reports what it changed, and refuses to write anywhere
+near the original. The artifact under audit is the evidence; a tool that edits it
+in place is a tool that destroys what it was pointed at.
+
+Neither of them repairs anything. There is no code path here that rewrites a
+record to make a chain verify: a verifier that can fix is a verifier that can
+forge. `tamper` can re-sign, and that is the opposite — it exists so the
+**re-signed record is still BROKEN** at its successor, which is the case that
+shows the chain is doing work the MAC alone cannot.
+
+WHAT TRUNCATION COSTS, AND THE HONEST LIMIT OF DETECTING IT
+------------------------------------------------------------
+Deleting the *last* record of a chain breaks no link: every record that remains
+still commits to its predecessor. Two witnesses in the artifact catch it anyway —
+the record counts `reg.graph` writes into `meta`, and the `FOLLOWS` edges, one of
+which is left pointing at a record the file no longer holds. **Neither is covered
+by a MAC**, so an attacker who edits the count and drops the edge as well is not
+detected by this walk, and that is stated here rather than left to be discovered.
+What defeats it is an external commitment to the final chain hash, which is a
+deployment question (the same one the honesty note above is about) and not
+something this file can solve on its own.
 """
 
 from __future__ import annotations
@@ -73,20 +114,34 @@ import json
 import math
 import os
 import secrets
+import sqlite3
 from enum import Enum
 from pathlib import Path
 from typing import Literal, get_args
 
+from reg import store
 from reg.stream import ENCODING, FLOAT_PRECISION
 
 __all__ = [
+    "ATTESTATION_PRESENT",
+    "CHAINS",
+    "FAILURE_KINDS",
     "GENESIS_HASH",
     "HASH_HEX_LEN",
     "KEY_BYTES",
     "MAC_FIELD",
+    "META_ATTESTATION_RECORDS",
+    "META_DECLARATION_COUNT",
+    "META_VERDICT_COUNT",
     "ROLES",
+    "TAMPER_DELETE",
     "UNSIGNED_MAC",
     "CanonicalizationError",
+    "ChainFailure",
+    "ChainReport",
+    "ChainResult",
+    "ChainSpec",
+    "ChainState",
     "Key",
     "KeyRoleError",
     "Keyring",
@@ -94,6 +149,9 @@ __all__ = [
     "MacCheck",
     "MacState",
     "Role",
+    "TamperError",
+    "TamperReport",
+    "TamperSpec",
     "canonical_bytes",
     "chain_hash",
     "generate_keyring",
@@ -101,7 +159,9 @@ __all__ = [
     "load_keyring",
     "sign",
     "signing_bytes",
+    "tamper",
     "verify",
+    "verify_chain",
     "write_keyring",
 ]
 
@@ -657,4 +717,959 @@ def verify(record: object, mac: object, key: Key | None) -> MacCheck:
         MacState.INVALID,
         f"MAC does not match under the {checked.role!r} key: the record, the "
         "MAC, or the key is not the one that was signed.",
+    )
+
+
+# --------------------------------------------------------------------------
+# THE WALK (issue #49)
+#
+# The `meta` keys below are named here rather than imported from `reg.graph`,
+# for the reason `reg.query` names its own: `reg.graph` imports this module, so
+# importing it back would be a cycle, and it reaches the raw stream besides.
+# `tests/test_chain.py::test_the_meta_keys_this_module_reads_are_the_ones_the_
+# builder_writes` compares the two sides and fails on a rename — otherwise a
+# renamed key turns every chain in every artifact into a could-not-evaluate,
+# months later and in somebody else's terminal.
+# --------------------------------------------------------------------------
+
+#: Whether the build that wrote an artifact was handed a record stream at all.
+#: `absent` and a run that produced no records are different facts and this key
+#: is what separates them (`reg.graph.META_ATTESTATION_RECORDS`).
+META_ATTESTATION_RECORDS = "attestation_records"
+
+#: How many records the build says it stored, per chain. **This is the only
+#: thing a walk can compare its own length against**, and it is what makes a
+#: truncated chain detectable at all — see the module header for what that
+#: costs, because these keys carry no MAC.
+META_DECLARATION_COUNT = "declaration_count"
+META_VERDICT_COUNT = "verdict_count"
+
+#: The value of `META_ATTESTATION_RECORDS` that means a record stream was
+#: supplied. Anything else — including the key being absent — is an artifact
+#: nobody asked to store records in, which is a refusal and not an empty chain.
+ATTESTATION_PRESENT = "present"
+
+
+class ChainState(Enum):
+    """The three verdicts a chain walk can reach. There is no fourth, no bool.
+
+    The same three states as `MacState`, one level up, and they mean the same
+    things: `BROKEN` is a finding about the artifact, `COULD_NOT_EVALUATE` is a
+    finding about the *walk* — it says nothing was learned — and the two must
+    never be reported as each other. Not having checked is not the same as
+    having found a fault; an empty artifact is not a verified one.
+    """
+
+    #: Every record walked, every link held, every MAC matched.
+    VERIFIED = "VERIFIED"
+    #: A definite fault: a link that does not hold, a MAC that does not match, a
+    #: record the artifact says it holds and does not.
+    BROKEN = "BROKEN"
+    #: The walk could not be performed, or could not be completed: no record
+    #: stream, no stated count, no records, an unreadable row, no key.
+    #: **Never resolves to VERIFIED.**
+    COULD_NOT_EVALUATE = "COULD-NOT-EVALUATE"
+
+
+#: What a failure is *about*. Fixed and small, like every other vocabulary here,
+#: so a report can be filtered on it and an unknown kind is a detectable fault
+#: rather than a category invented at a call site.
+FAILURE_KINDS: tuple[str, ...] = (
+    #: The record's MAC does not match under its party's key.
+    "mac",
+    #: The record's `prev_hash` is not its predecessor's chain hash.
+    "link",
+    #: The first record of the chain does not start at `GENESIS_HASH`.
+    "genesis",
+    #: The walk found a different number of records than the artifact states.
+    "count",
+    #: A `FOLLOWS` edge names a record this artifact no longer holds.
+    "dangling-link",
+    #: A stored row could not be read back as the record it claims to be.
+    "unreadable",
+    #: This chain holds no records, so nothing was checked.
+    "no-records",
+    #: The build was handed no record stream, so there is no chain to walk.
+    "no-record-stream",
+    #: No key for this chain's party, so no MAC on it was checked.
+    "no-key",
+    #: The artifact does not state how many records this chain should have.
+    "no-count",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainSpec:
+    """One of the two chains: which party signs it and where it is stored.
+
+    Two chains and not one interleaved stream — `reg.graph` keeps them separate
+    because they are two parties, and a walker that merged them would check the
+    policy's links under the enforcement key.
+    """
+
+    #: The party whose key signs every record in this chain.
+    role: Role
+    #: The record class name, as `reg.store.RECORD_KINDS` spells it. It is also
+    #: the `src_kind` of this chain's `FOLLOWS` edges.
+    kind: str
+    #: The table the records live in, and its primary key — which is also the
+    #: name of the record's own id field.
+    table: str
+    id_field: str
+    #: The `reg.store` reader for this chain, by name. By name because the
+    #: import is deferred (see `_read_records`).
+    reader: str
+    #: The `meta` key stating how many records this chain should hold.
+    count_key: str
+
+
+#: The two chains, in the order a report walks them.
+CHAINS: tuple[ChainSpec, ...] = (
+    ChainSpec(
+        role="policy",
+        kind="Declaration",
+        table="declaration",
+        id_field="declaration_id",
+        reader="read_declarations",
+        count_key=META_DECLARATION_COUNT,
+    ),
+    ChainSpec(
+        role="enforcement",
+        kind="Verdict",
+        table="verdict",
+        id_field="verdict_id",
+        reader="read_verdicts",
+        count_key=META_VERDICT_COUNT,
+    ),
+)
+
+
+def _spec(role: Role) -> ChainSpec:
+    for spec in CHAINS:
+        if spec.role == role:
+            return spec
+    raise KeyRoleError(
+        f"no chain for role {role!r}; the chains are {[s.role for s in CHAINS]}."
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainFailure:
+    """One thing wrong, and **which record it belongs to**.
+
+    The record id is the field this class exists for. An assessor's next question
+    after "is the chain intact" is always *which one, and what changed*; a
+    boolean cannot answer it, and a report that cannot answer it is not usable
+    evidence. `record_id` is `None` only for a failure about the chain as a whole
+    — a missing count, an absent key — and never because the failure is about a
+    record the report declined to name.
+    """
+
+    chain: Role
+    kind: str
+    state: ChainState
+    reason: str
+    record_id: str | None = None
+    seq: int | None = None
+    #: For a `link` failure: the record whose chain hash the `prev_hash` above
+    #: should have been. Named because a break has two ends and an assessor
+    #: needs both — the successor is where it is *detected*, the predecessor is
+    #: usually where it was *done*.
+    predecessor_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in FAILURE_KINDS:
+            raise ValueError(
+                f"failure kind {self.kind!r} is not in {list(FAILURE_KINDS)}. "
+                "The vocabulary is fixed so a report can be filtered on it."
+            )
+        if self.state is ChainState.VERIFIED:
+            raise ValueError(
+                "a ChainFailure is BROKEN or COULD-NOT-EVALUATE. A failure "
+                "recorded as VERIFIED would be counted as a finding and "
+                "reported as none."
+            )
+
+    def describe(self) -> str:
+        """One line: what is wrong, and with which record."""
+        where = "" if self.record_id is None else f" [{self.record_id}]"
+        if self.seq is not None:
+            where += f" (seq {self.seq})"
+        if self.predecessor_id is not None:
+            where += f" -> predecessor [{self.predecessor_id}]"
+        return f"{self.state.value} {self.kind}{where}: {self.reason}"
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainResult:
+    """One chain's walk: what was checked, and everything that was wrong.
+
+    The three counts are reported whatever the verdict, because "VERIFIED over
+    zero links" and "VERIFIED over two hundred" are not the same statement and a
+    verdict on its own does not distinguish them. `records_walked` against
+    `stated_records` is the truncation check written out where a reader can see
+    both numbers.
+
+    `links_checked` counts the genesis link too, so it equals `records_walked` on
+    an intact chain: a first record that claims a predecessor is a check that can
+    fail, and leaving it out of the count would report N records held together by
+    N-1 checks when N were made.
+    """
+
+    chain: Role
+    kind: str
+    state: ChainState
+    records_walked: int
+    links_checked: int
+    macs_checked: int
+    #: What the artifact says this chain holds, or `None` if it does not say.
+    stated_records: int | None
+    failures: tuple[ChainFailure, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainReport:
+    """Both chains. `bool(report)` raises — there are three states.
+
+    Exactly `MacCheck.__bool__`'s reason, one level up: `if verify_chain(...)`
+    reads as "is this artifact fine", and a could-not-evaluate is neither yes nor
+    no. Compare `.state` against `ChainState`.
+    """
+
+    chains: tuple[ChainResult, ...]
+
+    @property
+    def state(self) -> ChainState:
+        """The whole artifact's verdict.
+
+        BROKEN if any chain is broken — a definite fault anywhere is a fault,
+        and it outranks a chain that could not be evaluated, because the fault
+        was actually found. VERIFIED only if **every** chain verified.
+        """
+        states = {result.state for result in self.chains}
+        if ChainState.BROKEN in states:
+            return ChainState.BROKEN
+        if ChainState.COULD_NOT_EVALUATE in states or not states:
+            return ChainState.COULD_NOT_EVALUATE
+        return ChainState.VERIFIED
+
+    @property
+    def failures(self) -> tuple[ChainFailure, ...]:
+        """Every failure from every chain, in walk order."""
+        return tuple(f for result in self.chains for f in result.failures)
+
+    def __bool__(self) -> bool:  # pragma: no cover - exercised via pytest.raises
+        raise TypeError(
+            "a ChainReport has three states and cannot be used as a bool. "
+            f"This one is {self.state.value}. Compare .state against "
+            "ChainState.VERIFIED / BROKEN / COULD_NOT_EVALUATE — and handle "
+            "COULD_NOT_EVALUATE explicitly: an artifact that could not be "
+            "checked is not an artifact that passed."
+        )
+
+
+def _read_records(conn: sqlite3.Connection, spec: ChainSpec) -> list:
+    """This chain's records, in stored order.
+
+    Order is `reg.store`'s — `(seq, id)` — which is the order the chain was
+    written in and the only one two readers of one artifact are guaranteed to
+    agree on. A stream whose `seq` was reordered by tampering is not re-sorted
+    here into the order that would verify: the links are checked against the
+    order the artifact presents, and a reorder breaks them, which is the
+    `replay_or_reorder` fault being visible rather than repaired.
+    """
+    return getattr(store, spec.reader)(conn)
+
+
+def _walk(
+    conn: sqlite3.Connection, spec: ChainSpec, keyring: Keyring | None
+) -> ChainResult:
+    """One chain, end to end. Never raises for a fault it can report."""
+    failures: list[ChainFailure] = []
+
+    stated: int | None = None
+    stated_text = store.get_meta(conn, spec.count_key)
+    if stated_text is None:
+        failures.append(
+            ChainFailure(
+                chain=spec.role,
+                kind="no-count",
+                state=ChainState.COULD_NOT_EVALUATE,
+                reason=(
+                    f"the artifact states no {spec.count_key!r}, so the walk has "
+                    "nothing to compare its own length against and cannot tell a "
+                    "complete chain from one with its tail removed."
+                ),
+            )
+        )
+    else:
+        try:
+            stated = int(stated_text)
+        except ValueError:
+            failures.append(
+                ChainFailure(
+                    chain=spec.role,
+                    kind="no-count",
+                    state=ChainState.COULD_NOT_EVALUATE,
+                    reason=(
+                        f"meta[{spec.count_key!r}] is {stated_text!r}, which is "
+                        "not a count. Refusing to guess what it meant."
+                    ),
+                )
+            )
+
+    try:
+        records = _read_records(conn, spec)
+    except (store.StoreError, ValueError, sqlite3.DatabaseError) as exc:
+        failures.append(
+            ChainFailure(
+                chain=spec.role,
+                kind="unreadable",
+                state=ChainState.COULD_NOT_EVALUATE,
+                reason=(
+                    f"a stored {spec.kind} could not be read back as the record "
+                    f"it claims to be, so this chain was not walked: {exc}"
+                ),
+            )
+        )
+        return _result(spec, 0, 0, 0, stated, failures)
+
+    if not records:
+        failures.append(
+            ChainFailure(
+                chain=spec.role,
+                kind="no-records",
+                state=ChainState.COULD_NOT_EVALUATE,
+                reason=(
+                    f"this artifact holds no {spec.kind} at all, so nothing was "
+                    "checked. An artifact with nothing in it is not a verified "
+                    "artifact — and if the run genuinely produced none, that is "
+                    "a fact about the run and not a chain that passed."
+                ),
+            )
+        )
+        return _result(spec, 0, 0, 0, stated, failures)
+
+    key: Key | None = None
+    if keyring is None:
+        failures.append(
+            ChainFailure(
+                chain=spec.role,
+                kind="no-key",
+                state=ChainState.COULD_NOT_EVALUATE,
+                reason=(
+                    f"no key for the {spec.role!r} party, so none of the "
+                    f"{len(records)} MACs on this chain was checked. This is not "
+                    "a finding about the records: the links below were still "
+                    "walked, and an unchecked MAC is unchecked, not invalid."
+                ),
+            )
+        )
+    else:
+        key = keyring.key(spec.role)
+
+    links_checked = 0
+    macs_checked = 0
+    previous_hash: str | None = None
+    previous_id: str | None = None
+    walked_ids: set[str] = set()
+
+    for record in records:
+        record_id = str(getattr(record, spec.id_field))
+        seq = int(record.seq)
+        walked_ids.add(record_id)
+
+        if key is not None:
+            check = verify(record, record.mac, key)
+            if check.state is MacState.VALID:
+                macs_checked += 1
+            elif check.state is MacState.INVALID:
+                macs_checked += 1
+                failures.append(
+                    ChainFailure(
+                        chain=spec.role,
+                        kind="mac",
+                        state=ChainState.BROKEN,
+                        reason=check.reason,
+                        record_id=record_id,
+                        seq=seq,
+                    )
+                )
+            else:
+                failures.append(
+                    ChainFailure(
+                        chain=spec.role,
+                        kind="mac",
+                        state=ChainState.COULD_NOT_EVALUATE,
+                        reason=check.reason,
+                        record_id=record_id,
+                        seq=seq,
+                    )
+                )
+
+        expected = GENESIS_HASH if previous_hash is None else previous_hash
+        links_checked += 1
+        if record.prev_hash != expected:
+            if previous_id is None:
+                failures.append(
+                    ChainFailure(
+                        chain=spec.role,
+                        kind="genesis",
+                        state=ChainState.BROKEN,
+                        reason=(
+                            f"the first {spec.kind} of this chain carries "
+                            f"prev_hash={record.prev_hash!r}, not the genesis "
+                            f"hash. It claims a predecessor, and this artifact "
+                            "holds none — either a record was removed from the "
+                            "front of the chain or this one was not the first."
+                        ),
+                        record_id=record_id,
+                        seq=seq,
+                    )
+                )
+            else:
+                failures.append(
+                    ChainFailure(
+                        chain=spec.role,
+                        kind="link",
+                        state=ChainState.BROKEN,
+                        reason=(
+                            f"prev_hash={record.prev_hash!r} is not the chain "
+                            f"hash of the record before it ({expected!r}). "
+                            "Either this record's link was altered or the record "
+                            "it commits to was altered after it was signed."
+                        ),
+                        record_id=record_id,
+                        seq=seq,
+                        predecessor_id=previous_id,
+                    )
+                )
+
+        # The running hash is computed from the link the record *carries*, not
+        # from the one it should have carried. Recomputing it from `expected`
+        # would silently re-base the rest of the chain onto the tampered record
+        # and report one break where there is one break — which is right — but
+        # it would do it by asserting a link nobody made.
+        try:
+            previous_hash = chain_hash(record, record.prev_hash)
+        except (ValueError, CanonicalizationError) as exc:
+            failures.append(
+                ChainFailure(
+                    chain=spec.role,
+                    kind="unreadable",
+                    state=ChainState.COULD_NOT_EVALUATE,
+                    reason=(
+                        f"this record's own hash could not be computed, so every "
+                        f"link after it is unchecked: {exc}"
+                    ),
+                    record_id=record_id,
+                    seq=seq,
+                )
+            )
+            previous_hash = None
+        previous_id = record_id
+
+    if stated is not None and stated != len(records):
+        failures.append(
+            ChainFailure(
+                chain=spec.role,
+                kind="count",
+                state=ChainState.BROKEN,
+                reason=(
+                    f"the artifact states {stated} {spec.kind} record(s) in "
+                    f"meta[{spec.count_key!r}] and the walk found "
+                    f"{len(records)}. Records were removed from — or added to — "
+                    "this artifact after it was built; deleting the last record "
+                    "of a chain breaks no link, so this count is one of the two "
+                    "things that can notice it."
+                ),
+            )
+        )
+
+    failures.extend(_dangling_links(conn, spec, walked_ids))
+    return _result(spec, len(records), links_checked, macs_checked, stated, failures)
+
+
+def _dangling_links(
+    conn: sqlite3.Connection, spec: ChainSpec, walked_ids: set[str]
+) -> list[ChainFailure]:
+    """`FOLLOWS` edges naming a record this artifact no longer holds.
+
+    The second witness to a deleted record, and the one that does not depend on
+    the `meta` counts: `reg.graph` writes an edge per link, so a record removed
+    from either end of the chain leaves an edge pointing into nothing. Like the
+    counts it is not covered by any MAC — see the module header.
+    """
+    rows = store.read_edges(conn, edge_type="FOLLOWS")
+    out: list[ChainFailure] = []
+    for row in rows:
+        for end, kind_column, id_column in (
+            ("source", "src_kind", "src_id"),
+            ("target", "dst_kind", "dst_id"),
+        ):
+            if str(row[kind_column]) != spec.kind:
+                continue
+            record_id = str(row[id_column])
+            if record_id in walked_ids:
+                continue
+            out.append(
+                ChainFailure(
+                    chain=spec.role,
+                    kind="dangling-link",
+                    state=ChainState.BROKEN,
+                    reason=(
+                        f"a FOLLOWS edge names this record as its {end}, and the "
+                        f"{spec.table} table does not hold it. The link was "
+                        "written when the record was there, so the record was "
+                        "removed afterwards."
+                    ),
+                    record_id=record_id,
+                )
+            )
+    return out
+
+
+def _result(
+    spec: ChainSpec,
+    records_walked: int,
+    links_checked: int,
+    macs_checked: int,
+    stated: int | None,
+    failures: list[ChainFailure],
+) -> ChainResult:
+    """Assemble a `ChainResult` and derive its state from its failures.
+
+    Derived rather than passed in, so there is no call site at which a chain
+    with failures could be reported as verified.
+    """
+    states = {f.state for f in failures}
+    if ChainState.BROKEN in states:
+        state = ChainState.BROKEN
+    elif ChainState.COULD_NOT_EVALUATE in states:
+        state = ChainState.COULD_NOT_EVALUATE
+    else:
+        state = ChainState.VERIFIED
+    return ChainResult(
+        chain=spec.role,
+        kind=spec.kind,
+        state=state,
+        records_walked=records_walked,
+        links_checked=links_checked,
+        macs_checked=macs_checked,
+        stated_records=stated,
+        failures=tuple(failures),
+    )
+
+
+def verify_chain(conn: sqlite3.Connection, keyring: Keyring | None) -> ChainReport:
+    """Walk both record chains in an artifact and report on each.
+
+    This is what an assessor runs. It reads only the artifact and the keyring:
+    nothing is recomputed from a stream, nothing is repaired, and no record is
+    written back under any circumstances.
+
+    Args:
+        conn: an artifact opened with `reg.store.connect` (its `row_factory`
+            is what the record readers need).
+        keyring: the keyring the records were signed under, or `None` for "no
+            key available". **Required, with no default** — a caller that did
+            not think about the key would otherwise get a report that looks like
+            a verification and checked no signature. `None` is
+            **could-not-evaluate for the MACs and nothing else**: the links are
+            still walked and still reported, and a
+            chain whose links hold but whose MACs were not checked comes back
+            COULD-NOT-EVALUATE rather than VERIFIED. Not having checked is not
+            the same as having found a fault, and it is not the same as having
+            found none either.
+
+    Returns:
+        A `ChainReport`, one `ChainResult` per chain. `bool()` on it raises.
+
+    Raises:
+        sqlite3.DatabaseError: the connection is not an artifact at all. That is
+            a caller error rather than a finding about a chain — `reg.store.
+            connect` is what refuses a file that is not one.
+    """
+    records_meta = store.get_meta(conn, META_ATTESTATION_RECORDS)
+    if records_meta != ATTESTATION_PRESENT:
+        stated = (
+            "this build was given no record stream at all"
+            if records_meta is None or records_meta == "absent"
+            else f"meta[{META_ATTESTATION_RECORDS!r}] is {records_meta!r}"
+        )
+        return ChainReport(
+            chains=tuple(
+                _result(
+                    spec,
+                    0,
+                    0,
+                    0,
+                    None,
+                    [
+                        ChainFailure(
+                            chain=spec.role,
+                            kind="no-record-stream",
+                            state=ChainState.COULD_NOT_EVALUATE,
+                            reason=(
+                                f"{stated}, so there is no {spec.kind} chain in "
+                                "it to walk. That is a different fact from a run "
+                                "that produced no records, and it is emphatically "
+                                "not a chain that verified."
+                            ),
+                        )
+                    ],
+                )
+                for spec in CHAINS
+            )
+        )
+    return ChainReport(chains=tuple(_walk(conn, spec, keyring) for spec in CHAINS))
+
+
+# --------------------------------------------------------------------------
+# THE PROOF THAT THE WALK CAN SAY NO (issue #49)
+# --------------------------------------------------------------------------
+
+#: The tamper operation that removes a record rather than changing a field.
+#: Spelled out because "delete the last record" is the easiest attack there is
+#: and the one a walk over links alone cannot see.
+TAMPER_DELETE = "delete"
+
+#: SQLite declared type -> how a `--tamper` value is read off a command line.
+#: A `BLOB` column is absent on purpose: a WKB geometry cannot be given as a
+#: string, and coercing one would write bytes nobody typed.
+_TAMPER_TYPES = {"INTEGER": int, "REAL": float, "TEXT": str}
+
+
+class TamperError(ValueError):
+    """A tamper request that will not be carried out as asked.
+
+    Loud, and never a partial edit: an unparseable spec, a record that is not
+    there, a column that does not exist, a value of the wrong type, a
+    destination that already exists — or a request to write to the artifact
+    itself, which is refused absolutely.
+    """
+
+
+@dataclasses.dataclass(frozen=True)
+class TamperSpec:
+    """Which record to alter, and how. Parsed from `CHAIN:SELECTOR:OP`.
+
+        declaration:first:horizon=9.5      a field of a declaration
+        verdict:#3:t=1.25                  a field of a verdict
+        declaration:last:mac=0000...       the signature itself
+        verdict:d_007:prev_hash=aaaa...    the link
+        verdict:last:delete                remove the record
+
+    `SELECTOR` is `first`, `last`, `#N` (position in chain order, from 0), or a
+    record id. A position is offered because the interesting record is usually
+    "not the last one" — a re-signed record only breaks its **successor**, so a
+    tamper on the final record of a chain is the one case that proves nothing.
+    """
+
+    chain: Role
+    selector: str
+    field: str | None
+    value: str | None
+    #: Re-sign the record after altering it, under the key of the party that
+    #: owns this chain. The point is not to hide the tamper — it is to show that
+    #: hiding it from the MAC does not hide it from the chain.
+    resign: bool = False
+
+    def __post_init__(self) -> None:
+        _spec(self.chain)  # refuses an unknown chain, naming the two
+        if not self.selector:
+            raise TamperError(
+                "a tamper spec must say which record: first, last, #N, or an id."
+            )
+        if (self.field is None) != (self.value is None):
+            raise TamperError(
+                "a field tamper needs both a field and a value; "
+                f"got field={self.field!r} value={self.value!r}."
+            )
+        if self.field is None and self.resign:
+            raise TamperError(
+                "re-signing a deleted record is not a thing. Re-signing exists "
+                "to show that a record whose MAC was made to verify again still "
+                "breaks the chain at its successor."
+            )
+
+    @property
+    def deletes(self) -> bool:
+        return self.field is None
+
+    @classmethod
+    def parse(cls, text: str, *, resign: bool = False) -> TamperSpec:
+        """`CHAIN:SELECTOR:FIELD=VALUE` or `CHAIN:SELECTOR:delete`."""
+        parts = str(text).split(":", 2)
+        if len(parts) != 3:
+            raise TamperError(
+                f"tamper spec {text!r} is not CHAIN:SELECTOR:OP — for example "
+                "'declaration:first:horizon=9.5', 'verdict:#3:mac=" + "0" * 64 + "' "
+                f"or 'verdict:last:{TAMPER_DELETE}'."
+            )
+        chain, selector, op = parts
+        if chain not in {spec.role for spec in CHAINS} | {
+            spec.table for spec in CHAINS
+        }:
+            raise TamperError(
+                f"tamper spec {text!r} names chain {chain!r}; the chains are "
+                + ", ".join(f"{s.table} ({s.role})" for s in CHAINS)
+                + "."
+            )
+        role = next(
+            s.role for s in CHAINS if chain in (s.role, s.table)
+        )
+        if op == TAMPER_DELETE:
+            # `resign` is passed through rather than dropped: a flag silently
+            # ignored reads as one that was applied, and `__post_init__` is
+            # where the combination is refused.
+            return cls(
+                chain=role,
+                selector=selector,
+                field=None,
+                value=None,
+                resign=resign,
+            )
+        if "=" not in op:
+            raise TamperError(
+                f"tamper spec {text!r} ends in {op!r}, which is neither "
+                f"FIELD=VALUE nor {TAMPER_DELETE!r}."
+            )
+        field, _, value = op.partition("=")
+        if not field:
+            raise TamperError(f"tamper spec {text!r} names no field before '='.")
+        return cls(chain=role, selector=selector, field=field, value=value, resign=resign)
+
+
+@dataclasses.dataclass(frozen=True)
+class TamperReport:
+    """What was changed, where, and in which copy. **Not** a verdict.
+
+    Reported rather than returned as a bool because the whole purpose is to be
+    able to say, beside a BROKEN chain report, exactly which single edit
+    produced it. A demonstration nobody can read the inputs of demonstrates
+    nothing.
+    """
+
+    source: Path
+    copy: Path
+    chain: Role
+    kind: str
+    record_id: str
+    seq: int
+    field: str | None
+    before: object
+    after: object
+    resigned: bool
+
+    def describe(self) -> str:
+        if self.field is None:
+            what = f"deleted the {self.kind} record"
+        else:
+            what = f"set {self.field} {self.before!r} -> {self.after!r}"
+            if self.resigned:
+                what += ", and re-signed the record so its MAC verifies again"
+        return (
+            f"tampered {self.copy} (a copy of {self.source}): "
+            f"{self.chain} chain, record [{self.record_id}] (seq {self.seq}) — "
+            f"{what}."
+        )
+
+
+def _select(records: list, spec: ChainSpec, selector: str):
+    """The one record a selector names, or a `TamperError` naming what is there."""
+    if selector == "first":
+        return records[0]
+    if selector == "last":
+        return records[-1]
+    if selector.startswith("#"):
+        try:
+            index = int(selector[1:])
+        except ValueError:
+            raise TamperError(
+                f"selector {selector!r} is not a position; write #0, #1, ..."
+            ) from None
+        if not -len(records) <= index < len(records):
+            raise TamperError(
+                f"selector {selector!r} is out of range: this chain holds "
+                f"{len(records)} {spec.kind} record(s)."
+            )
+        return records[index]
+    for record in records:
+        if str(getattr(record, spec.id_field)) == selector:
+            return record
+    raise TamperError(
+        f"this artifact holds no {spec.kind} with {spec.id_field}={selector!r}. "
+        f"The first few are: "
+        f"{[str(getattr(r, spec.id_field)) for r in records[:5]]}."
+    )
+
+
+def _column_type(conn: sqlite3.Connection, table: str, column: str) -> str:
+    """The declared type of a column, or a `TamperError` naming the columns."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # noqa: S608
+    columns = {str(row["name"]): str(row["type"]).upper() for row in rows}
+    if column not in columns:
+        raise TamperError(
+            f"the {table} table has no column {column!r}; it has "
+            f"{sorted(columns)}."
+        )
+    return columns[column]
+
+
+def tamper(
+    artifact: str | os.PathLike[str],
+    out: str | os.PathLike[str],
+    spec: TamperSpec | str,
+    *,
+    keyring: Keyring | None = None,
+    resign: bool = False,
+) -> TamperReport:
+    """Alter exactly one record in a **copy** of an artifact. Never in place.
+
+    The evidence is the artifact. So this copies it byte for byte, opens the
+    copy, changes one value in one row, and reports what it changed — and
+    refuses to write to the original, to an existing file, or to the same path
+    it was given. There is no flag that turns any of those off.
+
+    Args:
+        artifact: the artifact to copy. It is opened read-only in effect: this
+            function reads its bytes and never writes to it.
+        out: where the tampered copy goes. Must not exist, and must not be the
+            artifact.
+        spec: a `TamperSpec`, or a `CHAIN:SELECTOR:OP` string to parse.
+        keyring: needed only for `resign`. Absent, a re-sign is refused rather
+            than performed under a key invented here.
+        resign: re-sign the altered record under its own party's key, so its MAC
+            verifies. Applied when the spec asks for it or when this argument
+            does. **This makes the MAC pass and the chain still break**, at the
+            successor, which is the case that shows the chain does work the MAC
+            alone cannot.
+
+    Returns:
+        A `TamperReport` naming the copy, the record and the change.
+
+    Raises:
+        TamperError: anything about the request that will not be carried out —
+            a bad spec, a missing record, an unknown column, a value of the
+            wrong type, a destination that exists, a re-sign with no key.
+    """
+    source = Path(artifact)
+    copy = Path(out)
+    if not source.exists():
+        raise TamperError(f"{source}: no such artifact. Nothing was copied.")
+    if copy.resolve() == source.resolve():
+        raise TamperError(
+            f"{copy} is the artifact itself. A tamper is never applied in "
+            "place: the artifact under audit is the evidence, and a tool that "
+            "edits it destroys the thing it was pointed at."
+        )
+    if copy.exists():
+        raise TamperError(
+            f"{copy} already exists. Refusing to overwrite it — the one file "
+            "this tool writes is a new copy, so that nothing it is pointed at "
+            "can be lost by pointing it at the wrong path."
+        )
+
+    if isinstance(spec, str):
+        spec = TamperSpec.parse(spec, resign=resign)
+    elif resign:
+        spec = dataclasses.replace(spec, resign=True)
+
+    chain_spec = _spec(spec.chain)
+    copy.write_bytes(source.read_bytes())
+
+    conn = store.connect(copy)
+    try:
+        records = _read_records(conn, chain_spec)
+        if not records:
+            raise TamperError(
+                f"{source} holds no {chain_spec.kind} to tamper with. A "
+                "demonstration on an empty chain would demonstrate nothing."
+            )
+        record = _select(records, chain_spec, spec.selector)
+        record_id = str(getattr(record, chain_spec.id_field))
+        seq = int(record.seq)
+
+        if spec.deletes:
+            before = record_id
+            conn.execute(
+                f"DELETE FROM {chain_spec.table} "  # noqa: S608
+                f"WHERE {chain_spec.id_field} = ?",
+                (record_id,),
+            )
+            after: object = None
+            field = None
+        else:
+            field = str(spec.field)
+            declared = _column_type(conn, chain_spec.table, field)
+            cast = _TAMPER_TYPES.get(declared)
+            if cast is None:
+                raise TamperError(
+                    f"{chain_spec.table}.{field} is a {declared} column, and a "
+                    "value for one cannot be given as text. The fields this "
+                    f"tool can set are the {sorted(_TAMPER_TYPES)} ones."
+                )
+            try:
+                after = cast(str(spec.value))
+            except ValueError:
+                raise TamperError(
+                    f"{spec.value!r} is not a value for "
+                    f"{chain_spec.table}.{field}, which is {declared}."
+                ) from None
+            row = conn.execute(
+                f"SELECT {field} AS v FROM {chain_spec.table} "  # noqa: S608
+                f"WHERE {chain_spec.id_field} = ?",
+                (record_id,),
+            ).fetchone()
+            before = None if row is None else row["v"]
+            conn.execute(
+                f"UPDATE {chain_spec.table} SET {field} = ? "  # noqa: S608
+                f"WHERE {chain_spec.id_field} = ?",
+                (after, record_id),
+            )
+
+        resigned = False
+        if spec.resign:
+            if keyring is None:
+                raise TamperError(
+                    "re-signing needs the keyring the records were signed "
+                    "under, and none was given. There is no key to invent here: "
+                    "a MAC under made-up material would fail for the wrong "
+                    "reason and prove nothing."
+                )
+            conn.commit()
+            altered = _select(
+                _read_records(conn, chain_spec), chain_spec, record_id
+            )
+            fresh = sign(altered, keyring.key(chain_spec.role))
+            conn.execute(
+                f"UPDATE {chain_spec.table} SET {MAC_FIELD} = ? "  # noqa: S608
+                f"WHERE {chain_spec.id_field} = ?",
+                (fresh, record_id),
+            )
+            resigned = True
+
+        conn.commit()
+    except Exception:
+        # The half-tampered copy is deleted rather than left behind. A file
+        # whose provenance is "something went wrong partway through altering
+        # it" is the one artifact nobody should ever be handed.
+        conn.close()
+        copy.unlink(missing_ok=True)
+        raise
+    else:
+        conn.close()
+
+    return TamperReport(
+        source=source,
+        copy=copy,
+        chain=chain_spec.role,
+        kind=chain_spec.kind,
+        record_id=record_id,
+        seq=seq,
+        field=field,
+        before=before,
+        after=after,
+        resigned=resigned,
     )

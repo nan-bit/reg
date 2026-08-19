@@ -10,14 +10,31 @@ claim that rests on a module's good manners is not a claim. So the enforcement
 here is structural, the same way the Layer A boundary is structural:
 
 **This module imports `reg.store` and `reg.tolerances` and nothing else from
-this package.** Not `reg.stream`, not `reg.scenarios`, not `reg.sim`, not
-`reg.world` — and not `reg.graph` or `reg.bench` either, because both of those
-import the first four and an import is one attribute lookup away from a call.
-Its only inputs are an open SQLite artifact and query arguments. If a question
-needs something the artifact does not hold, that is a **could-not-evaluate**,
-not a reason to open the CSV. `tests/test_query.py::test_importing_reg_query_
-does_not_import_the_stream` is the gate: it imports this module in a fresh
-interpreter and fails if any of those modules landed in `sys.modules`.
+this package at module level.** Not `reg.stream`, not `reg.scenarios`, not
+`reg.sim`, not `reg.world` — and not `reg.graph` or `reg.bench` either, because
+both of those import the first four and an import is one attribute lookup away
+from a call. Its only inputs are an open SQLite artifact and query arguments. If
+a question needs something the artifact does not hold, that is a
+**could-not-evaluate**, not a reason to open the CSV.
+`tests/test_query.py::test_importing_reg_query_does_not_import_the_stream` is
+the gate: it imports this module in a fresh interpreter and fails if any of
+those modules landed in `sys.modules`.
+
+THE ONE DEFERRED IMPORT, AND WHY IT IS DEFERRED
+------------------------------------------------
+`--verify-chain` (issue #49) calls `reg.chain.verify_chain`, and `reg.chain`
+reaches `reg.stream` for the float precision its canonical serialization commits
+to. So that import is **inside the function that needs it**, and
+`tests/test_query.py::test_the_chain_import_is_deferred` fails if anyone hoists
+it to the top of the file. The alternative was a second copy of the
+canonicalization here, which would be a second definition of the preimage every
+MAC in the record is taken over — the one thing `reg.chain`'s header says must
+never exist. `reg.store` does the same thing for the same reason
+(`reg.store._record_types`).
+
+Nothing about that softens the claim: chain verification reads the artifact and
+a keyring file, and no scene query can reach the deferred module either, because
+it is bound inside a call and never at module scope.
 
 WHAT A QUERY RETURNS, AND WHY IT IS NOT PROSE
 ---------------------------------------------
@@ -56,12 +73,19 @@ gets the refusal rather than a plausible answer assembled from the wrong layer.
 
 WHAT IS NOT HERE
 ----------------
-The attestation half of docs/plan.md Phase 7 — `declared_bound`, `violations`,
-`verdicts`, `verify_chain` — and `incident_report`, which composes them. Those
-are Milestone 3 and no fixture produces the records they read. A stub returning
-an empty list would make "no violation occurred" indistinguishable from "this
-build does not record violations", which is the one confusion this whole project
-is about, so they are absent rather than empty.
+The attestation *queries* of docs/plan.md Phase 7 — `declared_bound`,
+`violations`, `verdicts` — and `incident_report`, which composes them. A stub
+returning an empty list would make "no violation occurred" indistinguishable
+from "this build does not record violations", which is the one confusion this
+whole project is about, so they are absent rather than empty.
+
+`--verify-chain` and `--tamper` (issue #49) are here, and they are not queries:
+they return a `reg.chain.ChainReport`, not an `Answer`, because a chain walk is
+not a question about the scene and has three verdicts of its own. The CLI exits
+`0` VERIFIED, `3` BROKEN, `1` COULD-NOT-EVALUATE — three codes because those are
+three different facts, and a script that treated "could not check" as "checked
+and fine" is the failure mode the whole three-state discipline exists to
+prevent.
 
 LAYER
 -----
@@ -92,6 +116,7 @@ __all__ = [
     "ANSWERED",
     "COULD_NOT_EVALUATE",
     "EDGE_LAYER",
+    "EXIT_BROKEN",
     "EXIT_COULD_NOT_EVALUATE",
     "EXIT_OK",
     "EXIT_USAGE",
@@ -122,6 +147,7 @@ __all__ = [
     "min_separation",
     "reachable_entities",
     "render",
+    "render_chain_report",
     "run_interval",
     "separation_timeline",
     "time_of_closest_approach",
@@ -143,6 +169,12 @@ EXIT_OK = 0
 #: nothing about the invocation was wrong — the file is what could not say.
 EXIT_COULD_NOT_EVALUATE = 1
 EXIT_USAGE = 2
+
+#: `--verify-chain` walked a chain and found a fault in it. Distinct from
+#: `EXIT_COULD_NOT_EVALUATE` because a chain that broke and a chain that could
+#: not be checked are different facts, and a CI job that collapsed the two would
+#: treat a missing keyring as a tampered artifact — or, far worse, the reverse.
+EXIT_BROKEN = 3
 
 # --------------------------------------------------------------------------
 # The two layers.
@@ -1268,6 +1300,43 @@ def render(answer: Answer) -> str:
     return "\n".join(lines)
 
 
+def render_chain_report(report: object) -> str:
+    """A `reg.chain.ChainReport` as text. Reads nothing but the report.
+
+    Every failure gets a line naming the record it belongs to, and the counts
+    are printed for every chain including a broken one. "BROKEN" on its own is
+    not usable evidence: an assessor's next question is *which record, and what
+    changed*, and this is where that question is answered.
+
+    Annotated `object` rather than `ChainReport` for one reason: naming the type
+    would mean importing `reg.chain` at module level, which is exactly what the
+    module header says this file does not do.
+    """
+    lines = [f"verify-chain: {report.state.value}", ""]
+    for result in report.chains:
+        stated = (
+            "the artifact states no count"
+            if result.stated_records is None
+            else f"{result.stated_records} stated"
+        )
+        lines.extend(
+            [
+                f"chain:           {result.chain} ({result.kind})",
+                f"  state:         {result.state.value}",
+                f"  records:       {result.records_walked} walked; {stated}",
+                f"  links checked: {result.links_checked}",
+                f"  MACs checked:  {result.macs_checked}",
+            ]
+        )
+        if not result.failures:
+            lines.append("  failures:      none")
+        else:
+            lines.append(f"  failures:      {len(result.failures)}")
+            lines.extend(f"    - {failure.describe()}" for failure in result.failures)
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def _render_value(value: object) -> list[str]:
     if isinstance(value, SeparationTimeline):
         out = [
@@ -1353,12 +1422,21 @@ def _list_text() -> str:
         lines.append(f"      tolerance: {spec.tolerance}")
         lines.append("")
     lines.append(
+        "not a query, and not an Answer: --verify-chain walks the two record "
+        "chains this artifact holds and reports VERIFIED, BROKEN or "
+        "COULD-NOT-EVALUATE per chain (exit 0, 3, 1). --keyring names the "
+        "keyring the records were signed under; without one the links are "
+        "still walked and no MAC is checked, which is a COULD-NOT-EVALUATE and "
+        "never a pass. --tamper CHAIN:SELECTOR:OP alters one record in a copy "
+        "of the artifact and verifies the copy, so that the walk can be seen "
+        "to say no; it never writes to the artifact."
+    )
+    lines.append("")
+    lines.append(
         "not implemented, and absent rather than empty: declared_bound, "
-        "violations, verdicts, verify_chain and incident_report "
-        "(docs/lossiness.md queries 5-9). They are Milestone 3; no fixture "
-        "produces the records they read, and a stub returning an empty list "
-        "would make 'it did not happen' indistinguishable from 'this build does "
-        "not record it'."
+        "violations, verdicts and incident_report (docs/lossiness.md queries "
+        "5-9). A stub returning an empty list would make 'it did not happen' "
+        "indistinguishable from 'this build does not record it'."
     )
     return "\n".join(lines)
 
@@ -1429,6 +1507,53 @@ def _parser() -> argparse.ArgumentParser:
         metavar="ENTITY_ID",
         help=QUERIES["did_contact_occur"].question,
     )
+    group.add_argument(
+        "--verify-chain",
+        action="store_true",
+        help=(
+            "walk both record chains and report VERIFIED / BROKEN / "
+            "COULD-NOT-EVALUATE per chain (exit 0 / 3 / 1)"
+        ),
+    )
+    parser.add_argument(
+        "--keyring",
+        metavar="PATH",
+        help=(
+            "the keyring the records were signed under "
+            "(reg.chain.write_keyring). Without it no MAC is checked, which is "
+            "a could-not-evaluate and not a pass — there is no default key and "
+            "none is invented"
+        ),
+    )
+    parser.add_argument(
+        "--tamper",
+        metavar="SPEC",
+        help=(
+            "CHAIN:SELECTOR:OP — alter one record in a COPY of the artifact and "
+            "verify the copy, to show the walk can fail. CHAIN is declaration "
+            "or verdict; SELECTOR is first, last, #N or a record id; OP is "
+            "FIELD=VALUE or delete. Requires --verify-chain and --tamper-out. "
+            "The artifact itself is never written to"
+        ),
+    )
+    parser.add_argument(
+        "--tamper-out",
+        metavar="PATH",
+        help=(
+            "where the tampered copy goes. Required with --tamper, must not "
+            "exist, and has no default: a path invented here could name a file "
+            "somebody else's evidence is in"
+        ),
+    )
+    parser.add_argument(
+        "--tamper-resign",
+        action="store_true",
+        help=(
+            "re-sign the altered record under its own party's key, so its MAC "
+            "verifies again and the chain breaks at its successor instead. "
+            "Needs --keyring"
+        ),
+    )
     return parser
 
 
@@ -1469,8 +1594,83 @@ def _dispatch(conn: sqlite3.Connection, args: argparse.Namespace) -> Answer:
     )
 
 
+def _verify_chain_cli(args: argparse.Namespace) -> int:
+    """`--verify-chain`, and `--tamper` before it. Exit `0` / `3` / `1` / `2`.
+
+    The import of `reg.chain` is inside this function and must stay there — see
+    the module header, and `tests/test_query.py::test_the_chain_import_is_
+    deferred`, which fails if it moves to the top of the file.
+    """
+    from reg import chain
+
+    keyring = None
+    if args.keyring is not None:
+        try:
+            keyring = chain.load_keyring(args.keyring)
+        except chain.KeyringError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+
+    target = Path(args.artifact)
+    if args.tamper is not None:
+        if args.tamper_out is None:
+            print(
+                "error: --tamper needs --tamper-out PATH. The tampered copy has "
+                "nowhere to go and this tool will not pick a path — the "
+                "artifact is never written to, and a path invented here could "
+                "name a file somebody else's evidence is in.",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        try:
+            tampered = chain.tamper(
+                target,
+                args.tamper_out,
+                args.tamper,
+                keyring=keyring,
+                resign=args.tamper_resign,
+            )
+        except (chain.TamperError, store.StoreError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        # Printed before the verdict, because the verdict is only evidence of
+        # anything if the reader can see exactly which single edit produced it.
+        print(tampered.describe())
+        print()
+        target = tampered.copy
+    elif args.tamper_out is not None or args.tamper_resign:
+        print(
+            "error: --tamper-out and --tamper-resign say what to do with a "
+            "tamper, and no --tamper was given. Refusing rather than ignoring "
+            "them: a flag that is silently dropped reads as one that was "
+            "applied.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    try:
+        conn = store.connect(target)
+    except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        report = chain.verify_chain(conn, keyring)
+    finally:
+        conn.close()
+
+    print(render_chain_report(report))
+    return {
+        chain.ChainState.VERIFIED: EXIT_OK,
+        chain.ChainState.BROKEN: EXIT_BROKEN,
+        chain.ChainState.COULD_NOT_EVALUATE: EXIT_COULD_NOT_EVALUATE,
+    }[report.state]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Exit `0` answered, `1` could-not-evaluate, `2` refused. Never silent."""
+    """Exit `0` answered, `1` could-not-evaluate, `2` refused, `3` chain broken.
+
+    Never silent, and never one code for two facts.
+    """
     args = _parser().parse_args(argv)
 
     if args.list:
@@ -1481,6 +1681,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "error: an artifact is required. Every query here reads one file "
             "and nothing else.\n" + _list_text(),
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if args.verify_chain:
+        return _verify_chain_cli(args)
+
+    stray = [
+        flag
+        for flag, given in (
+            ("--keyring", args.keyring is not None),
+            ("--tamper", args.tamper is not None),
+            ("--tamper-out", args.tamper_out is not None),
+            ("--tamper-resign", args.tamper_resign),
+        )
+        if given
+    ]
+    if stray:
+        print(
+            f"error: {', '.join(stray)} belong(s) to --verify-chain, which was "
+            "not asked for. No scene query reads a key, and --tamper exists to "
+            "show the chain walk saying no — on its own it would alter a copy "
+            "of an artifact and report nothing about the result. Refusing "
+            "rather than ignoring them: a flag that is silently dropped reads "
+            "as one that was applied.",
             file=sys.stderr,
         )
         return EXIT_USAGE

@@ -1,9 +1,9 @@
 """The compression benchmark — **Claim 1, the commercial argument**.
 
-    python -m reg.bench --all --out bench/results.md
+    python -m reg.bench --all --scaling --out bench/results.md
 
 Claim 1 is the number a skeptic attacks first, so this file is written to be
-harder on itself than a reader would be. Four rules follow from that, and they
+harder on itself than a reader would be. Five rules follow from that, and they
 are the whole design:
 
 **1. The headline ratio is measured against *gzipped* CSV, not raw CSV.** The
@@ -38,6 +38,16 @@ envelope parameters) — `tests/test_bench.py` runs a scenario twice and compare
 Wall-clock timings are *not*, they are measurements of a machine, and the report
 says so on the table that carries them rather than letting a reader assume the
 whole file is reproducible bit for bit.
+
+**5. A ratio at one run length is not a claim about scaling** (issue #30). Claim
+1 is a claim about retaining evidence from runs that produce terabytes a day, and
+the six scenarios are six seconds each — the one regime where the answer cannot
+be read off, because a near-constant schema-and-index cost dominates everything.
+`--scaling` therefore measures one fixture at a ladder of lengths and reports the
+ratio as a function of run length, plus the length at which it passes 1.0 — or
+says plainly that it does not, within the range actually executed. **Nothing is
+extrapolated.** The marginal columns are arithmetic between two measured points,
+never a fitted curve, and a crossover that was not measured is not quoted.
 
 WHAT THIS BENCHMARK DOES NOT CLAIM
 ----------------------------------
@@ -82,9 +92,9 @@ from shapely.ops import unary_union
 from reg import __version__, graph, store
 from reg.envelope import SUBSTEP_DT
 from reg.kinematics import link_polygons
-from reg.scenarios import SCENARIOS, scenario
-from reg.sim import DEFAULT_SEED, simulate
-from reg.stream import FLOAT_PRECISION, read_frames
+from reg.scenarios import SCENARIOS, Scenario, long_run, scenario
+from reg.sim import DEFAULT_SEED, provenance
+from reg.stream import FLOAT_PRECISION, read_frames, write_frames
 from reg.tolerances import DISTANCE_TOL_M
 from reg.world import World
 
@@ -98,8 +108,12 @@ __all__ = [
     "MET",
     "NOT_MET",
     "QUESTION",
+    "SCALING_FRAME_COUNTS",
+    "SCALING_N_SAMPLES",
     "TIMING_REPEATS",
     "BenchError",
+    "Crossover",
+    "ScalingPoint",
     "ScenarioResult",
     "SeparationCheck",
     "Sizes",
@@ -107,11 +121,13 @@ __all__ = [
     "agreement",
     "claim_verdict",
     "compression_ratio",
+    "crossover",
     "gzip_bytes",
     "main",
     "min_separation_from_csv",
     "min_separation_from_graph",
     "render",
+    "run_scaling_point",
     "run_scenario",
     "sensor_projection_bytes",
     "table_bytes",
@@ -178,6 +194,33 @@ CLAIM_1_SUCCESS_RATIO = 100.0
 
 MET = "MET"
 NOT_MET = "NOT MET"
+
+#: The ladder of run lengths the scaling study measures, in frames. Stated by
+#: issue #30 ("300, 1k, 3k, 10k, 30k frames"), not chosen here, and printed in
+#: the report so a table cut short is visibly cut short rather than quietly
+#: shorter than the study it claims to be. At 50 Hz the last one is ten minutes
+#: of robot time — still nothing like a shift, and the report says so.
+SCALING_FRAME_COUNTS: tuple[int, ...] = (300, 1_000, 3_000, 10_000, 30_000)
+
+#: `n_samples` for the ladder, and the one parameter in this file chosen for
+#: cost rather than fidelity. It is a real choice with a real consequence, so
+#: both are here and both are in the report:
+#:
+#: * **Why it is legitimate at all.** Since issue #28 the envelope polygon is not
+#:   stored, so `n_samples` moves *no byte count* in the table. It moves compute
+#:   time, and it moves which frames count as overlapping.
+#: * **What it costs.** The envelope is an under-approximation that grows
+#:   monotonically with `n_samples` (`reg.envelope`), so a reduced value can only
+#:   *remove* overlaps — fewer INTERSECTS rows, fewer retained envelope rows, a
+#:   smaller artifact. The bias is in the flattering direction, which is why the
+#:   report carries a control row: the shortest ladder length re-measured at the
+#:   `--n-samples` the per-scenario table uses, so the size of the bias is a
+#:   measurement rather than an assurance.
+#: * **Why 16.** Measured on the machine that wrote the first version of this
+#:   file: ~35 ms per frame at 16 samples against ~1.18 s at 512. The full ladder
+#:   is 44,300 frames — half an hour at 16, fourteen and a half hours at 512.
+#:   A 30k row nobody can afford to reproduce is worth less than one they can.
+SCALING_N_SAMPLES = 16
 
 #: The agreement predicate for query 1, quoted from docs/lossiness.md's table:
 #: "per sampled frame, |d_graph - d_csv| <= DISTANCE_TOL_M". It is imported, not
@@ -297,6 +340,86 @@ class ScenarioResult:
     @property
     def total_edges(self) -> int:
         return sum(self.edges.values())
+
+
+@dataclass(frozen=True)
+class ScalingPoint:
+    """One run length, measured. The unit of the scaling table (issue #30).
+
+    A `ScenarioResult` and the `n_samples` it was measured at, because the
+    ladder and the control row differ in exactly that one parameter and a table
+    that carried the numbers without it would put two different measurements in
+    one column.
+    """
+
+    result: ScenarioResult
+    n_samples: int
+    #: The fixture's frame period, so the report can say how much *robot time* a
+    #: row is. Ten minutes of it is still not a shift, and a table that only
+    #: counted frames would let that go unsaid.
+    frame_period_s: float
+
+    @property
+    def frames(self) -> int:
+        return self.result.frames
+
+    @property
+    def seconds(self) -> float:
+        """Robot time in this run: frames are a sampling rate, not a duration."""
+        return (self.result.frames - 1) * float(self.frame_period_s)
+
+    @property
+    def sizes(self) -> Sizes:
+        return self.result.sizes
+
+    @property
+    def ratio(self) -> float:
+        """The headline ratio at this length: gzipped CSV over SQLite on disk."""
+        return self.result.sizes.ratio_vs_gzip_csv
+
+
+@dataclass(frozen=True)
+class Crossover:
+    """Where the ratio passes 1.0 — **among the lengths actually measured**.
+
+    `crossed_at` is `None` when no measured length reached 1.0. That is a
+    finding, not a gap to fill: the alternative is fitting a curve to five
+    points and quoting the root, which would put a length nobody ran into the
+    same table as five they did.
+
+    `fell_back_below` names any measured length *above* `crossed_at` whose ratio
+    is below 1.0 again. It is normally empty; when it is not, the ratio is not
+    monotone in run length and "the crossover" is the wrong shape of answer, so
+    the report says so instead of quoting the first crossing alone.
+    """
+
+    crossed_at: int | None
+    largest_measured: int
+    smallest_measured: int
+    fell_back_below: tuple[int, ...]
+
+
+def crossover(points: Sequence[ScalingPoint]) -> Crossover:
+    """The crossover among `points`. Measured lengths only; nothing is fitted."""
+    if not points:
+        raise BenchError(
+            "no scaling points, so there is nothing to look for a crossover in. "
+            "An empty ladder would report 'no crossover' — which is a finding "
+            "about the ratio, and this is the absence of a measurement."
+        )
+    ordered = sorted(points, key=lambda p: p.frames)
+    crossed = next((p.frames for p in ordered if p.ratio >= 1.0), None)
+    fell_back = (
+        tuple(p.frames for p in ordered if p.frames > crossed and p.ratio < 1.0)
+        if crossed is not None
+        else ()
+    )
+    return Crossover(
+        crossed_at=crossed,
+        largest_measured=ordered[-1].frames,
+        smallest_measured=ordered[0].frames,
+        fell_back_below=fell_back,
+    )
 
 
 def claim_verdict(ratio: float) -> str:
@@ -574,14 +697,87 @@ def run_scenario(
         A `ScenarioResult`. Its byte counts, ratios and row counts are a
         deterministic function of the arguments; its timings are not.
     """
-    scn = scenario(name)
+    return _measure(
+        scenario(name),
+        work_dir,
+        seed=seed,
+        horizon=horizon,
+        n_samples=n_samples,
+        envelope_seed=envelope_seed,
+        substep_dt=substep_dt,
+        timing_repeats=timing_repeats,
+    )
+
+
+def run_scaling_point(
+    frames: int,
+    work_dir: str | Path,
+    *,
+    seed: int,
+    horizon: float,
+    n_samples: int,
+    envelope_seed: int,
+    substep_dt: float,
+    timing_repeats: int = TIMING_REPEATS,
+) -> ScalingPoint:
+    """One rung of the scaling ladder: the long-run fixture at `frames` frames.
+
+    Same measurement as `run_scenario` — same stream format, same builder, same
+    cross-check — on `reg.scenarios.long_run(frames)`. The only thing that
+    varies down the ladder is the length, which is the point: a ratio measured
+    at one length and a ratio measured at another have to differ in nothing else
+    or the comparison between them is not about scaling.
+    """
+    scn = long_run(frames)
+    return ScalingPoint(
+        result=_measure(
+            scn,
+            work_dir,
+            seed=seed,
+            horizon=horizon,
+            n_samples=n_samples,
+            envelope_seed=envelope_seed,
+            substep_dt=substep_dt,
+            timing_repeats=timing_repeats,
+        ),
+        n_samples=int(n_samples),
+        frame_period_s=scn.dt,
+    )
+
+
+def _write_stream(scn: Scenario, seed: int, path: Path) -> Path:
+    """The raw stream for a `Scenario` object, byte-identical to `reg.sim`.
+
+    `reg.sim.simulate` takes a *registered* name, and the long-run fixture is
+    not registered — there is no single frame count that would be the right one
+    to put in `SCENARIOS`. This is that function's body with the lookup removed,
+    reusing `reg.sim.provenance` rather than restating the fields: a stream
+    whose provenance block was written by a second implementation would drift
+    from the one the CLI writes, and the drift would show up as a size
+    difference in a table about sizes.
+    """
+    return write_frames(tuple(scn.states(seed)), path, comments=provenance(scn, seed))
+
+
+def _measure(
+    scn: Scenario,
+    work_dir: str | Path,
+    *,
+    seed: int,
+    horizon: float,
+    n_samples: int,
+    envelope_seed: int,
+    substep_dt: float,
+    timing_repeats: int,
+) -> ScenarioResult:
+    """Simulate one scenario, build its graph, and measure both. No defaults."""
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = work_dir / f"{scn.name}.csv"
     sqlite_path = work_dir / f"{scn.name}.sqlite"
 
-    simulate(scn.name, seed, csv_path)
+    _write_stream(scn, seed, csv_path)
     result = graph.build(
         csv_path,
         sqlite_path,
@@ -673,7 +869,9 @@ def _repeats_text(results: Sequence[ScenarioResult]) -> str:
     counts = {r.check.graph_timing.repeats for r in results} | {
         r.check.csv_timing.repeats for r in results
     }
-    return str(sorted(counts)[0]) if len(counts) == 1 else "varies per scenario"
+    if not counts:
+        return "n/a — nothing in this report was timed"
+    return str(sorted(counts)[0]) if len(counts) == 1 else "varies per row"
 
 
 def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
@@ -689,6 +887,336 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
     return lines
 
 
+def _bytes_per_frame_text(total: int, frames: int) -> str:
+    return f"{int(total) / int(frames):,.1f}"
+
+
+def _marginal_ratio_text(baseline_delta: int, artifact_delta: int) -> str:
+    """`Δ baseline / Δ artifact` between two measured lengths, or `n/a`.
+
+    Arithmetic on two measured points, and *not* an extrapolation: it says what
+    each additional frame cost over an interval that was actually run. A
+    non-positive artifact delta is reported as `n/a` rather than as an enormous
+    ratio — an artifact that did not grow over an interval is a fact about that
+    interval, and dividing by it would manufacture a headline.
+    """
+    try:
+        return _ratio_text(compression_ratio(baseline_delta, artifact_delta))
+    except BenchError:
+        return "n/a"
+
+
+def _scaling_section(
+    scaling: Sequence[ScalingPoint],
+    control: ScalingPoint | None,
+    *,
+    n_samples: int,
+) -> list[str]:
+    """The ratio-versus-run-length half of Claim 1 (issue #30).
+
+    Measured points only. Every derived column here is arithmetic between two
+    lengths that were actually executed; no curve is fitted, and the crossover
+    is quoted only if a measured length reached it.
+    """
+    ladder = sorted(scaling, key=lambda p: p.frames)
+    ladder_samples = {p.n_samples for p in ladder}
+    crossing = crossover(ladder)
+
+    lines = [
+        "",
+        "## Ratio versus run length",
+        "",
+        "Claim 1 is a claim about **scaling**, and the six hand-authored",
+        "scenarios are five or six seconds each — the one length at which it",
+        "cannot be tested, because a near-constant schema-and-index cost",
+        "dominates the artifact there. This",
+        "table is the same measurement at a ladder of run lengths, on one",
+        "generated fixture (`reg.scenarios.long_run`): an arm working a repeating",
+        "cycle while a person patrols in and out, with every cycle drifting",
+        "slightly so that no two frames of the run are identical. A fixture that",
+        "repeated a short loop exactly would compress on both sides in a way no",
+        "real run does.",
+        "",
+        "**Measured points only.** Nothing below is extrapolated: the marginal",
+        "columns are differences between two lengths that were both executed, and",
+        "if the ratio does not reach 1.0 in the range run, this section says so",
+        "rather than projecting where it would.",
+        "",
+    ]
+
+    lines += _table(
+        ("parameter", "value", "why"),
+        [
+            (
+                "fixture",
+                "`reg.scenarios.long_run(frames)`",
+                "one scenario at every length, so only the length varies",
+            ),
+            (
+                "lengths",
+                ", ".join(_int_text(p.frames) for p in ladder),
+                "the ladder actually executed",
+            ),
+            (
+                "envelope samples",
+                (
+                    _int_text(sorted(ladder_samples)[0])
+                    if len(ladder_samples) == 1
+                    else "varies per row — see the column"
+                ),
+                (
+                    "compute cost, and which frames count as overlapping. Since "
+                    "issue #28 the polygon is not stored, so it moves no byte "
+                    "count here — but a tighter envelope removes overlaps, which "
+                    "*flatters* the ratio. The control row below measures that."
+                ),
+            ),
+        ],
+    )
+
+    lines += ["", "### Sizes and ratios by run length", ""]
+    lines += _table(
+        (
+            "frames",
+            "robot time",
+            "raw CSV B",
+            "gz CSV B",
+            "SQLite B",
+            "gz SQLite B",
+            "nodes",
+            "edges",
+            "edges/frame",
+            "x raw",
+            "x gz CSV",
+            "verdict",
+        ),
+        [
+            (
+                _int_text(p.frames),
+                f"{p.seconds:,.1f} s",
+                _int_text(p.sizes.raw_csv),
+                _int_text(p.sizes.gzip_csv),
+                _int_text(p.sizes.sqlite),
+                _int_text(p.sizes.gzip_sqlite),
+                _int_text(p.result.total_nodes),
+                _int_text(p.result.total_edges),
+                f"{p.result.total_edges / p.frames:.3f}",
+                _ratio_text(p.sizes.ratio_vs_raw),
+                f"**{_ratio_text(p.ratio)}**",
+                p.result.check.verdict,
+            )
+            for p in ladder
+        ],
+    )
+
+    lines += [
+        "",
+        "### What each additional frame cost",
+        "",
+        "The per-frame columns are the totals above divided by the frame count.",
+        "The `Δ` columns are the difference between one measured length and the",
+        "one before it, divided by the difference in frames: what the frames in",
+        "*that interval* cost, with the fixed schema-and-index cost differenced",
+        "away. `Δ x` is the marginal ratio — above 1.0 means the artifact grew",
+        "more slowly than the gzipped baseline over that interval, so the overall",
+        "ratio was still climbing there. **It is a rate between two measured",
+        "points, not a projection of where the ratio crosses 1.0.**",
+        "",
+    ]
+    marginal_rows = []
+    previous: ScalingPoint | None = None
+    for point in ladder:
+        if previous is None:
+            deltas = ("n/a", "n/a", "n/a")
+        else:
+            d_frames = point.frames - previous.frames
+            d_gz = point.sizes.gzip_csv - previous.sizes.gzip_csv
+            d_sqlite = point.sizes.sqlite - previous.sizes.sqlite
+            deltas = (
+                _bytes_per_frame_text(d_gz, d_frames),
+                _bytes_per_frame_text(d_sqlite, d_frames),
+                _marginal_ratio_text(d_gz, d_sqlite),
+            )
+        marginal_rows.append(
+            (
+                _int_text(point.frames),
+                _bytes_per_frame_text(point.sizes.gzip_csv, point.frames),
+                _bytes_per_frame_text(point.sizes.sqlite, point.frames),
+                *deltas,
+            )
+        )
+        previous = point
+    lines += _table(
+        (
+            "frames",
+            "gz CSV B/frame",
+            "SQLite B/frame",
+            "Δ gz CSV B/frame",
+            "Δ SQLite B/frame",
+            "Δ x",
+        ),
+        marginal_rows,
+    )
+
+    largest = ladder[-1]
+    lines += [
+        "",
+        "### Where the bytes went at the longest measured run",
+        "",
+        f"Bytes per table at {_int_text(largest.frames)} frames, from SQLite's own",
+        "`dbstat`. The same attribution the per-scenario table gets, at the length",
+        "where it decides the answer: if one table grows with the frame count, the",
+        "ratio cannot climb past what that table costs per frame, whatever happens",
+        "to the fixed cost.",
+        "",
+    ]
+    if largest.result.tables is None:
+        lines += [
+            "**Could not be attributed.** This SQLite build has no `dbstat` "
+            "virtual table. That is a could-not-evaluate; no estimate is "
+            "substituted for it.",
+        ]
+    else:
+        labels = (*_TABLE_LABELS, INDEX_LABEL)
+        lines += _table(
+            ("frames", *labels, "file"),
+            [
+                (
+                    _int_text(largest.frames),
+                    *[_int_text(largest.result.tables.get(label, 0)) for label in labels],
+                    _int_text(largest.sizes.sqlite),
+                )
+            ],
+        )
+
+    lines += ["", "### Crossover", ""]
+    if crossing.crossed_at is None:
+        lines += [
+            "**The ratio does not reach 1.0 at any measured length.** The largest",
+            f"run executed is {_int_text(crossing.largest_measured)} frames "
+            f"({largest.seconds:,.1f} s of robot time), and the headline ratio",
+            f"there is {_ratio_text(largest.ratio)} — the evidence graph still",
+            "costs more bytes to retain than a gzipped copy of the stream it",
+            "replaced.",
+            "",
+            "No crossover is projected, and none should be read into the table.",
+            "The measured points end where they end; a length fitted from them is",
+            "a number nobody ran.",
+            "",
+            "**This is a finding about the thesis, not a gap in the measurement.**",
+            "`docs/plan.md` states Claim 1's success criterion as 2–4 orders of",
+            f"magnitude, i.e. at least {_ratio_text(CLAIM_1_SUCCESS_RATIO)}; the",
+            "best ratio at any length measured here is "
+            f"{_ratio_text(max(p.ratio for p in ladder))}, and it does not reach",
+            "1.0. If that holds, the retainable-artifact argument rests on Claims 2–4 — query,",
+            "sufficiency boundary, attestation — which do not depend on the",
+            "artifact being smaller than the stream. It rests on compression only",
+            "at a run length nothing in this repository has measured.",
+        ]
+    elif crossing.crossed_at == crossing.smallest_measured:
+        lines += [
+            f"**The ratio passes 1.0 at {_int_text(crossing.crossed_at)} frames**,",
+            "which is the *shortest* length measured. Nothing here bounds the",
+            "crossing from below: this ladder does not contain a length at which",
+            "the artifact was larger than the stream, so where the ratio crosses",
+            "is outside the range run, and no value for it is quoted.",
+        ]
+    else:
+        lines += [
+            f"**The ratio passes 1.0 at {_int_text(crossing.crossed_at)} frames**,",
+            "the smallest measured length at which it does. At every shorter",
+            "measured length it is below 1.0 — the artifact is larger than the",
+            "gzipped stream it replaced. Where between",
+            f"{_int_text(crossing.smallest_measured)} and "
+            f"{_int_text(crossing.crossed_at)} frames the crossing actually",
+            "happens is not measured, and is not interpolated here.",
+        ]
+
+    if crossing.fell_back_below:
+        lines += [
+            "",
+            "**The ratio is not monotone in run length.** It falls back below",
+            "1.0 at "
+            + ", ".join(f"{_int_text(f)} frames" for f in crossing.fell_back_below)
+            + ". A single crossover is the wrong shape of answer for this "
+            "table; read the column.",
+        ]
+
+    if control is not None:
+        lines += [
+            "",
+            "### Control: what the reduced sample count cost",
+            "",
+            f"The shortest ladder length re-measured at **{_int_text(control.n_samples)}**",
+            "envelope samples — the value the per-scenario table above uses — against",
+            "the ladder's own value. The envelope is an under-approximation that grows",
+            "monotonically with `n_samples` (`reg.envelope`), so the cheaper setting can",
+            "only *remove* overlaps: fewer INTERSECTS rows, fewer retained envelope rows,",
+            "a smaller artifact and a **larger** ratio. This row is how much larger, at",
+            "one length, measured rather than argued.",
+            "",
+        ]
+        matching = [p for p in ladder if p.frames == control.frames]
+        rows = [
+            (
+                _int_text(p.frames),
+                _int_text(p.n_samples),
+                _int_text(p.sizes.sqlite),
+                _int_text(p.result.total_nodes),
+                _int_text(p.result.total_edges),
+                f"**{_ratio_text(p.ratio)}**",
+            )
+            for p in (*matching, control)
+        ]
+        lines += _table(
+            ("frames", "envelope samples", "SQLite B", "nodes", "edges", "x gz CSV"),
+            rows,
+        )
+        if matching:
+            base = matching[0]
+            delta_bytes = control.sizes.sqlite - base.sizes.sqlite
+            delta_edges = control.result.total_edges - base.result.total_edges
+            delta_nodes = control.result.total_nodes - base.result.total_nodes
+            lines += [
+                "",
+                f"**Measured difference at {_int_text(base.frames)} frames:** "
+                f"{delta_bytes:+,} bytes "
+                f"({100.0 * delta_bytes / base.sizes.sqlite:+.1f}%), "
+                f"{delta_edges:+,} edges, {delta_nodes:+,} nodes at the higher "
+                "sample count. Zero is a measurement like any other: at this "
+                "length the tighter envelope removed no overlap the artifact "
+                "would otherwise have recorded. It says nothing about the longer "
+                "rungs, which were not measured twice — that is what it would "
+                "have cost to measure them.",
+            ]
+    else:
+        lines += [
+            "",
+            "### Control: what the reduced sample count cost",
+            "",
+            "**Not measured in this run.** The ladder ran at the same `n_samples`",
+            f"as the per-scenario table ({_int_text(n_samples)}), so there is no",
+            "reduction to control for. When the two differ, this section carries",
+            "the shortest ladder length measured at both.",
+        ]
+
+    lines += [
+        "",
+        "### What this table is not",
+        "",
+        f"* **Not a shift.** The largest run here is {largest.seconds:,.1f} s of",
+        "  robot time at 50 Hz. docs/plan.md's terabytes/day is four orders of",
+        "  magnitude further out and no row here reaches toward it.",
+        "* **Not six scenarios.** One fixture, chosen so that only the length",
+        "  varies. A different fixture — a robot that holds still, or one that",
+        "  never comes near a person — would produce a different curve, and the",
+        "  incremental rule's whole behaviour is a function of how often",
+        "  relationships change.",
+        "* **Not a claim that the curve continues.** Every row was executed.",
+    ]
+    return lines
+
+
 def render(
     results: Sequence[ScenarioResult],
     *,
@@ -698,14 +1226,27 @@ def render(
     envelope_seed: int,
     substep_dt: float,
     sensor_multiplier: float | None,
+    scaling: Sequence[ScalingPoint] = (),
+    scaling_control: ScalingPoint | None = None,
 ) -> str:
-    """The whole report as markdown. Pure — same results in, same string out."""
-    if not results:
+    """The whole report as markdown. Pure — same results in, same string out.
+
+    `scaling` is the ladder of run lengths (issue #30) and may be empty, in
+    which case the report carries no scaling section at all rather than an empty
+    one. `scaling_control` is the shortest ladder length re-measured at a
+    different `n_samples`; it is reported beside the ladder and never mixed into
+    it.
+    """
+    if not results and not scaling:
         raise BenchError(
             "no scenarios were benchmarked, so there is no table to write. An "
             "empty report reads as 'the graph compresses nothing measured', "
             "which is not what happened."
         )
+
+    timed = [*results, *[p.result for p in scaling]]
+    if scaling_control is not None:
+        timed.append(scaling_control.result)
 
     lines: list[str] = [
         "# Compression benchmark — Claim 1",
@@ -715,7 +1256,8 @@ def render(
         "numbers look like fixtures.",
         "",
         "**What is measured:** the size of the SQLite evidence graph against the",
-        "size of the raw simulator state stream it was built from, per scenario.",
+        "size of the raw simulator state stream it was built from, per scenario",
+        "and — since issue #30 — as a function of run length.",
         "**What is not measured: anything about a real robot.** The terabytes/day",
         "figure in `docs/plan.md` is imported context about production humanoid",
         "sensor logs; nothing in this simulator produces or measures it, and no",
@@ -724,6 +1266,15 @@ def render(
         "## Run parameters",
         "",
     ]
+    # The per-scenario table's `n_samples` is stated only if something in this
+    # report was measured at it. A report with only a scaling ladder in it is
+    # measured at the ladder's own value, and printing the other one in the
+    # header would state a parameter no number here was produced under.
+    samples_text = (
+        _int_text(n_samples)
+        if results or scaling_control is not None
+        else "n/a — no table in this report was measured at it"
+    )
     lines += _table(
         ("parameter", "value", "what it changes"),
         [
@@ -731,7 +1282,7 @@ def render(
             ("simulator seed", str(int(seed)), "waypoint perturbation, all sizes"),
             ("envelope seed", str(int(envelope_seed)), "interior control samples"),
             ("envelope horizon", f"{float(horizon)} s", "envelope size, overlap rows"),
-            ("envelope samples", _int_text(n_samples), "envelope tightness"),
+            ("envelope samples", samples_text, "envelope tightness"),
             ("envelope substep", f"{float(substep_dt)} s", "envelope tightness"),
             (
                 "raw float precision",
@@ -746,11 +1297,17 @@ def render(
             ("gzip level", str(GZIP_COMPRESSLEVEL), "the gzipped baseline"),
             (
                 "timing repeats",
-                _repeats_text(results),
+                _repeats_text(timed),
                 "precision of the wall-clock table only",
             ),
         ],
     )
+
+    if scaling:
+        lines += _scaling_section(scaling, scaling_control, n_samples=n_samples)
+
+    if not results:
+        return "\n".join(lines + _caveats()) + "\n"
 
     lines += [
         "",
@@ -1001,7 +1558,13 @@ def render(
             ],
         )
 
-    lines += [
+    lines += _caveats()
+    return "\n".join(lines) + "\n"
+
+
+def _caveats() -> list[str]:
+    """The four things no number in this report is evidence for."""
+    return [
         "",
         "## What these numbers are not",
         "",
@@ -1019,7 +1582,6 @@ def render(
         "   every ratio move; both versions are in the header for that reason.",
         "",
     ]
-    return "\n".join(lines) + "\n"
 
 
 # --------------------------------------------------------------------------
@@ -1047,20 +1609,67 @@ def _non_negative_int(raw: str) -> int:
     return value
 
 
+def _frame_counts(raw: str) -> tuple[int, ...]:
+    """A comma-separated ladder of run lengths, checked for being a ladder.
+
+    Strictly increasing and at least two frames each. Out of order, the
+    crossover text ("it is below 1.0 at every shorter measured length") would be
+    a statement about the order they were typed in; duplicated, one length would
+    be measured twice and reported as two rungs.
+    """
+    counts: list[int] = []
+    for part in str(raw).split(","):
+        text = part.strip()
+        if not text:
+            raise argparse.ArgumentTypeError(
+                f"{raw!r} has an empty entry; the ladder is a comma-separated "
+                "list of frame counts, e.g. 300,1000,3000"
+            )
+        try:
+            value = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from None
+        if value < 2:
+            raise argparse.ArgumentTypeError(
+                f"{value}: a run needs at least two frames for a frame period to "
+                "exist, and `reg.graph` refuses a stream without one"
+            )
+        if counts and value <= counts[-1]:
+            raise argparse.ArgumentTypeError(
+                f"{value} does not come after {counts[-1]}: the lengths must be "
+                "strictly increasing, or 'the ratio is below 1.0 at every "
+                "shorter measured length' becomes a claim about typing order"
+            )
+        counts.append(value)
+    if not counts:
+        raise argparse.ArgumentTypeError("no frame counts given")
+    return tuple(counts)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m reg.bench",
         description=(
             "Measure the evidence graph against the raw state stream it was "
-            "built from, per scenario, and write a markdown report. The headline "
-            "ratio is against a gzipped baseline. Same seeds, same numbers "
-            "(timings excepted, and labelled)."
+            "built from, per scenario and as a function of run length, and write "
+            "a markdown report. The headline ratio is against a gzipped "
+            "baseline. Same seeds, same numbers (timings excepted, and labelled)."
         ),
     )
     parser.add_argument(
         "--all",
         action="store_true",
         help=f"benchmark every scenario: {', '.join(SCENARIOS)}",
+    )
+    parser.add_argument(
+        "--scaling",
+        action="store_true",
+        help=(
+            "also measure the compression ratio as a function of run length, on "
+            f"`reg.scenarios.long_run` at {', '.join(str(n) for n in SCALING_FRAME_COUNTS)} "
+            "frames. Can be given on its own or alongside --all/--scenario. "
+            "Expect tens of minutes: it is tens of thousands of envelopes."
+        ),
     )
     parser.add_argument(
         "--scenario",
@@ -1128,6 +1737,31 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--scaling-frames",
+        type=_frame_counts,
+        default=SCALING_FRAME_COUNTS,
+        metavar="N,N,...",
+        help=(
+            "the ladder of run lengths --scaling measures, strictly increasing "
+            f"(default: {','.join(str(n) for n in SCALING_FRAME_COUNTS)}, from "
+            "issue #30). A shorter ladder is a smaller study, and the report "
+            "prints the lengths it actually ran."
+        ),
+    )
+    parser.add_argument(
+        "--scaling-n-samples",
+        type=_non_negative_int,
+        default=SCALING_N_SAMPLES,
+        metavar="N",
+        help=(
+            f"control sequences per envelope for the ladder (default: "
+            f"{SCALING_N_SAMPLES}). Lower than --n-samples because the ladder is "
+            "tens of thousands of envelopes; since issue #28 it moves no byte "
+            "count, and the report carries a control row measuring what the "
+            "reduction did to the ratio."
+        ),
+    )
+    parser.add_argument(
         "--work-dir",
         metavar="PATH",
         help=(
@@ -1148,9 +1782,11 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list
     if args.all:
         return list(SCENARIOS)
     if not args.scenario:
+        if args.scaling:
+            return []
         parser.error(
-            "nothing to benchmark: pass --all, or --scenario NAME (repeatable). "
-            f"Known scenarios: {', '.join(SCENARIOS)}."
+            "nothing to benchmark: pass --all, --scenario NAME (repeatable), or "
+            f"--scaling. Known scenarios: {', '.join(SCENARIOS)}."
         )
     unknown = [name for name in args.scenario if name not in SCENARIOS]
     if unknown:
@@ -1174,6 +1810,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     work_dir = Path(args.work_dir) if args.work_dir else Path(tempfile.mkdtemp(prefix="reg-bench-"))
     results: list[ScenarioResult] = []
+    scaling: list[ScalingPoint] = []
+    control: ScalingPoint | None = None
     try:
         for name in names:
             print(f"benchmarking {name}...", file=sys.stderr, flush=True)
@@ -1188,6 +1826,47 @@ def main(argv: Sequence[str] | None = None) -> int:
                     substep_dt=args.substep_dt,
                 )
             )
+        if args.scaling:
+            for frames in args.scaling_frames:
+                print(
+                    f"benchmarking long_run at {frames} frames "
+                    f"(n_samples={args.scaling_n_samples})...",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                scaling.append(
+                    run_scaling_point(
+                        frames,
+                        work_dir,
+                        seed=args.seed,
+                        horizon=args.horizon,
+                        n_samples=args.scaling_n_samples,
+                        envelope_seed=args.envelope_seed,
+                        substep_dt=args.substep_dt,
+                    )
+                )
+            # The control: the shortest rung again at the per-scenario table's
+            # sample count, so the cost of the reduction is measured rather than
+            # asserted. Skipped when there is no reduction to measure — a row
+            # comparing a parameter with itself would read as a check that
+            # passed.
+            if args.scaling_n_samples != args.n_samples:
+                shortest = min(args.scaling_frames)
+                print(
+                    f"benchmarking long_run at {shortest} frames "
+                    f"(control, n_samples={args.n_samples})...",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                control = run_scaling_point(
+                    shortest,
+                    work_dir / "control",
+                    seed=args.seed,
+                    horizon=args.horizon,
+                    n_samples=args.n_samples,
+                    envelope_seed=args.envelope_seed,
+                    substep_dt=args.substep_dt,
+                )
         report = render(
             results,
             seed=args.seed,
@@ -1196,6 +1875,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             envelope_seed=args.envelope_seed,
             substep_dt=args.substep_dt,
             sensor_multiplier=args.sensor_multiplier,
+            scaling=scaling,
+            scaling_control=control,
         )
     except (BenchError, graph.GraphBuildError, store.StoreError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1208,7 +1889,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report, encoding="utf-8")
 
-    failed = [r for r in results if r.check.verdict != AGREE]
+    measured = [*results, *[p.result for p in scaling]]
+    if control is not None:
+        measured.append(control.result)
+    failed = [r for r in measured if r.check.verdict != AGREE]
     for r in failed:
         print(
             f"warning: {r.scenario}: the graph and the raw CSV answered "
@@ -1216,7 +1900,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"-> {r.check.verdict}",
             file=sys.stderr,
         )
-    print(f"wrote {out}: scenarios={len(results)} seed={args.seed}")
+    print(
+        f"wrote {out}: scenarios={len(results)} scaling_points={len(scaling)} "
+        f"seed={args.seed}"
+    )
     return EXIT_CHECK_FAILED if failed else EXIT_OK
 
 

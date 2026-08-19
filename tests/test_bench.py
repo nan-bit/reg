@@ -40,8 +40,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from shapely.ops import unary_union
 
-from reg import bench, store
+from reg import bench, graph, store
 from reg.bench import (
     AGREE,
     COULD_NOT_EVALUATE,
@@ -49,6 +50,7 @@ from reg.bench import (
     MET,
     NOT_MET,
     BenchError,
+    ScalingPoint,
     ScenarioResult,
     SeparationCheck,
     Sizes,
@@ -56,14 +58,18 @@ from reg.bench import (
     agreement,
     claim_verdict,
     compression_ratio,
+    crossover,
     gzip_bytes,
     min_separation_from_graph,
     render,
+    run_scaling_point,
     run_scenario,
     sensor_projection_bytes,
 )
-from reg.scenarios import SCENARIOS
-from reg.tolerances import DISTANCE_TOL_M
+from reg.envelope import compute_envelope
+from reg.kinematics import link_polygons
+from reg.scenarios import SCENARIOS, long_run, scenario
+from reg.tolerances import DISTANCE_TOL_M, simplify_geometry
 
 #: Coarse but legal: 4 samples is exactly the corner count for the two-link demo
 #: arm, so `compute_envelope` accepts it.
@@ -542,6 +548,485 @@ def test_cli_requires_an_output_path() -> None:
 
 
 # --------------------------------------------------------------------------
+# The long-run fixture (issue #30). The scaling table is a table about one
+# fixture, so what that fixture actually does is the first thing to pin down.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("frames", [2, 37, 300, 3_000])
+def test_the_long_run_is_the_length_it_was_asked_for(frames: int) -> None:
+    """The frame count is the parameter, so it had better be the frame count."""
+    scn = long_run(frames)
+    assert scn.n_frames == frames
+    assert len(tuple(scn.states(0))) == frames
+    assert scn.name == f"long_run_{frames}"
+
+
+def test_the_long_run_resolves_from_its_own_name() -> None:
+    """A stream records its scenario *name*; `reg.graph` recovers the world from
+    it. A generated name nothing can resolve would make the long run the one
+    stream whose limits and human radius cannot be recovered from the file."""
+    assert scenario("long_run_640").joint_waypoints == long_run(640).joint_waypoints
+    with pytest.raises(KeyError, match="unknown scenario"):
+        scenario("long_run_")
+    with pytest.raises(KeyError, match="unknown scenario"):
+        scenario("long_run_abc")
+
+
+def test_a_long_run_stream_can_be_rebuilt_from_its_own_provenance(
+    tmp_path: Path,
+) -> None:
+    """The chain from artifact back to parameters stays closed for a generated
+    fixture. `reg.graph` recovers the robot's limits and the human's radius from
+    the scenario *named in the stream*, and refuses rather than invent them — so
+    a name it could not resolve would make the long run the one stream nobody
+    can rebuild. Cheap envelope parameters: this is about the lookup."""
+    csv = bench._write_stream(long_run(20), 0, tmp_path / "long.csv")
+    code = graph.main(
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(tmp_path / "long.sqlite"),
+            "--n-samples",
+            str(_FAST["n_samples"]),
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+        ]
+    )
+    assert code == graph.EXIT_OK
+    assert (tmp_path / "long.sqlite").stat().st_size > 0
+
+
+@pytest.mark.parametrize("frames", [0, 1, -5])
+def test_a_run_shorter_than_two_frames_is_refused(frames: int) -> None:
+    """`reg.graph` refuses a stream with no frame period; generating one here
+    would just move the failure somewhere it reads as a build error."""
+    with pytest.raises(ValueError, match="two frames"):
+        long_run(frames)
+
+
+def test_a_non_integer_length_is_refused() -> None:
+    with pytest.raises(TypeError, match="int"):
+        long_run(300.0)  # type: ignore[arg-type]
+
+
+def test_no_two_frames_of_the_long_run_are_identical() -> None:
+    """THE PROPERTY THE FIXTURE EXISTS FOR, and the one issue #30 names as
+    disqualifying: "a path that produces literally identical frames is not [a
+    fixture], because it would compress in a way a real run would not".
+
+    A 3,000-frame run is a minute of robot time, fifteen arm cycles. Without the
+    per-cycle drift every fourth second would repeat exactly, gzip would
+    collapse the baseline and the incremental rule would see one transition set
+    over and over — both sides of the ratio would be measuring the fixture's
+    periodicity rather than the graph.
+    """
+    frames = tuple(long_run(3_000).states(0))
+    signatures = {
+        (tuple(f.q), tuple(f.qd), tuple(f.human_pos)) for f in frames
+    }
+    assert len(signatures) == len(frames)
+
+
+def test_the_long_run_is_deterministic_in_length_and_seed() -> None:
+    """Same length and seed, same frames; a different seed, a different run.
+    Both halves, because a fixture that ignored the seed would pass the first."""
+    a = tuple(long_run(300).states(0))
+    b = tuple(long_run(300).states(0))
+    assert [f.human_pos.tolist() for f in a] == [f.human_pos.tolist() for f in b]
+    assert [f.q.tolist() for f in a] == [f.q.tolist() for f in b]
+
+    other = tuple(long_run(300).states(7))
+    assert [f.q.tolist() for f in other] != [f.q.tolist() for f in a]
+
+
+def test_a_longer_run_extends_the_shorter_one_rather_than_replacing_it() -> None:
+    """Two rungs of the ladder are one run measured for longer.
+
+    If they were not — if the fixture rescaled itself to the length asked for —
+    the table would compare two different fixtures and call the difference
+    scaling. The knots come off an absolute clock, so they line up.
+
+    Up to the last *full* knot only, and the boundary is the honest part: each
+    run's final knot lands on its own end, so the last segment of the shorter
+    run is that run's own, and the seed's per-knot draws stop lining up there
+    too. Nothing before it moves.
+    """
+    short_scn, long_scn = long_run(300), long_run(3_000)
+    shared_until = min(
+        short_scn.joint_waypoints[-2].t, short_scn.human_waypoints[-2].t
+    )
+    short = [f for f in short_scn.states(0) if f.t <= shared_until]
+    long = [f for f in long_scn.states(0) if f.t <= shared_until]
+
+    assert len(short) > 1
+    assert [f.q.tolist() for f in short] == [f.q.tolist() for f in long]
+    assert [f.human_pos.tolist() for f in short] == [f.human_pos.tolist() for f in long]
+
+
+def test_the_person_enters_the_reachable_set_and_is_not_always_inside_it() -> None:
+    """The fixture's own name-claim, checked against the envelope itself.
+
+    `tests/test_scenarios.py` makes the same argument for the six: a fixture
+    whose claim is only in its description drifts until it no longer tests what
+    it says. Both halves are here because only the pair is a claim — a person
+    permanently inside the reachable set and a person never inside it are both
+    degenerate, and each would pass one of these on its own.
+
+    Checked at the closest and furthest frames of a 300-frame run, at the
+    ladder's own sample count. Two envelopes, not three hundred: the distances
+    that pick the frames need no envelope at all.
+    """
+    scn = long_run(300)
+    frames = tuple(scn.states(0))
+    distances = [
+        unary_union(link_polygons(f.proprio(), scn.world.limits)).distance(
+            scn.world.human_polygon(f.human_pos)
+        )
+        for f in frames
+    ]
+    closest = frames[min(range(len(frames)), key=distances.__getitem__)]
+    furthest = frames[max(range(len(frames)), key=distances.__getitem__)]
+
+    def overlaps(frame) -> bool:
+        envelope = simplify_geometry(
+            compute_envelope(
+                frame.proprio(),
+                scn.world.limits,
+                horizon=0.2,
+                n_samples=bench.SCALING_N_SAMPLES,
+                seed=0,
+                substep_dt=0.02,
+            )
+        )
+        overlap = envelope.intersection(scn.world.human_polygon(frame.human_pos))
+        return not overlap.is_empty and overlap.area > 0.0
+
+    assert overlaps(closest)
+    assert not overlaps(furthest)
+
+
+# --------------------------------------------------------------------------
+# The crossover. It is the answer the scaling table exists to give, and the
+# answer it must be able to give is "it does not".
+# --------------------------------------------------------------------------
+
+
+def test_the_crossover_is_the_smallest_measured_length_that_reaches_one() -> None:
+    found = crossover(
+        [_point(300, ratio=0.2), _point(3_000, ratio=0.9), _point(30_000, ratio=1.4)]
+    )
+    assert found.crossed_at == 30_000
+    assert found.largest_measured == 30_000
+    assert found.smallest_measured == 300
+    assert found.fell_back_below == ()
+
+
+def test_a_ratio_that_never_reaches_one_reports_no_crossover() -> None:
+    """THE NEGATIVE TEST for the crossover, and the outcome issue #30 says must
+    not be softened: a plateau below 1.0 answers `None`, not the largest length
+    measured and not a fitted one."""
+    found = crossover(
+        [_point(300, ratio=0.06), _point(3_000, ratio=0.11), _point(30_000, ratio=0.12)]
+    )
+    assert found.crossed_at is None
+    assert found.largest_measured == 30_000
+
+
+def test_a_ratio_that_falls_back_below_one_is_not_reported_as_a_clean_crossing() -> None:
+    found = crossover(
+        [_point(300, ratio=0.5), _point(3_000, ratio=1.2), _point(30_000, ratio=0.8)]
+    )
+    assert found.crossed_at == 3_000
+    assert found.fell_back_below == (30_000,)
+
+
+def test_a_crossover_over_no_measurements_is_refused() -> None:
+    """"No crossover" is a finding about the ratio. An empty ladder is the
+    absence of a measurement, and the two must not print the same sentence."""
+    with pytest.raises(BenchError, match="nothing to look for"):
+        crossover([])
+
+
+def test_the_marginal_ratio_refuses_an_artifact_that_did_not_grow() -> None:
+    """Δ SQLite <= 0 over an interval is a fact about that interval. Dividing by
+    it would manufacture an enormous marginal ratio and put it in a table beside
+    measured ones."""
+    assert bench._marginal_ratio_text(1_000, 0) == "n/a"
+    assert bench._marginal_ratio_text(1_000, -5) == "n/a"
+    assert bench._marginal_ratio_text(1_000, 500) == "2.00x"
+
+
+# --------------------------------------------------------------------------
+# The scaling section of the report.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def ladder() -> list[ScalingPoint]:
+    """Two rungs whose ratio climbs and stays well below 1.0 — the shape issue
+    #30 expects if the compression argument does not hold."""
+    return [
+        _point(
+            300,
+            sizes=Sizes(raw_csv=60_000, gzip_csv=6_000, sqlite=115_000, gzip_sqlite=20_000),
+        ),
+        _point(
+            3_000,
+            sizes=Sizes(raw_csv=600_000, gzip_csv=60_000, sqlite=400_000, gzip_sqlite=90_000),
+        ),
+    ]
+
+
+def test_the_scaling_table_carries_every_column_the_issue_asks_for(ladder: list[ScalingPoint]) -> None:
+    """Issue #30: "raw CSV bytes, gzipped CSV bytes, SQLite bytes, gzipped
+    SQLite bytes, node and edge counts, and the headline ratio", one row per
+    measured length."""
+    report = render([], sensor_multiplier=None, scaling=ladder, **_RENDER_ARGS)
+    header = next(
+        line for line in report.splitlines() if line.startswith("| frames | robot time |")
+    )
+    for column in (
+        "raw CSV B",
+        "gz CSV B",
+        "SQLite B",
+        "gz SQLite B",
+        "nodes",
+        "edges",
+        "x gz CSV",
+    ):
+        assert column in header
+    assert "| 300 |" in report
+    assert "| 3,000 |" in report
+
+
+def test_the_scaling_block_states_the_sample_count_the_ladder_ran_at(ladder: list[ScalingPoint]) -> None:
+    """Issue #30: "it changes which frames count as overlapping, so the value
+    used must appear in the table's parameter block"."""
+    report = render([], sensor_multiplier=None, scaling=ladder, **_RENDER_ARGS)
+    assert f"| envelope samples | {ladder[0].n_samples} |" in report
+    # ...and the per-scenario table's value is *not* stated as though something
+    # here had been measured at it, because nothing was.
+    assert "| envelope samples | n/a — no table in this report was measured at it |" in report
+
+
+def test_a_ladder_that_never_reaches_one_says_so_and_projects_nothing(ladder: list[ScalingPoint]) -> None:
+    """THE HONEST-OUTCOME CLAUSE, in the output rather than in a commit message.
+    Issue #30: "If the ratio plateaus below 1.0, say so in bench/results.md and
+    in the PR body, and do not soften it"."""
+    report = render([], sensor_multiplier=None, scaling=ladder, **_RENDER_ARGS)
+    assert "does not reach 1.0 at any measured length" in report
+    assert "No crossover is projected" in report
+    assert "finding about the thesis" in report
+    assert "passes 1.0 at" not in report
+
+
+def test_a_ladder_that_crosses_names_the_length_it_crossed_at(ladder: list[ScalingPoint]) -> None:
+    """The positive half, so the test above is not passing against a report that
+    says "no crossover" whatever it is given."""
+    crossing = [
+        ladder[0],
+        _point(
+            3_000,
+            ratio=None,
+            sizes=Sizes(raw_csv=600_000, gzip_csv=60_000, sqlite=50_000, gzip_sqlite=20_000),
+        ),
+    ]
+    report = render([], sensor_multiplier=None, scaling=crossing, **_RENDER_ARGS)
+    assert "**The ratio passes 1.0 at 3,000 frames**" in report
+    assert "does not reach 1.0 at any measured length" not in report
+
+
+def test_a_ladder_that_starts_above_one_does_not_claim_a_bounded_crossing() -> None:
+    """If the shortest rung already clears 1.0 there is no measured length below
+    it to bound the crossing, and the report must not name a range it did not
+    measure the bottom of."""
+    report = render(
+        [],
+        sensor_multiplier=None,
+        scaling=[_point(300, ratio=1.4), _point(3_000, ratio=2.0)],
+        **_RENDER_ARGS,
+    )
+    assert "the *shortest* length measured" in report
+    assert "no value for it is quoted" in report
+
+
+def test_a_non_monotone_ladder_says_so_instead_of_quoting_one_crossing() -> None:
+    report = render(
+        [],
+        sensor_multiplier=None,
+        scaling=[_point(300, ratio=0.5), _point(3_000, ratio=1.2), _point(30_000, ratio=0.8)],
+        **_RENDER_ARGS,
+    )
+    assert "not monotone in run length" in report
+    assert "falls back below" in report
+
+
+def test_the_control_row_is_absent_rather_than_faked_when_it_was_not_run(ladder: list[ScalingPoint]) -> None:
+    report = render([], sensor_multiplier=None, scaling=ladder, **_RENDER_ARGS)
+    assert "**Not measured in this run.**" in report
+
+    control = _point(
+        300,
+        ratio=None,
+        n_samples=512,
+        sizes=Sizes(raw_csv=60_000, gzip_csv=6_000, sqlite=130_000, gzip_sqlite=22_000),
+    )
+    with_control = render(
+        [], sensor_multiplier=None, scaling=ladder, scaling_control=control, **_RENDER_ARGS
+    )
+    assert "**Not measured in this run.**" not in with_control
+    assert "| 300 | 512 | 130,000 |" in with_control
+    # ...and the size of the reduction's effect is stated as a number, since a
+    # reader comparing two rows by eye is how a 13% difference gets called
+    # "about the same".
+    assert "+15,000 bytes (+13.0%), +0 edges, +0 nodes" in with_control
+
+
+def test_a_control_that_changed_nothing_says_zero_rather_than_going_quiet(
+    ladder: list[ScalingPoint],
+) -> None:
+    """The measured outcome at 300 frames, and the one most easily mistaken for
+    a control that never ran: the two sample counts produce the same artifact."""
+    report = render(
+        [],
+        sensor_multiplier=None,
+        scaling=ladder,
+        scaling_control=_point(300, n_samples=512, sizes=ladder[0].sizes),
+        **_RENDER_ARGS,
+    )
+    assert "+0 bytes (+0.0%), +0 edges, +0 nodes" in report
+    assert "Zero is a measurement like any other" in report
+
+
+def test_a_report_with_no_scaling_carries_no_scaling_section() -> None:
+    """An empty section reads as a study that found nothing."""
+    report = render([_result()], sensor_multiplier=None, **_RENDER_ARGS)
+    assert "Ratio versus run length" not in report
+
+
+def test_one_report_carries_both_tables(ladder: list[ScalingPoint]) -> None:
+    """Issue #30: "`bench/results.md` gains the scaling table **alongside** the
+    per-scenario one". Both sections, one file, from `--all --scaling`."""
+    report = render([_result()], sensor_multiplier=None, scaling=ladder, **_RENDER_ARGS)
+    assert "## Sizes and ratios" in report
+    assert "## Ratio versus run length" in report
+    assert "| `fixture` |" in report
+    assert "| 3,000 |" in report
+
+
+def test_render_still_refuses_a_report_with_nothing_in_it_at_all() -> None:
+    with pytest.raises(BenchError, match="no scenarios"):
+        render([], sensor_multiplier=None, scaling=[], **_RENDER_ARGS)
+
+
+# --------------------------------------------------------------------------
+# The scaling CLI, run for real at a length a test can afford.
+# --------------------------------------------------------------------------
+
+
+def test_cli_scaling_measures_the_ladder_it_was_given(tmp_path: Path) -> None:
+    """`--scaling` on its own: no scenario selection, and the report is the
+    ladder. Two short rungs at coarse envelope parameters — this is a test about
+    the ladder being measured and reported, not about envelope fidelity."""
+    out = tmp_path / "scaling.md"
+    code = bench.main(
+        [
+            "--scaling",
+            "--scaling-frames",
+            "20,40",
+            "--scaling-n-samples",
+            "4",
+            "--n-samples",
+            "4",
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+            "--out",
+            str(out),
+            "--work-dir",
+            str(tmp_path / "work"),
+        ]
+    )
+    assert code == bench.EXIT_OK
+    report = out.read_text(encoding="utf-8")
+    assert "| 20 |" in report
+    assert "| 40 |" in report
+    assert "| lengths | 20, 40 |" in report
+    # Same sample count as the per-scenario flag, so there is no reduction to
+    # control for and the section says that rather than comparing a parameter
+    # with itself.
+    assert "**Not measured in this run.**" in report
+    assert str(tmp_path) not in report
+
+
+def test_cli_scaling_measures_a_control_when_the_sample_counts_differ(
+    tmp_path: Path,
+) -> None:
+    """The ladder is cheap because `n_samples` is reduced, and the size of that
+    reduction's effect is measured at one length rather than asserted."""
+    out = tmp_path / "scaling.md"
+    code = bench.main(
+        [
+            "--scaling",
+            "--scaling-frames",
+            "20",
+            "--scaling-n-samples",
+            "4",
+            "--n-samples",
+            "6",
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+            "--out",
+            str(out),
+            "--work-dir",
+            str(tmp_path / "work"),
+        ]
+    )
+    assert code == bench.EXIT_OK
+    report = out.read_text(encoding="utf-8")
+    assert "**Not measured in this run.**" not in report
+    assert "| 20 | 6 |" in report
+
+
+def test_two_runs_of_one_scaling_point_agree_on_every_byte_count(tmp_path: Path) -> None:
+    """Determinism, on the rungs as much as on the scenarios: a ladder that
+    moved between two runs would make the trend down it unreadable."""
+    a = run_scaling_point(20, tmp_path / "a", seed=0, **_FAST)
+    b = run_scaling_point(20, tmp_path / "b", seed=0, **_FAST)
+    assert a.sizes == b.sizes
+    assert a.result.edges == b.result.edges
+    assert a.result.nodes == b.result.nodes
+    assert a.frames == b.frames == 20
+
+
+@pytest.mark.parametrize(
+    "ladder",
+    [
+        pytest.param("3000,300", id="not increasing"),
+        pytest.param("300,300", id="duplicated"),
+        pytest.param("1", id="too short to have a frame period"),
+        pytest.param("300,", id="empty entry"),
+        pytest.param("300,many", id="not a number"),
+    ],
+)
+def test_cli_refuses_a_ladder_that_is_not_one(tmp_path: Path, ladder: str) -> None:
+    """A ladder out of order would turn "below 1.0 at every shorter measured
+    length" into a claim about the order the lengths were typed in."""
+    with pytest.raises(SystemExit) as excinfo:
+        bench.main(
+            ["--scaling", "--scaling-frames", ladder, "--out", str(tmp_path / "r.md")]
+        )
+    assert excinfo.value.code == bench.EXIT_USAGE
+
+
+# --------------------------------------------------------------------------
 # Hand-built results, for the report tests above. Deliberately not a live run:
 # a test about what the report *says* must not depend on what the graph
 # currently *measures*.
@@ -567,3 +1052,34 @@ def _result(**overrides) -> ScenarioResult:
     }
     fields.update(overrides)
     return ScenarioResult(**fields)  # type: ignore[arg-type]
+
+
+def _point(
+    frames: int,
+    *,
+    ratio: float | None = None,
+    sizes: Sizes | None = None,
+    n_samples: int = bench.SCALING_N_SAMPLES,
+) -> ScalingPoint:
+    """One hand-built rung. Give it a `ratio` or a `Sizes`, not both.
+
+    `ratio` builds a `Sizes` whose headline is exactly that number, which is
+    what the crossover tests are about; `sizes` is for the report tests, where
+    the individual byte columns are what is being asserted.
+    """
+    if (ratio is None) == (sizes is None):
+        raise TypeError("_point takes exactly one of ratio= and sizes=")
+    if sizes is None:
+        sqlite = 100_000
+        gzip_csv = int(round(float(ratio) * sqlite))
+        sizes = Sizes(
+            raw_csv=gzip_csv * 10,
+            gzip_csv=gzip_csv,
+            sqlite=sqlite,
+            gzip_sqlite=sqlite // 4,
+        )
+    return ScalingPoint(
+        result=_result(scenario=f"long_run_{frames}", frames=frames, sizes=sizes),
+        n_samples=n_samples,
+        frame_period_s=0.02,
+    )

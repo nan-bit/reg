@@ -1,9 +1,19 @@
-"""The six named scenario fixtures. **Layer B** — this is simulator ground truth.
+"""The six named scenario fixtures, and one generated long run. **Layer B** —
+this is simulator ground truth.
 
 These are the fixtures everything downstream is measured against, so they come
 first (docs/plan.md, Phase 1). They are hand-authored and small on purpose:
 randomised scenarios would make the compression numbers in Claim 1
 unfalsifiable — you cannot argue about a ratio nobody can regenerate.
+
+The seventh, `long_run(n_frames)`, is generated rather than hand-authored,
+because the question it exists for is a question about *length* (issue #30:
+"does the compression ratio improve with run length?"). It is still not
+randomised: the same frame count produces the same waypoints, and its shape is
+fixed by the module constants below rather than drawn. It is not in `SCENARIOS`
+— there is no single frame count that would be the right one to register — but
+`scenario()` resolves its generated names, so a stream that says
+`scenario=long_run_3000` in its provenance block can still be rebuilt.
 
 What a scenario is: a fixed set of joint waypoints and a fixed human path,
 linearly interpolated at a fixed timestep. **No planner, no controller, no
@@ -440,10 +450,234 @@ def scenario(name: str) -> Scenario:
 
     A caller that mistypes a name should not get an empty result set that reads
     like 'nothing happened in that run'.
+
+    `long_run_<n>` resolves to `long_run(n)` even though it is not in
+    `SCENARIOS`: a stream's provenance block records the scenario *name*, and a
+    name nothing can resolve would make a long run the one kind of stream whose
+    world cannot be recovered from the file (`reg.graph._resolve_world`).
     """
     try:
         return SCENARIOS[name]
     except KeyError:
-        raise KeyError(
-            f"unknown scenario {name!r}; known scenarios are {list(SCENARIOS)}"
-        ) from None
+        pass
+    generated = _long_run_from_name(name)
+    if generated is not None:
+        return generated
+    raise KeyError(
+        f"unknown scenario {name!r}; known scenarios are {list(SCENARIOS)}, plus "
+        f"the generated {LONG_RUN_PREFIX}<frames> (e.g. {LONG_RUN_PREFIX}3000)"
+    )
+
+
+# --------------------------------------------------------------------------
+# The long run (issue #30). One scenario at any frame count.
+#
+# WHY IT IS GENERATED AND THE OTHER SIX ARE NOT. The six answer questions about
+# a *situation* — contact, near miss, bystander — and a situation is a thing you
+# write down. This one answers a question about *length*: Claim 1 is a claim
+# about scaling and the six all run for five or six seconds, which is the one
+# regime where the answer cannot be read off (fixed schema cost dominates
+# everything at 300 frames). So the length is the parameter, and the fixture is
+# a function of it.
+#
+# WHAT IT MUST NOT BE. A short loop repeated exactly. Every cycle would produce
+# byte-identical frames, gzip would collapse the baseline in a way no real run
+# compresses, and the incremental rule would see one transition set repeated —
+# both sides of the ratio would be measuring the fixture's periodicity rather
+# than the graph. So the cycles *drift*: the arm's sweep and the human's closest
+# approach are offset each cycle by `_drift`, an irrational rotation, which
+# takes a different value on every cycle for any run length. The motion stays
+# periodic in character and never repeats in fact.
+#
+# WHAT IT IS. A robot doing repetitive work while a person walks past it now and
+# then, which is the run an operator would actually have on disk at the end of a
+# shift. The arm cycles between two poses; the human patrols in and out on a
+# longer period, so their closest approach lands at a different point in the
+# arm's cycle each time and some approaches enter the reachable set while others
+# do not. Nothing here is tuned to make the compression number look good, and
+# the honest consequence is stated: an arm that moves continuously changes its
+# distance to every entity continuously, so SEPARATION edges emit at a rate set
+# by how fast the arm moves. That is what the scaling table is measuring.
+# --------------------------------------------------------------------------
+
+#: Prefix of the generated names. `long_run_3000` is 3000 frames.
+LONG_RUN_PREFIX = "long_run_"
+
+#: Seconds for one full out-and-back of the arm. Two knots per cycle.
+LONG_RUN_ARM_PERIOD_S = 4.0
+
+#: The two poses the arm works between, in radians. The elbow unfolds from 1.60
+#: to 0.75 — `near_miss`'s reach, which is the one the human's patrol line is
+#: placed against — and the shoulder holds near zero so the arm works to the +x
+#: side, where the patrol line is.
+LONG_RUN_ARM_PICK: tuple[float, float] = (0.00, 1.60)
+LONG_RUN_ARM_PLACE: tuple[float, float] = (0.00, 0.75)
+
+#: Per-cycle drift applied to each joint knot, in radians: the sweep is not the
+#: same sweep twice. Well inside `DEMO_WORLD.limits` at both poses.
+LONG_RUN_ARM_DRIFT: tuple[float, float] = (0.25, 0.10)
+
+#: Seconds for one full approach-and-retreat of the human. Deliberately not a
+#: multiple of the arm period (20:27 against it), so the closest approach lands
+#: at a different phase of the arm's cycle each time. Short enough that even the
+#: shortest length in the scaling ladder contains a whole approach: a 300-frame
+#: row in which the human never gets near the robot would not be measuring the
+#: same fixture as the 30,000-frame row above it.
+LONG_RUN_HUMAN_PERIOD_S = 5.4
+
+#: The patrol line, in metres. Far end well outside the workspace disc; near end
+#: at 1.00 m from the base, just inside `near_miss`'s 1.05 m closest approach.
+#:
+#: Measured, not argued, at 16 envelope samples and seed 0: over 300 frames the
+#: closest the bodies come is 0.139 m and the person is inside the reachable set
+#: at that frame; the run's furthest frame is 1.43 m away and outside it, so the
+#: fixture is not trivially always-overlapping. **Contact does happen at length**
+#: — none in 3,000 frames, 9 frames of 10,000 — which is left in rather than
+#: tuned out: rare events are what a long run is retained for, and a fixture
+#: that could never produce one would make the graph's contact machinery
+#: untested over exactly the lengths this study is about.
+LONG_RUN_HUMAN_FAR: tuple[float, float] = (2.30, 0.00)
+LONG_RUN_HUMAN_NEAR: tuple[float, float] = (1.00, 0.00)
+
+#: Per-cycle drift on the human knots, in metres, along the patrol line.
+LONG_RUN_HUMAN_DRIFT = 0.10
+
+#: The same bounded seed perturbation the six use, stated here for the same
+#: reason: a fixture that did not state its own jitter would put an invented
+#: number under every figure measured from it.
+LONG_RUN_Q_JITTER = 0.01
+LONG_RUN_HUMAN_JITTER = 0.01
+
+#: Golden-ratio conjugate. `k * _DRIFT_ROTATION mod 1` is equidistributed and
+#: never returns the same value twice, which is exactly the property wanted: the
+#: cycles differ from each other at every run length, with no random draw and no
+#: seed involved. (The seed's job is the per-run perturbation; the drift is part
+#: of the fixture and must be identical across seeds.)
+_DRIFT_ROTATION = 0.6180339887498949
+
+#: Absolute tolerance, in seconds, for "this knot lands on the run's end". Only
+#: used to decide whether the final knot is generated or interpolated; both
+#: paths produce the same trajectory, so it never moves a number.
+_KNOT_EPS_S = 1e-9
+
+
+def _drift(k: int) -> float:
+    """A bounded per-cycle offset in [-0.5, 0.5), different for every `k`."""
+    return ((k * _DRIFT_ROTATION) % 1.0) - 0.5
+
+
+def _pattern_knots(
+    half_period: float, duration: float, value_at
+) -> tuple[Waypoint, ...]:
+    """Knots every `half_period`, with a last one landing exactly on `duration`.
+
+    `Scenario` requires the final knot at `duration` exactly, and a run length
+    is not in general a whole number of cycles. The final knot is therefore the
+    pattern's own value *interpolated within the segment it falls in*, not the
+    next pattern value moved backwards: the second would change the trajectory's
+    slope over the last segment, which would make the run's final velocity a
+    function of where the run happened to be cut.
+    """
+    knots: list[Waypoint] = []
+    k = 0
+    while k * half_period < duration - _KNOT_EPS_S:
+        knots.append(Waypoint(k * half_period, value_at(k)))
+        k += 1
+    last = knots[-1]
+    span = k * half_period - last.t
+    frac = (duration - last.t) / span
+    nxt = value_at(k)
+    knots.append(
+        Waypoint(
+            duration,
+            tuple(a + (b - a) * frac for a, b in zip(last.value, nxt)),
+        )
+    )
+    return tuple(knots)
+
+
+def long_run(n_frames: int, *, dt: float = DEFAULT_DT) -> Scenario:
+    """The long-run fixture at `n_frames` frames. Deterministic in the count.
+
+    Args:
+        n_frames: how many frames the run is. No default: the frame count *is*
+            the parameter this fixture exists to vary, and a fixture that picked
+            one would answer the scaling question at a length nobody chose.
+        dt: the frame period, 50 Hz as everywhere else in this module.
+
+    Returns:
+        A `Scenario` named `long_run_<n_frames>`, resolvable by `scenario()`.
+
+    Raises:
+        TypeError: `n_frames` is not an integer.
+        ValueError: fewer than two frames, so there is no run.
+    """
+    if isinstance(n_frames, bool) or not isinstance(n_frames, (int, np.integer)):
+        raise TypeError(
+            f"n_frames must be an int, got {type(n_frames).__name__}. It names "
+            "the fixture and is recorded in the stream's provenance block."
+        )
+    n_frames = int(n_frames)
+    if n_frames < 2:
+        raise ValueError(
+            f"n_frames={n_frames}: a run needs at least two frames for a frame "
+            "period to exist, and `reg.graph` refuses a stream without one."
+        )
+    duration = (n_frames - 1) * dt
+
+    def arm(k: int) -> tuple[float, ...]:
+        base = LONG_RUN_ARM_PICK if k % 2 == 0 else LONG_RUN_ARM_PLACE
+        return tuple(
+            value + drift * _drift(k)
+            for value, drift in zip(base, LONG_RUN_ARM_DRIFT)
+        )
+
+    def human(k: int) -> tuple[float, ...]:
+        base = LONG_RUN_HUMAN_FAR if k % 2 == 0 else LONG_RUN_HUMAN_NEAR
+        return (base[0] + LONG_RUN_HUMAN_DRIFT * _drift(k), base[1])
+
+    return Scenario(
+        name=f"{LONG_RUN_PREFIX}{n_frames}",
+        description=(
+            f"{n_frames} frames of repetitive work: the arm cycles between two "
+            f"poses every {LONG_RUN_ARM_PERIOD_S} s while a person patrols in "
+            f"and out every {LONG_RUN_HUMAN_PERIOD_S} s. Every cycle differs "
+            "slightly from the last, so no two frames of the run are identical. "
+            "Approaches enter the reachable set often and reach contact rarely, "
+            "and how rarely is a function of how long the run is. "
+            "Generated at any length, for the scaling half of Claim 1 "
+            "(issue #30) — the six hand-authored fixtures all run for about six "
+            "seconds, which is the one length at which a claim about scaling "
+            "cannot be tested."
+        ),
+        world=DEMO_WORLD,
+        duration=duration,
+        joint_waypoints=_pattern_knots(LONG_RUN_ARM_PERIOD_S / 2.0, duration, arm),
+        human_waypoints=_pattern_knots(LONG_RUN_HUMAN_PERIOD_S / 2.0, duration, human),
+        q_jitter=LONG_RUN_Q_JITTER,
+        human_jitter=LONG_RUN_HUMAN_JITTER,
+        dt=dt,
+    )
+
+
+def _long_run_from_name(name: str) -> Scenario | None:
+    """`long_run(n)` for a generated name, or `None` if this is not one.
+
+    `None` rather than a raise: the caller is `scenario()`, and a name this
+    function does not recognise has to reach that function's own error message
+    with the full list of known names, not a message about frame counts.
+
+    A name that *is* one of these and still cannot be built — `long_run_1` — is
+    a `KeyError` like every other unresolvable name, carrying the reason.
+    `scenario()` has one failure mode and callers catch one exception type.
+    """
+    text = str(name)
+    if not text.startswith(LONG_RUN_PREFIX):
+        return None
+    suffix = text[len(LONG_RUN_PREFIX) :]
+    if not suffix.isdigit():
+        return None
+    try:
+        return long_run(int(suffix))
+    except ValueError as exc:
+        raise KeyError(f"unknown scenario {name!r}: {exc}") from None

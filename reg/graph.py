@@ -2300,15 +2300,44 @@ def _attestation_from_stream(
 
     keyring = load_keyring(keyring_path)
     states = [frame.proprio() for frame in read_frames(csv_path)]
-    declarations = emit_declarations(
-        states,
-        scenario.world.limits,
-        key=keyring.key("policy"),
-        replan_interval_s=replan_interval_s,
-        horizon_s=declaration_horizon_s,
-        declared_q_bounds=scenario.declared_q_bounds,
-        id_prefix=scenario.name,
-    )
+
+    # THE FIXTURE'S POLICY FIELDS, ALL OF THEM. A scenario says three things about
+    # what its policy does, and reading only some of them builds an attestation
+    # layer that disagrees with the fixture it was built from:
+    #
+    #   silent_windows      instants the policy did not see. Filtered out here, so
+    #                       the timing faults (no declaration, stale) reproduce in
+    #                       the artifact instead of being papered over by a
+    #                       declaration this build invented.
+    #   declared_margin_m   how far past its own region the policy claims. It is
+    #                       the ONLY way a run produces an envelope overclaim
+    #                       (reg/scenarios.py), so dropping it silently removes a
+    #                       fault from the graph.
+    #   declared_action_class  NOT read here, deliberately. Producing an
+    #                       out-of-vocabulary declaration means bypassing
+    #                       `Declaration.__post_init__`, which refuses one at
+    #                       construction — correctly. A library that offers a way
+    #                       to build an invalid record is a library that will be
+    #                       used to build one, so that fixture's fault is
+    #                       exercised in tests/test_enforce.py and does not
+    #                       reproduce in an artifact. See issue for the full fix.
+    speaking = [state for state in states if not scenario.silent_at(state.t)]
+    if not speaking:
+        # A policy that never declares at all. `emit_declarations` refuses an
+        # empty run and is right to; the artifact records a stream with no
+        # declarations rather than a build that failed.
+        declarations: tuple[Declaration, ...] = ()
+    else:
+        declarations = emit_declarations(
+            speaking,
+            scenario.world.limits,
+            key=keyring.key("policy"),
+            replan_interval_s=replan_interval_s,
+            horizon_s=declaration_horizon_s,
+            declared_q_bounds=scenario.declared_q_bounds,
+            declared_margin_m=scenario.declared_margin_m,
+            id_prefix=scenario.name,
+        )
 
     # Keyed on the rounded instant, matching the fixture harness: `t_issued` is
     # copied from a state's own `t`, so equality holds, and the rounding is

@@ -28,7 +28,7 @@ absence is load-bearing; `tests/test_sim_cli.py` asserts two different output
 paths give identical bytes.
 
 **3. An unknown scenario is a refusal, not a fallback.** `--scenario typo` exits
-non-zero naming the six valid names. Defaulting to one of them would produce a
+non-zero naming every valid name. Defaulting to one of them would produce a
 complete, plausible, byte-identical-on-rerun artifact of the wrong situation.
 
 ON `--seed` HAVING A DEFAULT

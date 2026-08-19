@@ -67,6 +67,7 @@ from reg.sim import provenance, simulate
 from reg.stream import read_frames, write_frames
 from reg.tolerances import (
     DISTANCE_TOL_M,
+    TIME_TOL_S,
     distance_bucket,
     quantize_area,
     quantize_time,
@@ -201,7 +202,17 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
     # And the nodes those edges anchor, once each — not per frame. There is no
     # `Timestep` kind to check: issue #29 removed it, and its absence from
     # `store.NODE_TABLES` is asserted in `test_there_is_no_per_frame_node_kind`.
-    assert result.nodes == {"Envelope": 1, "RobotConfig": 1, "Entity": 2}
+    #
+    # `Occurrence` is four (issue #35) and is also constant in the frame count:
+    # the two ends of the run and one closest approach per entity. Nothing else
+    # happens in a stream where nothing changes, which is the point — the event
+    # layer counts events, and holding still is not one.
+    assert result.nodes == {
+        "Envelope": 1,
+        "RobotConfig": 1,
+        "Entity": 2,
+        "Occurrence": 4,
+    }
 
 
 @pytest.mark.parametrize("n_frames", [12, 24, 240])
@@ -231,8 +242,14 @@ def test_node_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
     assert result.frames == n_frames
     # Two envelopes and two configurations — the two ends of the run, which
     # `GEOMETRY_RETENTION` keeps and nothing else here anchors. The same numbers
-    # at 12 frames and at 240.
-    assert result.nodes == {"Envelope": 2, "RobotConfig": 2, "Entity": 2}
+    # at 12 frames and at 240, and the same four occurrences: the arm creeping
+    # changes the envelope every frame and enters nothing, so no event happens.
+    assert result.nodes == {
+        "Envelope": 2,
+        "RobotConfig": 2,
+        "Entity": 2,
+        "Occurrence": 4,
+    }
     assert result.edges == {
         "HAS_ENVELOPE": 2,
         "INTERSECTS": 0,
@@ -1654,3 +1671,516 @@ def test_cli_requires_an_output_path(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as excinfo:
         graph.main(["build", str(csv)])
     assert excinfo.value.code == graph.EXIT_USAGE
+
+
+# --------------------------------------------------------------------------
+# The occurrence layer (issue #35). DSSAD-aligned events beside the edges.
+#
+# The claim it exists to support is not "the artifact got smaller" — issue #30
+# settled that the fine layer is larger than the stream and no layer added here
+# changes it. It is that a *coarser* record, in the shape UN R157 actually
+# mandates, still answers some of the questions. So the tests here are about
+# three things and nothing else: what counts as material, what a row must carry,
+# and what the layer refuses to record.
+# --------------------------------------------------------------------------
+
+
+def _occurrences(path: Path, **filters) -> list[sqlite3.Row]:
+    conn = store.connect(path)
+    try:
+        return store.read_occurrences(conn, **filters)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("n_frames", [12, 40, 200])
+def test_occurrence_rows_do_not_grow_with_frame_count(
+    tmp_path: Path, n_frames: int
+) -> None:
+    """THE INVARIANT THIS LAYER EXISTS FOR, and it is the strong form.
+
+    The stream is the one that *defeats* the edge layer: a human walking steadily
+    crosses a `DISTANCE_TOL_M` bucket at every frame, so `SEPARATION` emits a row
+    per frame by design (`test_a_stream_that_changes_every_frame_still_emits_a_
+    row_per_frame` protects exactly that). The occurrence layer must not follow
+    it, because a bucket crossing is a quantization boundary and not an event.
+
+    Asserted as equality across a sixteenfold range rather than as a bound: a
+    rule that still scaled, only more slowly, would pass "fewer than the frames".
+    The precondition — that the edge layer really is emitting per frame here — is
+    asserted too, or this says nothing.
+    """
+    # The human shuffles back and forth 3 cm at a time — three `DISTANCE_TOL_M`
+    # quanta, so the quantized separation differs at every frame — while staying
+    # well outside the envelope, and the arm creeps so every configuration is
+    # distinct too. Bounded rather than walking in a straight line, so that the
+    # *same* situation holds at 12 frames and at 200: a human who kept walking
+    # would eventually reach the arm and the run would contain different events
+    # at different lengths, which is not what this is measuring.
+    frames = [
+        _frame(i, (2.4 - 0.03 * (i % 5), 0.0), q=(1e-6 * i, 0.0), qd=(0.0, 0.0))
+        for i in range(n_frames)
+    ]
+    csv = _write_stream(tmp_path / f"shuffle_{n_frames}.csv", frames)
+    out = tmp_path / f"shuffle_{n_frames}.sqlite"
+    result = _build(csv, out)
+
+    human = _edges(out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
+    assert len(human) == n_frames, (
+        "precondition failed: the edge layer is not emitting per frame on this "
+        "stream, so there is no per-frame growth for the occurrence layer to "
+        "not have."
+    )
+    assert result.nodes["RobotConfig"] == n_frames
+
+    # Four, at 12 frames and at 200: the two ends of the run and one closest
+    # approach per entity. Nothing in this run is an *event* — a metric stepping
+    # a quantum is what the edge layer above is for.
+    kinds = [str(row["type"]) for row in _occurrences(out)]
+    assert sorted(kinds) == [
+        "closest_approach",
+        "closest_approach",
+        "run_began",
+        "run_ended",
+    ]
+
+
+def test_an_overlap_that_moves_a_quantum_is_not_an_occurrence(
+    tmp_path: Path,
+) -> None:
+    """The negative of the rule above, on the relationship it is easiest to lose.
+
+    `_sliding_frames` reopens the `INTERSECTS` edge on every frame because the
+    overlap area crosses an `AREA_QUANT_SIGFIGS` boundary every frame. Those are
+    metric steps, and the human enters the envelope exactly once. An
+    implementation that emitted `envelope_entered` per edge row rather than per
+    *relationship* would put one per frame here, which is the per-frame cost this
+    layer exists to be measured against.
+    """
+    n_frames = 30
+    csv = _write_stream(tmp_path / "slide.csv", _sliding_frames(n_frames))
+    out = tmp_path / "slide.sqlite"
+    result = _build(csv, out)
+
+    assert result.edges["INTERSECTS"] > 1, (
+        "precondition failed: the INTERSECTS edge did not reopen, so there are "
+        "no metric steps here to wrongly count as entries."
+    )
+    entered = _occurrences(out, occurrence_type="envelope_entered")
+    assert len(entered) == 1, [dict(r) for r in entered]
+
+
+def test_the_contact_occurrences_name_the_same_instants_as_the_edge(
+    tmp_path: Path,
+) -> None:
+    """The two layers must agree about when the same event happened.
+
+    Same instant, at each layer's own resolution: the occurrence timestamp is the
+    edge's `t_start` (or `t_end`) rounded to the artifact's occurrence
+    resolution. A layer that timestamped the *next* frame instead would be off by
+    one frame period, which no assertion about coarse timing would ever catch.
+    """
+    resolution = 0.05
+    # The human walks onto the arm, stays a while, and walks off it again.
+    frames = [
+        _frame(i, (0.5, 0.0) if 4 <= i <= 9 else (2.4, 0.0)) for i in range(16)
+    ]
+    csv = _write_stream(tmp_path / "touch.csv", frames)
+    out = tmp_path / "touch.sqlite"
+    _build(csv, out, occurrence_resolution_s=resolution)
+
+    contact = _edges(out, edge_type="CONTACT", dst_id=HUMAN_ENTITY_ID)
+    assert len(contact) == 1, "precondition failed: no single contact interval"
+
+    began = _occurrences(out, occurrence_type="contact_began")
+    ended = _occurrences(out, occurrence_type="contact_ended")
+    assert len(began) == 1 and len(ended) == 1
+    assert began[0]["t"] == pytest.approx(
+        graph.quantize_occurrence_time(contact[0]["t_start"], resolution)
+    )
+    assert ended[0]["t"] == pytest.approx(
+        graph.quantize_occurrence_time(contact[0]["t_end"], resolution)
+    )
+    assert began[0]["entity_id"] == HUMAN_ENTITY_ID
+
+
+def test_a_relationship_still_holding_at_the_end_gets_no_ended_occurrence(
+    tmp_path: Path,
+) -> None:
+    """Silence with a stated meaning, rather than a fabricated end.
+
+    The human is still touching the arm when the recording stops. Emitting
+    `contact_ended` at the last frame would record an event that did not happen;
+    omitting it is what `run_ended` is for, and `OCCURRENCE_RETENTION` in the
+    artifact says so, so the absence is readable rather than ambiguous.
+    """
+    frames = [_frame(i, (0.5, 0.0) if i >= 4 else (2.4, 0.0)) for i in range(10)]
+    csv = _write_stream(tmp_path / "hold.csv", frames)
+    out = tmp_path / "hold.sqlite"
+    _build(csv, out)
+
+    assert _occurrences(out, occurrence_type="contact_began")
+    assert _occurrences(out, occurrence_type="contact_ended") == []
+    assert _occurrences(out, occurrence_type="run_ended")
+    conn = store.connect(out)
+    try:
+        rule = store.get_meta(conn, graph.META_OCCURRENCE_RETENTION)
+    finally:
+        conn.close()
+    assert rule is not None and "run_ended bounds it" in rule
+
+
+def test_the_closest_approach_agrees_with_the_edge_layers_minimum(
+    tmp_path: Path,
+) -> None:
+    """One number, two layers, and they must be the same number.
+
+    The occurrence layer's whole claim to answering `min_separation` is this row.
+    If it disagreed with the `SEPARATION` edges by so much as a quantum, the
+    coarse layer would be answering a different question cheaply rather than the
+    same question cheaply.
+    """
+    n_frames = 24
+    csv = _write_stream(
+        tmp_path / "walk.csv",
+        _creep_frames(n_frames, lambda i: (2.4 - 0.05 * i, 0.0)),
+    )
+    out = tmp_path / "walk.sqlite"
+    _build(csv, out)
+
+    edges = _edges(out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
+    smallest = min(float(r["min_distance"]) for r in edges)
+    earliest = min(
+        float(r["t_start"]) for r in edges if float(r["min_distance"]) == smallest
+    )
+
+    closest = _occurrences(
+        out, occurrence_type="closest_approach", entity_id=HUMAN_ENTITY_ID
+    )
+    assert len(closest) == 1
+    assert float(closest[0]["value"]) == pytest.approx(smallest)
+    # The timestamp is the *earliest* frame the minimum was seen at, rounded.
+    # Not the last: a run that sits at its minimum reports when it got there.
+    assert float(closest[0]["t"]) == pytest.approx(
+        graph.quantize_occurrence_time(earliest, graph.OCCURRENCE_TIME_RESOLUTION_S)
+    )
+
+
+def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
+    """The data model, per UN R157 and docs/prior-art.md §9.
+
+    The flag, the reason, the timestamp, and the software version present at the
+    event (`R157SWIN`). The date is deliberately absent and the artifact says so
+    — a wall-clock date would be the one ambient value that breaks byte
+    reproducibility — so this asserts the *stated* substitute is there instead of
+    letting a missing column pass unremarked.
+    """
+    csv = _write_stream(
+        tmp_path / "walk.csv", _creep_frames(12, lambda i: (0.95 - 0.03 * i, 0.0))
+    )
+    out = tmp_path / "walk.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        rows = store.read_occurrences(conn)
+        meta = store.all_meta(conn)
+    finally:
+        conn.close()
+
+    assert rows, "precondition failed: this run produced no occurrences at all"
+    expected = graph.sw_version(**_FAST)
+    for row in rows:
+        assert str(row["type"]) in store.OCCURRENCE_SPECS
+        assert str(row["reason"]).strip()
+        assert row["t"] is not None
+        assert str(row["sw_version"]) == expected
+        assert str(row["layer"]) == store.occurrence_layer(str(row["type"]))
+
+    # The stamp is checkable against the parameters it binds, both of which the
+    # artifact carries: an occurrence whose digest its own meta cannot reproduce
+    # would be an event and a parameter set from two different runs.
+    assert meta[graph.META_OCCURRENCE_SW_VERSION] == expected
+    assert meta[graph.META_OCCURRENCE_RESOLUTION] == repr(
+        float(graph.OCCURRENCE_TIME_RESOLUTION_S)
+    )
+    assert meta[graph.META_OCCURRENCE_RETENTION] == graph.OCCURRENCE_RETENTION
+    # The date, named as absent rather than silently missing.
+    assert "no date element" in meta[graph.META_OCCURRENCE_RETENTION]
+
+
+def test_the_software_stamp_changes_when_the_envelope_parameters_do() -> None:
+    """`R157SWIN`'s negative. A stamp that never moved would bind nothing.
+
+    The regulation's point is that a recorded event can be attributed to the
+    software that produced it. Here that includes the envelope parameters,
+    because the same code at a different horizon computes a different envelope
+    and therefore records a different set of `envelope_entered` events.
+    """
+    base = graph.sw_version(**_FAST)
+    assert base != graph.sw_version(**{**_FAST, "horizon": 0.2})
+    assert base != graph.sw_version(**{**_FAST, "n_samples": 8})
+    assert base != graph.sw_version(**{**_FAST, "seed": 1})
+    assert base == graph.sw_version(**_FAST)
+
+
+@pytest.mark.parametrize("resolution", [1.0, 0.5, 0.02])
+def test_the_timestamp_resolution_is_a_parameter_and_it_bites(
+    tmp_path: Path, resolution: float
+) -> None:
+    """Settable, and settable to something that changes the record.
+
+    The whole point of the layer is measuring what a resolution costs, so a
+    resolution that were welded to 1.0 s would give one point and no curve. Every
+    timestamp must land on a multiple of whatever was asked for — asserted as a
+    property of every row rather than as a golden value for one.
+    """
+    frames = [
+        _frame(i, (0.5, 0.0) if 7 <= i <= 15 else (2.4, 0.0)) for i in range(30)
+    ]
+    csv = _write_stream(tmp_path / "touch.csv", frames)
+    out = tmp_path / f"touch_{resolution}.sqlite"
+    _build(csv, out, occurrence_resolution_s=resolution)
+
+    rows = _occurrences(out)
+    assert rows
+    for row in rows:
+        t = float(row["t"])
+        assert abs(t / resolution - round(t / resolution)) < 1e-9, (
+            f"occurrence at t={t} is not a multiple of the {resolution} s "
+            "resolution this artifact records itself as having."
+        )
+    conn = store.connect(out)
+    try:
+        assert store.get_meta(conn, graph.META_OCCURRENCE_RESOLUTION) == repr(
+            float(resolution)
+        )
+    finally:
+        conn.close()
+
+
+def test_a_finer_resolution_locates_an_event_a_coarse_one_cannot(
+    tmp_path: Path,
+) -> None:
+    """The cost of the coarse timestamp, made visible as a disagreement.
+
+    Two builds of *one stream* differing in nothing but the occurrence
+    resolution. At the frame period the contact is located exactly; at DSSAD's
+    ±1 s it is a second away from where it happened. That gap is the measurement
+    `reg.bench --resolution` reports, and this is the unit-level version of it.
+    """
+    frames = [
+        _frame(i, (0.5, 0.0) if 42 <= i <= 60 else (2.4, 0.0)) for i in range(90)
+    ]
+    csv = _write_stream(tmp_path / "touch.csv", frames)
+    fine = tmp_path / "fine.sqlite"
+    coarse = tmp_path / "coarse.sqlite"
+    _build(csv, fine, occurrence_resolution_s=DT)
+    _build(csv, coarse, occurrence_resolution_s=1.0)
+
+    t_fine = float(_occurrences(fine, occurrence_type="contact_began")[0]["t"])
+    t_coarse = float(_occurrences(coarse, occurrence_type="contact_began")[0]["t"])
+    assert t_fine == pytest.approx(42 * DT)
+    assert t_coarse == pytest.approx(1.0)
+    assert abs(t_coarse - t_fine) > TIME_TOL_S, (
+        "the coarse build landed within TIME_TOL_S of the fine one, so this "
+        "fixture is not exercising the resolution at all."
+    )
+
+
+@pytest.mark.parametrize("resolution", [0.0, -1.0, float("nan")])
+def test_a_resolution_nobody_can_round_to_is_refused(
+    tmp_path: Path, resolution: float
+) -> None:
+    """THE NEGATIVE for the parameter. No fallback to DSSAD's 1.0 s.
+
+    A substituted resolution would timestamp every occurrence at a granularity
+    the caller did not ask for and — since the artifact records what it was
+    *given* — would then be recorded as though it had been asked for.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    with pytest.raises(GraphBuildError, match="resolution"):
+        _build(csv, tmp_path / "held.sqlite", occurrence_resolution_s=resolution)
+
+
+def test_the_occurrence_layer_is_additive(tmp_path: Path) -> None:
+    """It must not have moved one edge, one envelope row or one config.
+
+    Issue #35: "the occurrence layer is additive. It does not replace the edge
+    layer, and the existing tables and queries keep working." Asserted against a
+    build made with the layer's own emission suppressed — the same stream, the
+    same everything else — rather than against numbers copied from before the
+    change, which would go stale the first time an unrelated tolerance moved.
+    """
+    frames = _sliding_frames(20)
+    csv = _write_stream(tmp_path / "slide.csv", frames)
+    with_layer = _build(csv, tmp_path / "with.sqlite")
+
+    without = tmp_path / "without.sqlite"
+    log = graph._OccurrenceLog
+    try:
+        graph._OccurrenceLog = _SilentOccurrenceLog
+        result = _build(csv, without)
+    finally:
+        graph._OccurrenceLog = log
+
+    assert result.edges == with_layer.edges
+    assert result.nodes["Envelope"] == with_layer.nodes["Envelope"]
+    assert result.nodes["RobotConfig"] == with_layer.nodes["RobotConfig"]
+    assert result.nodes["Entity"] == with_layer.nodes["Entity"]
+    assert result.nodes["Occurrence"] == 0
+    assert with_layer.nodes["Occurrence"] > 0
+
+    # And the rows themselves, not only their counts: every edge identical.
+    def rows(path: Path):
+        return [
+            tuple(row)
+            for row in _edges(path)
+        ]
+
+    assert rows(without) == rows(tmp_path / "with.sqlite")
+
+
+class _SilentOccurrenceLog:
+    """A drop-in `_OccurrenceLog` that records nothing.
+
+    Used by the additivity test only. It exists because the honest way to ask
+    "did the occurrence layer change the edge layer" is to build the same stream
+    with it and without it, and there is no flag to turn it off — the layer is
+    not optional in the product, it is only optional in this one comparison.
+    """
+
+    def __init__(self, conn, *, resolution: float, stamp: str) -> None:
+        graph.quantize_occurrence_time(0.0, resolution)
+
+    def run_began(self, t: float) -> None: ...
+
+    def run_ended(self, t: float) -> None: ...
+
+    def relationship_began(self, edge_type: str, entity_id: str, t: float) -> None: ...
+
+    def relationship_ended(self, edge_type: str, entity_id: str, t: float) -> None: ...
+
+    def separation_observed(self, entity_id: str, **kwargs) -> None: ...
+
+    def closest_approaches(self) -> None: ...
+
+
+def test_no_edge_type_points_at_an_occurrence() -> None:
+    """Additive in the vocabulary too, and asserted against the schema.
+
+    An edge to an `Occurrence` would make the coarse layer a participant in the
+    fine one's joins, and the two would stop being separable views of one run —
+    which is what `reg.bench --resolution` measures over.
+    """
+    assert "Occurrence" in store.NODE_TABLES
+    for edge_type, spec in store.EDGE_SPECS.items():
+        assert spec.src_kind != "Occurrence", edge_type
+        assert spec.dst_kind != "Occurrence", edge_type
+
+
+# --- the negatives: what the occurrence layer refuses ----------------------
+
+
+def _occurrence_kwargs(**overrides):
+    fields = {
+        "seq": 0,
+        "occurrence_type": "closest_approach",
+        "reason": "the smallest separation observed",
+        "t": 1.0,
+        "entity_id": "obs_a",
+        "value": 0.4,
+        "sw_version": "reg-test",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_an_out_of_vocabulary_occurrence_is_refused(seeded) -> None:
+    """The vocabulary is fixed and small, so an unknown type is a fault.
+
+    Not a new row type: an artifact that accepted one would record an event
+    whose meaning is nowhere written down, and the absence of a *known* type
+    would stop meaning "it did not happen".
+    """
+    with pytest.raises(store.StoreError, match="not an occurrence type"):
+        store.insert_occurrence(
+            seeded, "occ_0", **_occurrence_kwargs(occurrence_type="escalation_failure")
+        )
+    with pytest.raises(store.StoreError, match="not an occurrence type"):
+        store.occurrence_layer("veto")
+
+
+def test_the_schema_itself_refuses_an_unknown_occurrence_type(seeded) -> None:
+    """Not only the Python guard. The vocabulary is a CHECK in the file."""
+    with pytest.raises(sqlite3.IntegrityError):
+        seeded.execute(
+            "INSERT INTO occurrence (occurrence_id, seq, type, layer, reason, t, "
+            "sw_version) VALUES ('occ_x', 0, 'veto', 'A', 'because', 1.0, 'v')"
+        )
+
+
+def test_an_occurrence_with_no_reason_is_refused(seeded) -> None:
+    """DSSAD records the reason beside the flag. A blank one is not a record."""
+    for blank in ("", "   "):
+        with pytest.raises(store.StoreError, match="reason"):
+            store.insert_occurrence(
+                seeded, "occ_0", **_occurrence_kwargs(reason=blank)
+            )
+
+
+def test_an_occurrence_with_no_software_version_is_refused(seeded) -> None:
+    """`R157SWIN`. An event nobody can attribute to a build is not evidence."""
+    with pytest.raises(store.StoreError, match="R157SWIN"):
+        store.insert_occurrence(seeded, "occ_0", **_occurrence_kwargs(sw_version=""))
+
+
+def test_an_entity_occurrence_without_an_entity_is_refused(seeded) -> None:
+    with pytest.raises(store.StoreError, match="names an entity"):
+        store.insert_occurrence(
+            seeded, "occ_0", **_occurrence_kwargs(entity_id=None)
+        )
+
+
+def test_a_run_occurrence_that_names_an_entity_is_refused(seeded) -> None:
+    with pytest.raises(store.StoreError, match="names no entity"):
+        store.insert_occurrence(
+            seeded,
+            "occ_0",
+            **_occurrence_kwargs(
+                occurrence_type="run_began", entity_id="obs_a", value=None
+            ),
+        )
+
+
+def test_an_occurrence_naming_an_entity_that_is_not_there_is_refused(seeded) -> None:
+    """The same dangling-reference refusal edges get: an occurrence about an
+    entity the artifact does not contain is an event about nobody."""
+    with pytest.raises(store.StoreError, match="no Entity node"):
+        store.insert_occurrence(
+            seeded, "occ_0", **_occurrence_kwargs(entity_id="obs_nowhere")
+        )
+
+
+def test_a_missing_occurrence_metric_is_refused(seeded) -> None:
+    with pytest.raises(store.StoreError, match="min_distance_m"):
+        store.insert_occurrence(seeded, "occ_0", **_occurrence_kwargs(value=None))
+
+
+def test_a_metric_on_an_occurrence_that_carries_none_is_refused(seeded) -> None:
+    with pytest.raises(store.StoreError, match="carries no value"):
+        store.insert_occurrence(
+            seeded,
+            "occ_0",
+            **_occurrence_kwargs(
+                occurrence_type="envelope_entered", value=0.4
+            ),
+        )
+
+
+def test_read_occurrences_refuses_an_unknown_type_rather_than_returning_nothing(
+    seeded,
+) -> None:
+    """An empty list for a mistyped type reads as "no such event in this run"."""
+    with pytest.raises(store.StoreError, match="not an occurrence type"):
+        store.read_occurrences(seeded, occurrence_type="contact_begun")

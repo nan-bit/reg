@@ -49,6 +49,19 @@ says plainly that it does not, within the range actually executed. **Nothing is
 extrapolated.** The marginal columns are arithmetic between two measured points,
 never a fitted curve, and a crossover that was not measured is not quoted.
 
+**6. Since issue #30 answered the ratio question — no — the measured variable is
+resolution** (issue #35). `--scaling` established that the artifact is ~14x
+*larger* per frame than a gzipped copy of the stream at every length up to 30,000
+frames, and that this is structural rather than an encoding detail. What that
+exposed is that `reg` chose cm / 10 ms, every frame, while UN R157's DSSAD — the
+only mandated evidence recorder for autonomy — stores occurrences at ±1.0 s. So
+`--resolution` prices the choice: the occurrence layer, the transition layer and
+a per-frame expansion, **as three views of one build**, reporting bytes/hour and
+whether each level still answers the supported questions within their stated
+tolerances. It reports the divergence rather than tuning it away, and it quotes
+**no ratio against the CSV** — docs/plan.md Claim 1 forbids one while the
+measured ratio is below 1.
+
 WHAT THIS BENCHMARK DOES NOT CLAIM
 ----------------------------------
 * The raw stream is a *simulator state stream*, not a sensor log. It is the
@@ -74,6 +87,7 @@ recomputed outside `reg.graph`.
 from __future__ import annotations
 
 import argparse
+import bisect
 import gzip
 import math
 import shutil
@@ -95,7 +109,13 @@ from reg.kinematics import link_polygons
 from reg.scenarios import SCENARIOS, Scenario, long_run, scenario
 from reg.sim import DEFAULT_SEED, provenance
 from reg.stream import FLOAT_PRECISION, read_frames, write_frames
-from reg.tolerances import DISTANCE_TOL_M
+from reg.tolerances import (
+    DISTANCE_TOL_M,
+    TIME_TOL_S,
+    distance_bucket,
+    quantize_distance,
+    quantize_time,
+)
 from reg.world import World
 
 __all__ = [
@@ -107,26 +127,42 @@ __all__ = [
     "INDEX_LABEL",
     "MET",
     "NOT_MET",
+    "OCCURRENCE_LEVEL",
+    "PER_FRAME_LEVEL",
     "QUESTION",
+    "RESOLUTION_FRAME_COUNT",
+    "RESOLUTION_LEVELS",
+    "RESOLUTION_QUERIES",
     "SCALING_FRAME_COUNTS",
     "SCALING_N_SAMPLES",
     "TIMING_REPEATS",
+    "TRANSITION_LEVEL",
     "BenchError",
     "Crossover",
+    "GroundTruth",
+    "LevelCheck",
+    "ResolutionCurve",
+    "ResolutionPoint",
+    "ResolutionQuery",
     "ScalingPoint",
     "ScenarioResult",
     "SeparationCheck",
     "Sizes",
     "Timing",
     "agreement",
+    "answers_at_level",
+    "check_level",
     "claim_verdict",
     "compression_ratio",
     "crossover",
+    "ground_truth_from_csv",
     "gzip_bytes",
     "main",
+    "materialize_level",
     "min_separation_from_csv",
     "min_separation_from_graph",
     "render",
+    "run_resolution_curve",
     "run_scaling_point",
     "run_scenario",
     "sensor_projection_bytes",
@@ -221,6 +257,52 @@ SCALING_FRAME_COUNTS: tuple[int, ...] = (300, 1_000, 3_000, 10_000, 30_000)
 #:   is 44,300 frames — half an hour at 16, fourteen and a half hours at 512.
 #:   A 30k row nobody can afford to reproduce is worth less than one they can.
 SCALING_N_SAMPLES = 16
+
+# --------------------------------------------------------------------------
+# The resolution curve (issue #35). What replaced Claim 1 after issue #30
+# refuted it: not "is the graph smaller than the stream" — measured, no — but
+# "what does evidence cost per unit of resolution, and how coarse can it get
+# before it stops answering the question?" (docs/plan.md Claim 1, "What replaces
+# it".)
+#
+# Three levels, and they are three **views of one build**. Not three builds: a
+# curve whose points differ in the simulator run, the envelope parameters or the
+# builder would be measuring those, and the whole claim is about resolution.
+# --------------------------------------------------------------------------
+
+#: DSSAD-aligned: the occurrence layer alone, timestamps at the artifact's stated
+#: occurrence resolution (`reg.graph.OCCURRENCE_TIME_RESOLUTION_S`, ±1.0 s from
+#: UN R157). Entities and provenance stay — an occurrence naming an entity the
+#: file does not contain is not a record of anything.
+OCCURRENCE_LEVEL = "occurrence"
+
+#: The current edge emission: one row per relationship transition, endpoints at
+#: `TIME_TOL_S`. This is what `reg.graph` has produced since issue #14.
+TRANSITION_LEVEL = "transition"
+
+#: One row per frame per relationship — the density the incremental rule exists
+#: to avoid, materialized from the transition view so that the cost of *not*
+#: having the rule is a measurement in the same table rather than an argument.
+PER_FRAME_LEVEL = "per-frame"
+
+#: Coarsest first, so the table reads as a curve.
+RESOLUTION_LEVELS: tuple[str, ...] = (
+    OCCURRENCE_LEVEL,
+    TRANSITION_LEVEL,
+    PER_FRAME_LEVEL,
+)
+
+#: The run length the resolution curve is measured at, in frames. **Not chosen
+#: here**: it is the middle rung of issue #30's ladder, which issue #35 says to
+#: use sparingly — "one moderate length is enough to establish the curve". At
+#: 50 Hz it is 60 s of robot time, long enough that the fixed schema-and-index
+#: cost is not the whole artifact and short enough to reproduce.
+RESOLUTION_FRAME_COUNT = 3_000
+
+#: Seconds in an hour. Named because `bytes/hour` is the figure docs/plan.md
+#: quotes for retention and a literal 3600 in the middle of an arithmetic
+#: expression is the kind of number nobody checks.
+SECONDS_PER_HOUR = 3_600.0
 
 #: The agreement predicate for query 1, quoted from docs/lossiness.md's table:
 #: "per sampled frame, |d_graph - d_csv| <= DISTANCE_TOL_M". It is imported, not
@@ -677,15 +759,17 @@ def run_scenario(
     n_samples: int,
     envelope_seed: int,
     substep_dt: float,
+    occurrence_resolution_s: float,
     timing_repeats: int = TIMING_REPEATS,
 ) -> ScenarioResult:
     """Simulate, build, measure. Every parameter is required and none is guessed.
 
-    `seed`, `horizon`, `n_samples`, `envelope_seed` and `substep_dt` all move the
-    numbers this function returns, so none of them has a default here — the CLI
-    supplies them and the report prints them. `run_scenario(name, dir)` alone
-    would produce a table of numbers nobody could reproduce, which is the failure
-    the whole determinism rule exists to prevent.
+    `seed`, `horizon`, `n_samples`, `envelope_seed`, `substep_dt` and
+    `occurrence_resolution_s` all move the numbers this function returns, so none
+    of them has a default here — the CLI supplies them and the report prints
+    them. `run_scenario(name, dir)` alone would produce a table of numbers nobody
+    could reproduce, which is the failure the whole determinism rule exists to
+    prevent.
 
     Args:
         name: a scenario in `reg.scenarios.SCENARIOS`.
@@ -705,6 +789,7 @@ def run_scenario(
         n_samples=n_samples,
         envelope_seed=envelope_seed,
         substep_dt=substep_dt,
+        occurrence_resolution_s=occurrence_resolution_s,
         timing_repeats=timing_repeats,
     )
 
@@ -718,6 +803,7 @@ def run_scaling_point(
     n_samples: int,
     envelope_seed: int,
     substep_dt: float,
+    occurrence_resolution_s: float,
     timing_repeats: int = TIMING_REPEATS,
 ) -> ScalingPoint:
     """One rung of the scaling ladder: the long-run fixture at `frames` frames.
@@ -738,11 +824,250 @@ def run_scaling_point(
             n_samples=n_samples,
             envelope_seed=envelope_seed,
             substep_dt=substep_dt,
+            occurrence_resolution_s=occurrence_resolution_s,
             timing_repeats=timing_repeats,
         ),
         n_samples=int(n_samples),
         frame_period_s=scn.dt,
     )
+
+
+@dataclass(frozen=True)
+class ResolutionQuery:
+    """One question the curve asks at every level, and how agreement is judged.
+
+    `tolerance` is `None` for a question whose answer is not a number — those get
+    exact equality, the same way docs/lossiness.md gives queries 4-8 no numeric
+    tolerance. It is never a knob: every value here is imported from
+    `reg.tolerances`, and issue #35 forbids widening any of them, because
+    loosening a tolerance changes what the artifact *claims* rather than what it
+    *costs*, and cost is the variable under study.
+    """
+
+    name: str
+    #: What the question is, in one line, for a reader of the report.
+    question: str
+    #: The agreement predicate, quoted from docs/lossiness.md where it has one.
+    predicate: str
+    tolerance: float | None
+    #: Units for the report's delta column. Prose, not arithmetic.
+    unit: str
+
+
+#: The questions the curve asks. Every one is answerable from the **raw CSV by
+#: forward kinematics alone**, and that is the selection rule rather than an
+#: accident of what was easy:
+#:
+#: * docs/lossiness.md's queries 2 and 4 (`first_envelope_intersection`,
+#:   `reachable_entities`) are about the *envelope*, and the only ground truth
+#:   available for them here would be recomputing an envelope per frame with
+#:   `reg.envelope` — the builder's own computation. A check whose ground truth
+#:   reruns the code under test cannot fail, and shipping one would be exactly
+#:   the "harness that has only ever been run against a healthy graph" that
+#:   docs/lossiness.md rules out.
+#: * queries 5-8 are declarations, verdicts and the chain. They are Milestone 3
+#:   and no fixture produces them; asking them here would report
+#:   `COULD-NOT-EVALUATE` for every level and say nothing about resolution.
+#:
+#: So four questions, each answerable independently, spanning the two things
+#: resolution can cost: a *value* and a *time*.
+RESOLUTION_QUERIES: tuple[ResolutionQuery, ...] = (
+    ResolutionQuery(
+        name="min_separation",
+        question="the minimum robot-to-human separation over the run",
+        predicate="|d_level - d_csv| <= DISTANCE_TOL_M",
+        tolerance=DISTANCE_TOL_M,
+        unit="m",
+    ),
+    ResolutionQuery(
+        name="time_of_closest_approach",
+        question="when the closest approach to the human happened",
+        predicate=(
+            "|t_level - t| <= TIME_TOL_S for some frame t whose separation is "
+            "within DISTANCE_TOL_M of the run's minimum"
+        ),
+        tolerance=TIME_TOL_S,
+        unit="s",
+    ),
+    ResolutionQuery(
+        name="separation_timeline",
+        question=(
+            "the robot-to-human separation at every frame (query 1 of "
+            "docs/lossiness.md's supported set, in full)"
+        ),
+        predicate="per sampled frame, |d_level - d_csv| <= DISTANCE_TOL_M",
+        tolerance=DISTANCE_TOL_M,
+        unit="m",
+    ),
+    ResolutionQuery(
+        name="did_contact_occur",
+        question="whether the robot body and the human ever intersected",
+        predicate="exact equality — a missed or invented contact is a failure",
+        tolerance=None,
+        unit="",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class GroundTruth:
+    """The four answers recomputed from the raw stream. Computed **once**.
+
+    Once, and shared by every level, for the same reason the curve is three views
+    of one build: a ground truth recomputed per level would differ between levels
+    by whatever the recomputation is not deterministic in, and the comparison
+    would be measuring that.
+
+    `min_separation` is the *unquantized* minimum, so the comparison against the
+    artifact's quantized value spends the error budget docs/lossiness.md
+    allocates — exactly what `SeparationCheck` already does.
+
+    **`closest_approach_candidates` is a set, and that is the honest shape of
+    the answer.** "When was the closest approach?" is the argmin of a quantity
+    the artifact retains only to `DISTANCE_TOL_M`, and docs/lossiness.md
+    *Unanswerable* #4 says a metric difference finer than the tolerance is
+    unanswerable rather than false. So every frame whose separation is within one
+    quantum of the run's minimum is a frame the artifact cannot distinguish from
+    the minimum, and any of them is a correct answer. Comparing against a single
+    argmin frame instead would fail every level by one frame period as soon as
+    the graph's simplified entity boundary and this path's unsimplified one
+    disagreed by a millimetre near a bucket edge — a failure about the geometry
+    budget, reported in a table about resolution.
+
+    This is not a widened tolerance. `TIME_TOL_S` still governs the comparison;
+    what the candidate set fixes is *which instants the question has as correct
+    answers*, which the lossiness contract already decided.
+    """
+
+    min_separation: float | None
+    #: The earliest candidate — what the report prints as "the" answer.
+    t_closest_approach: float | None
+    #: Every frame within `DISTANCE_TOL_M` of the minimum, in frame order.
+    closest_approach_candidates: tuple[float, ...]
+    #: `(t, unquantized distance)` per frame, in frame order.
+    timeline: tuple[tuple[float, float], ...]
+    contact_occurred: bool
+
+    @property
+    def frames(self) -> int:
+        return len(self.timeline)
+
+
+@dataclass(frozen=True)
+class LevelAnswers:
+    """What one resolution level can say, with `None` for "it cannot say".
+
+    `None` is a refusal and never a zero or a `False`: a level that holds no
+    per-frame separation has not observed a separation of zero at every frame,
+    and the difference is the whole reason this dataclass exists rather than a
+    dict of numbers.
+    """
+
+    min_separation: float | None
+    t_closest_approach: float | None
+    timeline: tuple[tuple[float, float], ...] | None
+    contact_occurred: bool | None
+
+
+@dataclass(frozen=True)
+class LevelCheck:
+    """One query, at one level, with a verdict that can say no."""
+
+    query: str
+    verdict: Verdict
+    #: The two answers and their difference, as the report prints them. Prose,
+    #: because the answers are of three different types and a float column would
+    #: have to invent a number for the boolean one.
+    detail: str
+
+
+@dataclass(frozen=True)
+class ResolutionPoint:
+    """One level, measured: what it costs and what it can still answer."""
+
+    level: str
+    #: The resolution this level's timestamps are recorded at, in seconds.
+    timestamp_resolution_s: float
+    size_bytes: int
+    nodes: int
+    edges: int
+    occurrences: int
+    #: Robot time in the run, so `bytes_per_hour` is a rate this point can state
+    #: on its own rather than one only the curve can assemble.
+    run_seconds: float
+    checks: tuple[LevelCheck, ...]
+
+    @property
+    def bytes_per_hour(self) -> float:
+        """The retention rate — **the headline for this table**.
+
+        docs/plan.md Claim 1 forbids quoting a ratio against the CSV while the
+        measured one is below 1, and this is what it says to quote instead: an
+        absolute number, in the units a retention policy is written in.
+
+        It is `bytes / run_seconds * 3600` and therefore scales the artifact's
+        *fixed* schema-and-index cost by the same factor as its per-frame cost.
+        Over a run much shorter than an hour that overstates the hourly rate, and
+        the report says so on the table rather than here alone.
+        """
+        if self.run_seconds <= 0.0:
+            raise BenchError(
+                f"{self.level}: the run is {self.run_seconds} s of robot time, so "
+                "a per-hour rate over it is a division by zero. A run of no "
+                "duration is a measurement that did not happen."
+            )
+        return self.size_bytes * SECONDS_PER_HOUR / self.run_seconds
+
+    @property
+    def verdict(self) -> Verdict:
+        """The level's overall verdict. **The third never resolves to the first.**
+
+        A level that cannot answer a question does not thereby agree with it, so
+        one `COULD-NOT-EVALUATE` makes the level's summary `COULD-NOT-EVALUATE`,
+        and one `DISAGREE` makes it `DISAGREE` — a wrong answer outranks a
+        missing one, because a level that answers wrongly is not a smaller
+        artifact, it is a broken one.
+        """
+        verdicts = {c.verdict for c in self.checks}
+        if not verdicts:
+            return COULD_NOT_EVALUATE
+        if DISAGREE in verdicts:
+            return DISAGREE
+        if COULD_NOT_EVALUATE in verdicts:
+            return COULD_NOT_EVALUATE
+        return AGREE
+
+
+@dataclass(frozen=True)
+class ResolutionCurve:
+    """The whole curve: one build, three views, one ground truth."""
+
+    scenario: str
+    frames: int
+    frame_period_s: float
+    n_samples: int
+    occurrence_resolution_s: float
+    #: The build every point is a view of. Its own cross-check is a normal
+    #: `SeparationCheck` and gates the exit code; the per-level checks below are
+    #: the measurement and do not.
+    source: ScenarioResult
+    truth: GroundTruth
+    points: tuple[ResolutionPoint, ...]
+
+    @property
+    def run_seconds(self) -> float:
+        return (self.frames - 1) * float(self.frame_period_s)
+
+
+def _work_paths(scn: Scenario, work_dir: str | Path) -> tuple[Path, Path]:
+    """Where one scenario's stream and artifact live under `work_dir`.
+
+    One function so that a caller wanting the artifact `_measure` just wrote —
+    the resolution curve does, because it must not rebuild it — names it the same
+    way `_measure` did rather than reconstructing the convention.
+    """
+    work_dir = Path(work_dir)
+    return work_dir / f"{scn.name}.csv", work_dir / f"{scn.name}.sqlite"
 
 
 def _write_stream(scn: Scenario, seed: int, path: Path) -> Path:
@@ -768,14 +1093,14 @@ def _measure(
     n_samples: int,
     envelope_seed: int,
     substep_dt: float,
+    occurrence_resolution_s: float,
     timing_repeats: int,
 ) -> ScenarioResult:
     """Simulate one scenario, build its graph, and measure both. No defaults."""
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    csv_path = work_dir / f"{scn.name}.csv"
-    sqlite_path = work_dir / f"{scn.name}.sqlite"
+    csv_path, sqlite_path = _work_paths(scn, work_dir)
 
     _write_stream(scn, seed, csv_path)
     result = graph.build(
@@ -787,6 +1112,7 @@ def _measure(
         n_samples=n_samples,
         seed=envelope_seed,
         substep_dt=substep_dt,
+        occurrence_resolution_s=occurrence_resolution_s,
     )
 
     sizes = Sizes(
@@ -822,6 +1148,608 @@ def _measure(
             graph_timing=graph_timing,
             csv_timing=csv_timing,
         ),
+    )
+
+
+# --------------------------------------------------------------------------
+# The three views. Each one is the built artifact with everything the level does
+# not retain removed, then `VACUUM`ed so the bytes are the bytes that level
+# would actually cost rather than the bytes plus the free pages its deletions
+# left behind.
+#
+# Views, not builds. The simulator runs once, the graph is built once, and these
+# three files are projections of it — which is what makes the table a curve over
+# *resolution* rather than three measurements that differ in everything.
+# --------------------------------------------------------------------------
+
+
+def _meta_float(conn: sqlite3.Connection, key: str) -> float:
+    value = store.get_meta(conn, key)
+    if value is None:
+        raise BenchError(
+            f"the artifact has no meta[{key!r}], so it does not say what it was "
+            "built with. Every resolution level below is a statement about that "
+            "value; substituting one would put a number in the table that "
+            "nothing produced."
+        )
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise BenchError(f"meta[{key!r}] is {value!r}, not a number.") from exc
+
+
+def _frame_times(conn: sqlite3.Connection) -> tuple[float, ...]:
+    """Every frame's timestamp, from the artifact's own provenance.
+
+    From `t_first`, `frame_period_s` and `frame_count` rather than from the rows,
+    because since issue #29 the rows deliberately do not mark every frame — a row
+    count would say how many frames anchored something, which is a different
+    question and a smaller number. `reg.graph` refuses a stream whose period is
+    not uniform, so these three values reconstruct the sampling exactly.
+    """
+    period = _meta_float(conn, store.META_FRAME_PERIOD)
+    t_first = _meta_float(conn, "t_first")
+    count = int(_meta_float(conn, "frame_count"))
+    return tuple(quantize_time(t_first + i * period) for i in range(count))
+
+
+def materialize_level(
+    source: str | Path, level: str, out_path: str | Path
+) -> Path:
+    """Write the `level` view of an already-built artifact. Never rebuilds.
+
+    Args:
+        source: an artifact from `reg.graph.build`, left alone.
+        level: one of `RESOLUTION_LEVELS`.
+        out_path: where the view goes. Replaced if it exists.
+
+    Returns:
+        `out_path`, as a `Path`.
+
+    Raises:
+        BenchError: an unknown level, or a source artifact that does not carry
+            the provenance the per-frame expansion needs. Both are
+            could-not-evaluate; neither writes a partial view.
+    """
+    if level not in RESOLUTION_LEVELS:
+        raise BenchError(
+            f"{level!r} is not a resolution level. Known levels: "
+            f"{list(RESOLUTION_LEVELS)}. The curve is a comparison between named "
+            "views of one build, so a level nobody defined has no retention rule "
+            "and its byte count would mean nothing."
+        )
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.unlink(missing_ok=True)
+    shutil.copyfile(Path(source), out_path)
+
+    conn = store.connect(out_path)
+    try:
+        if level == OCCURRENCE_LEVEL:
+            # Everything the edge layer holds goes. What stays is the occurrence
+            # rows, the entity set they name, and the provenance — including the
+            # retention rule itself, so the view still says what its own silences
+            # mean.
+            conn.execute("DELETE FROM edge")
+            conn.execute("DELETE FROM envelope")
+            conn.execute("DELETE FROM robot_config")
+        else:
+            # The other two levels are the edge layer, so the occurrence rows go:
+            # each point must cost what *that* level costs and not what it costs
+            # plus a layer it does not use.
+            conn.execute("DELETE FROM occurrence")
+        if level == PER_FRAME_LEVEL:
+            _expand_to_frames(conn)
+        conn.commit()
+        # Outside a transaction, and the reason it is here rather than left to
+        # the caller: without it the file keeps the pages the DELETEs freed and
+        # the occurrence view measures as large as the artifact it came from.
+        conn.execute("VACUUM")
+        conn.commit()
+    finally:
+        conn.close()
+    return out_path
+
+
+def _expand_to_frames(conn: sqlite3.Connection) -> None:
+    """Replace every interval with one row per frame it covers.
+
+    The incremental rule run backwards. An edge spanning `[t_start, t_end]`
+    asserts the relationship held at every frame in it, so expanding it invents
+    nothing — it writes down what the interval already says, once per frame,
+    which is what the artifact would have cost without the rule.
+
+    **What this view is not.** It does not restore the per-frame `robot_config`
+    and `envelope` rows that issue #29 removed: those were discarded at build
+    time and there is nothing here to recover them from. So the per-frame point
+    is a **lower bound** on what a per-frame artifact costs, and the report says
+    so — an understatement in the direction that makes the coarser levels look
+    *less* good, which is the direction to be wrong in.
+    """
+    times = _frame_times(conn)
+    rows = store.read_edges(conn)
+    period = _meta_float(conn, store.META_FRAME_PERIOD)
+    conn.execute("DELETE FROM edge")
+    for row in rows:
+        t_start = float(row["t_start"])
+        t_end = float(row["t_end"])
+        # Bisected rather than scanned: this runs once per edge over every frame
+        # of the run, and the whole point of the view is to be measurable at a
+        # length where that product is large.
+        lo = bisect.bisect_left(times, t_start)
+        hi = bisect.bisect_right(times, t_end)
+        covered = list(times[lo:hi])
+        if not covered:
+            # An interval covering no sampled frame cannot be expanded into
+            # per-frame rows without inventing a frame. It is kept as itself
+            # rather than dropped: dropping it would make the per-frame view
+            # answer "the relationship never held", which is a different run.
+            covered = [t_start] if t_start == t_end else []
+            if not covered:  # pragma: no cover - endpoints are frame times
+                raise BenchError(
+                    f"edge {row['edge_id']} spans [{t_start}, {t_end}], which "
+                    f"contains no frame at period {period}. The per-frame view "
+                    "would have to invent one."
+                )
+        for t in covered:
+            conn.execute(
+                """
+                INSERT INTO edge (type, layer, src_kind, src_id, dst_kind,
+                                  dst_id, t_start, t_end, overlap_area,
+                                  min_distance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["type"],
+                    row["layer"],
+                    row["src_kind"],
+                    row["src_id"],
+                    row["dst_kind"],
+                    row["dst_id"],
+                    t,
+                    t,
+                    row["overlap_area"],
+                    row["min_distance"],
+                ),
+            )
+
+
+# --------------------------------------------------------------------------
+# The four questions, from each side.
+# --------------------------------------------------------------------------
+
+
+def ground_truth_from_csv(csv_path: str | Path, world: World) -> GroundTruth:
+    """The four answers recomputed from the raw stream, in one pass.
+
+    Forward kinematics from `frame.proprio()` and `world.limits` — Layer A inputs
+    even here — against the human disc, exactly as `min_separation_from_csv`
+    does. Geometry is deliberately not simplified, so the comparison against the
+    artifact spends the error budget docs/lossiness.md allocates rather than
+    checking one code path against itself.
+
+    It takes no entity argument, unlike `answers_at_level`: the human is the only
+    entity whose position the raw stream carries per frame, so it is the only one
+    this path can recompute anything about at all.
+    """
+    timeline: list[tuple[float, float]] = []
+    contact = False
+    best_raw: float | None = None
+
+    for frame in read_frames(csv_path):
+        t = quantize_time(frame.t)
+        body = unary_union(link_polygons(frame.proprio(), world.limits))
+        human = world.human_polygon(frame.human_pos)
+        distance = float(body.distance(human))
+        timeline.append((t, distance))
+        if body.intersects(human):
+            contact = True
+        if best_raw is None or distance < best_raw:
+            best_raw = distance
+
+    if not timeline:
+        raise BenchError(
+            f"{csv_path} yielded no frames, so there is no ground truth to check "
+            "any resolution level against. An empty stream is a step of the "
+            "pipeline that did not run, not a run in which nothing happened."
+        )
+    # Every frame the artifact could not tell apart from the minimum. One quantum
+    # wide because that is the resolution distances are retained at; making it
+    # narrower would ask the artifact a question docs/lossiness.md says it cannot
+    # answer, and making it wider would stop the check being able to fail.
+    candidates = tuple(
+        t for t, distance in timeline if distance - best_raw <= DISTANCE_TOL_M
+    )
+    if not candidates:  # pragma: no cover - the minimum is within zero of itself
+        raise BenchError(
+            "no frame is within DISTANCE_TOL_M of the run's own minimum "
+            "separation, which is arithmetically impossible."
+        )
+    return GroundTruth(
+        min_separation=best_raw,
+        t_closest_approach=candidates[0],
+        closest_approach_candidates=candidates,
+        timeline=tuple(timeline),
+        contact_occurred=contact,
+    )
+
+
+def _covering_values(
+    rows: Sequence[sqlite3.Row], times: Sequence[float], column: str
+) -> tuple[tuple[float, float], ...] | None:
+    """The value in force at each of `times`, or `None` if one is uncovered.
+
+    `None` rather than a shorter list: a timeline missing frames is a
+    could-not-evaluate for the whole query, and a short list compared elementwise
+    against ground truth would silently compare frame 40 with frame 41.
+    """
+    intervals = sorted(
+        ((float(r["t_start"]), float(r["t_end"]), r[column]) for r in rows),
+        key=lambda item: item[0],
+    )
+    out: list[tuple[float, float]] = []
+    index = 0
+    for t in times:
+        while index < len(intervals) and intervals[index][1] < t:
+            index += 1
+        if index >= len(intervals) or intervals[index][0] > t:
+            return None
+        value = intervals[index][2]
+        if value is None:  # pragma: no cover - the schema CHECKs metric presence
+            return None
+        out.append((t, float(value)))
+    return tuple(out)
+
+
+def answers_at_level(
+    view_path: str | Path, level: str, entity_id: str = graph.HUMAN_ENTITY_ID
+) -> LevelAnswers:
+    """What one level's view can answer, reading only what that level retains.
+
+    The occurrence level reads the `occurrence` table and nothing else; the two
+    edge levels read the `edge` table and nothing else. That separation is the
+    measurement: a level allowed to fall back on the finer layer would report the
+    finer layer's answers at the coarser layer's byte count.
+
+    **The closed-world reading, stated because it is doing work.** At the
+    occurrence level, "no `contact_began` row for this entity" is read as "no
+    contact occurred", not as "unknown". That is legitimate *only* because the
+    artifact carries `reg.graph.OCCURRENCE_RETENTION` in its own `meta`, which
+    says a contact would have produced one — the same reason DSSAD's absence of
+    an occurrence flag is readable. Without that rule in the file it would be
+    silence, and silence is not agreement.
+    """
+    if level not in RESOLUTION_LEVELS:
+        raise BenchError(
+            f"{level!r} is not a resolution level. Known levels: "
+            f"{list(RESOLUTION_LEVELS)}."
+        )
+    entity_id = str(entity_id)
+    conn = store.connect(view_path)
+    try:
+        if level == OCCURRENCE_LEVEL:
+            closest = store.read_occurrences(
+                conn, occurrence_type="closest_approach", entity_id=entity_id
+            )
+            began = store.read_occurrences(
+                conn, occurrence_type="contact_began", entity_id=entity_id
+            )
+            retention_stated = store.get_meta(conn, graph.META_OCCURRENCE_RETENTION)
+            return LevelAnswers(
+                min_separation=(
+                    None if not closest else float(closest[0]["value"])
+                ),
+                t_closest_approach=(
+                    None if not closest else float(closest[0]["t"])
+                ),
+                # The occurrence layer holds events, not states. There is no
+                # per-frame separation in it at any resolution, and there is no
+                # honest way to produce one — the intervals between occurrences
+                # are exactly what it discarded.
+                timeline=None,
+                contact_occurred=(
+                    None if retention_stated is None else bool(began)
+                ),
+            )
+
+        times = _frame_times(conn)
+        separations = store.read_edges(
+            conn, edge_type="SEPARATION", dst_id=entity_id
+        )
+        contacts = store.read_edges(conn, edge_type="CONTACT", dst_id=entity_id)
+    finally:
+        conn.close()
+
+    if not separations:
+        # No separation row for the entity at all: the artifact is silent, and
+        # silence about a separation is not a large separation.
+        return LevelAnswers(
+            min_separation=None,
+            t_closest_approach=None,
+            timeline=None,
+            contact_occurred=bool(contacts),
+        )
+
+    smallest = min(float(r["min_distance"]) for r in separations)
+    earliest = min(
+        float(r["t_start"])
+        for r in separations
+        if float(r["min_distance"]) == smallest
+    )
+    return LevelAnswers(
+        min_separation=smallest,
+        t_closest_approach=earliest,
+        timeline=_covering_values(separations, times, "min_distance"),
+        contact_occurred=bool(contacts),
+    )
+
+
+def check_level(
+    query: ResolutionQuery, answers: LevelAnswers, truth: GroundTruth
+) -> LevelCheck:
+    """One query, at one level, against ground truth. Three outcomes.
+
+    Every path through here can return `DISAGREE`, and the one that cannot
+    answer returns `COULD-NOT-EVALUATE` — never `AGREE` on the strength of an
+    absent answer. `tests/test_bench.py` feeds each of them the condition it
+    guards against.
+    """
+    if query.name == "min_separation":
+        return _scalar_check(
+            query, answers.min_separation, truth.min_separation, "m"
+        )
+    if query.name == "time_of_closest_approach":
+        return _closest_approach_time_check(query, answers.t_closest_approach, truth)
+    if query.name == "separation_timeline":
+        return _timeline_check(query, answers.timeline, truth)
+    if query.name == "did_contact_occur":
+        return _boolean_check(query, answers.contact_occurred, truth)
+    raise BenchError(  # pragma: no cover - RESOLUTION_QUERIES is the only source
+        f"{query.name!r} has no implementation. A query in the table with no way "
+        "to answer it would print as could-not-evaluate at every level, which "
+        "reads as a finding about resolution and is a missing function."
+    )
+
+
+def _scalar_check(
+    query: ResolutionQuery,
+    level_answer: float | None,
+    truth_answer: float | None,
+    unit: str,
+) -> LevelCheck:
+    tolerance = query.tolerance
+    if tolerance is None:  # pragma: no cover - both scalar queries have one
+        raise BenchError(f"{query.name} is compared numerically and states no tolerance.")
+    verdict = agreement(level_answer, truth_answer, tolerance)
+    if verdict == COULD_NOT_EVALUATE:
+        which = "the level" if level_answer is None else "ground truth"
+        return LevelCheck(
+            query=query.name,
+            verdict=verdict,
+            detail=f"{which} returned no answer",
+        )
+    difference = abs(float(level_answer) - float(truth_answer))  # type: ignore[arg-type]
+    return LevelCheck(
+        query=query.name,
+        verdict=verdict,
+        detail=(
+            f"{float(level_answer):.4f} {unit} vs {float(truth_answer):.4f} "
+            f"{unit}, Δ {difference:.4f} {unit} (tol {tolerance} {unit})"
+        ),
+    )
+
+
+def _closest_approach_time_check(
+    query: ResolutionQuery, level_answer: float | None, truth: GroundTruth
+) -> LevelCheck:
+    """"When was the closest approach" against the set of frames that qualify.
+
+    Agreement is `|t_level - t| <= TIME_TOL_S` for **some** candidate frame, and
+    the reported delta is the distance to the nearest one. See `GroundTruth`:
+    the set, not a single argmin, is what the lossiness contract leaves as the
+    answer, and the tolerance in force is still `TIME_TOL_S`.
+    """
+    if level_answer is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail="this level records no closest approach",
+        )
+    tolerance = float(query.tolerance)  # type: ignore[arg-type]
+    nearest = min(
+        truth.closest_approach_candidates, key=lambda t: abs(level_answer - t)
+    )
+    difference = abs(float(level_answer) - nearest)
+    return LevelCheck(
+        query=query.name,
+        verdict=AGREE if difference <= tolerance else DISAGREE,
+        detail=(
+            f"{float(level_answer):.4f} s against "
+            f"{len(truth.closest_approach_candidates):,} frame(s) within "
+            f"{DISTANCE_TOL_M} m of the minimum, nearest at {nearest:.4f} s, "
+            f"Δ {difference:.4f} s (tol {tolerance} s)"
+        ),
+    )
+
+
+def _timeline_check(
+    query: ResolutionQuery,
+    timeline: tuple[tuple[float, float], ...] | None,
+    truth: GroundTruth,
+) -> LevelCheck:
+    if timeline is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail="this level holds no per-frame separation",
+        )
+    if len(timeline) != truth.frames:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail=(
+                f"{len(timeline)} frames answered against {truth.frames} in the "
+                "stream; a partial timeline is not a timeline"
+            ),
+        )
+    tolerance = float(query.tolerance)  # type: ignore[arg-type]
+    worst = 0.0
+    worst_t = None
+    for (t_level, d_level), (t_truth, d_truth) in zip(timeline, truth.timeline):
+        if abs(t_level - t_truth) > TIME_TOL_S:
+            return LevelCheck(
+                query=query.name,
+                verdict=DISAGREE,
+                detail=(
+                    f"the level answers for t={t_level} where the stream has "
+                    f"t={t_truth}"
+                ),
+            )
+        difference = abs(d_level - d_truth)
+        if difference > worst:
+            worst, worst_t = difference, t_truth
+    verdict = AGREE if worst <= tolerance else DISAGREE
+    where = "" if worst_t is None else f" at t={worst_t}"
+    return LevelCheck(
+        query=query.name,
+        verdict=verdict,
+        detail=(
+            f"worst frame Δ {worst:.4f} m{where} over {truth.frames:,} frames "
+            f"(tol {tolerance} m)"
+        ),
+    )
+
+
+def _boolean_check(
+    query: ResolutionQuery, level_answer: bool | None, truth: GroundTruth
+) -> LevelCheck:
+    if level_answer is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail="this level does not state whether it would have recorded one",
+        )
+    verdict = AGREE if bool(level_answer) == truth.contact_occurred else DISAGREE
+    vacuous = (
+        " — and neither did the run, so this is agreement on a negative"
+        if not truth.contact_occurred
+        else ""
+    )
+    return LevelCheck(
+        query=query.name,
+        verdict=verdict,
+        detail=(
+            f"level says {bool(level_answer)}, stream says "
+            f"{truth.contact_occurred}{vacuous}"
+        ),
+    )
+
+
+def _level_counts(view_path: Path) -> tuple[int, int, int]:
+    """`(nodes, edges, occurrences)` in one view. Occurrences counted twice on
+    purpose — once inside the node total, once on their own — because the whole
+    table exists to compare a layer of occurrences against a layer of edges."""
+    conn = store.connect(view_path)
+    try:
+        nodes = 0
+        occurrences = 0
+        for kind, (table, _) in store.NODE_TABLES.items():
+            count = int(
+                conn.execute(
+                    f"SELECT count(*) AS n FROM {table}"  # noqa: S608
+                ).fetchone()["n"]
+            )
+            nodes += count
+            if kind == "Occurrence":
+                occurrences = count
+        edges = int(
+            conn.execute("SELECT count(*) AS n FROM edge").fetchone()["n"]
+        )
+    finally:
+        conn.close()
+    return nodes, edges, occurrences
+
+
+def run_resolution_curve(
+    frames: int,
+    work_dir: str | Path,
+    *,
+    seed: int,
+    horizon: float,
+    n_samples: int,
+    envelope_seed: int,
+    substep_dt: float,
+    occurrence_resolution_s: float,
+    timing_repeats: int = TIMING_REPEATS,
+) -> ResolutionCurve:
+    """Build the long-run fixture once and measure all three views of it.
+
+    **One build.** The simulator runs once, `reg.graph.build` runs once, and the
+    three points are projections of that one artifact — issue #35's runtime note
+    is a correctness requirement as much as a cost one: three builds would differ
+    in more than resolution, and the curve would not be about resolution.
+
+    Args:
+        frames: the run length. `RESOLUTION_FRAME_COUNT` is what the CLI passes.
+        work_dir: where the stream, the artifact and the three views go.
+        occurrence_resolution_s: what the occurrence timestamps are rounded to.
+            This is the variable the curve exists to price.
+
+    Returns:
+        A `ResolutionCurve`, coarsest point first.
+    """
+    scn = long_run(frames)
+    result = _measure(
+        scn,
+        work_dir,
+        seed=seed,
+        horizon=horizon,
+        n_samples=n_samples,
+        envelope_seed=envelope_seed,
+        substep_dt=substep_dt,
+        occurrence_resolution_s=occurrence_resolution_s,
+        timing_repeats=timing_repeats,
+    )
+    csv_path, sqlite_path = _work_paths(scn, work_dir)
+    truth = ground_truth_from_csv(csv_path, scn.world)
+
+    points: list[ResolutionPoint] = []
+    for level in RESOLUTION_LEVELS:
+        view = materialize_level(
+            sqlite_path, level, Path(work_dir) / "views" / f"{level}.sqlite"
+        )
+        nodes, edges, occurrences = _level_counts(view)
+        answers = answers_at_level(view, level)
+        points.append(
+            ResolutionPoint(
+                level=level,
+                timestamp_resolution_s=(
+                    float(occurrence_resolution_s)
+                    if level == OCCURRENCE_LEVEL
+                    else TIME_TOL_S
+                ),
+                size_bytes=view.stat().st_size,
+                nodes=nodes,
+                edges=edges,
+                occurrences=occurrences,
+                run_seconds=(result.frames - 1) * float(scn.dt),
+                checks=tuple(
+                    check_level(query, answers, truth)
+                    for query in RESOLUTION_QUERIES
+                ),
+            )
+        )
+
+    return ResolutionCurve(
+        scenario=scn.name,
+        frames=result.frames,
+        frame_period_s=scn.dt,
+        n_samples=int(n_samples),
+        occurrence_resolution_s=float(occurrence_resolution_s),
+        source=result,
+        truth=truth,
+        points=tuple(points),
     )
 
 
@@ -1217,6 +2145,214 @@ def _scaling_section(
     return lines
 
 
+def _bytes_per_hour_text(value: float) -> str:
+    """Bytes/hour at the magnitude a retention policy is written in."""
+    if value >= 1e9:
+        return f"{value / 1e9:,.2f} GB/h"
+    if value >= 1e6:
+        return f"{value / 1e6:,.2f} MB/h"
+    if value >= 1e3:
+        return f"{value / 1e3:,.1f} kB/h"
+    return f"{value:,.0f} B/h"
+
+
+def _resolution_section(curve: ResolutionCurve) -> list[str]:
+    """What evidence costs per unit of resolution (issue #35).
+
+    **No ratio against the CSV appears in this section.** docs/plan.md Claim 1
+    forbids quoting one while the measured ratio is below 1, and the figure that
+    replaced it is absolute: bytes/hour, beside the column that decides whether
+    the bytes bought anything — whether the questions still get the right answer.
+    """
+    points = list(curve.points)
+    if not points:
+        raise BenchError(
+            "the resolution curve has no points. An empty curve would read as "
+            "'no resolution level answered anything', which is a finding, and "
+            "this is the absence of a measurement."
+        )
+
+    lines = [
+        "",
+        "## What resolution costs",
+        "",
+        "**This is Claim 1 as it stands after issue #30.** The original question —",
+        "is the graph smaller than the stream — was measured and answered, no. The",
+        "question here is the one worth asking instead: *what does evidence cost",
+        "per unit of resolution, and how coarse can it get before it stops",
+        "answering the question?*",
+        "",
+        "The coarsest level is not invented. UN R157's **DSSAD** is the only",
+        "mandated evidence recorder for autonomy that exists, and it stores",
+        "**occurrences**: a flag, a reason, a date, a timestamp accurate to",
+        "**±1.0 s**, and the software version present at the event",
+        "(`docs/prior-art.md` §9). `reg` stores relationships at cm / 10 ms, every",
+        "frame — two orders of magnitude finer than the only comparable thing",
+        "actually required by law.",
+        "",
+        "**Three views of one build.** The simulator ran once and the graph was",
+        "built once; each row below is that artifact with everything the level",
+        "does not retain removed, then vacuumed. Nothing here is a second build,",
+        "because a curve whose points differed in the run or the parameters would",
+        "be measuring those instead of resolution.",
+        "",
+    ]
+
+    lines += _table(
+        ("parameter", "value", "why"),
+        [
+            (
+                "fixture",
+                f"`reg.scenarios.{curve.scenario}`",
+                "one run, three views of it",
+            ),
+            (
+                "length",
+                f"{_int_text(curve.frames)} frames, {curve.run_seconds:,.1f} s of "
+                "robot time",
+                "one moderate length. `--scaling` is where length is the "
+                "variable; here it is held still so resolution can be",
+            ),
+            (
+                "envelope samples",
+                _int_text(curve.n_samples),
+                "compute cost and which frames count as overlapping; since issue "
+                "#28 it moves no byte count",
+            ),
+            (
+                "occurrence resolution",
+                f"{curve.occurrence_resolution_s} s",
+                "the variable this table prices. DSSAD's stated accuracy is "
+                "±1.0 s; `--occurrence-resolution` moves it",
+            ),
+            (
+                "edge-layer resolution",
+                f"{TIME_TOL_S} s",
+                "`TIME_TOL_S`, and **not** a parameter. Widening it would change "
+                "what the artifact claims rather than what it costs",
+            ),
+        ],
+    )
+
+    lines += ["", "### The curve", ""]
+    query_names = [q.name for q in RESOLUTION_QUERIES]
+    lines += _table(
+        (
+            "level",
+            "timestamp resolution",
+            "SQLite B",
+            "bytes/hour",
+            "nodes",
+            "edges",
+            "occurrences",
+            *query_names,
+            "all queries",
+        ),
+        [
+            (
+                f"`{p.level}`",
+                f"{p.timestamp_resolution_s} s",
+                _int_text(p.size_bytes),
+                f"**{_bytes_per_hour_text(p.bytes_per_hour)}**",
+                _int_text(p.nodes),
+                _int_text(p.edges),
+                _int_text(p.occurrences),
+                *[
+                    next(
+                        (c.verdict for c in p.checks if c.query == name),
+                        COULD_NOT_EVALUATE,
+                    )
+                    for name in query_names
+                ],
+                p.verdict,
+            )
+            for p in points
+        ],
+    )
+
+    lines += [
+        "",
+        "`bytes/hour` is the retention figure, and it is what this table quotes",
+        "instead of a compression ratio: `docs/plan.md` Claim 1 forbids a ratio",
+        "against the stream while the measured one is below 1. It is the file",
+        f"size over {curve.run_seconds:,.1f} s of robot time, scaled to an hour,",
+        "which scales the artifact's *fixed* schema-and-index cost by the same",
+        "factor as its per-frame cost — so at this run length it **overstates**",
+        "the hourly rate, and by more for the smaller levels, where the fixed",
+        "cost is most of the file.",
+        "",
+        "`COULD-NOT-EVALUATE` never resolves to `AGREE`: a level that cannot",
+        "answer a question has not agreed with it. A level that is small and",
+        "answers correctly is the result; a level that is small and answers",
+        "wrongly is not a smaller artifact, it is a broken one.",
+        "",
+        "### What each level answered, and by how much it missed",
+        "",
+    ]
+
+    detail_rows = []
+    for query in RESOLUTION_QUERIES:
+        for point in points:
+            check = next(
+                (c for c in point.checks if c.query == query.name), None
+            )
+            if check is None:  # pragma: no cover - every point checks every query
+                continue
+            detail_rows.append(
+                (
+                    f"`{query.name}`",
+                    f"`{point.level}`",
+                    check.verdict,
+                    check.detail,
+                )
+            )
+    lines += _table(("query", "level", "verdict", "answers"), detail_rows)
+
+    lines += ["", "The questions, and the predicate each is judged under:", ""]
+    lines += _table(
+        ("query", "question", "agreement predicate"),
+        [
+            (f"`{q.name}`", q.question, f"`{q.predicate}`")
+            for q in RESOLUTION_QUERIES
+        ],
+    )
+
+    lines += [
+        "",
+        "Ground truth for all four is recomputed from the raw CSV by forward",
+        "kinematics, exactly as the cross-check in *Query wall-clock* is. The",
+        "envelope queries of `docs/lossiness.md`'s set (2 and 4) are **not** here:",
+        "their only available ground truth would be recomputing an envelope per",
+        "frame with `reg.envelope`, which is the builder's own computation, and a",
+        "check whose ground truth reruns the code under test cannot fail.",
+        "Queries 5–8 are declarations, verdicts and the chain — Milestone 3, no",
+        "fixture, and asking them here would print `COULD-NOT-EVALUATE` at every",
+        "level for a reason that has nothing to do with resolution.",
+        "",
+        "### What this table is not",
+        "",
+        "* **Not a claim that the per-frame row is what per-frame costs.** That",
+        "  view expands the retained intervals to one row per frame; it does not",
+        "  restore the per-frame `robot_config` and `envelope` rows issue #29",
+        "  removed, because they were discarded at build time and nothing here can",
+        "  recover them. It is a **lower bound**, and the direction matters: it",
+        "  understates what the fine layer costs, which makes the coarse levels",
+        "  look *less* good rather than more.",
+        "* **Not a licence to delete the fine layer.** The occurrence layer is",
+        "  additive. All three points are needed for there to be a curve at all,",
+        "  and a single coarse artifact is not a measurement.",
+        "* **Not an hour.** See the note under the table.",
+    ]
+    if not curve.truth.contact_occurred:
+        lines += [
+            "* **Not a strong check of `did_contact_occur`.** This run contains no",
+            "  contact, so every level agreeing means every level agreed on a",
+            "  negative. `tests/test_bench.py` is where that check is shown able to",
+            "  fail, on a fixture that does contact and on a perturbed artifact.",
+        ]
+    return lines
+
+
 def render(
     results: Sequence[ScenarioResult],
     *,
@@ -1225,9 +2361,11 @@ def render(
     n_samples: int,
     envelope_seed: int,
     substep_dt: float,
+    occurrence_resolution_s: float,
     sensor_multiplier: float | None,
     scaling: Sequence[ScalingPoint] = (),
     scaling_control: ScalingPoint | None = None,
+    resolution: ResolutionCurve | None = None,
 ) -> str:
     """The whole report as markdown. Pure — same results in, same string out.
 
@@ -1235,9 +2373,10 @@ def render(
     which case the report carries no scaling section at all rather than an empty
     one. `scaling_control` is the shortest ladder length re-measured at a
     different `n_samples`; it is reported beside the ladder and never mixed into
-    it.
+    it. `resolution` is the curve over resolution levels (issue #35) and is
+    likewise absent rather than empty when it was not run.
     """
-    if not results and not scaling:
+    if not results and not scaling and resolution is None:
         raise BenchError(
             "no scenarios were benchmarked, so there is no table to write. An "
             "empty report reads as 'the graph compresses nothing measured', "
@@ -1247,6 +2386,8 @@ def render(
     timed = [*results, *[p.result for p in scaling]]
     if scaling_control is not None:
         timed.append(scaling_control.result)
+    if resolution is not None:
+        timed.append(resolution.source)
 
     lines: list[str] = [
         "# Compression benchmark — Claim 1",
@@ -1275,6 +2416,11 @@ def render(
         if results or scaling_control is not None
         else "n/a — no table in this report was measured at it"
     )
+    occurrence_text = (
+        f"{float(occurrence_resolution_s)} s"
+        if resolution is None
+        else f"{float(resolution.occurrence_resolution_s)} s"
+    )
     lines += _table(
         ("parameter", "value", "what it changes"),
         [
@@ -1284,6 +2430,11 @@ def render(
             ("envelope horizon", f"{float(horizon)} s", "envelope size, overlap rows"),
             ("envelope samples", samples_text, "envelope tightness"),
             ("envelope substep", f"{float(substep_dt)} s", "envelope tightness"),
+            (
+                "occurrence resolution",
+                occurrence_text,
+                "occurrence timestamps only — the edge layer is at TIME_TOL_S",
+            ),
             (
                 "raw float precision",
                 str(FLOAT_PRECISION),
@@ -1302,6 +2453,9 @@ def render(
             ),
         ],
     )
+
+    if resolution is not None:
+        lines += _resolution_section(resolution)
 
     if scaling:
         lines += _scaling_section(scaling, scaling_control, n_samples=n_samples)
@@ -1672,6 +2826,18 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--resolution",
+        action="store_true",
+        help=(
+            "also measure what evidence costs per unit of resolution: the "
+            "occurrence layer (DSSAD-aligned, ±1 s), the transition layer (the "
+            "current edge emission) and a per-frame expansion of it, as three "
+            "views of one build, with bytes/hour and whether every supported "
+            "query still AGREEs. Can be given on its own. This is Claim 1 as it "
+            "stands after issue #30."
+        ),
+    )
+    parser.add_argument(
         "--scenario",
         action="append",
         metavar="NAME",
@@ -1762,6 +2928,41 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--resolution-frames",
+        type=_non_negative_int,
+        default=RESOLUTION_FRAME_COUNT,
+        metavar="N",
+        help=(
+            f"run length for --resolution (default: {RESOLUTION_FRAME_COUNT}, "
+            "the middle rung of issue #30's ladder — one moderate length is "
+            "enough to establish a curve whose variable is resolution, not "
+            "length)."
+        ),
+    )
+    parser.add_argument(
+        "--resolution-n-samples",
+        type=_non_negative_int,
+        default=SCALING_N_SAMPLES,
+        metavar="N",
+        help=(
+            f"control sequences per envelope for --resolution (default: "
+            f"{SCALING_N_SAMPLES}, the value issue #30 established as legitimate "
+            "for size-comparison work; since issue #28 it moves no byte count)."
+        ),
+    )
+    parser.add_argument(
+        "--occurrence-resolution",
+        type=_positive_float,
+        default=graph.OCCURRENCE_TIME_RESOLUTION_S,
+        metavar="SECONDS",
+        help=(
+            "the resolution occurrence timestamps are rounded to (default: "
+            f"{graph.OCCURRENCE_TIME_RESOLUTION_S}, UN R157 DSSAD's stated "
+            "accuracy). This is the variable the resolution curve prices; it "
+            "does not touch the edge layer, whose endpoints are at TIME_TOL_S."
+        ),
+    )
+    parser.add_argument(
         "--work-dir",
         metavar="PATH",
         help=(
@@ -1782,11 +2983,11 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list
     if args.all:
         return list(SCENARIOS)
     if not args.scenario:
-        if args.scaling:
+        if args.scaling or args.resolution:
             return []
         parser.error(
-            "nothing to benchmark: pass --all, --scenario NAME (repeatable), or "
-            f"--scaling. Known scenarios: {', '.join(SCENARIOS)}."
+            "nothing to benchmark: pass --all, --scenario NAME (repeatable), "
+            f"--scaling or --resolution. Known scenarios: {', '.join(SCENARIOS)}."
         )
     unknown = [name for name in args.scenario if name not in SCENARIOS]
     if unknown:
@@ -1812,6 +3013,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     results: list[ScenarioResult] = []
     scaling: list[ScalingPoint] = []
     control: ScalingPoint | None = None
+    resolution: ResolutionCurve | None = None
     try:
         for name in names:
             print(f"benchmarking {name}...", file=sys.stderr, flush=True)
@@ -1824,7 +3026,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                     n_samples=args.n_samples,
                     envelope_seed=args.envelope_seed,
                     substep_dt=args.substep_dt,
+                    occurrence_resolution_s=args.occurrence_resolution,
                 )
+            )
+        if args.resolution:
+            print(
+                f"measuring the resolution curve on long_run at "
+                f"{args.resolution_frames} frames "
+                f"(n_samples={args.resolution_n_samples}, occurrence "
+                f"resolution={args.occurrence_resolution} s)...",
+                file=sys.stderr,
+                flush=True,
+            )
+            resolution = run_resolution_curve(
+                args.resolution_frames,
+                work_dir / "resolution",
+                seed=args.seed,
+                horizon=args.horizon,
+                n_samples=args.resolution_n_samples,
+                envelope_seed=args.envelope_seed,
+                substep_dt=args.substep_dt,
+                occurrence_resolution_s=args.occurrence_resolution,
             )
         if args.scaling:
             for frames in args.scaling_frames:
@@ -1843,6 +3065,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         n_samples=args.scaling_n_samples,
                         envelope_seed=args.envelope_seed,
                         substep_dt=args.substep_dt,
+                        occurrence_resolution_s=args.occurrence_resolution,
                     )
                 )
             # The control: the shortest rung again at the per-scenario table's
@@ -1866,6 +3089,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     n_samples=args.n_samples,
                     envelope_seed=args.envelope_seed,
                     substep_dt=args.substep_dt,
+                    occurrence_resolution_s=args.occurrence_resolution,
                 )
         report = render(
             results,
@@ -1874,9 +3098,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             n_samples=args.n_samples,
             envelope_seed=args.envelope_seed,
             substep_dt=args.substep_dt,
+            occurrence_resolution_s=args.occurrence_resolution,
             sensor_multiplier=args.sensor_multiplier,
             scaling=scaling,
             scaling_control=control,
+            resolution=resolution,
         )
     except (BenchError, graph.GraphBuildError, store.StoreError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1889,9 +3115,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report, encoding="utf-8")
 
+    # WHAT GATES THE EXIT CODE, AND WHAT DELIBERATELY DOES NOT. Every build's own
+    # cross-check does: a graph that stopped answering query 1 correctly is a bug.
+    # The per-level verdicts in the resolution curve do **not**, and that is the
+    # point of the curve rather than a leniency — "the occurrence layer cannot
+    # answer the separation timeline" is the measurement issue #35 exists to
+    # produce, and a command that exited non-zero on its own finding would push
+    # the next person to tune the finding away.
     measured = [*results, *[p.result for p in scaling]]
     if control is not None:
         measured.append(control.result)
+    if resolution is not None:
+        measured.append(resolution.source)
     failed = [r for r in measured if r.check.verdict != AGREE]
     for r in failed:
         print(
@@ -1900,8 +3135,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"-> {r.check.verdict}",
             file=sys.stderr,
         )
+    if resolution is not None:
+        for point in resolution.points:
+            print(
+                f"resolution: {point.level}: {point.size_bytes} B "
+                f"({_bytes_per_hour_text(point.bytes_per_hour)}) -> "
+                f"{point.verdict}",
+                file=sys.stderr,
+            )
     print(
         f"wrote {out}: scenarios={len(results)} scaling_points={len(scaling)} "
+        f"resolution_levels={0 if resolution is None else len(resolution.points)} "
         f"seed={args.seed}"
     )
     return EXIT_CHECK_FAILED if failed else EXIT_OK

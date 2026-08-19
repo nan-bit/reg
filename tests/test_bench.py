@@ -37,6 +37,7 @@ call so no test depends on a default staying put.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -73,7 +74,15 @@ from reg.tolerances import DISTANCE_TOL_M, simplify_geometry
 
 #: Coarse but legal: 4 samples is exactly the corner count for the two-link demo
 #: arm, so `compute_envelope` accepts it.
-_FAST = {"horizon": 0.05, "n_samples": 4, "envelope_seed": 0, "substep_dt": 0.05}
+_FAST = {
+    "horizon": 0.05,
+    "n_samples": 4,
+    "envelope_seed": 0,
+    "substep_dt": 0.05,
+    # Stated rather than inherited, like the four above: it is a parameter of
+    # the artifact these tests measure, and `run_scenario` has no default for it.
+    "occurrence_resolution_s": graph.OCCURRENCE_TIME_RESOLUTION_S,
+}
 
 #: One scenario, the shortest that still has a human moving through the scene.
 SCENARIO = "near_miss"
@@ -84,6 +93,7 @@ _RENDER_ARGS = {
     "n_samples": 512,
     "envelope_seed": 0,
     "substep_dt": 0.02,
+    "occurrence_resolution_s": graph.OCCURRENCE_TIME_RESOLUTION_S,
 }
 
 
@@ -348,11 +358,15 @@ def test_the_report_carries_the_seeds_and_the_envelope_parameters(
     simulator's and the envelope's — because a run reproduced with the wrong one
     produces different numbers and no error."""
     report = render([live], sensor_multiplier=None, seed=3, horizon=0.2, n_samples=512,
-                    envelope_seed=11, substep_dt=0.02)
+                    envelope_seed=11, substep_dt=0.02, occurrence_resolution_s=0.25)
     assert "| simulator seed | 3 |" in report
     assert "| envelope seed | 11 |" in report
     assert "| envelope horizon | 0.2 s |" in report
     assert "| envelope samples | 512 |" in report
+    # The occurrence resolution moves the occurrence layer's timestamps and
+    # nothing else, and it is settable, so the header states which one produced
+    # the artifact rather than leaving a reader to assume DSSAD's 1.0 s.
+    assert "| occurrence resolution | 0.25 s |" in report
     assert f"| gzip level | {bench.GZIP_COMPRESSLEVEL} |" in report
 
 
@@ -1082,4 +1096,607 @@ def _point(
         result=_result(scenario=f"long_run_{frames}", frames=frames, sizes=sizes),
         n_samples=n_samples,
         frame_period_s=0.02,
+    )
+
+
+# --------------------------------------------------------------------------
+# The resolution curve (issue #35). What evidence costs per unit of resolution.
+#
+# THE TWO TESTS THIS SECTION EXISTS FOR:
+# `test_the_occurrence_level_cannot_answer_the_separation_timeline` and
+# `test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong`. The curve
+# is a check like everything else here, so both halves of it are fed what they
+# guard against: a level that cannot answer must say could-not-evaluate rather
+# than agree, and a level that answers *wrongly* must say disagree rather than
+# report a small artifact.
+# --------------------------------------------------------------------------
+
+#: The fixture the level checks run against — the one scenario that contacts,
+#: because `did_contact_occur` agreeing on a run with no contact is agreement on
+#: a negative and proves nothing about whether it can fail.
+RESOLUTION_SCENARIO = "contact"
+
+
+@pytest.fixture(scope="module")
+def built(tmp_path_factory) -> tuple[Path, Path]:
+    """One real build: `(csv, sqlite)`. Module-scoped, and built exactly once —
+    which is also what the curve itself must do."""
+    work = tmp_path_factory.mktemp("resolution")
+    run_scenario(RESOLUTION_SCENARIO, work, seed=0, **_FAST)
+    # `_measure` names its files after the scenario; `bench._work_paths` is the
+    # one definition of that and the tests read it rather than restate it.
+    return bench._work_paths(scenario(RESOLUTION_SCENARIO), work)
+
+
+@pytest.fixture(scope="module")
+def views(built, tmp_path_factory) -> dict[str, Path]:
+    """The three views of that one build."""
+    _, sqlite_path = built
+    out = tmp_path_factory.mktemp("views")
+    return {
+        level: bench.materialize_level(sqlite_path, level, out / f"{level}.sqlite")
+        for level in bench.RESOLUTION_LEVELS
+    }
+
+
+@pytest.fixture(scope="module")
+def truth(built) -> bench.GroundTruth:
+    csv_path, _ = built
+    return bench.ground_truth_from_csv(csv_path, scenario(RESOLUTION_SCENARIO).world)
+
+
+def _checks(view: Path, level: str, truth: bench.GroundTruth) -> dict[str, str]:
+    answers = bench.answers_at_level(view, level)
+    return {
+        q.name: bench.check_level(q, answers, truth).verdict
+        for q in bench.RESOLUTION_QUERIES
+    }
+
+
+def test_each_view_keeps_only_what_its_level_retains(views: dict[str, Path]) -> None:
+    """The three views are disjoint layers of one artifact, not three copies.
+
+    If the occurrence view kept the edges it would cost what the edge layer
+    costs, and the curve would be flat for a reason that has nothing to do with
+    resolution.
+    """
+    def counts(path: Path) -> tuple[int, int]:
+        conn = store.connect(path)
+        try:
+            edges = conn.execute("SELECT count(*) AS n FROM edge").fetchone()["n"]
+            occ = conn.execute("SELECT count(*) AS n FROM occurrence").fetchone()["n"]
+        finally:
+            conn.close()
+        return int(edges), int(occ)
+
+    occurrence_edges, occurrence_rows = counts(views[bench.OCCURRENCE_LEVEL])
+    transition_edges, transition_rows = counts(views[bench.TRANSITION_LEVEL])
+    per_frame_edges, per_frame_rows = counts(views[bench.PER_FRAME_LEVEL])
+
+    assert occurrence_edges == 0 and occurrence_rows > 0
+    assert transition_edges > 0 and transition_rows == 0
+    assert per_frame_edges > transition_edges and per_frame_rows == 0
+
+
+def test_the_per_frame_view_has_a_row_per_frame_per_relationship(
+    built, views: dict[str, Path]
+) -> None:
+    """The incremental rule run backwards: an interval asserts the relationship
+    held at every frame under it, and this writes that down once per frame."""
+    _, sqlite_path = built
+    conn = store.connect(sqlite_path)
+    try:
+        frames = int(store.get_meta(conn, "frame_count"))
+    finally:
+        conn.close()
+
+    conn = store.connect(views[bench.PER_FRAME_LEVEL])
+    try:
+        rows = store.read_edges(
+            conn, edge_type="SEPARATION", dst_id=graph.HUMAN_ENTITY_ID
+        )
+    finally:
+        conn.close()
+    assert len(rows) == frames
+    assert all(row["t_start"] == row["t_end"] for row in rows)
+
+
+def test_the_coarser_the_level_the_fewer_the_bytes(views: dict[str, Path]) -> None:
+    """The curve's shape, on a real build. Not a golden ratio — an ordering.
+
+    A number would move with the schema; the ordering is the claim, and it is
+    the one that would break if a view stopped dropping what its level discards.
+    """
+    sizes = {level: path.stat().st_size for level, path in views.items()}
+    assert (
+        sizes[bench.OCCURRENCE_LEVEL]
+        < sizes[bench.TRANSITION_LEVEL]
+        < sizes[bench.PER_FRAME_LEVEL]
+    ), sizes
+
+
+def test_the_occurrence_level_answers_the_questions_it_can(
+    views: dict[str, Path], truth: bench.GroundTruth
+) -> None:
+    """The finding the issue exists to produce, on a fixture that contacts.
+
+    `min_separation` and `did_contact_occur` survive two orders of magnitude of
+    coarsening; the per-frame timeline and the timing of the closest approach do
+    not. That is "did-contact-occur needs only occurrence resolution, the
+    separation timeline needs transition resolution", measured.
+    """
+    assert truth.contact_occurred, (
+        "precondition failed: this fixture does not contact, so agreement on "
+        "did_contact_occur would be agreement on a negative."
+    )
+    verdicts = _checks(views[bench.OCCURRENCE_LEVEL], bench.OCCURRENCE_LEVEL, truth)
+    assert verdicts["min_separation"] == AGREE
+    assert verdicts["did_contact_occur"] == AGREE
+    assert verdicts["separation_timeline"] == COULD_NOT_EVALUATE
+
+
+@pytest.mark.parametrize(
+    "level", [bench.TRANSITION_LEVEL, bench.PER_FRAME_LEVEL]
+)
+def test_the_edge_levels_answer_every_question(
+    views: dict[str, Path], truth: bench.GroundTruth, level: str
+) -> None:
+    """The other end of the curve: the fine layers still agree on all four.
+
+    This is the control. Without it, "the occurrence layer disagrees" would be
+    indistinguishable from "the check disagrees with everything".
+    """
+    assert set(_checks(views[level], level, truth).values()) == {AGREE}
+
+
+def test_the_occurrence_level_cannot_answer_the_separation_timeline(
+    views: dict[str, Path], truth: bench.GroundTruth
+) -> None:
+    """**COULD-NOT-EVALUATE never resolves to AGREE**, and this is where it would.
+
+    The occurrence layer holds events, not states. A harness that scored "no
+    per-frame separation" as agreement would report the coarsest level answering
+    everything at a fraction of the bytes, which is the flattering wrong answer
+    this whole file is written against.
+    """
+    answers = bench.answers_at_level(
+        views[bench.OCCURRENCE_LEVEL], bench.OCCURRENCE_LEVEL
+    )
+    assert answers.timeline is None
+    query = next(
+        q for q in bench.RESOLUTION_QUERIES if q.name == "separation_timeline"
+    )
+    check = bench.check_level(query, answers, truth)
+    assert check.verdict == COULD_NOT_EVALUATE
+    assert "per-frame" in check.detail
+
+
+def _timing_truth(candidates: tuple[float, ...]) -> bench.GroundTruth:
+    """A ground truth whose only content is when the closest approach was.
+
+    Hand-built rather than measured, because what is under test is the *shape* of
+    the comparison — how a coarse timestamp fares against the tolerance the
+    artifact advertises — and a fixture would tie it to whether that particular
+    run's minimum happened to last longer than a second.
+    """
+    return bench.GroundTruth(
+        min_separation=0.2,
+        t_closest_approach=candidates[0],
+        closest_approach_candidates=candidates,
+        timeline=tuple((t, 0.2) for t in candidates),
+        contact_occurred=False,
+    )
+
+
+def test_the_coarse_timestamp_is_reported_as_a_disagreement() -> None:
+    """**The ±1 s cost, priced.** Reported rather than tuned away.
+
+    `TIME_TOL_S` is what the artifact advertises for interval endpoints, and a
+    timestamp rounded to a whole second cannot meet it when the event it names
+    did not happen on a second boundary. The issue's instruction is to report the
+    divergence, so this must come out `DISAGREE` with the delta in the detail —
+    not `AGREE` on the strength of the level's own coarser resolution, which
+    would make the check unable to fail by construction.
+    """
+    query = next(
+        q for q in bench.RESOLUTION_QUERIES if q.name == "time_of_closest_approach"
+    )
+    coarse = bench.LevelAnswers(
+        min_separation=0.2,
+        t_closest_approach=2.0,  # what a 1 s resolution can say about t = 2.53
+        timeline=None,
+        contact_occurred=False,
+    )
+    check = bench.check_level(query, coarse, _timing_truth((2.51, 2.53, 2.55)))
+    assert check.verdict == DISAGREE
+    assert "0.5100" in check.detail
+    assert "tol" in check.detail
+
+
+def test_an_answer_inside_the_candidate_set_agrees() -> None:
+    """The other half, or the check above would be unfalsifiable in the other
+    direction: an answer naming a frame the artifact cannot tell from the
+    minimum is *correct*, and every frame within `DISTANCE_TOL_M` of the minimum
+    is such a frame (docs/lossiness.md Unanswerable #4)."""
+    query = next(
+        q for q in bench.RESOLUTION_QUERIES if q.name == "time_of_closest_approach"
+    )
+    fine = bench.LevelAnswers(
+        min_separation=0.2,
+        t_closest_approach=2.55,
+        timeline=None,
+        contact_occurred=False,
+    )
+    assert (
+        bench.check_level(query, fine, _timing_truth((2.51, 2.53, 2.55))).verdict
+        == AGREE
+    )
+    # And a level that records no closest approach at all does not thereby agree.
+    silent = bench.LevelAnswers(None, None, None, None)
+    assert (
+        bench.check_level(query, silent, _timing_truth((2.51,))).verdict
+        == COULD_NOT_EVALUATE
+    )
+
+
+def test_a_sustained_minimum_is_locatable_even_at_one_second(
+    views: dict[str, Path], truth: bench.GroundTruth
+) -> None:
+    """The measured counterpart, and it is a finding rather than a formality.
+
+    On this fixture the robot is in contact for more than a second, so the set of
+    frames the artifact cannot tell from the minimum spans a whole second and the
+    ±1 s timestamp lands inside it. *When* a coarse timestamp is good enough is a
+    property of the event, not of the recorder — which is exactly what a curve
+    over resolution is for.
+    """
+    query = next(
+        q for q in bench.RESOLUTION_QUERIES if q.name == "time_of_closest_approach"
+    )
+    assert (
+        max(truth.closest_approach_candidates)
+        - min(truth.closest_approach_candidates)
+        > 1.0
+    ), "precondition failed: the minimum is not sustained for over a second here"
+    answers = bench.answers_at_level(
+        views[bench.OCCURRENCE_LEVEL], bench.OCCURRENCE_LEVEL
+    )
+    assert bench.check_level(query, answers, truth).verdict == AGREE
+
+
+def test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong(
+    views: dict[str, Path], truth: bench.GroundTruth, tmp_path: Path
+) -> None:
+    """THE NEGATIVE TEST for the occurrence layer's one closed-world answer.
+
+    "No `contact_began` row" is read as "no contact occurred", which is only
+    legitimate because the artifact carries the retention rule saying one would
+    have been written. So the check must catch a layer that lost the row: delete
+    it and the verdict has to flip, or the coarse level would score `AGREE` for
+    saying nothing at all.
+    """
+    tampered = tmp_path / "tampered.sqlite"
+    shutil.copyfile(views[bench.OCCURRENCE_LEVEL], tampered)
+    conn = store.connect(tampered)
+    try:
+        conn.execute("DELETE FROM occurrence WHERE type = 'contact_began'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    query = next(q for q in bench.RESOLUTION_QUERIES if q.name == "did_contact_occur")
+    answers = bench.answers_at_level(tampered, bench.OCCURRENCE_LEVEL)
+    assert bench.check_level(query, answers, truth).verdict == DISAGREE
+
+
+def test_a_perturbed_value_is_caught_at_every_level(
+    views: dict[str, Path], truth: bench.GroundTruth, tmp_path: Path
+) -> None:
+    """docs/lossiness.md's "ship the negative test", applied to each view.
+
+    One distance shifted by more than `DISTANCE_TOL_M`, at each level, in the
+    column that level answers from. Every one must report `DISAGREE`.
+    """
+    for level, path in views.items():
+        tampered = tmp_path / f"tampered_{level}.sqlite"
+        shutil.copyfile(path, tampered)
+        conn = store.connect(tampered)
+        try:
+            if level == bench.OCCURRENCE_LEVEL:
+                conn.execute(
+                    "UPDATE occurrence SET value = value + ? "
+                    "WHERE type = 'closest_approach'",
+                    (10 * DISTANCE_TOL_M,),
+                )
+            else:
+                conn.execute(
+                    "UPDATE edge SET min_distance = min_distance + ? "
+                    "WHERE type = 'SEPARATION'",
+                    (10 * DISTANCE_TOL_M,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        query = next(
+            q for q in bench.RESOLUTION_QUERIES if q.name == "min_separation"
+        )
+        answers = bench.answers_at_level(tampered, level)
+        assert bench.check_level(query, answers, truth).verdict == DISAGREE, level
+
+
+def test_an_artifact_with_no_rows_at_a_level_could_not_evaluate(
+    views: dict[str, Path], truth: bench.GroundTruth, tmp_path: Path
+) -> None:
+    """Silence is not agreement, one layer down. An empty view answers nothing."""
+    empty = tmp_path / "empty.sqlite"
+    shutil.copyfile(views[bench.TRANSITION_LEVEL], empty)
+    conn = store.connect(empty)
+    try:
+        conn.execute("DELETE FROM edge")
+        conn.commit()
+    finally:
+        conn.close()
+
+    answers = bench.answers_at_level(empty, bench.TRANSITION_LEVEL)
+    assert answers.min_separation is None
+    verdicts = {
+        q.name: bench.check_level(q, answers, truth).verdict
+        for q in bench.RESOLUTION_QUERIES
+    }
+    assert verdicts["min_separation"] == COULD_NOT_EVALUATE
+    assert verdicts["separation_timeline"] == COULD_NOT_EVALUATE
+
+
+@pytest.mark.parametrize("level", ["", "occurrences", "frame"])
+def test_a_level_nobody_defined_is_refused(
+    built, tmp_path: Path, level: str
+) -> None:
+    """A byte count for a view with no retention rule means nothing."""
+    _, sqlite_path = built
+    with pytest.raises(BenchError, match="not a resolution level"):
+        bench.materialize_level(sqlite_path, level, tmp_path / "x.sqlite")
+    with pytest.raises(BenchError, match="not a resolution level"):
+        bench.answers_at_level(sqlite_path, level)
+
+
+def test_the_curve_builds_the_graph_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """Issue #35's runtime note, as an assertion rather than as a good intention.
+
+    "The resolution curve is three views of the *same* builds, so it must not
+    re-run the simulator or rebuild graphs per level." That is a correctness
+    requirement as much as a cost one: three builds would differ in more than
+    resolution, and the curve would not be a curve over resolution.
+    """
+    builds: list[object] = []
+    real_build = graph.build
+
+    def counting_build(*args, **kwargs):
+        builds.append(args[0])
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(graph, "build", counting_build)
+    curve = bench.run_resolution_curve(
+        30,
+        tmp_path / "work",
+        seed=0,
+        timing_repeats=1,
+        **_FAST,
+    )
+    assert len(builds) == 1, builds
+    assert [p.level for p in curve.points] == list(bench.RESOLUTION_LEVELS)
+    assert curve.frames == 30
+    assert curve.occurrence_resolution_s == graph.OCCURRENCE_TIME_RESOLUTION_S
+
+
+def test_the_curve_is_deterministic(tmp_path: Path) -> None:
+    """Same seed and parameters, same bytes at every level (rule 2)."""
+    kwargs = {"seed": 0, "timing_repeats": 1, **_FAST}
+    a = bench.run_resolution_curve(30, tmp_path / "a", **kwargs)
+    b = bench.run_resolution_curve(30, tmp_path / "b", **kwargs)
+    assert [p.size_bytes for p in a.points] == [p.size_bytes for p in b.points]
+    assert [p.nodes for p in a.points] == [p.nodes for p in b.points]
+    assert [c.verdict for p in a.points for c in p.checks] == [
+        c.verdict for p in b.points for c in p.checks
+    ]
+
+
+# --- the report ------------------------------------------------------------
+
+
+def _level(level: str, **overrides) -> bench.ResolutionPoint:
+    fields = {
+        "level": level,
+        "timestamp_resolution_s": 1.0,
+        "size_bytes": 20_000,
+        "nodes": 12,
+        "edges": 0,
+        "occurrences": 12,
+        "run_seconds": 60.0,
+        "checks": tuple(
+            bench.LevelCheck(query=q.name, verdict=AGREE, detail="0.1 vs 0.1")
+            for q in bench.RESOLUTION_QUERIES
+        ),
+    }
+    fields.update(overrides)
+    return bench.ResolutionPoint(**fields)  # type: ignore[arg-type]
+
+
+def _curve(points=None, **overrides) -> bench.ResolutionCurve:
+    fields = {
+        "scenario": "long_run_3000",
+        "frames": 3_000,
+        "frame_period_s": 0.02,
+        "n_samples": 16,
+        "occurrence_resolution_s": 1.0,
+        "source": _result(scenario="long_run_3000", frames=3_000),
+        "truth": bench.GroundTruth(
+            min_separation=0.2,
+            t_closest_approach=1.0,
+            closest_approach_candidates=(1.0,),
+            timeline=((0.0, 0.2),),
+            contact_occurred=True,
+        ),
+        "points": tuple(
+            points
+            if points is not None
+            else [_level(name) for name in bench.RESOLUTION_LEVELS]
+        ),
+    }
+    fields.update(overrides)
+    return bench.ResolutionCurve(**fields)  # type: ignore[arg-type]
+
+
+def test_bytes_per_hour_is_the_headline_and_no_csv_ratio_appears() -> None:
+    """Issue #35: "do not report a ratio against the CSV as the headline. Report
+    bytes/hour and the agreement column."
+
+    docs/plan.md Claim 1 forbids quoting a ratio against the stream while the
+    measured one is below 1, so the table must not carry one at all — a column
+    nobody is allowed to quote is a column that gets quoted.
+    """
+    report = render(
+        [], sensor_multiplier=None, resolution=_curve(), **_RENDER_ARGS
+    )
+    header = next(
+        line for line in report.splitlines() if line.startswith("| level |")
+    )
+    for column in ("bytes/hour", "SQLite B", "nodes", "edges", "occurrences"):
+        assert column in header
+    for query in bench.RESOLUTION_QUERIES:
+        assert query.name in header
+    # The ratio columns the rest of the report uses must not be in this one.
+    assert "x gz CSV" not in header
+    assert "x raw" not in header
+
+
+def test_the_resolution_table_carries_a_verdict_per_level_and_query() -> None:
+    """The column that decides it. A size table with no agreement column would
+    report a smaller artifact and say nothing about whether it still works."""
+    points = [
+        _level(bench.OCCURRENCE_LEVEL, checks=(
+            bench.LevelCheck("min_separation", AGREE, "0.1 vs 0.1"),
+            bench.LevelCheck("separation_timeline", COULD_NOT_EVALUATE, "no rows"),
+        )),
+        _level(bench.TRANSITION_LEVEL),
+    ]
+    report = render(
+        [], sensor_multiplier=None, resolution=_curve(points), **_RENDER_ARGS
+    )
+    assert COULD_NOT_EVALUATE in report
+    assert "no rows" in report
+
+
+def test_a_level_that_could_not_evaluate_does_not_summarise_as_agree() -> None:
+    """The third verdict never resolves to the first, and a wrong answer outranks
+    a missing one — otherwise a broken level would read as a merely partial one."""
+    agreeing = _level("x", checks=(bench.LevelCheck("q", AGREE, ""),))
+    silent = _level("x", checks=(
+        bench.LevelCheck("q", AGREE, ""),
+        bench.LevelCheck("r", COULD_NOT_EVALUATE, ""),
+    ))
+    wrong = _level("x", checks=(
+        bench.LevelCheck("q", DISAGREE, ""),
+        bench.LevelCheck("r", COULD_NOT_EVALUATE, ""),
+    ))
+    assert agreeing.verdict == AGREE
+    assert silent.verdict == COULD_NOT_EVALUATE
+    assert wrong.verdict == DISAGREE
+    assert _level("x", checks=()).verdict == COULD_NOT_EVALUATE
+
+
+def test_the_report_says_the_per_frame_view_is_a_lower_bound() -> None:
+    """It expands the intervals; it cannot restore the nodes issue #29 removed.
+    A reader must not read that row as what a per-frame artifact costs."""
+    report = render(
+        [], sensor_multiplier=None, resolution=_curve(), **_RENDER_ARGS
+    )
+    assert "lower bound" in report
+
+
+def test_a_report_with_no_resolution_curve_carries_no_such_section() -> None:
+    """Absent rather than empty, like the scaling section and the projection."""
+    report = render([_result()], sensor_multiplier=None, **_RENDER_ARGS)
+    assert "## What resolution costs" not in report
+
+
+def test_a_curve_with_no_points_is_refused() -> None:
+    """An empty curve would read as "no level answered anything", which is a
+    finding. This is the absence of a measurement."""
+    with pytest.raises(BenchError, match="no points"):
+        render([], sensor_multiplier=None, resolution=_curve([]), **_RENDER_ARGS)
+
+
+def test_a_run_of_no_duration_has_no_hourly_rate() -> None:
+    """A rate over zero seconds is a division by zero, not an infinite rate."""
+    with pytest.raises(BenchError, match="division by zero"):
+        _level("x", run_seconds=0.0).bytes_per_hour
+
+
+def test_bytes_per_hour_is_the_size_scaled_by_the_run_length() -> None:
+    """Hand-worked: 20 kB over 60 s is 1.2 MB/h, and nothing else."""
+    point = _level("x", size_bytes=20_000, run_seconds=60.0)
+    assert point.bytes_per_hour == pytest.approx(20_000 * 3600 / 60)
+
+
+def test_cli_resolution_writes_the_curve(tmp_path: Path) -> None:
+    """The issue's verification command, at a length a test can afford."""
+    out = tmp_path / "resolution.md"
+    code = bench.main(
+        [
+            "--resolution",
+            "--resolution-frames",
+            "30",
+            "--resolution-n-samples",
+            str(_FAST["n_samples"]),
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+            "--out",
+            str(out),
+            "--work-dir",
+            str(tmp_path / "work"),
+        ]
+    )
+    assert code == bench.EXIT_OK
+    report = out.read_text(encoding="utf-8")
+    assert "## What resolution costs" in report
+    for level in bench.RESOLUTION_LEVELS:
+        assert f"| `{level}` |" in report
+    # Nothing that varies between two runs of the same command may reach it.
+    assert str(tmp_path) not in report
+
+
+def test_cli_resolution_does_not_fail_on_its_own_finding(tmp_path: Path) -> None:
+    """The exit code must not gate on the per-level verdicts.
+
+    The occurrence level disagreeing about *when* the closest approach happened
+    is the measurement, not a regression. A command that exited non-zero on its
+    own finding would push the next person to tune the finding away — which is
+    the one thing issue #35 says not to do.
+    """
+    out = tmp_path / "resolution.md"
+    code = bench.main(
+        [
+            "--resolution",
+            "--resolution-frames",
+            "30",
+            "--resolution-n-samples",
+            str(_FAST["n_samples"]),
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+            "--out",
+            str(out),
+            "--work-dir",
+            str(tmp_path / "work"),
+        ]
+    )
+    assert code == bench.EXIT_OK
+    assert DISAGREE in out.read_text(encoding="utf-8"), (
+        "no level disagreed at this length, so this run does not show that the "
+        "exit code is independent of the per-level verdicts. Pick a fixture or a "
+        "resolution where they diverge rather than deleting the assertion."
     )

@@ -86,6 +86,23 @@ the robot demonstrably could reach, reported for an instant at which it could
 not. docs/lossiness.md Discarded #10 states the rule and the artifact carries it
 in `meta` under `envelope_row_retention`.
 
+AND BESIDE ALL OF IT, A COARSER LAYER — ISSUE #35
+--------------------------------------------------
+Everything above makes the fine layer cheaper without changing its resolution,
+and issue #30 measured what that resolution still costs: 51.5 MB/hour, ~14x
+larger per frame than a gzipped copy of the stream. The resolution itself was
+never justified. UN R157's DSSAD — the only mandated evidence recorder for
+autonomy that exists — records **occurrences**: a flag, a reason, a date, a
+timestamp good to ±1.0 s, and the software version present at the event. Two
+orders of magnitude coarser than cm / 10 ms every frame.
+
+So this builder also emits an `Occurrence` layer (`OCCURRENCE_RETENTION`,
+`OCCURRENCE_MATERIAL_EDGES`) at a stated, settable timestamp resolution, and
+`reg.bench --resolution` measures what each layer costs and which questions each
+can still answer. The layer is **additive** — not one edge row exists or fails
+to exist because of it — because the deliverable is a curve over views of one
+run, and three different builds would not be one.
+
 WHAT IS NOT HERE
 ----------------
 Declarations and verdicts. They are Milestone 3, and the `DECLARED`,
@@ -160,12 +177,20 @@ __all__ = [
     "HUMAN_KIND",
     "META_ENVELOPE_RETENTION",
     "META_GEOMETRY_RETENTION",
+    "META_OCCURRENCE_RESOLUTION",
+    "META_OCCURRENCE_RETENTION",
+    "META_OCCURRENCE_SW_VERSION",
+    "OCCURRENCE_MATERIAL_EDGES",
+    "OCCURRENCE_RETENTION",
+    "OCCURRENCE_TIME_RESOLUTION_S",
     "BuildResult",
     "GraphBuildError",
     "GraphQueryError",
     "build",
     "envelope_at",
     "main",
+    "quantize_occurrence_time",
+    "sw_version",
 ]
 
 EXIT_OK = 0
@@ -304,6 +329,106 @@ ENVELOPE_RETENTION = (
 
 #: Where `ENVELOPE_RETENTION` lands in `meta`.
 META_ENVELOPE_RETENTION = "envelope_row_retention"
+
+# --------------------------------------------------------------------------
+# The occurrence layer (issue #35, docs/prior-art.md §9, docs/plan.md Claim 1
+# "What replaces it"). A second, much coarser view of the same run, in the shape
+# UN R157's DSSAD mandates — and the reason it exists is that issue #30 measured
+# what the fine view costs: 51.5 MB/hour, ~14x larger per frame than a gzipped
+# copy of the stream, at a resolution (cm / 10 ms, every frame) that no standard
+# asks for. This layer is what the question "how coarse can the evidence get
+# before it stops answering the question?" is asked *with*.
+#
+# It is additive. Nothing above changed, and `reg.bench --resolution` compares
+# the two as views of one build rather than as two different artifacts.
+# --------------------------------------------------------------------------
+
+#: DSSAD's stated timestamp accuracy, **±1.0 second** (UN R157; docs/prior-art.md
+#: §9 has the element list). Imported from the regulation, not chosen here — the
+#: same standing as `ENVELOPE_HORIZON`, which comes from docs/plan.md Phase 2.
+#:
+#: It is a *default*, not a constant: `build` takes it as an argument and records
+#: what it was given in `meta`, because the whole point of this layer is
+#: measuring what a resolution costs, and a resolution welded shut measures one
+#: point rather than a curve. It is deliberately **not** in `reg.tolerances`:
+#: that module owns the four constants docs/lossiness.md makes normative, and
+#: this is not one of them. Confusing the two would make "coarsen the occurrence
+#: timestamps" look like permission to widen `TIME_TOL_S`, which is the move the
+#: contract exists to forbid.
+OCCURRENCE_TIME_RESOLUTION_S: float = 1.0
+
+#: Edge type -> (the occurrence when the relationship begins, the occurrence when
+#: it ceases). **Only these two edge types produce occurrences**, and the absence
+#: of the other two is the rule "material events, not quantization boundaries":
+#: `SEPARATION` closes and reopens every time a distance crosses a
+#: `DISTANCE_TOL_M` bucket — which for a walking human is every frame — and
+#: `HAS_ENVELOPE` changes whenever the arm moves at all. Occurrences at those
+#: would be the per-frame cost this layer exists to escape, wearing a coarser
+#: timestamp.
+#:
+#: Counted over the *relationship*, not the edge row, for the reason
+#: `GEOMETRY_EVIDENCE_EDGES` is: an `INTERSECTS` edge also closes and reopens on
+#: every overlap-area quantum, and those are metric steps rather than the human
+#: entering or leaving the reachable set.
+OCCURRENCE_MATERIAL_EDGES: dict[str, tuple[str, str]] = {
+    "INTERSECTS": ("envelope_entered", "envelope_left"),
+    "CONTACT": ("contact_began", "contact_ended"),
+}
+
+#: The reason element, per occurrence type. DSSAD records "the reason for the
+#: occurrence, where applicable" beside the flag; these are this project's, in
+#: prose, because the artifact is what an assessor holds and `envelope_entered`
+#: alone does not say what it means.
+OCCURRENCE_REASONS: dict[str, str] = {
+    "run_began": "the first frame of the recorded run",
+    "run_ended": "the last frame of the recorded run",
+    "envelope_entered": (
+        "the entity began to intersect the robot's computed reachable envelope"
+    ),
+    "envelope_left": (
+        "the entity ceased to intersect the robot's computed reachable envelope"
+    ),
+    "contact_began": "the robot body and the entity began to intersect",
+    "contact_ended": "the robot body and the entity ceased to intersect",
+    "closest_approach": (
+        "the smallest robot-to-entity separation observed in the run, at the "
+        "earliest frame it was observed at"
+    ),
+}
+
+#: The occurrence retention rule, in one sentence, as it is recorded in the
+#: artifact's meta table — the same discipline as `ENVELOPE_RETENTION` and for
+#: the same reason. A reader meeting an occurrence layer with three rows in it
+#: has to be able to tell "three things happened" from "this build only records
+#: three kinds of thing", and the rows do not distinguish them.
+OCCURRENCE_RETENTION = (
+    "an occurrence row is written for a semantically material event and for "
+    "nothing else: run_began and run_ended at the two ends of the run; "
+    "envelope_entered and envelope_left at the frames an INTERSECTS "
+    "relationship with an entity begins and ceases to hold; contact_began and "
+    "contact_ended likewise for CONTACT; and one closest_approach per entity, "
+    "at the earliest frame at which the run's smallest quantized separation to "
+    "that entity was observed, carrying that separation in metres. Nothing is "
+    "written when a metric merely crosses a quantization boundary — those are "
+    "the transitions the edge layer records, and recording them here would "
+    "reintroduce the per-frame cost this layer exists to measure against. Every "
+    "timestamp is rounded to the nearest occurrence_time_resolution_s in this "
+    "meta table, so this layer locates an event only to that resolution and "
+    "nothing may report finer from it. A relationship still holding at the last "
+    "frame gets no envelope_left or contact_ended; run_ended bounds it. The "
+    "vocabulary is fixed (reg.store.OCCURRENCE_SPECS): an occurrence type "
+    "outside it is a fault, not a new kind of row, and the absence of a type "
+    "from this artifact means the event did not happen rather than that this "
+    "build had no name for it. There is no date element — a wall-clock date is "
+    "not in the source stream and this build writes no clock into an artifact "
+    "that must be byte-reproducible; the run's own time base and "
+    "source_provenance are what an occurrence is anchored to."
+)
+
+#: Where the occurrence-layer facts land in `meta`.
+META_OCCURRENCE_RETENTION = "occurrence_retention"
+META_OCCURRENCE_RESOLUTION = "occurrence_time_resolution_s"
+META_OCCURRENCE_SW_VERSION = "occurrence_sw_version"
 
 #: The `meta` keys `envelope_at` reads back to recompute a discarded polygon.
 #: Named constants because the writer and the reader are one contract now: a key
@@ -549,6 +674,200 @@ class _FrameNodes:
 
 
 # --------------------------------------------------------------------------
+# The occurrence layer
+# --------------------------------------------------------------------------
+
+
+def quantize_occurrence_time(t: float, resolution: float) -> float:
+    """An instant rounded to the nearest multiple of `resolution`.
+
+    Deliberately *not* in `reg.tolerances`: that module owns the four constants
+    docs/lossiness.md makes normative and this resolution is not one of them
+    (`OCCURRENCE_TIME_RESOLUTION_S`). The rounding rule is the same one — nearest
+    multiple, `round`'s banker's tie-break — so the invariant the contract's
+    quantizers are chosen for holds here too: two instants more than one
+    resolution apart cannot land on the same occurrence timestamp.
+
+    Raises:
+        GraphBuildError: `resolution` is not finite and positive. There is no
+            fallback: a zero or negative resolution has no nearest multiple, and
+            substituting one would put timestamps in the artifact at a
+            granularity nobody asked for and nothing records.
+    """
+    resolution = float(resolution)
+    if not np.isfinite(resolution) or resolution <= 0.0:
+        raise GraphBuildError(
+            f"occurrence_resolution_s={resolution!r}. A timestamp resolution has "
+            "to be finite and positive to have a nearest multiple. This is the "
+            "parameter the resolution curve varies, so it is stated by the "
+            "caller and never inferred."
+        )
+    t = float(t)
+    if not np.isfinite(t):
+        raise GraphBuildError(
+            f"an occurrence at t={t!r} cannot be timestamped. A non-finite "
+            "instant has no place in the run, and rounding it would produce a "
+            "timestamp no comparison downstream can reject."
+        )
+    return round(t / resolution) * resolution
+
+
+def sw_version(
+    *, horizon: float, n_samples: int, seed: int, substep_dt: float
+) -> str:
+    """DSSAD's `R157SWIN` element in this project's terms.
+
+    UN R157 requires each recorded occurrence to carry "the software version
+    identifier present when the event occurred" (docs/prior-art.md §9), so that
+    an event can be attributed to the build that produced it. Here that is the
+    `reg` version plus a digest over the envelope parameters, which are the rest
+    of what decides what this build would have seen: the same code with a
+    different horizon computes a different envelope and therefore a different set
+    of `envelope_entered` occurrences.
+
+    A digest rather than the parameters spelled out, because the parameters are
+    already in `meta` in full and an occurrence row is not the place to keep a
+    second copy of them (docs/lossiness.md Discarded #6, one layer up). The
+    digest is what makes the two checkable against each other: an artifact whose
+    occurrences carry a stamp its own `meta` does not reproduce is one whose
+    events and whose parameters came from different runs.
+    """
+    return "reg-" + __version__ + "+env-" + _digest(
+        _float_text(horizon),
+        str(int(n_samples)),
+        str(int(seed)),
+        _float_text(substep_dt),
+    )[:8]
+
+
+class _OccurrenceLog:
+    """Emits the occurrence layer as the build walks the stream, in order.
+
+    Holds exactly two pieces of state, and both are the minimum for the rule:
+    `_seq`, so two events inside one timestamp quantum stay two rows, and the
+    running closest approach per entity, which cannot be emitted until the run
+    ends because "the closest" is a fact about the whole run.
+
+    Everything else it needs — which relationships are open, when they began — is
+    already the builder's state, so it is told about transitions rather than
+    working them out a second time. A second implementation of "did this
+    relationship begin here" would be a second answer to it.
+    """
+
+    def __init__(self, conn, *, resolution: float, stamp: str) -> None:
+        # Validated here rather than at the first emission: a run with no
+        # occurrences at all must still refuse a resolution nobody can round to,
+        # or the parameter would be checked only on the runs that happen to
+        # contain events.
+        quantize_occurrence_time(0.0, resolution)
+        self._conn = conn
+        self._resolution = float(resolution)
+        self._stamp = stamp
+        self._seq = 0
+        #: entity_id -> (distance bucket, quantized distance, t of the earliest
+        #: frame at which that bucket was observed). Keyed on the bucket index
+        #: and not on the float, for the reason `_Observation.compare` is:
+        #: comparing two roundings of a float decides whether a row is written.
+        self._closest: dict[str, tuple[int, float, float]] = {}
+
+    @property
+    def count(self) -> int:
+        """How many occurrences have been emitted. Zero is a legitimate answer
+        only before `run_began`; every run has at least two."""
+        return self._seq
+
+    def _emit(
+        self,
+        occurrence_type: str,
+        *,
+        t: float,
+        entity_id: str | None = None,
+        value: float | None = None,
+    ) -> None:
+        reason = OCCURRENCE_REASONS.get(occurrence_type)
+        if reason is None:  # pragma: no cover - the vocabulary is checked in CI
+            raise GraphBuildError(
+                f"no reason is stated for occurrence type {occurrence_type!r}. "
+                "DSSAD records a reason beside every flag, and inventing one "
+                "here would put prose in the artifact that nobody wrote down."
+            )
+        seq = self._seq
+        self._seq += 1
+        t_q = quantize_occurrence_time(t, self._resolution)
+        occurrence_id = "occ_" + _digest(
+            str(seq),
+            occurrence_type,
+            "" if entity_id is None else entity_id,
+            _float_text(t_q),
+            "" if value is None else _float_text(value),
+        )
+        store.insert_occurrence(
+            self._conn,
+            occurrence_id,
+            seq=seq,
+            occurrence_type=occurrence_type,
+            reason=reason,
+            t=t_q,
+            entity_id=entity_id,
+            value=value,
+            sw_version=self._stamp,
+        )
+
+    def run_began(self, t: float) -> None:
+        self._emit("run_began", t=t)
+
+    def run_ended(self, t: float) -> None:
+        self._emit("run_ended", t=t)
+
+    def relationship_began(self, edge_type: str, entity_id: str, t: float) -> None:
+        """A relationship that was not holding now holds. Ignores the rest.
+
+        `edge_type not in OCCURRENCE_MATERIAL_EDGES` is the rule, not an
+        oversight: `SEPARATION` opens whenever a distance crosses a quantum, and
+        an occurrence there would be one per frame for a walking human.
+        """
+        pair = OCCURRENCE_MATERIAL_EDGES.get(edge_type)
+        if pair is not None:
+            self._emit(pair[0], t=t, entity_id=entity_id)
+
+    def relationship_ended(self, edge_type: str, entity_id: str, t: float) -> None:
+        """A relationship that was holding no longer does.
+
+        `t` is the last instant it *was* observed to hold — the closing edge's
+        own `t_end` — so the two layers name the same instant for the same event
+        and a reader comparing them is not comparing two conventions.
+        """
+        pair = OCCURRENCE_MATERIAL_EDGES.get(edge_type)
+        if pair is not None:
+            self._emit(pair[1], t=t, entity_id=entity_id)
+
+    def separation_observed(
+        self, entity_id: str, *, bucket: int, distance: float, t: float
+    ) -> None:
+        """One frame's separation to one entity. Emits nothing; tracks the least.
+
+        Strictly less than, so the *earliest* frame attaining the minimum wins.
+        That matters because the timestamp is the answer to "when was the closest
+        approach", and a run that sits at its minimum for a second would
+        otherwise report whichever frame happened to be read last.
+        """
+        current = self._closest.get(entity_id)
+        if current is None or bucket < current[0]:
+            self._closest[entity_id] = (int(bucket), float(distance), float(t))
+
+    def closest_approaches(self) -> None:
+        """One `closest_approach` per entity observed, in first-seen order.
+
+        Emitted at the end because it is the only occurrence here that is a fact
+        about the whole run rather than about an instant in it. An entity with no
+        separation observed at all gets no row — that is the entity set being
+        empty, not a separation of zero.
+        """
+        for entity_id, (_, distance, t) in self._closest.items():
+            self._emit("closest_approach", t=t, entity_id=entity_id, value=distance)
+
+
+# --------------------------------------------------------------------------
 # Stream checks
 # --------------------------------------------------------------------------
 
@@ -648,6 +967,7 @@ def build(
     n_samples: int = ENVELOPE_N_SAMPLES,
     seed: int = ENVELOPE_SEED,
     substep_dt: float = SUBSTEP_DT,
+    occurrence_resolution_s: float = OCCURRENCE_TIME_RESOLUTION_S,
 ) -> BuildResult:
     """Turn a raw CSV stream into a SQLite evidence graph. Overwrites `out_path`.
 
@@ -668,6 +988,13 @@ def build(
             recorded in the artifact's meta table, so no consumer has to guess
             which produced a given file — and `envelope_at` reads them back to
             recompute the envelope geometry `GEOMETRY_RETENTION` discards.
+        occurrence_resolution_s: the resolution every occurrence timestamp is
+            rounded to, in seconds. Defaults to DSSAD's stated ±1.0 s
+            (`OCCURRENCE_TIME_RESOLUTION_S`) and is recorded in `meta` either
+            way. It is an argument rather than a constant because measuring what
+            a resolution costs is the point of the layer (docs/plan.md Claim 1,
+            "What replaces it"); it does **not** touch the edge layer, whose
+            resolution is `TIME_TOL_S` and is not a parameter of anything.
 
     Returns:
         A `BuildResult` with the row counts and the artifact's size.
@@ -675,6 +1002,8 @@ def build(
         retains (`ENVELOPE_RETENTION`) and **not** one per frame nor one per
         material change; most of them carry no polygon (`GEOMETRY_RETENTION`),
         so it is not a count of stored geometries either.
+        `nodes["Occurrence"]` counts the event layer (`OCCURRENCE_RETENTION`),
+        which is additive: no edge row exists or fails to exist because of it.
 
     Raises:
         GraphBuildError: the stream could not be understood — too short, a
@@ -693,6 +1022,10 @@ def build(
             "artifact would answer 'no' for a reason nobody wrote down."
         )
 
+    stamp = sw_version(
+        horizon=horizon, n_samples=n_samples, seed=seed, substep_dt=substep_dt
+    )
+
     conn = store.create(out_path)
     try:
         _write_provenance(
@@ -706,6 +1039,8 @@ def build(
             n_samples=n_samples,
             seed=seed,
             substep_dt=substep_dt,
+            occurrence_resolution_s=occurrence_resolution_s,
+            stamp=stamp,
         )
 
         # Entity set, once. Static geometry is simplified because
@@ -727,6 +1062,16 @@ def build(
         has_envelope: _Active | None = None
         previous: _FrameNodes | None = None
         last_frame_id = len(frames) - 1
+
+        # The occurrence layer walks the same loop (issue #35). It is told about
+        # transitions the builder has already decided on rather than deciding
+        # them again: two implementations of "did this relationship begin here"
+        # is two answers to it, and the layers would drift apart on exactly the
+        # runs a reader would compare them on.
+        occurrences = _OccurrenceLog(
+            conn, resolution=occurrence_resolution_s, stamp=stamp
+        )
+        occurrences.run_began(quantize_time(frames[0].t))
 
         def envelope_timeline(nodes: _FrameNodes) -> None:
             """One frame's entry in the envelope's own timeline. Layer A.
@@ -800,6 +1145,14 @@ def build(
                 cited = active[key].edge_type in GEOMETRY_EVIDENCE_EDGES
                 if cited and previous is not None:
                     previous.keep_geometry()
+                # The occurrence is timestamped at the last instant the
+                # relationship held, which is the previous frame and is the
+                # closing edge's own `t_end`. `previous is None` cannot happen
+                # here — nothing is active before the first frame is read — and
+                # the guard is for the type checker rather than for a case.
+                if previous is not None:  # pragma: no branch - see above
+                    edge_type, entity_id = key
+                    occurrences.relationship_ended(edge_type, entity_id, previous.t)
                 del active[key]
 
             # ...and that backward reach is the last thing that can retain the
@@ -810,6 +1163,18 @@ def build(
                 envelope_timeline(previous)
 
             for key, observation in observations.items():
+                # The occurrence layer's other input: the running closest
+                # approach per entity. Read off the observation the edge layer
+                # is about to store, so the two layers cannot disagree about
+                # what the smallest separation of the run was.
+                if observation.edge_type == "SEPARATION":
+                    occurrences.separation_observed(
+                        key[1],
+                        bucket=int(observation.compare),  # type: ignore[arg-type]
+                        distance=float(observation.min_distance),  # type: ignore[arg-type]
+                        t=t,
+                    )
+
                 current = active.get(key)
                 if current is not None and current.compare == observation.compare:
                     store.extend_edge(conn, current.edge_id, t)
@@ -822,6 +1187,15 @@ def build(
                 cited = observation.edge_type in GEOMETRY_EVIDENCE_EDGES
                 if current is None and cited:
                     nodes.keep_geometry()
+                if current is None:
+                    # `current is None` is what makes this the *relationship*
+                    # beginning rather than its metric stepping a quantum — the
+                    # same distinction GEOMETRY_RETENTION draws one line up, and
+                    # the reason an occurrence is not emitted per overlap
+                    # quantum.
+                    occurrences.relationship_began(
+                        observation.edge_type, key[1], t
+                    )
                 edge_id = store.open_edge(
                     conn,
                     observation.edge_type,
@@ -841,6 +1215,14 @@ def build(
         # already refused a stream too short to have one.
         if previous is not None:  # pragma: no branch - >= 2 frames, checked above
             envelope_timeline(previous)
+
+        # A relationship still holding at the last frame gets no `..._left` or
+        # `..._ended` occurrence — it did not end, the recording did, and
+        # `run_ended` is what says so. `OCCURRENCE_RETENTION` states it in the
+        # artifact, because "no contact_ended" would otherwise read as contact
+        # continuing after the last frame this run has any evidence about.
+        occurrences.closest_approaches()
+        occurrences.run_ended(quantize_time(frames[-1].t))
 
         conn.commit()
         result = _summarize(conn, Path(out_path), len(frames))
@@ -1002,6 +1384,8 @@ def _write_provenance(
     n_samples: int,
     seed: int,
     substep_dt: float,
+    occurrence_resolution_s: float,
+    stamp: str,
 ) -> None:
     """Everything needed to say what produced this artifact, and nothing else.
 
@@ -1035,6 +1419,18 @@ def _write_provenance(
     # retained, on a stated rule" rather than as "the build stopped".
     store.put_meta(conn, META_ENVELOPE_RETENTION, ENVELOPE_RETENTION)
     store.put_meta(conn, META_GEOMETRY_RETENTION, GEOMETRY_RETENTION)
+
+    # The occurrence layer's rule, its resolution and its software stamp. The
+    # resolution especially: an occurrence timestamp read without it is a number
+    # that looks like a time and is good to nobody knows what, and a reader
+    # holding only the file has no other way to find out. The stamp is repeated
+    # here so the digest on every occurrence row can be checked against the
+    # parameters above rather than taken on faith.
+    store.put_meta(conn, META_OCCURRENCE_RETENTION, OCCURRENCE_RETENTION)
+    store.put_meta(
+        conn, META_OCCURRENCE_RESOLUTION, _float_text(occurrence_resolution_s)
+    )
+    store.put_meta(conn, META_OCCURRENCE_SW_VERSION, stamp)
 
     store.put_meta(conn, "tolerance_distance_tol_m", _float_text(DISTANCE_TOL_M))
     store.put_meta(conn, "tolerance_area_quant_sigfigs", str(AREA_QUANT_SIGFIGS))
@@ -1419,6 +1815,18 @@ def _parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"envelope integration resolution (default: {SUBSTEP_DT}).",
     )
+    build_parser.add_argument(
+        "--occurrence-resolution",
+        type=_positive_float,
+        default=OCCURRENCE_TIME_RESOLUTION_S,
+        metavar="SECONDS",
+        help=(
+            "the resolution every occurrence timestamp is rounded to (default: "
+            f"{OCCURRENCE_TIME_RESOLUTION_S}, UN R157 DSSAD's stated accuracy). "
+            "Recorded in the artifact either way. It does not touch the edge "
+            "layer, whose interval endpoints are at TIME_TOL_S."
+        ),
+    )
     return parser
 
 
@@ -1445,6 +1853,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             n_samples=args.n_samples,
             seed=args.envelope_seed,
             substep_dt=args.substep_dt,
+            occurrence_resolution_s=args.occurrence_resolution,
         )
     except GraphBuildError as exc:
         print(f"error: {exc}", file=sys.stderr)

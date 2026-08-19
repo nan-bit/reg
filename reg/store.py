@@ -48,6 +48,18 @@ would otherwise be indistinguishable from a right one:
   stores no polygon and does not say what it was computed from is a row nobody
   can turn back into a region, and `reg.graph.envelope_at` would have to answer
   "no envelope" for a frame that had one. See `insert_envelope`.
+* an occurrence outside the vocabulary, or one whose entity or metric does not
+  match what its type is — see `OCCURRENCE_SPECS` and `insert_occurrence`.
+
+THE OCCURRENCE TABLE IS A SECOND RESOLUTION, NOT A SECOND ARTIFACT
+------------------------------------------------------------------
+Issue #35 added `occurrence` beside `edge`. It is the same run at DSSAD's
+event-level granularity — a flag, a reason, a timestamp good to a stated
+resolution, and the software version present at the event (docs/prior-art.md
+§9) — and it is **additive**: nothing above it changed, and every query that
+read the edge layer before still reads it. `reg.bench --resolution` measures
+what each of the two costs and which questions each can still answer, which is
+what Claim 1 became after issue #30 refuted its original form.
 
 DETERMINISM
 -----------
@@ -78,10 +90,12 @@ __all__ = [
     "ENVELOPE_SOURCES",
     "EDGE_SPECS",
     "NODE_TABLES",
+    "OCCURRENCE_SPECS",
     "StoreError",
     "create",
     "connect",
     "layer_of",
+    "occurrence_layer",
     "put_meta",
     "get_meta",
     "all_meta",
@@ -89,10 +103,12 @@ __all__ = [
     "attach_envelope_geometry",
     "envelope_row",
     "insert_entity",
+    "insert_occurrence",
     "insert_robot_config",
     "open_edge",
     "extend_edge",
     "read_edges",
+    "read_occurrences",
     "to_wkb",
     "from_wkb",
 ]
@@ -112,7 +128,13 @@ __all__ = [
 #: v3 file would find `HAS_ENVELOPE` intervals covering only part of the run and
 #: read the gaps as "the robot had no envelope then" rather than as "that frame
 #: is not retained"; same confident wrong answer, one level up.
-SCHEMA_VERSION = 3
+#:
+#: 4: the `occurrence` table arrived (issue #35) — the DSSAD-aligned event layer,
+#: additive beside the edges and replacing none of them. A v3 reader meeting a v4
+#: file cannot see it at all, so every question the occurrence layer answers
+#: would come back "this artifact records no such thing" rather than "this reader
+#: does not understand this artifact".
+SCHEMA_VERSION = 4
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -171,17 +193,77 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
     "CONTACT": EdgeSpec("B", "RobotConfig", "Entity", None),
 }
 
+
+@dataclass(frozen=True)
+class OccurrenceSpec:
+    """What one occurrence type is: its layer, its subject, and its metric.
+
+    The occurrence vocabulary's single definition, the same way `EDGE_SPECS` is
+    the edge vocabulary's. `insert_occurrence` reads the layer off it rather than
+    taking it from the caller, so a Layer B event naming an entity cannot be
+    written as Layer A by a call site in a hurry.
+    """
+
+    layer: Layer
+    #: `entity` — the occurrence is about the robot's relationship to one entity
+    #: and names it. `run` — it is about the record itself and names none.
+    #: Presence of `entity_id` is enforced against this both here and by a
+    #: `CHECK`: an `envelope_entered` with no entity says something entered
+    #: something, which is not evidence about anything.
+    subject: Literal["entity", "run"]
+    #: What this occurrence type's `value` column holds, or `None` if it holds
+    #: nothing. Presence is enforced both ways, like an edge's metric.
+    metric: str | None
+
+
+#: The occurrence vocabulary (issue #35, docs/prior-art.md §9). **Fixed and
+#: small, like `ENVELOPE_SOURCES` and `EDGE_SPECS`**: an out-of-vocabulary
+#: occurrence is a detectable fault rather than a new category nobody agreed to.
+#:
+#: Every type here is one the six fixtures can actually produce. `escalation_
+#: failure`, `veto` and the rest of the Phase 4 taxonomy are deliberately absent
+#: — an occurrence type nothing emits makes "no escalation failed in this run"
+#: indistinguishable from "this build does not record escalation failures".
+#:
+#: The layers split exactly where the project's does: the run's own ends are
+#: Layer A (they are facts about the record), and everything naming an entity is
+#: Layer B without exception, because where an entity is comes from perception in
+#: any real system.
+OCCURRENCE_SPECS: dict[str, OccurrenceSpec] = {
+    "run_began": OccurrenceSpec("A", "run", None),
+    "run_ended": OccurrenceSpec("A", "run", None),
+    "envelope_entered": OccurrenceSpec("B", "entity", None),
+    "envelope_left": OccurrenceSpec("B", "entity", None),
+    "contact_began": OccurrenceSpec("B", "entity", None),
+    "contact_ended": OccurrenceSpec("B", "entity", None),
+    "closest_approach": OccurrenceSpec("B", "entity", "min_distance_m"),
+}
+
 #: Node kind -> (table, primary key column). Used to check that an edge's
 #: endpoints exist before the edge is written.
+#:
+#: `Occurrence` is in here so it is counted, attributed and checked like every
+#: other node kind, and **not** because any edge points at one: no `EdgeSpec`
+#: names it. The occurrence layer is additive (issue #35) — it sits beside the
+#: edges rather than joining them, and giving it an edge type would be inventing
+#: a relationship the fixtures do not produce.
 NODE_TABLES: dict[str, tuple[str, str]] = {
     "Envelope": ("envelope", "envelope_id"),
     "Entity": ("entity", "entity_id"),
     "RobotConfig": ("robot_config", "config_id"),
+    "Occurrence": ("occurrence", "occurrence_id"),
 }
 
 _SQL_EDGE_TYPES = ", ".join(f"'{name}'" for name in EDGE_SPECS)
 _SQL_NODE_KINDS = ", ".join(f"'{name}'" for name in NODE_TABLES)
 _SQL_ENVELOPE_SOURCES = ", ".join(f"'{name}'" for name in ENVELOPE_SOURCES)
+_SQL_OCCURRENCE_TYPES = ", ".join(f"'{name}'" for name in OCCURRENCE_SPECS)
+_SQL_OCCURRENCE_ENTITY_TYPES = ", ".join(
+    f"'{name}'" for name, spec in OCCURRENCE_SPECS.items() if spec.subject == "entity"
+)
+_SQL_OCCURRENCE_VALUED_TYPES = ", ".join(
+    f"'{name}'" for name, spec in OCCURRENCE_SPECS.items() if spec.metric is not None
+)
 
 SCHEMA = f"""
 CREATE TABLE meta (
@@ -271,11 +353,60 @@ CREATE TABLE edge (
     CHECK ((type = 'SEPARATION') = (min_distance IS NOT NULL))
 );
 
+-- THE OCCURRENCE LAYER (issue #35). An event-level view of the same run, in the
+-- shape UN R157's DSSAD mandates for automated driving — the only mandated
+-- evidence recorder for autonomy that exists (docs/prior-art.md §9). It is
+-- **additive**: the edge layer above is unchanged, every existing query still
+-- reads it, and the two are two resolutions of one run rather than two builds.
+--
+-- The columns are DSSAD's data elements, named so the mapping is legible to a
+-- reader who knows the regulation:
+--
+--   `type`        the occurrence flag — which listed event this is
+--   `reason`      DSSAD's "reason for the occurrence, where applicable"
+--   `t`           the timestamp, at the resolution recorded in
+--                 meta[occurrence_time_resolution_s] (DSSAD states ±1.0 s)
+--   `sw_version`  DSSAD's **R157SWIN**, the software version identifier present
+--                 when the event occurred, in this project's terms: the `reg`
+--                 version plus a digest binding the envelope parameters that
+--                 produced the run, both of which are also in `meta` in full.
+--
+-- **There is no `date` column, and the omission is deliberate.** DSSAD records
+-- `yyyy/mm/dd` because a car's recorder has a clock. This artifact must be
+-- byte-reproducible from its seeds (docs/plan.md, determinism), and a wall-clock
+-- date is exactly the ambient value that would break that. What replaces it is
+-- the run's own time base plus the source stream's provenance block, both in
+-- `meta`. An assessor gets "when in this run" and "which run"; they do not get
+-- "which afternoon", and this comment is where that is said rather than left to
+-- be discovered as a missing column.
+--
+-- `seq` is emission order, and it is what keeps two events inside one resolution
+-- quantum two rows. Coarsening the timestamp loses *when* they happened relative
+-- to each other, which is the cost being measured; it must not silently lose one
+-- of them, which would be a different and much worse thing.
+CREATE TABLE occurrence (
+    occurrence_id TEXT    PRIMARY KEY,
+    seq           INTEGER NOT NULL UNIQUE,
+    type          TEXT    NOT NULL CHECK (type IN ({_SQL_OCCURRENCE_TYPES})),
+    layer         TEXT    NOT NULL CHECK (layer IN ('A', 'B')),
+    reason        TEXT    NOT NULL,
+    t             REAL    NOT NULL,
+    entity_id     TEXT    REFERENCES entity (entity_id),
+    value         REAL,
+    sw_version    TEXT    NOT NULL,
+    CHECK ((type IN ({_SQL_OCCURRENCE_ENTITY_TYPES})) = (entity_id IS NOT NULL)),
+    CHECK ((type IN ({_SQL_OCCURRENCE_VALUED_TYPES})) = (value IS NOT NULL))
+);
+
 -- Claim 3 is `WHERE layer = ?`; queries 1-4 are `WHERE type = ? AND dst_id = ?`
 -- over an interval. Index what the supported question set actually asks.
 CREATE INDEX edge_by_layer     ON edge (layer);
 CREATE INDEX edge_by_type_dst  ON edge (type, dst_id);
 CREATE INDEX edge_by_interval  ON edge (t_start, t_end);
+
+-- The occurrence layer is asked "which events of this type, for this entity",
+-- which is the same shape as `edge_by_type_dst` one layer up.
+CREATE INDEX occurrence_by_type ON occurrence (type, entity_id);
 """
 
 
@@ -303,6 +434,28 @@ def layer_of(edge_type: str) -> Layer:
             f"{sorted(EDGE_SPECS)}. Adding one means deciding its layer, its "
             "endpoints and its metric in reg.store.EDGE_SPECS — Claim 3 is a "
             "query over the layer tag, so an edge nobody tagged is unusable."
+        )
+    return spec.layer
+
+
+def occurrence_layer(occurrence_type: str) -> Layer:
+    """The layer an occurrence type belongs to. Refuses one not in the vocabulary.
+
+    The same rule as `layer_of`, for the same reason, plus one specific to this
+    layer: the occurrence vocabulary is the artifact's claim about *what kinds of
+    event it would have recorded had they happened*. A type invented at a call
+    site makes the absence of that event unreadable — nobody can tell "it did not
+    happen" from "this build had no name for it".
+    """
+    spec = OCCURRENCE_SPECS.get(occurrence_type)
+    if spec is None:
+        raise StoreError(
+            f"{occurrence_type!r} is not an occurrence type. Known types: "
+            f"{sorted(OCCURRENCE_SPECS)}. The vocabulary is fixed and small on "
+            "purpose (docs/prior-art.md §9): an out-of-vocabulary occurrence is "
+            "a detectable fault, not a new row type. Adding one means deciding "
+            "its layer, its subject and its metric in "
+            "reg.store.OCCURRENCE_SPECS — and having a fixture that produces it."
         )
     return spec.layer
 
@@ -687,6 +840,150 @@ def insert_entity(
             "is_static": 1 if geometry is not None else 0,
             "geometry_wkb": None if geometry is None else to_wkb(geometry),
         },
+    )
+
+
+def insert_occurrence(
+    conn: sqlite3.Connection,
+    occurrence_id: str,
+    *,
+    seq: int,
+    occurrence_type: str,
+    reason: str,
+    t: float,
+    entity_id: str | None,
+    value: float | None,
+    sw_version: str,
+) -> str:
+    """One DSSAD-shaped occurrence. Every element required, none defaulted.
+
+    `entity_id` and `value` are required *arguments* and either may be `None`
+    where the type says so — `insert_envelope`'s discipline, for the same reason:
+    "this event names no entity" and "I forgot to say which entity" must not be
+    the same call.
+
+    `layer` is never taken from the caller; it comes from `OCCURRENCE_SPECS`.
+
+    Args:
+        seq: emission order, unique within the artifact. It is what keeps two
+            events inside one timestamp quantum two rows.
+        reason: DSSAD's reason element, as prose. Non-empty: an occurrence whose
+            reason is blank records that something happened and nothing about
+            what, which is the row an assessor cannot use.
+        t: the timestamp, **already rounded to the artifact's occurrence
+            resolution by the caller**. This module stores what it is given and
+            does not quantize on anyone's behalf, exactly as it does not round
+            `area` — a store that silently coarsens makes the resolution in force
+            a property of the writer rather than of the record.
+        sw_version: DSSAD's `R157SWIN` in this project's terms — the software
+            version identifier present when the event occurred.
+
+    Raises:
+        StoreError: an unknown type, a blank reason or `sw_version`, an entity
+            named by a type that has no subject (or missing from one that does),
+            a value on a type that carries none (or missing from one that does),
+            or an `entity_id` no `entity` row matches.
+    """
+    spec = OCCURRENCE_SPECS.get(occurrence_type)
+    if spec is None:
+        occurrence_layer(occurrence_type)  # raises with the full vocabulary
+        raise AssertionError  # pragma: no cover - occurrence_layer always raises
+
+    if not isinstance(reason, str) or not reason.strip():
+        raise StoreError(
+            f"a {occurrence_type} occurrence was written with reason={reason!r}. "
+            "DSSAD records the reason for an occurrence alongside the flag; a "
+            "blank one leaves a row saying an event happened and nothing about "
+            "which condition produced it."
+        )
+    if not isinstance(sw_version, str) or not sw_version.strip():
+        raise StoreError(
+            f"a {occurrence_type} occurrence was written with "
+            f"sw_version={sw_version!r}. That is DSSAD's R157SWIN element: an "
+            "occurrence not bound to the software that produced it cannot be "
+            "attributed to a build, which is the one thing the element exists "
+            "for."
+        )
+
+    if spec.subject == "entity":
+        if entity_id is None:
+            raise StoreError(
+                f"a {occurrence_type} occurrence names an entity and none was "
+                "supplied. It is an event *about* something, and one that names "
+                "nothing says something happened to somebody."
+            )
+        _require_node(conn, "Entity", str(entity_id))
+    elif entity_id is not None:
+        raise StoreError(
+            f"a {occurrence_type} occurrence is about the run and names no "
+            f"entity, but entity_id={entity_id!r} was supplied. Recording it "
+            "would put an event in that entity's history that is not about it."
+        )
+
+    if spec.metric is not None and value is None:
+        raise StoreError(
+            f"a {occurrence_type} occurrence carries {spec.metric} and none was "
+            "supplied. Writing it as NULL would answer every question about the "
+            "quantity with 'no', not with 'unknown'."
+        )
+    if spec.metric is None and value is not None:
+        raise StoreError(
+            f"a {occurrence_type} occurrence carries no value, but {value!r} was "
+            "supplied. A number in a column nobody can name the units of is not "
+            "evidence."
+        )
+
+    return _insert_node(
+        conn,
+        "occurrence",
+        "occurrence_id",
+        {
+            "occurrence_id": str(occurrence_id),
+            "seq": int(seq),
+            "type": str(occurrence_type),
+            "layer": spec.layer,
+            "reason": str(reason),
+            "t": float(t),
+            "entity_id": None if entity_id is None else str(entity_id),
+            "value": None if value is None else float(value),
+            "sw_version": str(sw_version),
+        },
+    )
+
+
+def read_occurrences(
+    conn: sqlite3.Connection,
+    *,
+    occurrence_type: str | None = None,
+    entity_id: str | None = None,
+    layer: Literal["A", "B"] | None = None,
+) -> list[sqlite3.Row]:
+    """Occurrences matching the filters, ordered by `(t, seq)`.
+
+    `t` alone is not a total order at this layer and is much further from being
+    one than at the edge layer: the whole point of the occurrence timestamp is
+    that it is coarse, so several events routinely share one. `seq` breaks the
+    tie by emission order so two reads of one artifact agree — without implying
+    that the tie-break carries timing information the record does not have.
+    """
+    if occurrence_type is not None:
+        occurrence_layer(occurrence_type)  # refuses an unknown type, not []
+    clauses: list[str] = []
+    params: list[object] = []
+    for column, value in (
+        ("type", occurrence_type),
+        ("entity_id", entity_id),
+        ("layer", layer),
+    ):
+        if value is not None:
+            clauses.append(f"{column} = ?")
+            params.append(value)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return list(
+        conn.execute(
+            f"SELECT * FROM occurrence{where} ORDER BY t, seq",  # noqa: S608
+            params,
+        ).fetchall()
     )
 
 

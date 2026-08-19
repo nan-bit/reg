@@ -32,7 +32,12 @@ the premise of the whole argument is that the policy is uncertified and out of
 scope. It also does not have to be *right* — given a fixed declared box (the
 `declared_q_bounds` of `reg.scenarios.DECLARED_VIOLATION`) it will happily
 declare one bound and then command outside it. A policy that never violates its
-own declaration would make Phase 4's fault taxonomy undemonstrable.
+own declaration would make Phase 4's fault taxonomy undemonstrable. The same
+goes for `declared_margin_m`: told to pad its claim, it pads it, including past
+the point where the padded region is a region the robot cannot reach
+(`reg.scenarios.ENVELOPE_OVERCLAIM`). Neither is a mode this module chooses —
+both are stated by the caller, because a policy that decided for itself how
+wrong to be would be a fixture generator rather than a policy.
 
 Two consequences of the same rule, stated because they look like omissions:
 
@@ -505,6 +510,31 @@ def declared_region(configs: np.ndarray | Sequence[Sequence[float]], limits: Lim
     return region
 
 
+def _padded(region: Polygon, margin: float | None) -> Polygon:
+    """`region` dilated by `margin`, or `region` itself when there is no margin.
+
+    The dilation is the whole of what a padded claim is: no other part of the
+    record changes, so a padded declaration is indistinguishable from an honest
+    one to every reader except one that recomputes what the robot can reach.
+
+    Raises:
+        DeclarationError: the dilation produced something that is not a single
+            valid polygon. A bound nobody can test against must not be signed —
+            every containment test against it would report could-not-evaluate,
+            and Phase 4 must not be handed one this side manufactured.
+    """
+    if margin is None:
+        return region
+    dilated = region.buffer(margin)
+    if not isinstance(dilated, Polygon) or dilated.is_empty or not dilated.is_valid:
+        raise DeclarationError(
+            f"padding the declared region by {margin} m produced a "
+            f"{type(dilated).__name__} that is empty or invalid. That is a "
+            "failed computation, not a wider claim."
+        )
+    return dilated
+
+
 # --------------------------------------------------------------------------
 # The scripted policy.
 # --------------------------------------------------------------------------
@@ -558,6 +588,7 @@ def emit_declarations(
     replan_interval_s: float,
     horizon_s: float,
     declared_q_bounds: Sequence[tuple[float, float]] | None,
+    declared_margin_m: float | None,
     id_prefix: str,
 ) -> tuple[Declaration, ...]:
     """The scripted policy: one signed, chained declaration per replan interval.
@@ -586,6 +617,18 @@ def emit_declarations(
             policy. The fixed box is the interesting case: it is a claim the
             policy makes independently of what it then does, so it can be false,
             which is what `reg.scenarios.DECLARED_VIOLATION` exists to produce.
+        declared_margin_m: metres to dilate the declared region by before signing
+            it, or `None` to declare the region itself. Required — no default,
+            because a padded claim and an unpadded one are different statements
+            and a margin invented here would be indistinguishable downstream from
+            one the policy meant. A padded claim is not a conservative one: the
+            declared envelope is the region the robot is being authorised to
+            sweep, so padding claims authority over space the arm may not be able
+            to reach, and past `reg.enforce.computed_bound` it is an **envelope
+            overclaim** — the only way a run can produce that fault, because
+            every region built from the arm's own kinematics lies inside the
+            workspace disc for any joint box whatsoever
+            (`reg.scenarios.ENVELOPE_OVERCLAIM`).
         id_prefix: prefix for the deterministic `declaration_id`s, normally the
             scenario name.
 
@@ -642,6 +685,17 @@ def emit_declarations(
             f"id_prefix must be a non-empty str, got {id_prefix!r}; it is what "
             "makes declaration_id readable and unique to a run."
         )
+    if declared_margin_m is not None:
+        declared_margin_m = _finite(declared_margin_m, "declared_margin_m")
+        if declared_margin_m <= 0.0:
+            raise DeclarationError(
+                f"declared_margin_m must be strictly positive, got "
+                f"{declared_margin_m}. Zero is not 'no padding' — that is `None` "
+                "— and a negative margin would *shrink* the declared region into "
+                "a claim the policy is guaranteed to violate on its first frame, "
+                "which is a fault manufactured by the producer rather than "
+                "committed by the policy."
+            )
 
     # The fixed box, if there is one, is the same claim in every interval, so
     # its region is computed once. Nothing is approximated by the reuse: the
@@ -649,7 +703,9 @@ def emit_declarations(
     fixed_wkb: bytes | None = None
     if declared_q_bounds is not None:
         box = _check_box(declared_q_bounds, limits, "declared_q_bounds")
-        fixed_wkb = envelope_wkb(declared_region(box_grid(box, limits), limits))
+        fixed_wkb = envelope_wkb(
+            _padded(declared_region(box_grid(box, limits), limits), declared_margin_m)
+        )
 
     declarations: list[Declaration] = []
     prev_hash = GENESIS_HASH
@@ -661,7 +717,9 @@ def emit_declarations(
         wkb = (
             fixed_wkb
             if fixed_wkb is not None
-            else envelope_wkb(declared_region(configs, limits))
+            else envelope_wkb(
+                _padded(declared_region(configs, limits), declared_margin_m)
+            )
         )
 
         unsigned = Declaration(

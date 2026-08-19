@@ -96,6 +96,7 @@ def emit(scenario: Scenario, **overrides: object) -> tuple[Declaration, ...]:
         replan_interval_s=REPLAN_S,
         horizon_s=HORIZON_S,
         declared_q_bounds=scenario.declared_q_bounds,
+        declared_margin_m=scenario.declared_margin_m,
         id_prefix=scenario.name,
     )
     kwargs.update(overrides)
@@ -370,9 +371,41 @@ def test_emission_is_deterministic_and_the_seed_still_does_something() -> None:
         replan_interval_s=REPLAN_S,
         horizon_s=HORIZON_S,
         declared_q_bounds=scenario.declared_q_bounds,
+        declared_margin_m=scenario.declared_margin_m,
         id_prefix=scenario.name,
     )
     assert [d.mac for d in other] != [d.mac for d in first]
+
+
+def test_a_declared_margin_widens_the_claim_and_nothing_else() -> None:
+    """The padded claim, and the two things that make it a claim rather than a bug.
+
+    It has to be strictly wider than the unpadded one — a margin that changed
+    nothing would be a fixture parameter with no effect, and
+    `reg.scenarios.ENVELOPE_OVERCLAIM` would produce no fault while claiming
+    one. And it has to leave the rest of the record alone: same count, same
+    times, same classes, same sequence, so a padded declaration is
+    indistinguishable from an honest one to every reader except one that
+    recomputes what the robot can reach.
+    """
+    scenario = SCENARIOS["contact"]
+    honest = emit(scenario, declared_margin_m=None)
+    padded = emit(scenario, declared_margin_m=0.25)
+
+    assert len(padded) == len(honest)
+    for wide, plain in zip(padded, honest, strict=True):
+        assert wide.envelope().area > plain.envelope().area
+        assert wide.envelope().covers(plain.envelope())
+        assert (wide.seq, wide.t_issued, wide.horizon, wide.action_class) == (
+            plain.seq,
+            plain.t_issued,
+            plain.horizon,
+            plain.action_class,
+        )
+    # ...and the padding is the *only* difference, so the MACs must differ: a
+    # padded run that chained identically would be one no auditor could tell
+    # apart from the honest one.
+    assert [d.mac for d in padded] != [d.mac for d in honest]
 
 
 def test_the_declared_violation_fixture_really_violates_its_declaration(runs) -> None:
@@ -435,6 +468,7 @@ def test_the_action_class_follows_the_motion() -> None:
                 replan_interval_s=REPLAN_S,
                 horizon_s=HORIZON_S,
                 declared_q_bounds=None,
+                declared_margin_m=None,
                 id_prefix="synthetic",
             )
         ]
@@ -487,6 +521,7 @@ def test_the_policy_takes_proprioception_and_refuses_a_state_frame() -> None:
             replan_interval_s=REPLAN_S,
             horizon_s=HORIZON_S,
             declared_q_bounds=None,
+            declared_margin_m=None,
             id_prefix="leak",
         )
 
@@ -514,6 +549,9 @@ def test_the_declare_module_holds_no_layer_b_type() -> None:
         ({"id_prefix": ""}, "non-empty str"),
         ({"declared_q_bounds": ((0.0, 1.0),)}, "one \\(lo, hi\\) pair per joint"),
         ({"declared_q_bounds": ((1.0, 0.0), (0.0, 1.0))}, "inverted"),
+        ({"declared_margin_m": 0.0}, "strictly positive"),
+        ({"declared_margin_m": -0.1}, "strictly positive"),
+        ({"declared_margin_m": float("nan")}, "non-finite"),
     ],
 )
 def test_the_policy_refuses_parameters_it_cannot_act_on(
@@ -533,6 +571,7 @@ def test_the_policy_refuses_a_run_that_is_not_a_run() -> None:
             replan_interval_s=REPLAN_S,
             horizon_s=HORIZON_S,
             declared_q_bounds=None,
+            declared_margin_m=None,
             id_prefix="empty",
         )
 
@@ -548,6 +587,7 @@ def test_the_policy_refuses_a_run_that_is_not_a_run() -> None:
             replan_interval_s=REPLAN_S,
             horizon_s=HORIZON_S,
             declared_q_bounds=None,
+            declared_margin_m=None,
             id_prefix="backwards",
         )
 

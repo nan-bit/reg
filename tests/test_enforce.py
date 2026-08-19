@@ -1,6 +1,6 @@
 """Enforcement: the independent bound, the `Verdict`, and the nine faults.
 
-Four things this file is really about.
+Five things this file is really about.
 
 * **Every fault has a negative test.** One per taxonomy entry, each feeding the
   condition the check guards against and asserting the named fault *and* the
@@ -18,6 +18,12 @@ Four things this file is really about.
   test that an honest declaration bigger than the sampled envelope is accepted,
   because getting that wrong is how this check would fail in the direction
   nobody notices.
+* **Every semantic fault has occurred in a run, not only in a unit test.** The
+  last section adjudicates the fault fixtures of `reg.scenarios` end to end —
+  real declarations, real enforcer, several seeds — because a detector that
+  works on a record built three lines earlier says nothing about whether the
+  fault can happen. Each of those fixtures is one policy behaviour away from a
+  clean run, and taking the behaviour away has to leave PERMIT on every frame.
 """
 
 from __future__ import annotations
@@ -53,6 +59,7 @@ from reg.declare import (
     emit_declarations,
     envelope_wkb,
     sign_declaration,
+    verify_declaration,
 )
 from reg.enforce import (
     FAULTS,
@@ -74,7 +81,7 @@ from reg.enforce import (
 )
 from reg.envelope import HASH_COORD_PRECISION, compute_envelope, envelope_area
 from reg.kinematics import link_polygons
-from reg.scenarios import SCENARIOS
+from reg.scenarios import SCENARIOS, Scenario
 from reg.types import Limits, Obstacle, ProprioState, StateFrame
 from reg.world import DEMO_WORLD
 
@@ -1010,20 +1017,113 @@ FIXTURE_HORIZON_S = 0.5
 FIXTURE_WATCHDOG_S = 1.0
 
 
-def run_declared_violation(seed: int) -> tuple[Enforcer, tuple[Declaration, ...], list[Verdict]]:
-    """Adjudicate the `declared_violation` fixture, declarations and all."""
-    scenario = SCENARIOS["declared_violation"]
-    states = [frame.proprio() for frame in scenario.states(seed)]
+@dataclasses.dataclass(frozen=True)
+class FixtureRun:
+    """One fixture, adjudicated end to end: what the policy said and what came back.
+
+    `refusals` and `actions` are kept apart because they answer different
+    questions — a refusal is a finding about a *declaration* and an action
+    verdict is a finding about a commanded action — and both are in
+    `enforcer.verdicts`, in the order they were emitted.
+    """
+
+    scenario: Scenario
+    seed: int
+    enforcer: Enforcer
+    declarations: tuple[Declaration, ...]
+    refusals: tuple[Verdict, ...]
+    actions: tuple[Verdict, ...]
+
+    @property
+    def verdicts(self) -> tuple[Verdict, ...]:
+        return self.enforcer.verdicts
+
+    @property
+    def faults(self) -> set[str]:
+        return {v.fault for v in self.verdicts if v.fault is not None}
+
+
+def nonconforming_declarations(
+    declarations: tuple[Declaration, ...], action_class: str
+) -> tuple[Declaration, ...]:
+    """Re-issue a stream from a producer that does not share the vocabulary.
+
+    `reg.declare` refuses to *construct* a declaration whose `action_class` is
+    outside `ACTION_CLASSES`, which is why `reg.scenarios.OUT_OF_VOCABULARY_ACTION`
+    cannot be produced by it and why this exists here rather than there — a
+    producer that could emit one would make that module's refusal decorative.
+
+    The whole chain is re-issued rather than the field edited in place: the MAC
+    covers every field and `prev_hash` covers the MAC, so a stream with one
+    record rewritten would be an unattributed one, and the fault under test
+    would be the wrong one. What arrives at enforcement is therefore a
+    well-formed, correctly signed, correctly linked stream whose only defect is
+    a word nothing downstream knows.
+    """
+    out: list[Declaration] = []
+    prev_hash = GENESIS_HASH
+    for d in declarations:
+        forged = Declaration(
+            declaration_id=d.declaration_id,
+            seq=d.seq,
+            t_issued=d.t_issued,
+            horizon=d.horizon,
+            # Constructed in vocabulary, then stamped: this producer is the one
+            # that never asked what the vocabulary was.
+            action_class="hold",
+            declared_envelope=d.declared_envelope,
+            prev_hash=prev_hash,
+            mac=UNSIGNED_MAC,
+        )
+        object.__setattr__(forged, "action_class", action_class)
+        object.__setattr__(forged, "mac", sign(forged, POLICY_KEY))
+        out.append(forged)
+        prev_hash = chain_hash(forged, prev_hash)
+    return tuple(out)
+
+
+def declarations_for(
+    scenario: Scenario, states: list[ProprioState]
+) -> tuple[Declaration, ...]:
+    """The declaration stream this fixture's policy emits over `states`.
+
+    Three fixture fields decide what the policy does and none of them has a
+    default: it is silent inside `silent_windows`, it pads its region by
+    `declared_margin_m`, and it stamps `declared_action_class` if the fixture
+    says it has one. Everything else is `reg.declare.emit_declarations`.
+    """
+    speaking = [state for state in states if not scenario.silent_at(state.t)]
+    if not speaking:
+        # A policy that never says anything. Not an empty stream to paper over —
+        # `emit_declarations` refuses an empty run, and it is right to: this is
+        # the fixture, not a degenerate call.
+        return ()
     declarations = emit_declarations(
-        states,
+        speaking,
         LIMITS,
         key=POLICY_KEY,
         replan_interval_s=FIXTURE_REPLAN_S,
         horizon_s=FIXTURE_HORIZON_S,
         declared_q_bounds=scenario.declared_q_bounds,
+        declared_margin_m=scenario.declared_margin_m,
         id_prefix=scenario.name,
     )
+    if scenario.declared_action_class is None:
+        return declarations
+    return nonconforming_declarations(declarations, scenario.declared_action_class)
+
+
+def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
+    """Adjudicate a whole fixture: real declarations, real enforcer, in time order.
+
+    Nobody acknowledges anything. An acknowledgment is an operator saying it is
+    safe to resume, and inserting one here would be this harness deciding that —
+    which is exactly the decision `escalation_failure` is about the absence of.
+    """
+    states = [frame.proprio() for frame in scenario.states(seed)]
+    declarations = declarations_for(scenario, states)
     pending = {round(d.t_issued, 9): d for d in declarations}
+
     e = Enforcer(
         LIMITS,
         key=ENFORCEMENT_KEY,
@@ -1032,13 +1132,34 @@ def run_declared_violation(seed: int) -> tuple[Enforcer, tuple[Declaration, ...]
         t_start=0.0,
         id_prefix=scenario.name,
     )
-    verdicts: list[Verdict] = []
+    refusals: list[Verdict] = []
+    actions: list[Verdict] = []
     for state in states:
         due = pending.pop(round(state.t, 9), None)
         if due is not None:
-            assert e.offer(due) is None, "the fixture's own declarations are honest"
-        verdicts.append(e.adjudicate(state))
-    return e, declarations, verdicts
+            refused = e.offer(due)
+            if refused is not None:
+                refusals.append(refused)
+        actions.append(e.adjudicate(state))
+    assert not pending, (
+        f"{scenario.name}: {len(pending)} declarations were issued at instants "
+        "that are not frames of the run, so they were never offered."
+    )
+    return FixtureRun(
+        scenario=scenario,
+        seed=seed,
+        enforcer=e,
+        declarations=declarations,
+        refusals=tuple(refusals),
+        actions=tuple(actions),
+    )
+
+
+def run_declared_violation(seed: int) -> tuple[Enforcer, tuple[Declaration, ...], list[Verdict]]:
+    """Adjudicate the `declared_violation` fixture, declarations and all."""
+    run = run_scenario(SCENARIOS["declared_violation"], seed)
+    assert not run.refusals, "the fixture's own declarations are honest"
+    return run.enforcer, run.declarations, list(run.actions)
 
 
 def test_declared_violation_permits_then_clamps_against_identical_declarations() -> None:
@@ -1101,9 +1222,33 @@ def test_the_verdict_stream_is_deterministic() -> None:
     assert len(other) == len(a)
 
 
-@pytest.mark.parametrize(
-    "name", [n for n, s in SCENARIOS.items() if s.declared_q_bounds is None]
-)
+#: The fixtures that must produce nothing: no silence, no padding, no borrowed
+#: vocabulary, and a claim that is true of the run. Selected by `fault is None`
+#: rather than by name, so a fixture added later is included or excluded by what
+#: it says about itself.
+COMPLIANT = [name for name, s in SCENARIOS.items() if s.fault is None]
+
+#: The fixtures that must produce exactly one named fault, and the response
+#: docs/plan.md's taxonomy specifies for it. Written out rather than derived:
+#: the response is the taxonomy's decision, and a table computed from the code
+#: under test would agree with it by construction.
+FAULT_RESPONSE: dict[str, str] = {
+    "declared_violation": "CLAMP",
+    "no_declaration": "VETO",
+    "stale_declaration": "VETO",
+    "envelope_overclaim": "VETO",
+    "out_of_vocabulary_action": "VETO",
+    "escalation_failure": "SAFE_STATE",
+}
+
+FAULT_FIXTURES = [name for name, s in SCENARIOS.items() if s.fault is not None]
+
+#: Three seeds for the end-to-end fault tests. The seed perturbs the waypoints,
+#: so a fault that only fires at seed 0 is a fixture tuned to one draw.
+FIXTURE_SEEDS = (0, 1, 7)
+
+
+@pytest.mark.parametrize("name", COMPLIANT)
 def test_a_compliant_fixture_is_permitted_throughout(name: str) -> None:
     """The positive control for the whole taxonomy, on every compliant fixture.
 
@@ -1112,20 +1257,327 @@ def test_a_compliant_fixture_is_permitted_throughout(name: str) -> None:
     Nothing in the taxonomy should fire on any of them — this is the test that
     would catch a bound that cries wolf, and if it goes red the bound is wrong,
     not the fixture and not the tolerance.
+
+    Adding the fault fixtures of issue #46 must not disturb it: they are
+    excluded because each states the fault it exists to produce, not because
+    they were listed out here.
     """
     scenario = SCENARIOS[name]
+    assert scenario.fault is None
     assert scenario.declared_q_bounds is None
-    states = [frame.proprio() for frame in scenario.states(0)]
-    declarations = emit_declarations(
-        states,
-        LIMITS,
-        key=POLICY_KEY,
-        replan_interval_s=FIXTURE_REPLAN_S,
-        horizon_s=FIXTURE_HORIZON_S,
-        declared_q_bounds=None,
-        id_prefix=scenario.name,
+    assert scenario.declared_margin_m is None
+    assert scenario.declared_action_class is None
+    assert scenario.silent_windows == ()
+
+    run = run_scenario(scenario, 0)
+    assert not run.refusals
+    for v in run.actions:
+        assert v.outcome == "PERMIT", (
+            f"{scenario.name} t={v.t}: an honest declaration produced "
+            f"{v.outcome}/{v.fault}. Do not widen a tolerance to fix this — the "
+            "bound is wrong."
+        )
+    assert not run.enforcer.is_passivated
+
+
+# ==========================================================================
+# One fixture per semantic fault (issue #46).
+#
+# The synthetic cases above (issue #43) already demonstrate all nine against
+# declarations built in this file, which tests the detector and says nothing
+# about whether the fault can occur. These run the real enforcer over the real
+# declarations of a real fixture: a fault that has never appeared in a run
+# cannot reach the graph, the occurrence layer, or an incident report.
+#
+# The three transport faults — `unattributed`, `replay_or_reorder`,
+# `watchdog_expiry` — deliberately have no fixture and keep their synthetic
+# tests above. They are PROFIsafe's (docs/prior-art.md §5), and forging a MAC
+# inside a fixture would mean the fixture generator holding a key it should not
+# have.
+# ==========================================================================
+
+
+def test_the_fault_table_covers_every_fault_fixture() -> None:
+    """Guards every test below: a fixture missing from the table is untested.
+
+    Without this, adding a fixture and forgetting to say what its response is
+    would silently shrink the parametrization, and the suite would go green over
+    a fault nobody adjudicated.
+    """
+    assert set(FAULT_FIXTURES) == set(FAULT_RESPONSE)
+    assert set(FAULT_RESPONSE.values()) <= set(OUTCOMES)
+    for name in FAULT_FIXTURES:
+        assert SCENARIOS[name].fault in FAULTS
+    assert set(COMPLIANT) & set(FAULT_FIXTURES) == set()
+    assert len(COMPLIANT) + len(FAULT_FIXTURES) == len(SCENARIOS)
+
+
+@pytest.mark.parametrize("name", FAULT_FIXTURES)
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_a_fault_fixture_produces_the_fault_it_is_named_for(name: str, seed: int) -> None:
+    """The whole point of the fixtures. Real declarations, real enforcer.
+
+    Asserted with the response as well as the fault: a fixture that produced
+    `stale_declaration` as a CLAMP would be evidence that the taxonomy's
+    response had drifted, and a report written against it would say the robot
+    was allowed to continue when it was not.
+    """
+    scenario = SCENARIOS[name]
+    run = run_scenario(scenario, seed)
+    hits = [v for v in run.verdicts if v.fault == scenario.fault]
+    assert hits, (
+        f"{name} produced no {scenario.fault!r} verdict at seed {seed}; it "
+        f"produced {sorted(run.faults) or 'nothing'}. A fixture named for a "
+        "fault that does not fire is a green test asserting nothing — the "
+        "fixture is wrong, not the detector (#22)."
     )
+    assert hits[0].outcome == FAULT_RESPONSE[name], (
+        f"{name}: {scenario.fault} came back as {hits[0].outcome}, not the "
+        f"{FAULT_RESPONSE[name]} the taxonomy specifies."
+    )
+    for v in run.verdicts:
+        assert verify_verdict(v, ENFORCEMENT_KEY).state is MacState.VALID
+
+
+@pytest.mark.parametrize("name", FAULT_FIXTURES)
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_a_fault_fixture_produces_no_transport_fault(name: str, seed: int) -> None:
+    """The fixtures are about semantics; the channel in them is clean.
+
+    `unattributed`, `replay_or_reorder` and `watchdog_expiry` have no fixture on
+    purpose. One of them firing here would mean a fixture is producing its fault
+    by breaking the channel — a MAC that does not verify, a sequence that goes
+    backwards, a policy that simply stopped — and the run would be evidence
+    about transport rather than about what the declaration meant.
+    """
+    faults = run_scenario(SCENARIOS[name], seed).faults
+    assert faults.isdisjoint({"unattributed", "replay_or_reorder", "watchdog_expiry"})
+
+
+@pytest.mark.parametrize(
+    "name", [n for n in FAULT_FIXTURES if n != "escalation_failure"]
+)
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_the_named_fault_is_the_first_thing_that_goes_wrong(name: str, seed: int) -> None:
+    """Nothing else catches it — asserted, not claimed in the description.
+
+    The first verdict that is not a PERMIT has to be the fault the fixture is
+    named for. If something else fires first, the fixture is producing its fault
+    as a consequence of a different one and the incident it narrates is not the
+    incident it says it is.
+
+    `escalation_failure` is excluded and has its own test below: by definition
+    its window is opened by another fault passivating the enforcer, so it is the
+    one fixture where the named fault is not the first.
+    """
+    scenario = SCENARIOS[name]
+    run = run_scenario(scenario, seed)
+    first = next((v for v in run.verdicts if v.outcome != "PERMIT"), None)
+    assert first is not None, f"{name} produced no fault at all"
+    assert first.fault == scenario.fault, (
+        f"{name}: the first thing to fire at seed {seed} was {first.fault!r} at "
+        f"t={first.t}, not the {scenario.fault!r} the fixture is named for."
+    )
+    assert run.faults == {scenario.fault}, (
+        f"{name} produced {sorted(run.faults)}; a fixture that produces two "
+        "faults cannot be the fixture either of them is demonstrated against."
+    )
+
+
+@pytest.mark.parametrize("name", FAULT_FIXTURES)
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_arranging_the_fault_away_leaves_a_run_that_is_permitted_throughout(
+    name: str, seed: int
+) -> None:
+    """NEGATIVE, and the strongest thing these fixtures assert.
+
+    Each fault fixture is one policy behaviour away from a clean run: take away
+    the silence, the padding, the borrowed vocabulary or the fixed box and the
+    same trajectory, the same seed and the same enforcer produce PERMIT on every
+    frame. So the fault is caused by the thing the fixture's description says
+    causes it, and not by the geometry, the human, the timestep or the seed.
+
+    It is also the negative half of the checks themselves: a detector stuck at
+    'fault' would pass every test above and fail this one.
+    """
+    scenario = SCENARIOS[name]
+    compliant = dataclasses.replace(
+        scenario,
+        declared_q_bounds=None,
+        declared_margin_m=None,
+        declared_action_class=None,
+        silent_windows=(),
+        fault=None,
+    )
+    run = run_scenario(compliant, seed)
+    assert not run.refusals
+    assert run.faults == set(), (
+        f"{name} with its fault arranged away still produced "
+        f"{sorted(run.faults)} at seed {seed}."
+    )
+    assert all(v.outcome == "PERMIT" for v in run.actions)
+
+
+def test_the_no_declaration_fixture_declares_nothing_at_all() -> None:
+    """The arrangement, checked at the source rather than inferred from the verdict."""
+    scenario = SCENARIOS["no_declaration"]
+    run = run_scenario(scenario, 0)
+    assert run.declarations == ()
+    assert run.enforcer.open_declaration is None
+    first = run.actions[0]
+    assert (first.outcome, first.fault) == ("VETO", "no_declaration")
+    assert first.t == 0.0, "the veto is on the first commanded action, not a later one"
+    assert first.declaration_id is None, (
+        "there is no declaration to name, and `None` is the finding rather than "
+        "a gap in the record."
+    )
+    # And it stays a safe state: recovery needs a fresh declaration and an
+    # acknowledgment, and this run has neither.
+    assert {v.outcome for v in run.actions[1:]} == {"SAFE_STATE"}
+
+
+def test_the_stale_fixture_expires_one_horizon_after_the_last_declaration() -> None:
+    """Staleness is about the horizon, and it is not the watchdog.
+
+    The two are different failures with different remedies — a policy that has
+    gone quiet versus a claim that has run out — so the instant is asserted
+    against the horizon, and the watchdog is asserted not to have fired. The
+    fixture's silence is longer than the horizon and shorter than the watchdog
+    period on purpose, and this is where that arithmetic is checked rather than
+    trusted.
+    """
+    scenario = SCENARIOS["stale_declaration"]
+    run = run_scenario(scenario, 0)
+    last = run.declarations[-1]
+    assert last.t_issued < scenario.silent_windows[0][0]
+
+    stale = [v for v in run.verdicts if v.fault == "stale_declaration"]
+    first_stale = stale[0]
+    assert first_stale.outcome == "VETO"
+    assert first_stale.declaration_id == last.declaration_id
+    expiry = last.t_issued + last.horizon
+    assert first_stale.t == pytest.approx(expiry + scenario.dt, abs=1e-9), (
+        "the first stale verdict must be the first frame past the horizon; "
+        "earlier means the boundary is being excluded, later means a frame was "
+        "adjudicated against an expired claim and permitted."
+    )
+    assert all(v.outcome == "PERMIT" for v in run.actions if v.t <= expiry)
+    assert first_stale.t < last.t_issued + FIXTURE_WATCHDOG_S, (
+        "the horizon has to expire before the watchdog period, or this fixture "
+        "is a watchdog fixture wearing a staleness label."
+    )
+    assert "watchdog_expiry" not in run.faults
+
+
+def test_the_overclaim_fixture_declares_past_the_independently_computed_bound() -> None:
+    """The claim is refuted by `Limits` alone, and no joint box could make it.
+
+    Both halves matter. The padded region has to reach measurably outside the
+    workspace disc — otherwise the fixture is riding on a rounding difference —
+    and the *unpadded* claim has to lie inside it, or the fixture would be
+    demonstrating that the arm itself is out of bounds.
+    """
+    scenario = SCENARIOS["envelope_overclaim"]
+    assert scenario.declared_margin_m is not None
+    run = run_scenario(scenario, 0)
+    assert run.declarations, "no declaration to overclaim with"
+
+    for d in run.declarations:
+        excess = envelope_excess(d.envelope(), LIMITS)
+        assert excess > 0.01, (
+            f"{d.declaration_id} reaches only {excess:.4f} m past the "
+            f"{computed_bound(LIMITS):.4f} m bound; that is close enough to the "
+            "boundary that the fault would turn on floating point rather than on "
+            "the claim."
+        )
+    assert len(run.refusals) == len(run.declarations), (
+        "every declaration in this run overclaims, so every one is refused; a "
+        "run where some got through would be adjudicating two different things."
+    )
+
+    # The honest half: the region the arm actually sweeps is inside the bound,
+    # so what is out of bounds is the padding and only the padding.
+    honest = declarations_for(
+        dataclasses.replace(scenario, declared_margin_m=None),
+        [f.proprio() for f in scenario.states(0)],
+    )
+    for d in honest:
+        assert envelope_excess(d.envelope(), LIMITS) < 0.0
+
+
+def test_the_out_of_vocabulary_fixture_is_well_formed_but_for_one_word() -> None:
+    """Everything else about the declaration is correct, which is the point.
+
+    If the record were also unsigned, or out of sequence, or geometrically
+    dishonest, the VETO would prove nothing about the vocabulary — one of the
+    other checks would have caught it first, and `offer` checks attribution
+    before it checks anything else.
+    """
+    scenario = SCENARIOS["out_of_vocabulary_action"]
+    assert scenario.declared_action_class not in ACTION_CLASSES
+    run = run_scenario(scenario, 0)
+
+    for d in run.declarations:
+        assert d.action_class == scenario.declared_action_class
+        assert verify_declaration(d, POLICY_KEY).state is MacState.VALID
+        assert envelope_excess(d.envelope(), LIMITS) < 0.0
+    assert [d.seq for d in run.declarations] == list(range(len(run.declarations)))
+    assert run.declarations[0].prev_hash == GENESIS_HASH
+    for previous, nxt in zip(run.declarations, run.declarations[1:]):
+        assert nxt.prev_hash == chain_hash(previous, previous.prev_hash)
+
+    assert [v.fault for v in run.refusals] == [
+        "out_of_vocabulary_action" for _ in run.declarations
+    ]
+
+
+def test_escalation_failure_is_an_ordinary_declaration_inside_a_passivation() -> None:
+    """The sequence, in the order `reg/enforce.py` defines the obligation in.
+
+    A passivation opens the window; the window stays open until an
+    acknowledgment; a declaration issued inside it that is not an `escalate` is
+    the fault. So this asserts all four: the window was opened by an earlier
+    fault, nothing acknowledged it, the late declaration is an ordinary one from
+    the vocabulary, and the verdict lands at the instant it was issued.
+    """
+    scenario = SCENARIOS["escalation_failure"]
+    run = run_scenario(scenario, 0)
+
+    opening = next(v for v in run.verdicts if v.fault is not None)
+    assert opening.outcome == "VETO", "the window is opened by a passivation"
+    assert opening.fault != "escalation_failure"
+
+    failures = [v for v in run.verdicts if v.fault == "escalation_failure"]
+    assert failures, "the policy never declared again, so nothing was obliged"
+    first = failures[0]
+    assert first.outcome == "SAFE_STATE", "flag and safe state, per the taxonomy"
+    assert first.t > opening.t
+
+    late = next(d for d in run.declarations if d.declaration_id == first.declaration_id)
+    assert late.t_issued == pytest.approx(first.t, abs=1e-9)
+    assert late.action_class in ACTION_CLASSES
+    assert late.action_class != "escalate", (
+        "an `escalate` here would be the policy doing what it was obliged to do"
+    )
+    assert run.enforcer.acknowledgments == (), "nothing acknowledged the passivation"
+    assert not run.enforcer.escalated
+
+
+def test_an_acknowledged_passivation_makes_the_same_declaration_lawful() -> None:
+    """NEGATIVE for `escalation_failure`: the window closes, and the check says no.
+
+    The same fixture, the same seed, the same declarations — with one
+    acknowledgment recorded before the policy speaks again. The obligation to
+    escalate ends at the acknowledgment, so the declaration that was a fault a
+    moment ago is now accepted and the robot is reintegrated. Without this, a
+    check that reported `escalation_failure` for *every* declaration after a
+    passivation would pass every other test in this file.
+    """
+    scenario = SCENARIOS["escalation_failure"]
+    states = [frame.proprio() for frame in scenario.states(0)]
+    declarations = declarations_for(scenario, states)
     pending = {round(d.t_issued, 9): d for d in declarations}
+
     e = Enforcer(
         LIMITS,
         key=ENFORCEMENT_KEY,
@@ -1134,14 +1586,37 @@ def test_a_compliant_fixture_is_permitted_throughout(name: str) -> None:
         t_start=0.0,
         id_prefix=scenario.name,
     )
+    acknowledged = False
+    faults: list[str] = []
     for state in states:
+        # The operator acknowledges as soon as the enforcer passivates, which is
+        # the difference between this run and the fixture's own.
+        if e.is_passivated and not acknowledged:
+            e.acknowledge(t=state.t, reason="operator inspected the cell and cleared it")
+            acknowledged = True
         due = pending.pop(round(state.t, 9), None)
         if due is not None:
-            assert e.offer(due) is None
+            refused = e.offer(due)
+            if refused is not None:
+                faults.append(refused.fault or "")
         v = e.adjudicate(state)
-        assert v.outcome == "PERMIT", (
-            f"{scenario.name} t={state.t}: an honest declaration produced "
-            f"{v.outcome}/{v.fault}. Do not widen a tolerance to fix this — the "
-            "bound is wrong."
-        )
-    assert not e.is_passivated
+        if v.fault is not None:
+            faults.append(v.fault)
+
+    assert acknowledged, "the run never passivated, so there was nothing to close"
+    assert "escalation_failure" not in faults, (
+        "an acknowledged passivation obliges no escalation; reporting one here "
+        "would make the acknowledgment record decorative."
+    )
+    assert not e.is_passivated, "a fresh declaration plus an acknowledgment resumes"
+    assert e.acknowledgments and e.acknowledgments[0].fault == "stale_declaration"
+
+
+@pytest.mark.parametrize("name", FAULT_FIXTURES)
+def test_a_fault_fixtures_verdict_stream_is_deterministic(name: str) -> None:
+    """Same seed, same verdicts, same MACs, same chain head. CLAUDE.md rule 2."""
+    first = run_scenario(SCENARIOS[name], 0)
+    second = run_scenario(SCENARIOS[name], 0)
+    assert first.verdicts == second.verdicts
+    assert first.enforcer.head_hash == second.enforcer.head_hash
+    assert first.declarations == second.declarations

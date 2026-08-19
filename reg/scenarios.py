@@ -1,10 +1,20 @@
-"""The six named scenario fixtures, and one generated long run. **Layer B** —
+"""The eleven named scenario fixtures, and one generated long run. **Layer B** —
 this is simulator ground truth.
 
 These are the fixtures everything downstream is measured against, so they come
 first (docs/plan.md, Phase 1). They are hand-authored and small on purpose:
 randomised scenarios would make the compression numbers in Claim 1
 unfalsifiable — you cannot argue about a ratio nobody can regenerate.
+
+The catalogue is in two halves. The **six situations** — approach, near miss,
+contact, bystander, sustained overlap, declared violation — are what the
+compression and query claims are measured against. The **five fault fixtures**
+after them (issue #46) each produce exactly one of the semantic faults in
+`reg.enforce.FAULTS` when the real enforcer is run over their real declarations;
+they exist because an incident report can only narrate what a run produced, and
+five of the six semantic faults had never occurred in one. Their geometry is
+deliberately dull: the human is parked in a corner and the arm does something
+unremarkable, because what is wrong with those runs is what the *policy* said.
 
 The seventh, `long_run(n_frames)`, is generated rather than hand-authored,
 because the question it exists for is a question about *length* (issue #30:
@@ -46,6 +56,13 @@ from reg.world import DEMO_WORLD, World
 DEFAULT_DT = 0.02
 
 
+def _is_number(value: object) -> bool:
+    """Whether `value` is a real number. `True` is not one — it is a flag."""
+    return not isinstance(value, bool) and isinstance(
+        value, (int, float, np.integer, np.floating)
+    )
+
+
 @dataclass(frozen=True)
 class Waypoint:
     """One scripted knot: a time and the values held at it.
@@ -66,6 +83,15 @@ class Scenario:
     seed applies, in radians and metres. Both are required — a scenario that did
     not state its own jitter would be claiming an invented number as a fixture
     parameter, and every compression figure downstream would inherit it.
+
+    Five fields describe the **policy** rather than the motion:
+    `declared_q_bounds`, `declared_margin_m`, `silent_windows`,
+    `declared_action_class` and `fault`. A fixture is a *run*, and a run includes
+    what the policy said while it happened — a trajectory alone cannot express a
+    declaration that expired, one that was never issued, or one that claimed
+    space the robot cannot reach. Each defaults to the not-applicable value and
+    none of them is a threshold: they say what this fixture's policy does, in the
+    same way `declared_q_bounds` already says what `declared_violation`'s does.
     """
 
     name: str
@@ -87,6 +113,51 @@ class Scenario:
     #: own upcoming configurations sweep, which is a true statement about itself
     #: and therefore a compliant run.
     declared_q_bounds: tuple[tuple[float, float], ...] | None = None
+    #: Metres the policy dilates its declared region by before signing it
+    #: (`reg.declare.emit_declarations`). `None` means it declares the region
+    #: itself and pads nothing.
+    #:
+    #: This is the only way a run can produce an **envelope overclaim**, and the
+    #: reason is geometric: every region built from the arm's own kinematics lies
+    #: inside the workspace disc `reg.enforce.computed_bound` compares against,
+    #: for any joint box whatsoever, so no `declared_q_bounds` can overclaim. A
+    #: padded claim can — it is the policy claiming authority over space the
+    #: robot cannot physically occupy, which is a claim enforcement can refute
+    #: from `Limits` alone.
+    declared_margin_m: float | None = None
+    #: Closed time windows `(t0, t1)`, seconds, in which the policy issues no
+    #: declaration: a state at `t0 <= t <= t1` is one the policy did not see.
+    #: Empty means it declares throughout.
+    #:
+    #: Where the window falls is what distinguishes the two timing faults, and it
+    #: is a property of the run rather than of the party reading it. A window
+    #: covering the whole run is a policy that never declares at all
+    #: (**no declaration**); one that opens mid-run and never closes leaves the
+    #: last declaration to expire (**stale declaration**); one that closes again
+    #: does that *and* then offers an ordinary declaration into the passivation
+    #: it caused (**escalation failure**).
+    silent_windows: tuple[tuple[float, float], ...] = ()
+    #: The `action_class` this run's policy stamps on every declaration instead
+    #: of classifying the motion, or `None` to let it classify.
+    #:
+    #: A value outside `reg.declare.ACTION_CLASSES` cannot be produced by
+    #: `reg.declare` at all — that module refuses to construct one, so an invalid
+    #: declaration is never signed by the conforming producer. A run using one is
+    #: therefore a run whose declarations came from a producer that does not
+    #: share enforcement's vocabulary, which is exactly the case enforcement
+    #: exists for. Not validated against the vocabulary here: the fixture that
+    #: needs this field needs a word that is *not* in it.
+    declared_action_class: str | None = None
+    #: The semantic fault this fixture exists to produce, spelled as
+    #: `reg.enforce.FAULTS` spells it, or `None` for a run in which nothing in
+    #: the taxonomy should fire.
+    #:
+    #: A fixture named for a fault that does not produce it is worse than no
+    #: fixture — it is a green test asserting nothing — so this field is what
+    #: `tests/test_enforce.py` runs the real enforcer against, one fixture at a
+    #: time. It is a claim about the run, not a switch: nothing here changes what
+    #: the fixture does.
+    fault: str | None = None
     dt: float = DEFAULT_DT
 
     def __post_init__(self) -> None:
@@ -145,6 +216,91 @@ class Scenario:
                     raise ValueError(
                         f"{self.name}: declared_q_bounds[{j}] = ({lo}, {hi}) is empty"
                     )
+
+        self._check_policy()
+
+    def _check_policy(self) -> None:
+        """The policy-behaviour fields. Each refusal is a fixture nobody could read.
+
+        Nothing here is a threshold and nothing is defaulted into: a malformed
+        window or a margin of zero is a fixture whose author meant something,
+        and guessing which is how a fault fixture silently stops producing its
+        fault.
+        """
+        if self.declared_margin_m is not None:
+            if not _is_number(self.declared_margin_m) or not (
+                np.isfinite(float(self.declared_margin_m))
+                and float(self.declared_margin_m) > 0.0
+            ):
+                raise ValueError(
+                    f"{self.name}: declared_margin_m must be finite and strictly "
+                    f"positive, got {self.declared_margin_m}. Zero is not 'no "
+                    "padding' — that is `None`, and the two are different "
+                    "statements about what the policy claimed."
+                )
+
+        if not isinstance(self.silent_windows, tuple):
+            raise TypeError(
+                f"{self.name}: silent_windows must be a tuple, not "
+                f"{type(self.silent_windows)}. It reaches the record with the "
+                "fixture, and a record that can be edited after the fact is not "
+                "evidence."
+            )
+        previous_end = None
+        for k, window in enumerate(self.silent_windows):
+            if (
+                not isinstance(window, tuple)
+                or len(window) != 2
+                or not all(_is_number(v) for v in window)
+            ):
+                raise ValueError(
+                    f"{self.name}: silent_windows[{k}] = {window!r} is not a "
+                    "(t0, t1) pair of seconds."
+                )
+            t0, t1 = float(window[0]), float(window[1])
+            if not (0.0 <= t0 < t1 <= self.duration):
+                raise ValueError(
+                    f"{self.name}: silent window {k} ({t0}, {t1}) is not a "
+                    f"non-empty interval inside [0.0, {self.duration}]. A window "
+                    "outside the run silences nothing, and the fixture that "
+                    "declared it would produce no fault while claiming one."
+                )
+            if previous_end is not None and t0 <= previous_end:
+                raise ValueError(
+                    f"{self.name}: silent window {k} starts at {t0}, at or before "
+                    f"the end of the previous one ({previous_end}). Overlapping "
+                    "or unordered windows describe one silence written twice, "
+                    "and which one a reader is looking at changes the answer."
+                )
+            previous_end = t1
+
+        for label, value in (
+            ("declared_action_class", self.declared_action_class),
+            ("fault", self.fault),
+        ):
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"{self.name}: {label} must be a non-empty str or None, got "
+                    f"{value!r}."
+                )
+            if any(c.isspace() or ord(c) < 0x20 for c in value):
+                raise ValueError(
+                    f"{self.name}: {label} {value!r} contains whitespace or a "
+                    "control character. It is a vocabulary word that ends up in a "
+                    "record and in a query filter, not free text."
+                )
+
+    def silent_at(self, t: float) -> bool:
+        """Whether the policy of this fixture issues nothing at `t`.
+
+        Closed windows on both ends: a state at the exact boundary is one the
+        policy did not see. Half-open would put the boundary frame's declaration
+        on one side of the gap for reasons no reader could recover from the
+        fixture.
+        """
+        return any(t0 <= t <= t1 for t0, t1 in self.silent_windows)
 
     def _check_waypoints(
         self, label: str, waypoints: tuple[Waypoint, ...], width: int
@@ -250,7 +406,8 @@ def _sample(times: np.ndarray, values: np.ndarray, t: float) -> tuple[np.ndarray
 
 
 # --------------------------------------------------------------------------
-# The six. Each one exists to make a specific downstream question answerable;
+# The six situations. Each one exists to make a specific downstream question
+# answerable;
 # the comment above each says which, because a fixture whose purpose is only in
 # its name drifts until it no longer tests what it claims.
 #
@@ -430,6 +587,211 @@ DECLARED_VIOLATION = Scenario(
     # exceeds its own claim. Phase 3 emits this as a Declaration; Phase 4's
     # enforcement recomputes the physical bound and never trusts this number.
     declared_q_bounds=((-0.40, 0.80), (-1.60, 1.60)),
+    # The one semantic fault that had a fixture before issue #46. Stated rather
+    # than left implicit now that the other five have one: the geometry above is
+    # untouched, and this field only writes down what the run already produced.
+    fault="declaration_action_mismatch",
+)
+
+# --------------------------------------------------------------------------
+# The five fault fixtures (issue #46).
+#
+# WHY THEY EXIST AT ALL, GIVEN THAT `tests/test_enforce.py` ALREADY TESTS THE
+# NINE. Issue #43 demonstrated every fault against a synthetic declaration built
+# in the test, which is the right way to test detection logic and says nothing
+# about whether the fault can occur. A fault that has never appeared in a run
+# cannot reach the graph, the occurrence layer, or an incident report — and an
+# incident report can only narrate what a run produced. So each of these is a
+# run: a trajectory, a policy that behaves in one specific wrong way, and the
+# real enforcer over the real declarations.
+#
+# THE HUMAN IS PARKED IN THE CORNER IN ALL FIVE, at the spot `declared_violation`
+# uses. These fixtures are about Layer A — what the policy claimed and when — and
+# a person wandering into the reachable set would put a second story in the run
+# for no reason. The seed still perturbs both the arm and the human, because a
+# fixture that only holds for seed 0 is a golden value in disguise.
+#
+# THE THREE TRANSPORT FAULTS GET NO FIXTURE, DELIBERATELY. `unattributed`,
+# `replay_or_reorder` and `watchdog_expiry` are PROFIsafe's (docs/prior-art.md
+# §5) and stay unit-tested: forging a MAC inside a fixture would mean this
+# module holding a key it has no business holding, and a reordered stream is a
+# property of a channel rather than of a run. `tests/test_scenarios.py` asserts
+# the split rather than leaving it to this comment.
+# --------------------------------------------------------------------------
+
+#: Where the human stands in every fault fixture: the far corner, clear of the
+#: room's walls, of all three obstacles and of the workspace disc by a wide
+#: margin. Shared so that "the human is not what this fixture is about" is one
+#: line rather than five separate placements to re-verify.
+_PARKED_HUMAN: tuple[Waypoint, ...] = (
+    Waypoint(0.0, (2.70, -1.10)),
+    Waypoint(2.0, (2.70, -1.10)),
+)
+
+
+def _parked(duration: float) -> tuple[Waypoint, ...]:
+    """`_PARKED_HUMAN`, ending exactly on `duration` as `Scenario` requires."""
+    x, y = _PARKED_HUMAN[0].value
+    return (Waypoint(0.0, (x, y)), Waypoint(duration, (x, y)))
+
+
+NO_DECLARATION = Scenario(
+    name="no_declaration",
+    description=(
+        "The arm reaches out and back and the policy never declares anything at "
+        "all — the declaration channel was never wired up, or the policy came up "
+        "without it. Actuation before the first declaration, which is the fault: "
+        "enforcement VETOes the very first commanded action and passivates, and "
+        "every frame after it is a safe state carrying the same fault. Nothing "
+        "else catches it, because there is nothing else to catch: the motion is "
+        "physically legal, the arm never approaches the human, and every other "
+        "check in the taxonomy is a check on a record that this run does not "
+        "contain. It is the fixture for the case where the evidence is missing "
+        "rather than wrong."
+    ),
+    world=DEMO_WORLD,
+    duration=2.0,
+    joint_waypoints=(
+        Waypoint(0.0, (0.20, 1.40)),
+        Waypoint(1.0, (0.20, 0.70)),
+        Waypoint(2.0, (0.20, 1.40)),
+    ),
+    human_waypoints=_parked(2.0),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    # The whole run. The policy is not late; it is absent.
+    silent_windows=((0.0, 2.0),),
+    fault="no_declaration",
+)
+
+STALE_DECLARATION = Scenario(
+    name="stale_declaration",
+    description=(
+        "The policy declares for the first two seconds of a sweep and then stops, "
+        "while the arm keeps moving. Its last declaration expires one horizon "
+        "later and enforcement VETOes: the robot is acting under a statement of "
+        "intent that has run out. Nothing else catches it — the declarations are "
+        "signed, in sequence, in vocabulary, and honest about the region the arm "
+        "occupies, so the only thing wrong with the run is *when* it stopped "
+        "saying so. Distinct from the watchdog, which is the liveness check on "
+        "the channel and is a transport fault: this run's channel is not being "
+        "checked for silence, it is being checked for a claim that has expired, "
+        "and the horizon is the shorter of the two by construction."
+    ),
+    world=DEMO_WORLD,
+    duration=3.0,
+    # A slow sweep across the front of the robot: ~0.4 rad/s at the shoulder,
+    # well inside qd_max, and continuing right through the silence so that the
+    # run is a robot in motion under an expired claim rather than a parked one.
+    joint_waypoints=(
+        Waypoint(0.0, (-0.60, 1.20)),
+        Waypoint(3.0, (0.60, 0.80)),
+    ),
+    human_waypoints=_parked(3.0),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    # A fixed box, generously around the sweep: the claim stays true for the whole
+    # run at every seed, so no declaration/action mismatch can fire and the run
+    # isolates the expiry. The trajectory is 0.2 rad inside it on both joints,
+    # which is far more than the grid step `reg.declare` derives for it.
+    declared_q_bounds=((-0.80, 0.80), (0.60, 1.40)),
+    # From t=2.0 to the end. The policy stops and never resumes, so the run
+    # contains an expiry and nothing after it.
+    silent_windows=((2.0, 3.0),),
+    fault="stale_declaration",
+)
+
+ESCALATION_FAILURE = Scenario(
+    name="escalation_failure",
+    description=(
+        "`stale_declaration`'s silence, and then the policy starts talking again "
+        "as though nothing had happened. Enforcement has passivated on the expiry "
+        "and nobody has acknowledged it, so the next declaration is obliged to be "
+        "an `escalate` (reg/enforce.py states the condition). It is an ordinary "
+        "`traverse`, which is the fault: escalation conditions met, no escalation "
+        "emitted. The most sequenced of the five, and the one with no PROFIsafe "
+        "analogue — a transport protocol never has to consider a party that fails "
+        "by *not acting*. Nothing else catches it: the late declaration is signed, "
+        "in sequence, in vocabulary and honest, so every other check in the "
+        "taxonomy passes it. It arrives while the robot is in a safe state it has "
+        "not been told about, which is exactly what a black channel means."
+    ),
+    world=DEMO_WORLD,
+    duration=4.0,
+    joint_waypoints=(
+        Waypoint(0.0, (-0.60, 1.20)),
+        Waypoint(4.0, (0.60, 0.80)),
+    ),
+    human_waypoints=_parked(4.0),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    declared_q_bounds=((-0.80, 0.80), (0.60, 1.40)),
+    # One second of silence, then the policy resumes. Long enough to expire the
+    # open declaration (0.5 s horizon), short enough that the run continues for a
+    # second afterwards with declarations landing inside the passivation.
+    silent_windows=((2.0, 3.0),),
+    fault="escalation_failure",
+)
+
+ENVELOPE_OVERCLAIM = Scenario(
+    name="envelope_overclaim",
+    description=(
+        "The arm works near full extension and the policy pads every declared "
+        "region by 25 cm 'to be safe'. Padding a claim is not conservatism — the "
+        "declared envelope is the region the robot is being authorised to sweep, "
+        "and 25 cm around a 0.90 m arm claims authority over space no "
+        "configuration of it can reach. Enforcement recomputes the workspace disc "
+        "from `Limits` and VETOes the declaration itself. Nothing else catches "
+        "it, and no joint box could produce it: every region built from the arm's "
+        "own kinematics lies inside that disc, so the overclaim has to come from "
+        "a claim the policy made about *space* rather than about configurations. "
+        "It is the fixture for a policy whose model of the robot is wrong."
+    ),
+    world=DEMO_WORLD,
+    duration=2.0,
+    # Near-straight throughout: the elbow stays inside [0.20, 0.40] rad, so the
+    # body reaches about 0.88 m and the padded claim about 1.13 m against a
+    # 0.95 m bound. Every declaration in the run overclaims, not just some.
+    joint_waypoints=(
+        Waypoint(0.0, (-0.30, 0.40)),
+        Waypoint(1.0, (0.30, 0.20)),
+        Waypoint(2.0, (-0.30, 0.40)),
+    ),
+    human_waypoints=_parked(2.0),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    declared_margin_m=0.25,
+    fault="envelope_overclaim",
+)
+
+OUT_OF_VOCABULARY_ACTION = Scenario(
+    name="out_of_vocabulary_action",
+    description=(
+        "An ordinary sweep, declared as a `lunge` — a sixth action class that "
+        "exists on the policy side and was never agreed with the constraint "
+        "layer. Enforcement VETOes: it holds one copy of the vocabulary, imported "
+        "rather than restated, and a word outside it is a claim nothing "
+        "downstream can read. Nothing else catches it, and that is the point — "
+        "the record is well-formed, correctly signed, in sequence, and its "
+        "geometry is honest, so every check that looks at the run rather than at "
+        "the word passes it. `reg.declare` refuses to *build* one, so this run's "
+        "declarations necessarily come from a producer that does not share the "
+        "vocabulary, which is the case enforcement exists for."
+    ),
+    world=DEMO_WORLD,
+    duration=2.0,
+    # A pure shoulder sweep at a fixed elbow: the arm's reach never changes, so
+    # the conforming policy would have classified this `traverse`.
+    joint_waypoints=(
+        Waypoint(0.0, (0.00, 1.20)),
+        Waypoint(1.0, (0.60, 1.20)),
+        Waypoint(2.0, (0.00, 1.20)),
+    ),
+    human_waypoints=_parked(2.0),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    declared_action_class="lunge",
+    fault="out_of_vocabulary_action",
 )
 
 _ALL: tuple[Scenario, ...] = (
@@ -439,6 +801,11 @@ _ALL: tuple[Scenario, ...] = (
     STATIC_BYSTANDER,
     SUSTAINED_OVERLAP,
     DECLARED_VIOLATION,
+    NO_DECLARATION,
+    STALE_DECLARATION,
+    ESCALATION_FAILURE,
+    ENVELOPE_OVERCLAIM,
+    OUT_OF_VOCABULARY_ACTION,
 )
 
 #: Name to definition. `list(SCENARIOS)` is the authoritative list, and its order

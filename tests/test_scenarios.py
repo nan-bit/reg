@@ -8,6 +8,17 @@ intersect a link polygon and `static_bystander` must never do so — and they ru
 across several seeds, because a fixture that only holds for seed 0 is a golden
 value in disguise.
 
+The five fault fixtures (issue #46) are held to the same standard and by the
+same tests: they are in `EXPECTED_NAMES`, so every invariant here — room
+containment, obstacle clearance, joint limits, monotonic time, frozen arrays,
+determinism under seed — applies to them unchanged, and none of them is
+exempted. What this file cannot check is the half that gives them their names:
+whether the fault actually fires needs the real enforcer over the real
+declarations, and that lives in `tests/test_enforce.py`. What it checks instead
+is the *arrangement* — that each one is one policy behaviour away from a clean
+run, that no two share a behaviour, and that the catalogue covers every semantic
+fault and no transport one.
+
 Where a name claims something about the *reachable set*, the claim is checked
 against `reg.envelope.compute_envelope` itself, not against the workspace disc.
 The disc is a superset of the envelope, so asserting a positive claim against it
@@ -25,6 +36,7 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString, Point, Polygon
 
+from reg.enforce import FAULTS
 from reg.envelope import compute_envelope
 from reg.scenarios import (
     DEFAULT_DT,
@@ -47,7 +59,32 @@ EXPECTED_NAMES = [
     "static_bystander",
     "sustained_overlap",
     "declared_violation",
+    # The five fault fixtures (issue #46). Every invariant above applies to them
+    # unchanged — they are runs, not exemptions — and the fault each one produces
+    # is asserted end to end against the real enforcer in tests/test_enforce.py,
+    # which is the only place that can say whether the name is true.
+    "no_declaration",
+    "stale_declaration",
+    "escalation_failure",
+    "envelope_overclaim",
+    "out_of_vocabulary_action",
 ]
+
+#: The six faults in `reg.enforce.FAULTS` that are about what a declaration
+#: *meant*. Each one has a fixture, which is the claim issue #46 makes.
+SEMANTIC_FAULTS = {
+    "no_declaration",
+    "stale_declaration",
+    "declaration_action_mismatch",
+    "envelope_overclaim",
+    "out_of_vocabulary_action",
+    "escalation_failure",
+}
+
+#: The three that are about the channel. No fixture, deliberately: they are
+#: PROFIsafe's (docs/prior-art.md §5) and stay unit-tested, because a fixture
+#: producing one would need this module to hold a key and forge a MAC.
+TRANSPORT_FAULTS = {"unattributed", "replay_or_reorder", "watchdog_expiry"}
 
 
 # --------------------------------------------------------------------------
@@ -160,12 +197,46 @@ def frames(name: str, seed: int) -> list:
 # --------------------------------------------------------------------------
 
 
-def test_scenarios_are_exactly_the_six_named() -> None:
+def test_scenarios_are_exactly_the_named_catalogue() -> None:
     assert list(SCENARIOS) == EXPECTED_NAMES, (
-        "SCENARIOS is the authoritative list; the six names are fixtures the "
+        "SCENARIOS is the authoritative list; these names are the fixtures the "
         "whole project is measured against, so adding or dropping one is a "
         "change to what is being claimed."
     )
+
+
+def test_every_semantic_fault_has_a_fixture_and_no_transport_fault_does() -> None:
+    """The catalogue's coverage of the taxonomy, asserted rather than described.
+
+    Both halves are the claim. Every *semantic* fault has a run that produces
+    it, because an incident report can only narrate what a run produced and five
+    of the six had never occurred in one (issue #46). No *transport* fault has
+    one, because those are PROFIsafe's and a fixture that produced one would
+    have to forge a MAC or reorder a stream — which would make this module a
+    party to the attribution it is supposed to be evidence about.
+    """
+    covered = {sc.fault for sc in SCENARIOS.values() if sc.fault is not None}
+    assert covered == SEMANTIC_FAULTS
+    assert covered.isdisjoint(TRANSPORT_FAULTS)
+    assert SEMANTIC_FAULTS | TRANSPORT_FAULTS == set(FAULTS), (
+        "the taxonomy moved. A fault added to reg.enforce is either semantic — "
+        "and needs a fixture here — or transport, and needs a stated reason not "
+        "to have one."
+    )
+    # One fixture per fault, not two arguing about the same one.
+    faults = [sc.fault for sc in SCENARIOS.values() if sc.fault is not None]
+    assert len(faults) == len(set(faults))
+
+
+def test_each_fault_fixture_is_named_for_the_fault_it_produces() -> None:
+    """`declared_violation` is the one exception, and it predates the taxonomy."""
+    for name, sc in SCENARIOS.items():
+        if sc.fault is None or name == "declared_violation":
+            continue
+        assert name == sc.fault, (
+            f"fixture {name!r} produces {sc.fault!r}. A fixture whose name and "
+            "fault disagree is one every reader has to check twice."
+        )
 
 
 def test_each_scenario_is_keyed_by_its_own_name() -> None:
@@ -405,13 +476,73 @@ def test_declared_violation_leaves_the_bound_it_declares(seed: int) -> None:
         assert np.all(f.q >= LIMITS.q_min) and np.all(f.q <= LIMITS.q_max)
 
 
-def test_only_declared_violation_declares_a_bound() -> None:
+#: The fixtures whose policy declares a fixed joint box rather than the region
+#: its own configurations sweep. Written out because it is a decision about each
+#: fixture, not a property to derive: `declared_violation` uses one so that the
+#: claim can be *false*, and the two timing fixtures use one so that their claim
+#: stays *true* for the whole run at every seed — a claim that followed the arm
+#: around would go stale in the same window the declaration does, and the run
+#: would produce a mismatch on top of the fault it exists for.
+FIXED_BOX_FIXTURES = {"declared_violation", "stale_declaration", "escalation_failure"}
+
+
+def test_a_fixture_declares_a_fixed_bound_only_where_it_needs_one() -> None:
     """`None` means not-applicable, and must not be readable as permission."""
     for name, sc in SCENARIOS.items():
-        if name == "declared_violation":
-            assert sc.declared_q_bounds is not None
+        if name in FIXED_BOX_FIXTURES:
+            assert sc.declared_q_bounds is not None, name
         else:
-            assert sc.declared_q_bounds is None
+            assert sc.declared_q_bounds is None, name
+
+
+def test_the_policy_fields_are_set_only_on_the_fixture_that_needs_them() -> None:
+    """One fixture, one wrong behaviour. A fault fixture with two is untestable.
+
+    Each of these is a way for the policy to be wrong, and the fault fixtures
+    are only worth anything if they are one behaviour away from a clean run —
+    `tests/test_enforce.py` asserts exactly that by taking the behaviour away
+    and getting PERMIT on every frame. If two fixtures shared a behaviour, or
+    one fixture had two, that test would stop meaning what it says.
+    """
+    padded = {n for n, sc in SCENARIOS.items() if sc.declared_margin_m is not None}
+    silent = {n for n, sc in SCENARIOS.items() if sc.silent_windows}
+    stamped = {n for n, sc in SCENARIOS.items() if sc.declared_action_class is not None}
+
+    assert padded == {"envelope_overclaim"}
+    assert silent == {"no_declaration", "stale_declaration", "escalation_failure"}
+    assert stamped == {"out_of_vocabulary_action"}
+    assert padded.isdisjoint(silent) and padded.isdisjoint(stamped)
+    assert silent.isdisjoint(stamped)
+
+
+def test_the_silent_windows_say_when_the_policy_is_quiet() -> None:
+    """`silent_at` is closed on both ends, and the placement is the fault.
+
+    Where the window falls is what separates the three timing fixtures, so it is
+    asserted rather than left to the descriptions: covering the run means the
+    policy never declares; running to the end means the last declaration
+    expires; closing again means it expires *and* the policy then speaks into
+    the passivation it caused.
+    """
+    never = SCENARIOS["no_declaration"]
+    assert never.silent_at(0.0) and never.silent_at(never.duration)
+    assert all(never.silent_at(t) for t in np.arange(0.0, never.duration, 0.1))
+
+    stale = SCENARIOS["stale_declaration"]
+    assert not stale.silent_at(0.0)
+    assert stale.silent_at(stale.duration)
+    gap_start, gap_end = stale.silent_windows[0]
+    assert gap_start > 0.0, "the policy has to declare before it stops"
+    assert gap_end == stale.duration, "the policy stops and never resumes"
+
+    escalating = SCENARIOS["escalation_failure"]
+    (open_at, close_at) = escalating.silent_windows[0]
+    assert close_at < escalating.duration, "the policy has to speak again"
+    assert not escalating.silent_at(close_at + escalating.dt)
+    # Longer than the horizon a declaration claims, or nothing expires. The
+    # horizon itself belongs to the caller (tests/test_enforce.py names it); what
+    # this fixture owns is that its silence is long enough to be a gap at all.
+    assert close_at - open_at > 0.5
 
 
 @pytest.mark.parametrize("name", EXPECTED_NAMES)
@@ -626,6 +757,69 @@ def test_rejects_an_empty_declared_bound() -> None:
         _scenario(declared_q_bounds=((0.5, 0.5), (-1.0, 1.0)))
     with pytest.raises(ValueError, match="declared_q_bounds has"):
         _scenario(declared_q_bounds=((-1.0, 1.0),))
+
+
+def test_rejects_a_margin_that_pads_nothing() -> None:
+    """Zero is not `None`: the two are different statements about the claim."""
+    with pytest.raises(ValueError, match="declared_margin_m"):
+        _scenario(declared_margin_m=0.0)
+    with pytest.raises(ValueError, match="declared_margin_m"):
+        _scenario(declared_margin_m=-0.1)
+    with pytest.raises(ValueError, match="declared_margin_m"):
+        _scenario(declared_margin_m=float("nan"))
+    assert _scenario(declared_margin_m=0.25).declared_margin_m == 0.25
+
+
+@pytest.mark.parametrize(
+    ("windows", "match"),
+    [
+        (((1.0, 0.5),), "non-empty interval"),
+        (((1.0, 1.0),), "non-empty interval"),
+        (((-0.5, 1.0),), "non-empty interval"),
+        (((0.5, 2.5),), "non-empty interval"),  # the probe scenario runs 2.0 s
+        (((0.2, 1.0), (0.8, 1.5)), "before the end of the previous"),
+        (((1.0, 1.5), (0.2, 0.5)), "before the end of the previous"),
+        ((("a", 1.0),), "not a"),
+        (((0.5,),), "not a"),
+    ],
+)
+def test_rejects_a_silence_that_says_nothing_about_the_run(
+    windows: tuple, match: str
+) -> None:
+    """NEGATIVE. A window outside the run silences nothing, and a fixture that
+    declared one would produce no fault while claiming one."""
+    with pytest.raises((ValueError, TypeError), match=match):
+        _scenario(silent_windows=windows)
+
+
+def test_rejects_a_mutable_silence() -> None:
+    with pytest.raises(TypeError, match="must be a tuple"):
+        _scenario(silent_windows=[(0.5, 1.0)])  # type: ignore[arg-type]
+
+
+def test_the_probe_scenario_accepts_a_well_formed_silence() -> None:
+    """The positive control for the four negatives above."""
+    sc = _scenario(silent_windows=((0.2, 0.5), (1.0, 2.0)))
+    assert sc.silent_at(0.2) and sc.silent_at(0.5) and sc.silent_at(2.0)
+    assert not sc.silent_at(0.0) and not sc.silent_at(0.75)
+
+
+@pytest.mark.parametrize("field", ["declared_action_class", "fault"])
+@pytest.mark.parametrize("value", ["", "has space", "has\nnewline", 17])
+def test_rejects_a_vocabulary_word_that_is_not_one(field: str, value: object) -> None:
+    """NEGATIVE. Both fields end up in a record or a query filter, not in prose.
+
+    `declared_action_class` is deliberately *not* checked against
+    `ACTION_CLASSES` — the fixture that needs it needs a word outside the
+    vocabulary — so the shape is all this can check, and it checks it.
+    """
+    with pytest.raises(ValueError, match=field):
+        _scenario(**{field: value})
+
+
+def test_an_out_of_vocabulary_action_class_is_allowed_and_is_the_point() -> None:
+    """The positive control: the refusals above are about shape, not vocabulary."""
+    assert _scenario(declared_action_class="lunge").declared_action_class == "lunge"
 
 
 def test_scenarios_are_frozen() -> None:

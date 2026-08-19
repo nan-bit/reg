@@ -43,7 +43,7 @@ from pathlib import Path
 import pytest
 from shapely.ops import unary_union
 
-from reg import bench, graph, store
+from reg import bench, graph, query, store
 from reg.bench import (
     AGREE,
     COULD_NOT_EVALUATE,
@@ -1440,12 +1440,55 @@ def test_an_artifact_with_no_rows_at_a_level_could_not_evaluate(
 
     answers = bench.answers_at_level(empty, bench.TRANSITION_LEVEL)
     assert answers.min_separation is None
+    # And the closed-world reading does not survive the layer it was licensed
+    # by: a view with nothing in it does not thereby report "no contact
+    # occurred" (issue #37 — before the query layer, this answered `False`).
+    assert answers.contact_occurred is None
     verdicts = {
         q.name: bench.check_level(q, answers, truth).verdict
         for q in bench.RESOLUTION_QUERIES
     }
     assert verdicts["min_separation"] == COULD_NOT_EVALUATE
     assert verdicts["separation_timeline"] == COULD_NOT_EVALUATE
+    assert verdicts["did_contact_occur"] == COULD_NOT_EVALUATE
+
+
+def test_a_view_that_still_holds_a_foreign_layer_is_refused(built) -> None:
+    """THE NEGATIVE TEST for the level separation, which used to be a branch.
+
+    Since issue #37 `answers_at_level` does not know how to answer anything — it
+    puts the questions to `reg.query`, and what keeps the occurrence level from
+    reporting the edge layer's answers is that `materialize_level` emptied the
+    edge table. So the thing that has to be checked is that the view really is
+    the level it claims to be: the *unprojected* build holds both layers, and
+    asking it for the occurrence level's answers must be refused rather than
+    quietly answered at edge resolution.
+    """
+    _, sqlite_path = built
+    with pytest.raises(BenchError, match="foreign|still holds rows"):
+        bench.answers_at_level(sqlite_path, bench.OCCURRENCE_LEVEL)
+
+
+def test_the_benchmark_and_the_query_layer_answer_with_one_implementation(
+    built,
+) -> None:
+    """Issue #37's "extract, do not duplicate", asserted.
+
+    `min_separation_from_graph` is `reg.query.min_separation` with a timing
+    wrapper; the ground-truth-from-CSV path is the *other* implementation and
+    exists on purpose. If these two ever disagree, one of them has grown a
+    second copy of the question.
+    """
+    _, sqlite_path = built
+    conn = store.connect(sqlite_path)
+    try:
+        direct = query.min_separation(conn, graph.HUMAN_ENTITY_ID)
+    finally:
+        conn.close()
+    assert direct.verdict != COULD_NOT_EVALUATE
+    assert min_separation_from_graph(sqlite_path) == direct.value
+    # One verdict vocabulary, one definition of it.
+    assert COULD_NOT_EVALUATE is query.COULD_NOT_EVALUATE
 
 
 @pytest.mark.parametrize("level", ["", "occurrences", "frame"])

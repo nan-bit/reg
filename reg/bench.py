@@ -106,6 +106,24 @@ from shapely.ops import unary_union
 from reg import __version__, graph, store
 from reg.envelope import SUBSTEP_DT
 from reg.kinematics import link_polygons
+
+# The query layer, imported by name rather than as a module (issue #37). Several
+# functions below take a `ResolutionQuery` parameter called `query`, and a module
+# of the same name sitting in the global scope is a shadowing bug waiting for the
+# first person who reaches for it inside one of them.
+from reg.query import (
+    COULD_NOT_EVALUATE,
+    EDGE_LAYER,
+    OCCURRENCE_LAYER,
+    QueryError,
+    available_layers,
+    did_contact_occur,
+    frame_period,
+    frame_times,
+    min_separation,
+    separation_timeline,
+    time_of_closest_approach,
+)
 from reg.scenarios import SCENARIOS, Scenario, long_run, scenario
 from reg.sim import DEFAULT_SEED, provenance
 from reg.stream import FLOAT_PRECISION, read_frames, write_frames
@@ -213,9 +231,13 @@ QUESTION = "minimum robot-to-human separation over the run"
 #: Verdict vocabulary. Fixed and small, and the third never resolves to the
 #: first: a graph with no separation rows for the human answers
 #: `COULD-NOT-EVALUATE`, never `AGREE` on the strength of an empty result set.
+#:
+#: `COULD_NOT_EVALUATE` is **imported** from `reg.query` rather than assigned
+#: here (issue #37). It is one verdict with one meaning, and the query layer is
+#: where it is produced; two modules each defining the string would be two
+#: definitions of the same word, which is the trap this repo keeps naming.
 AGREE = "AGREE"
 DISAGREE = "DISAGREE"
-COULD_NOT_EVALUATE = "COULD-NOT-EVALUATE"
 
 Verdict = Literal["AGREE", "DISAGREE", "COULD-NOT-EVALUATE"]
 
@@ -666,24 +688,24 @@ def min_separation_from_graph(
 
     `None` (rather than `float('inf')`, or 0.0) when the artifact holds no
     separation row for the entity: the artifact is silent, and silence about a
-    separation is not a large separation.
+    separation is not a large separation. An entity the artifact never declared
+    is `None` for the same reason — `reg.query` refuses it by name, and the
+    refusal is narrowed to `None` here because this function's whole contract is
+    "the answer, or nothing".
 
-    `reg.query` does not exist yet — it is Milestone 2 — so this reads SQL
-    directly. When it lands, this should call it rather than grow a second
-    implementation of the same question.
+    **This is now `reg.query.min_separation` with the timing wrapper around it**
+    (issue #37). It was a second implementation of the same question until the
+    query layer landed; the ground-truth-from-CSV path below is the *other*
+    implementation and stays, because the comparison between them is the check.
     """
     conn = store.connect(sqlite_path)
     try:
-        row = conn.execute(
-            "SELECT min(min_distance) AS d FROM edge "
-            "WHERE type = 'SEPARATION' AND dst_id = ?",
-            (str(entity_id),),
-        ).fetchone()
+        answer = min_separation(conn, str(entity_id))
+    except QueryError:
+        return None
     finally:
         conn.close()
-    if row is None or row["d"] is None:
-        return None
-    return float(row["d"])
+    return float(answer.value) if answer.answered else None  # type: ignore[arg-type]
 
 
 def min_separation_from_csv(csv_path: str | Path, world: World) -> float | None:
@@ -1163,34 +1185,18 @@ def _measure(
 # --------------------------------------------------------------------------
 
 
-def _meta_float(conn: sqlite3.Connection, key: str) -> float:
-    value = store.get_meta(conn, key)
-    if value is None:
-        raise BenchError(
-            f"the artifact has no meta[{key!r}], so it does not say what it was "
-            "built with. Every resolution level below is a statement about that "
-            "value; substituting one would put a number in the table that "
-            "nothing produced."
-        )
-    try:
-        return float(value)
-    except ValueError as exc:
-        raise BenchError(f"meta[{key!r}] is {value!r}, not a number.") from exc
+def _asking(conn: sqlite3.Connection, what: str, ask):
+    """Call a `reg.query` reader, restating its refusal as a `BenchError`.
 
-
-def _frame_times(conn: sqlite3.Connection) -> tuple[float, ...]:
-    """Every frame's timestamp, from the artifact's own provenance.
-
-    From `t_first`, `frame_period_s` and `frame_count` rather than from the rows,
-    because since issue #29 the rows deliberately do not mark every frame — a row
-    count would say how many frames anchored something, which is a different
-    question and a smaller number. `reg.graph` refuses a stream whose period is
-    not uniform, so these three values reconstruct the sampling exactly.
+    The benchmark's failures are `BenchError` and a `QueryError` escaping into
+    `main` would be an uncaught traceback where every other could-not-evaluate
+    here is a message. Nothing is swallowed — the query layer's sentence is the
+    message.
     """
-    period = _meta_float(conn, store.META_FRAME_PERIOD)
-    t_first = _meta_float(conn, "t_first")
-    count = int(_meta_float(conn, "frame_count"))
-    return tuple(quantize_time(t_first + i * period) for i in range(count))
+    try:
+        return ask(conn)
+    except QueryError as exc:
+        raise BenchError(f"{what}: {exc}") from exc
 
 
 def materialize_level(
@@ -1267,9 +1273,14 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
     so — an understatement in the direction that makes the coarser levels look
     *less* good, which is the direction to be wrong in.
     """
-    times = _frame_times(conn)
+    # The frame grid comes from `reg.query`, which reconstructs it from
+    # `t_first`, `frame_period_s` and `frame_count` in the artifact's own meta —
+    # the same grid the timeline query answers on. Two reconstructions of one
+    # sampling would let the view and the query disagree about which frames the
+    # run had, which is the disagreement no table would show.
+    times = _asking(conn, "the per-frame view", frame_times)
     rows = store.read_edges(conn)
-    period = _meta_float(conn, store.META_FRAME_PERIOD)
+    period = _asking(conn, "the per-frame view", frame_period)
     conn.execute("DELETE FROM edge")
     for row in rows:
         t_start = float(row["t_start"])
@@ -1375,50 +1386,45 @@ def ground_truth_from_csv(csv_path: str | Path, world: World) -> GroundTruth:
     )
 
 
-def _covering_values(
-    rows: Sequence[sqlite3.Row], times: Sequence[float], column: str
-) -> tuple[tuple[float, float], ...] | None:
-    """The value in force at each of `times`, or `None` if one is uncovered.
+#: Which layer each resolution level is a view *of*. `transition` and
+#: `per-frame` are two densities of the edge layer and answer identically; the
+#: occurrence level is the other layer. Used to check a view is what it claims
+#: to be, below.
+_LEVEL_LAYER: dict[str, str] = {
+    OCCURRENCE_LEVEL: OCCURRENCE_LAYER,
+    TRANSITION_LEVEL: EDGE_LAYER,
+    PER_FRAME_LEVEL: EDGE_LAYER,
+}
 
-    `None` rather than a shorter list: a timeline missing frames is a
-    could-not-evaluate for the whole query, and a short list compared elementwise
-    against ground truth would silently compare frame 40 with frame 41.
+
+def _answer_value(answer) -> object | None:
+    """An `Answer`'s value, or `None` where it refused.
+
+    `None` is the refusal travelling into `LevelAnswers`, which reads it the
+    same way: not a zero, not a `False`, not an empty timeline.
     """
-    intervals = sorted(
-        ((float(r["t_start"]), float(r["t_end"]), r[column]) for r in rows),
-        key=lambda item: item[0],
-    )
-    out: list[tuple[float, float]] = []
-    index = 0
-    for t in times:
-        while index < len(intervals) and intervals[index][1] < t:
-            index += 1
-        if index >= len(intervals) or intervals[index][0] > t:
-            return None
-        value = intervals[index][2]
-        if value is None:  # pragma: no cover - the schema CHECKs metric presence
-            return None
-        out.append((t, float(value)))
-    return tuple(out)
+    return answer.value if answer.answered else None
 
 
 def answers_at_level(
     view_path: str | Path, level: str, entity_id: str = graph.HUMAN_ENTITY_ID
 ) -> LevelAnswers:
-    """What one level's view can answer, reading only what that level retains.
+    """What one level's view can answer — asked through `reg.query`.
 
-    The occurrence level reads the `occurrence` table and nothing else; the two
-    edge levels read the `edge` table and nothing else. That separation is the
-    measurement: a level allowed to fall back on the finer layer would report the
-    finer layer's answers at the coarser layer's byte count.
+    **This function no longer knows how to answer anything** (issue #37). It
+    opens the view, checks the view really is the level it claims to be, and
+    puts the four questions to `reg.query`, which is the module that cannot read
+    the raw stream. The benchmark used to hold its own copies of these queries,
+    and two implementations of one question is two answers to it — with the
+    graph-versus-CSV comparison in this file silently checking one of them.
 
-    **The closed-world reading, stated because it is doing work.** At the
-    occurrence level, "no `contact_began` row for this entity" is read as "no
-    contact occurred", not as "unknown". That is legitimate *only* because the
-    artifact carries `reg.graph.OCCURRENCE_RETENTION` in its own `meta`, which
-    says a contact would have produced one — the same reason DSSAD's absence of
-    an occurrence flag is readable. Without that rule in the file it would be
-    silence, and silence is not agreement.
+    The layer separation that makes the measurement honest is now *structural*
+    rather than a branch here: `materialize_level` empties the table the level
+    does not retain, `reg.query.available_layers` reads what is actually in the
+    file, and each query refuses when its layer is absent. A level allowed to
+    fall back on the finer layer would report the finer layer's answers at the
+    coarser layer's byte count — so the fallback is checked for, and a view
+    still holding a foreign layer is a `BenchError` rather than a good number.
     """
     if level not in RESOLUTION_LEVELS:
         raise BenchError(
@@ -1428,61 +1434,41 @@ def answers_at_level(
     entity_id = str(entity_id)
     conn = store.connect(view_path)
     try:
-        if level == OCCURRENCE_LEVEL:
-            closest = store.read_occurrences(
-                conn, occurrence_type="closest_approach", entity_id=entity_id
+        foreign = available_layers(conn) - {_LEVEL_LAYER[level]}
+        if foreign:
+            raise BenchError(
+                f"the {level} view still holds rows in the "
+                f"{', '.join(sorted(foreign))} layer, which that level does not "
+                "retain. Its answers would come from a layer its byte count "
+                "does not pay for, and the curve would be flat for a reason "
+                "that has nothing to do with resolution."
             )
-            began = store.read_occurrences(
-                conn, occurrence_type="contact_began", entity_id=entity_id
-            )
-            retention_stated = store.get_meta(conn, graph.META_OCCURRENCE_RETENTION)
-            return LevelAnswers(
-                min_separation=(
-                    None if not closest else float(closest[0]["value"])
+        return _asking(
+            conn,
+            f"the {level} level",
+            lambda c: LevelAnswers(
+                min_separation=_answer_value(min_separation(c, entity_id)),
+                t_closest_approach=_answer_value(
+                    time_of_closest_approach(c, entity_id)
                 ),
-                t_closest_approach=(
-                    None if not closest else float(closest[0]["t"])
-                ),
-                # The occurrence layer holds events, not states. There is no
-                # per-frame separation in it at any resolution, and there is no
-                # honest way to produce one — the intervals between occurrences
-                # are exactly what it discarded.
-                timeline=None,
-                contact_occurred=(
-                    None if retention_stated is None else bool(began)
-                ),
-            )
-
-        times = _frame_times(conn)
-        separations = store.read_edges(
-            conn, edge_type="SEPARATION", dst_id=entity_id
+                timeline=_timeline_of(separation_timeline(c, entity_id)),
+                contact_occurred=_answer_value(did_contact_occur(c, entity_id)),
+            ),
         )
-        contacts = store.read_edges(conn, edge_type="CONTACT", dst_id=entity_id)
     finally:
         conn.close()
 
-    if not separations:
-        # No separation row for the entity at all: the artifact is silent, and
-        # silence about a separation is not a large separation.
-        return LevelAnswers(
-            min_separation=None,
-            t_closest_approach=None,
-            timeline=None,
-            contact_occurred=bool(contacts),
-        )
 
-    smallest = min(float(r["min_distance"]) for r in separations)
-    earliest = min(
-        float(r["t_start"])
-        for r in separations
-        if float(r["min_distance"]) == smallest
-    )
-    return LevelAnswers(
-        min_separation=smallest,
-        t_closest_approach=earliest,
-        timeline=_covering_values(separations, times, "min_distance"),
-        contact_occurred=bool(contacts),
-    )
+def _timeline_of(answer) -> tuple[tuple[float, float], ...] | None:
+    """The `(t, distance)` samples out of a `separation_timeline` answer.
+
+    `None` where the query refused — which at the occurrence level it always
+    does, because that layer holds events and not states, and the intervals
+    between them are exactly what it discarded. That refusal is now the query
+    layer's and every caller gets it, which is what issue #37 moved.
+    """
+    value = _answer_value(answer)
+    return None if value is None else value.samples  # type: ignore[union-attr]
 
 
 def check_level(

@@ -1,10 +1,29 @@
-"""The chain: canonical bytes, links, MACs, and the two keys.
+"""The chain: canonical bytes, links, MACs, the two keys, and the walk over both.
 
 Most of this file is negative. That is the point of the phase — a chain whose
 tests only show that untouched records verify has demonstrated nothing, because
 a `verify` that returns VALID unconditionally would pass every one of them. So
 each mechanism is tested by breaking it: a mutated field, a swapped link, the
 wrong key, no key, a malformed MAC, a field that will not serialize.
+
+THE SECOND HALF OF THIS FILE IS THE SAME ARGUMENT ABOUT `verify_chain`
+-----------------------------------------------------------------------
+Issue #49. A tamper-evidence mechanism that has never been shown to detect
+tampering is exactly the check-that-cannot-fail CLAUDE.md forbids, so the
+deliverable is not "an untampered artifact verifies" — that would pass for a
+walker that returns VERIFIED unconditionally. It is one test per way of altering
+a real artifact: a declaration field, a verdict field, a `mac`, a `prev_hash`, a
+deleted record, and a record altered *and re-signed* so its MAC verifies and the
+chain must break anyway. Plus the two states that are not findings: an empty
+artifact and an absent key are COULD-NOT-EVALUATE, never VERIFIED and never
+BROKEN.
+
+Those tests run against a **real artifact**, built by `reg.graph` from a real
+scenario with real signed records, because the thing being tested is a walk over
+what the builder actually writes — the record tables, the `FOLLOWS` edges and the
+`meta` counts. A hand-assembled SQLite file would test a shape nothing produces.
+`declared_violation` at a tenth of its frame rate is that artifact: 11
+declarations, 51 verdicts, under a second to build.
 """
 
 from __future__ import annotations
@@ -16,23 +35,37 @@ import os
 import subprocess
 import sys
 import textwrap
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 import shapely
 from shapely.geometry import Polygon
 
+from reg import graph, store
 from reg.chain import (
+    ATTESTATION_PRESENT,
+    CHAINS,
     GENESIS_HASH,
     HASH_HEX_LEN,
     KEY_BYTES,
+    META_ATTESTATION_RECORDS,
+    META_DECLARATION_COUNT,
+    META_VERDICT_COUNT,
     ROLES,
     UNSIGNED_MAC,
     CanonicalizationError,
+    ChainFailure,
+    ChainReport,
+    ChainResult,
+    ChainState,
     Key,
     KeyRoleError,
     Keyring,
     KeyringError,
     MacState,
+    TamperError,
+    TamperSpec,
     canonical_bytes,
     chain_hash,
     generate_keyring,
@@ -40,11 +73,16 @@ from reg.chain import (
     load_keyring,
     sign,
     signing_bytes,
+    tamper,
     verify,
+    verify_chain,
     write_keyring,
 )
 from reg.declare import Declaration, envelope_wkb, sign_declaration
-from reg.stream import FLOAT_PRECISION
+from reg.graph import AttestationRecords
+from reg.scenarios import SCENARIOS
+from reg.sim import provenance
+from reg.stream import FLOAT_PRECISION, write_frames
 
 POLICY_MATERIAL = bytes(range(KEY_BYTES))
 ENFORCEMENT_MATERIAL = bytes(range(100, 100 + KEY_BYTES))
@@ -571,3 +609,548 @@ def test_generated_keys_are_full_length_and_different_from_each_other() -> None:
     assert len(policy) == len(enforcement) == KEY_BYTES
     assert policy != enforcement
     assert generate_keyring().key("policy").material != policy
+
+
+# --------------------------------------------------------------------------
+# THE WALK OVER A PERSISTED ARTIFACT (issue #49)
+#
+# Everything below runs against an artifact `reg.graph` built, with records
+# `reg.declare` and `reg.enforce` signed. The fixture is `declared_violation`
+# sampled at a tenth of its frame rate — the same run, looked at less often —
+# because what is being tested is the walk and not the scenario.
+# --------------------------------------------------------------------------
+
+#: The fixture's policy and enforcement parameters. Stated rather than defaulted,
+#: for the reason `emit_declarations` and `Enforcer` refuse to invent them.
+FIXTURE_DT = 0.1
+FIXTURE_REPLAN_S = 0.5
+FIXTURE_HORIZON_S = 0.5
+FIXTURE_WATCHDOG_S = 1.0
+FIXTURE_SEED = 0
+
+#: Envelope parameters coarse enough that the build is under a second. Nothing
+#: here is about envelope fidelity — `tests/test_envelope.py` owns that — and
+#: they are passed explicitly so no test here depends on a default staying put.
+_FAST = {"horizon": 0.1, "n_samples": 4, "seed": 0, "substep_dt": 0.05}
+
+
+def _stream(tmp_path: Path):
+    """The stream and its scenario, resampled at `FIXTURE_DT`."""
+    scn = replace(SCENARIOS["declared_violation"], dt=FIXTURE_DT)
+    csv = write_frames(
+        scn.states(FIXTURE_SEED),
+        tmp_path / "dv.csv",
+        comments=provenance(scn, FIXTURE_SEED),
+    )
+    return csv, scn
+
+
+def _records(csv: Path, scn, tmp_path: Path) -> AttestationRecords:
+    """The record stream, through the CLI's own producer.
+
+    Through `graph._attestation_from_stream` rather than a second copy of the
+    policy/enforcer wiring, for the reason `tests/test_graph.py` gives: a fixture
+    that assembled the records differently from the way the CLI does would be
+    verifying a chain nobody can produce.
+    """
+    return graph._attestation_from_stream(
+        csv,
+        scn,
+        keyring_path=write_keyring(KEYRING, tmp_path / "keyring.json"),
+        replan_interval_s=FIXTURE_REPLAN_S,
+        declaration_horizon_s=FIXTURE_HORIZON_S,
+        watchdog_period_s=FIXTURE_WATCHDOG_S,
+    )
+
+
+def _build(tmp_path: Path, name: str, records) -> Path:
+    csv, scn = _stream(tmp_path)
+    out = tmp_path / name
+    graph.build(
+        csv,
+        out,
+        scn.world.limits,
+        human_radius=scn.world.human_radius,
+        records=records if records is not _PRODUCE else _records(csv, scn, tmp_path),
+        **_FAST,
+    )
+    return out
+
+
+#: Sentinel for "build the real record stream", distinct from `None`, which is
+#: the meaningful value "this build was handed no record stream".
+_PRODUCE = object()
+
+
+@pytest.fixture(scope="module")
+def attested(tmp_path_factory) -> Path:
+    """One artifact with both chains in it. Module-scoped: every test reads it."""
+    return _build(tmp_path_factory.mktemp("attested"), "dv.sqlite", _PRODUCE)
+
+
+@pytest.fixture(scope="module")
+def unattested(tmp_path_factory) -> Path:
+    """The same run, built with no record stream at all."""
+    return _build(tmp_path_factory.mktemp("unattested"), "none.sqlite", None)
+
+
+@pytest.fixture(scope="module")
+def attested_empty(tmp_path_factory) -> Path:
+    """A build handed a record stream that holds nothing.
+
+    A different fact from the one above — `reg.graph` records which — and this
+    file asserts the two are told apart by the reason and not only by the state.
+    """
+    return _build(
+        tmp_path_factory.mktemp("empty"),
+        "empty.sqlite",
+        AttestationRecords(declarations=(), verdicts=()),
+    )
+
+
+def _report(artifact: Path, keyring: Keyring | None = KEYRING) -> ChainReport:
+    conn = store.connect(artifact)
+    try:
+        return verify_chain(conn, keyring)
+    finally:
+        conn.close()
+
+
+def _chain(report: ChainReport, role: str) -> ChainResult:
+    return next(result for result in report.chains if result.chain == role)
+
+
+def _kinds(result: ChainResult) -> list[str]:
+    return [failure.kind for failure in result.failures]
+
+
+def _named(result: ChainResult, kind: str) -> list[str | None]:
+    """The record ids the failures of one kind name."""
+    return [f.record_id for f in result.failures if f.kind == kind]
+
+
+def _tamper_to(artifact: Path, tmp_path: Path, spec, **kwargs):
+    """Tamper into a fresh path under `tmp_path`. Returns `(report, copy)`."""
+    out = tmp_path / "tampered.sqlite"
+    return tamper(artifact, out, spec, **kwargs), out
+
+
+# --- the artifact that is intact ------------------------------------------
+
+
+def test_an_untampered_artifact_verifies(attested: Path) -> None:
+    """Both chains, every link, every MAC. The precondition for every negative
+    below: if this did not verify, none of them would mean anything."""
+    report = _report(attested)
+    assert report.state is ChainState.VERIFIED
+    assert not report.failures
+    for result in report.chains:
+        assert result.state is ChainState.VERIFIED
+        assert result.records_walked == result.stated_records > 0
+        assert result.links_checked == result.records_walked
+        assert result.macs_checked == result.records_walked
+
+
+def test_the_report_walks_both_chains_separately(attested: Path) -> None:
+    """Two chains, not one merged stream: the policy signs one and enforcement
+    the other, and a walker that merged them would check the policy's links
+    under the enforcement key."""
+    report = _report(attested)
+    assert [result.chain for result in report.chains] == [s.role for s in CHAINS]
+    policy = _chain(report, "policy")
+    enforcement = _chain(report, "enforcement")
+    assert policy.kind == "Declaration"
+    assert enforcement.kind == "Verdict"
+    # A verdict is per commanded action, so the two chains are different lengths
+    # on any real run. Equal counts would mean the fixture is not exercising the
+    # separation at all.
+    assert enforcement.records_walked > policy.records_walked > 0
+
+
+def test_a_chain_report_cannot_be_used_as_a_bool(attested: Path) -> None:
+    """`if verify_chain(...)` is the bug this refuses to compile into behaviour —
+    exactly `MacCheck.__bool__`'s reason, one level up."""
+    report = _report(attested)
+    with pytest.raises(TypeError, match="three states"):
+        bool(report)
+
+
+# --- THE FOUR TAMPER MODES. Each is a negative and each is the deliverable. -
+
+
+def test_a_tampered_declaration_field_is_broken_and_named(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. One field of one declaration, and the walk must say which."""
+    tampered, copy = _tamper_to(
+        attested, tmp_path, "declaration:first:horizon=9.5", keyring=KEYRING
+    )
+    assert tampered.field == "horizon"
+    assert tampered.before != tampered.after
+
+    result = _chain(_report(copy), "policy")
+    assert result.state is ChainState.BROKEN
+    # The MAC names the altered record; the link names its successor and the
+    # predecessor it should have committed to. Both point at the same edit.
+    assert tampered.record_id in _named(result, "mac")
+    assert any(
+        f.predecessor_id == tampered.record_id for f in result.failures if f.kind == "link"
+    )
+    assert _chain(_report(copy), "enforcement").state is ChainState.VERIFIED
+
+
+def test_a_tampered_verdict_field_is_broken_and_named(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. The other chain, under the other party's key."""
+    tampered, copy = _tamper_to(
+        attested, tmp_path, "verdict:#3:t=99.5", keyring=KEYRING
+    )
+    result = _chain(_report(copy), "enforcement")
+    assert result.state is ChainState.BROKEN
+    assert tampered.record_id in _named(result, "mac")
+    assert _chain(_report(copy), "policy").state is ChainState.VERIFIED
+
+
+def test_a_tampered_mac_is_broken_and_named(attested: Path, tmp_path: Path) -> None:
+    """NEGATIVE. The signature alone, on the **last** record — where no link
+    covers it, so the MAC check is the only thing that can catch it."""
+    tampered, copy = _tamper_to(
+        attested, tmp_path, "declaration:last:mac=" + "a" * HASH_HEX_LEN
+    )
+    result = _chain(_report(copy), "policy")
+    assert result.state is ChainState.BROKEN
+    assert _named(result, "mac") == [tampered.record_id]
+    assert "link" not in _kinds(result), (
+        "a MAC swapped on the last record breaks no link; if this reports one, "
+        "the walk is not checking what it says it is"
+    )
+
+
+def test_a_tampered_prev_hash_is_broken_and_named(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. The link itself, mid-chain."""
+    tampered, copy = _tamper_to(
+        attested, tmp_path, "verdict:#5:prev_hash=" + "b" * HASH_HEX_LEN
+    )
+    result = _chain(_report(copy), "enforcement")
+    assert result.state is ChainState.BROKEN
+    assert tampered.record_id in _named(result, "link")
+
+
+# --- the three that the four above would not catch ------------------------
+
+
+def test_a_truncated_chain_is_broken_not_verified(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. Deleting the last record breaks no link — every record that
+    remains still commits to its predecessor — so a walk over links alone would
+    verify a shorter chain happily. Deleting evidence is the easiest attack
+    there is, and the artifact's own count and its `FOLLOWS` edges are what
+    notice."""
+    tampered, copy = _tamper_to(attested, tmp_path, "verdict:last:delete")
+    intact = _chain(_report(attested), "enforcement").records_walked
+
+    result = _chain(_report(copy), "enforcement")
+    assert result.state is ChainState.BROKEN
+    assert result.records_walked == intact - 1
+    assert result.stated_records == intact
+    assert "count" in _kinds(result)
+    assert tampered.record_id in _named(result, "dangling-link")
+    assert "link" not in _kinds(result), (
+        "the surviving records still link to each other; if a link failed, this "
+        "test is passing for the wrong reason"
+    )
+
+
+def test_a_resigned_record_is_still_broken(attested: Path, tmp_path: Path) -> None:
+    """NEGATIVE, and the one that shows the chain does work the MAC cannot.
+
+    Alter a field *and* re-sign it with the correct key: the MAC verifies again,
+    every MAC on the chain is checked and none fails — and the chain still breaks
+    at the successor, because `prev_hash` commits to the record as it was signed
+    the first time.
+    """
+    tampered, copy = _tamper_to(
+        attested,
+        tmp_path,
+        "declaration:first:horizon=9.5",
+        keyring=KEYRING,
+        resign=True,
+    )
+    assert tampered.resigned
+
+    result = _chain(_report(copy), "policy")
+    assert result.state is ChainState.BROKEN
+    assert result.macs_checked == result.records_walked
+    assert "mac" not in _kinds(result), (
+        "the point of this test is that the MAC was made to verify again; if it "
+        "fails, the re-sign did not happen and the link break proves less"
+    )
+    links = [f for f in result.failures if f.kind == "link"]
+    assert [f.predecessor_id for f in links] == [tampered.record_id]
+
+
+def test_an_unreadable_record_is_could_not_evaluate_not_broken(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. A value that reached a column without passing a record — which
+    means raw SQL, which means tampering — is a loud could-not-evaluate on the
+    way out. Not BROKEN: nothing about the chain was checked."""
+    _, copy = _tamper_to(attested, tmp_path, "declaration:first:action_class=nonsense")
+    result = _chain(_report(copy), "policy")
+    assert result.state is ChainState.COULD_NOT_EVALUATE
+    assert _kinds(result) == ["unreadable"]
+    assert result.records_walked == 0
+
+
+# --- the two states that are not findings ---------------------------------
+
+
+def test_an_empty_artifact_is_could_not_evaluate_not_verified(
+    unattested: Path,
+) -> None:
+    """NEGATIVE. An artifact with nothing in it is not a verified artifact."""
+    report = _report(unattested)
+    assert report.state is ChainState.COULD_NOT_EVALUATE
+    for result in report.chains:
+        assert result.state is ChainState.COULD_NOT_EVALUATE
+        assert _kinds(result) == ["no-record-stream"]
+        assert result.records_walked == result.links_checked == result.macs_checked == 0
+
+
+def test_no_record_stream_and_no_records_are_told_apart(
+    unattested: Path, attested_empty: Path
+) -> None:
+    """Both refuse — and the reasons differ, because the two are different facts
+    and `reg.graph` went to the trouble of recording which."""
+    absent = _chain(_report(unattested), "policy")
+    empty = _chain(_report(attested_empty), "policy")
+    assert absent.state is empty.state is ChainState.COULD_NOT_EVALUATE
+    assert _kinds(absent) == ["no-record-stream"]
+    assert _kinds(empty) == ["no-records"]
+    assert empty.stated_records == 0
+
+
+def test_a_missing_key_is_could_not_evaluate_not_broken(attested: Path) -> None:
+    """NEGATIVE. Not having checked is not the same as having found a fault.
+
+    The links are still walked and still reported — the walk learned something —
+    but a chain whose MACs were never checked is not VERIFIED either.
+    """
+    report = _report(attested, keyring=None)
+    assert report.state is ChainState.COULD_NOT_EVALUATE
+    for result in report.chains:
+        assert result.state is ChainState.COULD_NOT_EVALUATE
+        assert _kinds(result) == ["no-key"]
+        assert result.macs_checked == 0
+        assert result.links_checked == result.records_walked > 0
+        assert not [f for f in result.failures if f.state is ChainState.BROKEN]
+
+
+def test_a_broken_chain_outranks_a_key_that_is_missing(
+    attested: Path, tmp_path: Path
+) -> None:
+    """A definite fault found without a key is still a definite fault. The
+    reverse — reporting an unchecked MAC as a break — is the false accusation
+    the third state exists to prevent."""
+    _, copy = _tamper_to(
+        attested, tmp_path, "verdict:#5:prev_hash=" + "b" * HASH_HEX_LEN
+    )
+    report = _report(copy, keyring=None)
+    assert report.state is ChainState.BROKEN
+    assert _chain(report, "policy").state is ChainState.COULD_NOT_EVALUATE
+
+
+def test_a_missing_count_is_could_not_evaluate(attested: Path, tmp_path: Path) -> None:
+    """NEGATIVE. Without the stated count the walk cannot tell a complete chain
+    from one with its tail removed, and it says so rather than verifying."""
+    copy = tmp_path / "no-count.sqlite"
+    copy.write_bytes(attested.read_bytes())
+    conn = store.connect(copy)
+    try:
+        conn.execute("DELETE FROM meta WHERE key = ?", (META_VERDICT_COUNT,))
+        conn.commit()
+    finally:
+        conn.close()
+    result = _chain(_report(copy), "enforcement")
+    assert result.state is ChainState.COULD_NOT_EVALUATE
+    assert _kinds(result) == ["no-count"]
+    assert result.stated_records is None
+
+
+# --- the tamper tool itself -----------------------------------------------
+
+
+def test_tamper_leaves_the_original_untouched(attested: Path, tmp_path: Path) -> None:
+    """The artifact under audit is the evidence. Byte for byte, and it still
+    verifies afterwards."""
+    before = hashlib.sha256(attested.read_bytes()).hexdigest()
+    _tamper_to(attested, tmp_path, "declaration:first:horizon=9.5")
+    assert hashlib.sha256(attested.read_bytes()).hexdigest() == before
+    assert _report(attested).state is ChainState.VERIFIED
+
+
+def test_tamper_refuses_to_write_over_the_artifact(attested: Path) -> None:
+    """NEGATIVE. In place is never available, under any flag."""
+    with pytest.raises(TamperError, match="is the artifact itself"):
+        tamper(attested, attested, "declaration:first:horizon=9.5")
+
+
+def test_tamper_refuses_a_destination_that_exists(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. The one file it writes is a new one, so nothing it is pointed
+    at can be lost by pointing it at the wrong path."""
+    taken = tmp_path / "taken.sqlite"
+    taken.write_bytes(b"someone else's evidence")
+    with pytest.raises(TamperError, match="already exists"):
+        tamper(attested, taken, "declaration:first:horizon=9.5")
+    assert taken.read_bytes() == b"someone else's evidence"
+
+
+def test_tamper_refuses_to_resign_without_a_key(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. No key is invented — a MAC under made-up material would fail
+    for the wrong reason and prove nothing."""
+    with pytest.raises(TamperError, match="no key to invent"):
+        tamper(
+            attested,
+            tmp_path / "out.sqlite",
+            "declaration:first:horizon=9.5",
+            resign=True,
+        )
+    assert not (tmp_path / "out.sqlite").exists()
+
+
+def test_tamper_refuses_a_record_that_is_not_there(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE, and it names what is there rather than only saying no."""
+    with pytest.raises(TamperError, match="holds no Declaration"):
+        tamper(attested, tmp_path / "out.sqlite", "declaration:no-such-id:horizon=1.0")
+    with pytest.raises(TamperError, match="out of range"):
+        tamper(attested, tmp_path / "out.sqlite", "declaration:#9999:horizon=1.0")
+
+
+def test_tamper_refuses_a_column_it_cannot_type(
+    attested: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. A WKB geometry cannot be given as a string, and coercing one
+    would write bytes nobody typed."""
+    with pytest.raises(TamperError, match="BLOB column"):
+        tamper(
+            attested,
+            tmp_path / "out.sqlite",
+            "declaration:first:declared_envelope_wkb=circle",
+        )
+    with pytest.raises(TamperError, match="has no column"):
+        tamper(attested, tmp_path / "out.sqlite", "declaration:first:nonesuch=1")
+    with pytest.raises(TamperError, match="not a value for"):
+        tamper(attested, tmp_path / "out.sqlite", "declaration:first:horizon=soon")
+    assert not (tmp_path / "out.sqlite").exists(), (
+        "a refused tamper leaves no half-altered copy behind"
+    )
+
+
+def test_tamper_refuses_an_empty_chain(attested_empty: Path, tmp_path: Path) -> None:
+    """NEGATIVE. A demonstration on an empty chain demonstrates nothing."""
+    with pytest.raises(TamperError, match="holds no Declaration"):
+        tamper(attested_empty, tmp_path / "out.sqlite", "declaration:first:horizon=1.0")
+
+
+@pytest.mark.parametrize(
+    "spec, match",
+    [
+        ("declaration:first", "not CHAIN:SELECTOR:OP"),
+        ("nonsense:first:horizon=1", "names chain"),
+        ("declaration:first:horizon", "neither FIELD=VALUE"),
+        ("declaration:first:=1", "names no field"),
+        ("declaration::horizon=1", "which record"),
+    ],
+)
+def test_a_tamper_spec_that_is_not_one_is_refused(spec: str, match: str) -> None:
+    """NEGATIVE. Every defect in a spec is a refusal, never a guess."""
+    with pytest.raises(TamperError, match=match):
+        TamperSpec.parse(spec)
+
+
+def test_a_delete_spec_cannot_be_resigned() -> None:
+    """NEGATIVE. Re-signing a deleted record is not a thing."""
+    with pytest.raises(TamperError, match="deleted record"):
+        TamperSpec.parse("verdict:last:delete", resign=True)
+
+
+def test_a_tamper_spec_takes_either_name_for_a_chain() -> None:
+    """`declaration` is the table, `policy` is the party that signs it."""
+    assert TamperSpec.parse("declaration:first:horizon=1").chain == "policy"
+    assert TamperSpec.parse("policy:first:horizon=1").chain == "policy"
+    assert TamperSpec.parse("verdict:last:delete").chain == "enforcement"
+    assert TamperSpec.parse("enforcement:last:delete").chain == "enforcement"
+
+
+# --- the report's own vocabulary ------------------------------------------
+
+
+def test_a_failure_cannot_be_recorded_as_verified() -> None:
+    """NEGATIVE. A failure that is not a finding would be counted as one and
+    reported as none."""
+    with pytest.raises(ValueError, match="BROKEN or COULD-NOT-EVALUATE"):
+        ChainFailure(
+            chain="policy", kind="mac", state=ChainState.VERIFIED, reason="fine"
+        )
+    with pytest.raises(ValueError, match="not in"):
+        ChainFailure(
+            chain="policy", kind="vibes", state=ChainState.BROKEN, reason="bad"
+        )
+
+
+def test_the_report_state_is_the_worst_of_its_chains() -> None:
+    """A definite fault anywhere is a fault; VERIFIED needs every chain."""
+
+    def result(state: ChainState) -> ChainResult:
+        return ChainResult(
+            chain="policy",
+            kind="Declaration",
+            state=state,
+            records_walked=1,
+            links_checked=1,
+            macs_checked=1,
+            stated_records=1,
+            failures=(),
+        )
+
+    worst = {
+        (ChainState.VERIFIED, ChainState.VERIFIED): ChainState.VERIFIED,
+        (ChainState.VERIFIED, ChainState.BROKEN): ChainState.BROKEN,
+        (ChainState.VERIFIED, ChainState.COULD_NOT_EVALUATE): (
+            ChainState.COULD_NOT_EVALUATE
+        ),
+        (ChainState.COULD_NOT_EVALUATE, ChainState.BROKEN): ChainState.BROKEN,
+    }
+    for (left, right), expected in worst.items():
+        assert ChainReport(chains=(result(left), result(right))).state is expected
+    assert ChainReport(chains=()).state is ChainState.COULD_NOT_EVALUATE
+
+
+def test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes(
+    attested: Path,
+) -> None:
+    """The drift guard. `reg.chain` names these keys instead of importing them
+    from `reg.graph` — which imports this module, and reaches the raw stream
+    besides — so the two spellings are compared here rather than diverging into
+    a chain that silently stops being checkable."""
+    assert META_ATTESTATION_RECORDS == graph.META_ATTESTATION_RECORDS
+    assert META_DECLARATION_COUNT == graph.META_DECLARATION_COUNT
+    assert META_VERDICT_COUNT == graph.META_VERDICT_COUNT
+    conn = store.connect(attested)
+    try:
+        meta = store.all_meta(conn)
+    finally:
+        conn.close()
+    for key in (META_ATTESTATION_RECORDS, META_DECLARATION_COUNT, META_VERDICT_COUNT):
+        assert key in meta, f"the builder writes no {key!r}"
+    assert meta[META_ATTESTATION_RECORDS] == ATTESTATION_PRESENT

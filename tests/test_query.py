@@ -56,7 +56,7 @@ from pathlib import Path
 
 import pytest
 
-from reg import bench, graph, query, store
+from reg import bench, chain, graph, query, store
 from reg.bench import AGREE, COULD_NOT_EVALUATE, DISAGREE, run_scenario
 from reg.query import ANSWERED, QueryError
 from reg.scenarios import scenario
@@ -771,8 +771,11 @@ def test_list_names_every_supported_query(capsys) -> None:
     for name in query.QUERIES:
         assert "--" + name.replace("_", "-") in out
     # And the ones that do not exist yet are named as absent rather than left
-    # to look like queries that returned nothing.
-    assert "verify_chain" in out
+    # to look like queries that returned nothing. `verify_chain` was on this
+    # list until issue #49; it is now a flag, and
+    # `test_the_query_list_names_verify_chain_and_what_is_still_absent` is what
+    # checks the list moved it rather than dropped it.
+    assert "incident_report" in out
 
 
 def test_the_cli_answers_a_scene_query(artifact: Path, capsys) -> None:
@@ -851,3 +854,257 @@ def test_render_is_pure_and_never_empty(artifact: Path) -> None:
     text = query.render(answer)
     assert text.strip()
     assert query.render(answer) == text
+
+
+# --------------------------------------------------------------------------
+# --verify-chain and --tamper (issue #49).
+#
+# The walk itself is `tests/test_chain.py`'s. What is tested here is the CLI:
+# four exit codes for four different facts, the flags that are refused rather
+# than ignored, and the one import in `reg/query.py` that has to stay inside a
+# function or Claim 2's "alone" stops being a property of the import graph.
+# --------------------------------------------------------------------------
+
+#: The chain fixture's parameters. Stated here for the reason
+#: `tests/test_chain.py` states them: `emit_declarations` and `Enforcer` refuse
+#: to invent any of the three, and a coarser frame period is the same run looked
+#: at less often.
+CHAIN_DT = 0.1
+CHAIN_REPLAN_S = 0.5
+CHAIN_HORIZON_S = 0.5
+CHAIN_WATCHDOG_S = 1.0
+
+#: Fixed material, not a secret and not pretending to be one — the same
+#: discipline `tests/test_graph.py` uses, because `generate_keyring` is
+#: deliberately unseeded.
+CHAIN_KEYRING = chain.Keyring.from_material(
+    policy=bytes(range(32)), enforcement=bytes(range(32, 64))
+)
+
+
+@pytest.fixture(scope="module")
+def attested(tmp_path_factory) -> tuple[Path, Path]:
+    """`(artifact, keyring)` — one build with both record chains in it."""
+    from dataclasses import replace as _replace
+
+    from reg.sim import provenance
+    from reg.stream import write_frames
+
+    tmp = tmp_path_factory.mktemp("verify-chain")
+    scn = _replace(scenario("declared_violation"), dt=CHAIN_DT)
+    csv = write_frames(scn.states(0), tmp / "dv.csv", comments=provenance(scn, 0))
+    keyring_path = chain.write_keyring(CHAIN_KEYRING, tmp / "keyring.json")
+    records = graph._attestation_from_stream(
+        csv,
+        scn,
+        keyring_path=keyring_path,
+        replan_interval_s=CHAIN_REPLAN_S,
+        declaration_horizon_s=CHAIN_HORIZON_S,
+        watchdog_period_s=CHAIN_WATCHDOG_S,
+    )
+    out = tmp / "dv.sqlite"
+    # The envelope parameters are spelled out rather than taken from `_FAST`,
+    # which names them the way `run_scenario` does; every call in this repo
+    # passes them explicitly so no test depends on a default staying put.
+    graph.build(
+        csv,
+        out,
+        scn.world.limits,
+        human_radius=scn.world.human_radius,
+        records=records,
+        horizon=0.1,
+        n_samples=4,
+        seed=0,
+        substep_dt=0.05,
+    )
+    return out, keyring_path
+
+
+def test_the_chain_import_is_deferred() -> None:
+    """`reg.chain` reaches `reg.stream`, so `reg.query` may only import it
+    inside the function that needs it.
+
+    The runtime gate above already fails if this regresses — but it fails with
+    "importing reg.query pulled in reg.stream", which does not say what to do
+    about it. This one names the rule: the import stays in a function body.
+    """
+    tree = ast.parse(Path(query.__file__).read_text())
+    module_level = set()
+    for node in tree.body:  # only the top level, not ast.walk
+        if isinstance(node, ast.Import):
+            module_level.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            module_level.update(
+                {node.module, *(f"{node.module}.{a.name}" for a in node.names)}
+            )
+    offenders = sorted(n for n in module_level if n.startswith("reg.chain"))
+    assert not offenders, (
+        f"reg/query.py imports {offenders} at module level. reg.chain imports "
+        "reg.stream for the precision its canonical serialization commits to, "
+        "so hoisting this import puts the raw stream one attribute away from "
+        "every scene query. It belongs inside _verify_chain_cli."
+    )
+    assert "from reg import chain" in Path(query.__file__).read_text(), (
+        "and it does have to be imported somewhere: --verify-chain must not "
+        "grow a second copy of the canonicalization the MACs are taken over"
+    )
+
+
+def test_the_could_not_evaluate_spelling_is_one_string() -> None:
+    """`reg.chain` and `reg.query` reach the same third verdict, and a
+    vocabulary with two definitions is one that can drift."""
+    assert chain.ChainState.COULD_NOT_EVALUATE.value == COULD_NOT_EVALUATE
+
+
+def test_the_cli_verifies_an_intact_chain(attested, capsys) -> None:
+    artifact, keyring = attested
+    code = query.main([str(artifact), "--verify-chain", "--keyring", str(keyring)])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_OK
+    assert "VERIFIED" in out
+    # Both chains, and what was actually checked in each — a verdict with no
+    # counts beside it does not distinguish a walk over 250 records from a walk
+    # over none.
+    assert "policy (Declaration)" in out
+    assert "enforcement (Verdict)" in out
+    assert "links checked" in out and "MACs checked" in out
+
+
+@pytest.mark.parametrize(
+    "spec, expected_in_output",
+    [
+        ("declaration:first:horizon=9.5", "mac"),
+        ("verdict:#3:t=99.5", "mac"),
+        ("declaration:last:mac=" + "a" * 64, "mac"),
+        ("verdict:#5:prev_hash=" + "b" * 64, "link"),
+        ("verdict:last:delete", "count"),
+    ],
+)
+def test_the_cli_exits_broken_on_a_tampered_copy(
+    attested, tmp_path: Path, capsys, spec: str, expected_in_output: str
+) -> None:
+    """NEGATIVE, one per tamper mode, through the CLI a person actually runs.
+
+    Exit 3 and not 1: a chain that broke and a chain that could not be checked
+    are different facts, and a CI job that collapsed them would read a missing
+    keyring as a tampered artifact.
+    """
+    artifact, keyring = attested
+    code = query.main(
+        [
+            str(artifact),
+            "--verify-chain",
+            "--keyring",
+            str(keyring),
+            "--tamper",
+            spec,
+            "--tamper-out",
+            str(tmp_path / "tampered.sqlite"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == query.EXIT_BROKEN
+    assert "BROKEN" in out
+    assert expected_in_output in out
+    # What was changed, printed beside the verdict: "BROKEN" on its own is not
+    # usable evidence.
+    assert "tampered" in out
+
+
+def test_the_cli_leaves_the_artifact_it_was_pointed_at_alone(
+    attested, tmp_path: Path, capsys
+) -> None:
+    artifact, keyring = attested
+    before = artifact.read_bytes()
+    query.main(
+        [
+            str(artifact),
+            "--verify-chain",
+            "--keyring",
+            str(keyring),
+            "--tamper",
+            "declaration:first:horizon=9.5",
+            "--tamper-out",
+            str(tmp_path / "copy.sqlite"),
+        ]
+    )
+    capsys.readouterr()
+    assert artifact.read_bytes() == before
+    assert (
+        query.main([str(artifact), "--verify-chain", "--keyring", str(keyring)])
+        == query.EXIT_OK
+    )
+
+
+def test_the_cli_could_not_evaluate_without_a_key(attested, capsys) -> None:
+    """NEGATIVE. No keyring, no MAC checked — exit 1, and never exit 0."""
+    artifact, _ = attested
+    code = query.main([str(artifact), "--verify-chain"])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_COULD_NOT_EVALUATE
+    assert COULD_NOT_EVALUATE in out
+    assert "no key" in out
+
+
+def test_the_cli_could_not_evaluate_on_an_artifact_with_no_records(
+    artifact: Path, capsys
+) -> None:
+    """NEGATIVE. The build in this file was handed no record stream, and an
+    artifact with nothing in it is not a verified artifact."""
+    code = query.main([str(artifact), "--verify-chain"])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_COULD_NOT_EVALUATE
+    assert COULD_NOT_EVALUATE in out
+    assert "no record stream" in out
+
+
+@pytest.mark.parametrize(
+    "argv_tail, match",
+    [
+        (["--verify-chain", "--tamper", "verdict:last:delete"], "--tamper-out"),
+        (["--verify-chain", "--tamper-out", "x.sqlite"], "no --tamper was given"),
+        (
+            ["--verify-chain", "--tamper", "nonsense", "--tamper-out", "x.sqlite"],
+            "CHAIN:SELECTOR:OP",
+        ),
+        (["--verify-chain", "--keyring", "no-such-keyring.json"], "keyring"),
+        (["--min-separation", "human", "--tamper", "verdict:last:delete"], "--tamper"),
+        (["--min-separation", "human", "--keyring", "k.json"], "--keyring"),
+    ],
+)
+def test_the_cli_refuses_a_flag_it_would_otherwise_drop(
+    artifact: Path, capsys, argv_tail: list[str], match: str
+) -> None:
+    """NEGATIVE. A flag silently ignored reads as one that was applied — and a
+    tamper spec nobody can parse must never come back as a clean verdict."""
+    code = query.main([str(artifact), *argv_tail])
+    err = capsys.readouterr().err
+    assert code == query.EXIT_USAGE
+    assert match in err
+
+
+def test_render_chain_report_is_pure_and_names_every_chain(attested) -> None:
+    """The CLI formats; the walk returns. `render_chain_report` reads no file."""
+    artifact, _ = attested
+    conn = store.connect(artifact)
+    try:
+        report = chain.verify_chain(conn, CHAIN_KEYRING)
+    finally:
+        conn.close()
+    text = query.render_chain_report(report)
+    assert text.strip()
+    assert query.render_chain_report(report) == text
+    for result in report.chains:
+        assert result.chain in text
+        assert result.kind in text
+
+
+def test_the_query_list_names_verify_chain_and_what_is_still_absent() -> None:
+    """`--list` is the vocabulary. A query missing from it reads as a milestone
+    that has not landed, so the one that just landed has to appear — and the
+    four that have not must still say so."""
+    text = query._list_text()
+    assert "--verify-chain" in text
+    assert "--tamper" in text
+    for absent in ("declared_bound", "violations", "verdicts", "incident_report"):
+        assert absent in text

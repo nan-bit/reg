@@ -48,6 +48,7 @@ depends on a default staying put.
 from __future__ import annotations
 
 import sqlite3
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -59,8 +60,23 @@ from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from reg import graph, store
+from reg.chain import (
+    GENESIS_HASH,
+    UNSIGNED_MAC,
+    Keyring,
+    MacState,
+    chain_hash,
+    write_keyring,
+)
+from reg.declare import Declaration, envelope_wkb, verify_declaration
+from reg.enforce import Verdict, sign_verdict, verify_verdict
 from reg.envelope import compute_envelope, envelope_hash
-from reg.graph import HUMAN_ENTITY_ID, GraphBuildError, build
+from reg.graph import (
+    HUMAN_ENTITY_ID,
+    AttestationRecords,
+    GraphBuildError,
+    build,
+)
 from reg.kinematics import link_polygons
 from reg.scenarios import SCENARIOS
 from reg.sim import provenance, simulate
@@ -192,12 +208,19 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
 
     assert result.frames == n_frames
     # One HAS_ENVELOPE, and one SEPARATION per entity (obstacle + human). No
-    # INTERSECTS and no CONTACT: both are far outside a 0.1 s envelope.
+    # INTERSECTS and no CONTACT: both are far outside a 0.1 s envelope. The four
+    # attestation edges are zero because this build was given no record stream —
+    # a zero here and a missing key in `meta` are two different facts and the
+    # artifact carries both (issue #45, `META_ATTESTATION_RECORDS`).
     assert result.edges == {
         "HAS_ENVELOPE": 1,
         "INTERSECTS": 0,
         "SEPARATION": 2,
         "CONTACT": 0,
+        "DECLARED": 0,
+        "ADJUDICATED": 0,
+        "ENFORCED": 0,
+        "FOLLOWS": 0,
     }
     # And the nodes those edges anchor, once each — not per frame. There is no
     # `Timestep` kind to check: issue #29 removed it, and its absence from
@@ -212,6 +235,8 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "RobotConfig": 1,
         "Entity": 2,
         "Occurrence": 4,
+        "Declaration": 0,
+        "Verdict": 0,
     }
 
 
@@ -249,12 +274,18 @@ def test_node_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "RobotConfig": 2,
         "Entity": 2,
         "Occurrence": 4,
+        "Declaration": 0,
+        "Verdict": 0,
     }
     assert result.edges == {
         "HAS_ENVELOPE": 2,
         "INTERSECTS": 0,
         "SEPARATION": 2,
         "CONTACT": 0,
+        "DECLARED": 0,
+        "ADJUDICATED": 0,
+        "ENFORCED": 0,
+        "FOLLOWS": 0,
     }
 
 
@@ -818,11 +849,16 @@ def test_extending_an_edge_backwards_is_refused(seeded) -> None:
 
 def test_an_unknown_edge_type_is_refused(seeded) -> None:
     """Not a default layer and not a silent skip: adding an edge type is a
-    decision about which layer it belongs to."""
+    decision about which layer it belongs to.
+
+    `DECLARED` was the example here until issue #45 made it a real edge type, so
+    the example is now one that is still not in the vocabulary: `CONTAINS`,
+    which docs/plan.md lists beside `INTERSECTS` and issue #14 de-scoped.
+    """
     with pytest.raises(store.StoreError, match="not an edge type"):
-        store.layer_of("DECLARED")
+        store.layer_of("CONTAINS")
     with pytest.raises(store.StoreError, match="not an edge type"):
-        store.open_edge(seeded, "DECLARED", "cfg_0", "env_0", 0.0)
+        store.open_edge(seeded, "CONTAINS", "cfg_0", "env_0", 0.0)
 
 
 def test_a_missing_metric_is_refused(seeded) -> None:
@@ -1451,10 +1487,16 @@ def test_there_is_no_per_frame_node_kind() -> None:
     assert "Timestep" not in store.NODE_TABLES
     assert not hasattr(store, "insert_timestep")
     assert store.EDGE_SPECS["HAS_ENVELOPE"].src_kind == "RobotConfig"
-    # Every endpoint kind in the vocabulary must be a table that exists.
+    # Every endpoint kind in the vocabulary must be a table that exists. An
+    # endpoint may be a set of kinds — `FOLLOWS` joins two declarations in one
+    # chain and two verdicts in the other (issue #45) — and then every kind in
+    # the set has to be one, because `open_edge` will store whichever the caller
+    # states and an edge stored against a table that is not there is a dangling
+    # reference every join reads as "the relationship never held".
     for edge_type, spec in store.EDGE_SPECS.items():
-        assert spec.src_kind in store.NODE_TABLES, edge_type
-        assert spec.dst_kind in store.NODE_TABLES, edge_type
+        for kind in (spec.src_kind, spec.dst_kind):
+            for one in {kind} if isinstance(kind, str) else kind:
+                assert one in store.NODE_TABLES, edge_type
 
 
 def test_envelope_at_refuses_when_a_parameter_it_needs_is_missing(
@@ -1608,9 +1650,13 @@ def test_read_edges_refuses_an_unknown_type_rather_than_returning_nothing(
     seeded,
 ) -> None:
     """An empty list is a could-not-evaluate and must not read as 'no such
-    relationships occurred'."""
+    relationships occurred'.
+
+    `FOLLOWS` was the example until issue #45 made it a real edge type;
+    `CONTAINS` is still out of the vocabulary and takes its place.
+    """
     with pytest.raises(store.StoreError, match="not an edge type"):
-        store.read_edges(seeded, edge_type="FOLLOWS")
+        store.read_edges(seeded, edge_type="CONTAINS")
 
 
 # --------------------------------------------------------------------------
@@ -2184,3 +2230,811 @@ def test_read_occurrences_refuses_an_unknown_type_rather_than_returning_nothing(
     """An empty list for a mistyped type reads as "no such event in this run"."""
     with pytest.raises(store.StoreError, match="not an occurrence type"):
         store.read_occurrences(seeded, occurrence_type="contact_begun")
+
+
+# --------------------------------------------------------------------------
+# The attestation layer (issue #45). Declarations, verdicts and the four edges.
+#
+# WHAT THESE TESTS ARE ABOUT. Not that the rows arrive — that is the easy half
+# and a schema that flattened every verdict into its declaration would pass it.
+# Three things:
+#
+# * **`ADJUDICATED` does not flatten.** `test_adjudicated_keeps_every_verdict`
+#   is the one this section exists for, and it runs on the real
+#   `declared_violation` fixture rather than a synthetic pair, because the
+#   property is a fact about that run: the box is fixed for the whole scenario,
+#   so five declarations carry an identical `declared_envelope` and one of them
+#   is adjudicated PERMIT and later CLAMP. A one-row-per-declaration schema
+#   passes every other test here and silently destroys the ability to say *when*
+#   the violation began.
+# * **Persistence does not launder a record.** The store holds no keys, so it
+#   cannot check a MAC and must not be able to fix one.
+#   `test_the_store_does_not_launder_a_bad_mac` feeds it the condition it guards
+#   against and asserts the record still fails verification on the way out.
+# * **What is refused.** A verdict naming a declaration the artifact does not
+#   hold, and a record stream that is not one unbroken chain. Both would produce
+#   an artifact that answers an audit question with something nobody can check.
+# --------------------------------------------------------------------------
+
+#: The keyring the fixtures here sign with. Fixed material, because these tests
+#: compare artifacts byte for byte and `generate_keyring` is deliberately not
+#: seeded — see `reg.chain.generate_keyring`. It is not a secret and is not
+#: pretending to be one.
+FIXTURE_KEYRING = Keyring.from_material(
+    policy=bytes(range(32)), enforcement=bytes(range(32, 64))
+)
+
+#: The policy and enforcement parameters for these runs. Stated here because
+#: `emit_declarations` and `Enforcer` refuse to invent any of the three, and
+#: because a test that passed a different one per call would be comparing two
+#: runs. They match `tests/test_enforce.py`'s fixture parameters, so the record
+#: stream this file stores is the one that file adjudicates.
+FIXTURE_REPLAN_S = 0.5
+FIXTURE_HORIZON_S = 0.5
+FIXTURE_WATCHDOG_S = 1.0
+
+
+def _keyring_file(tmp_path: Path) -> Path:
+    return write_keyring(FIXTURE_KEYRING, tmp_path / "keyring.json")
+
+
+def _records_for(csv: Path, scn, tmp_path: Path) -> AttestationRecords:
+    """The record stream for a stream, through the CLI's own producer.
+
+    Through `graph._attestation_from_stream` rather than a second copy of the
+    policy/enforcer wiring: a fixture that assembled the records differently
+    from the way the CLI does would be testing a run nobody can produce.
+    """
+    return graph._attestation_from_stream(
+        csv,
+        scn,
+        keyring_path=_keyring_file(tmp_path),
+        replan_interval_s=FIXTURE_REPLAN_S,
+        declaration_horizon_s=FIXTURE_HORIZON_S,
+        watchdog_period_s=FIXTURE_WATCHDOG_S,
+    )
+
+
+@pytest.fixture(scope="module")
+def attested(tmp_path_factory) -> tuple[Path, AttestationRecords]:
+    """`declared_violation`, built with its own record stream. One build, shared.
+
+    Module-scoped because it is the expensive fixture in this file — a full
+    scenario, an envelope per frame — and every test below reads the same
+    artifact rather than rebuilding it.
+    """
+    tmp = tmp_path_factory.mktemp("attested")
+    scn = SCENARIOS["declared_violation"]
+    csv = _scenario_stream(scn, scn.dt, tmp / "dv.csv")
+    records = _records_for(csv, scn, tmp)
+    out = tmp / "dv.sqlite"
+    build(
+        csv,
+        out,
+        scn.world.limits,
+        human_radius=scn.world.human_radius,
+        records=records,
+        **_FAST,
+    )
+    return out, records
+
+
+def _held_attested(tmp_path: Path, n_frames: int = 8) -> tuple[Path, AttestationRecords]:
+    """A short held stream and its record stream. The cheap fixture."""
+    csv = _held_stream(tmp_path / "held.csv", n_frames)
+    return csv, _records_for(csv, SCENARIOS["contact"], tmp_path)
+
+
+def _rows(path: Path, sql: str) -> list[sqlite3.Row]:
+    conn = store.connect(path)
+    try:
+        return list(conn.execute(sql).fetchall())
+    finally:
+        conn.close()
+
+
+def _meta(path: Path) -> dict[str, str]:
+    conn = store.connect(path)
+    try:
+        return store.all_meta(conn)
+    finally:
+        conn.close()
+
+
+# --- the property this issue exists for -----------------------------------
+
+
+def test_adjudicated_keeps_every_verdict(attested) -> None:
+    """THE TEST OF THIS ISSUE, on the real fixture and not a synthetic pair.
+
+    A verdict is per **commanded action**, not per declaration (#43): the
+    declared box is fixed for the whole of `declared_violation`, so every
+    declaration carries an identical `declared_envelope` and the violation
+    begins partway through. One declaration is therefore adjudicated PERMIT and
+    then CLAMP, and the artifact has to be able to say so.
+
+    Asserted three ways, because the failure this guards against is a schema
+    that looks right: one `ADJUDICATED` edge per verdict that named a
+    declaration, at least one declaration carrying more than one outcome, and
+    strictly more edges than declarations.
+    """
+    out, records = attested
+
+    outcomes = Counter(v.outcome for v in records.verdicts)
+    assert outcomes["PERMIT"] and outcomes["CLAMP"], (
+        f"precondition failed: {outcomes}. This fixture is supposed to be "
+        "permitted and then clamped; without both, the property below is not "
+        "being tested at all."
+    )
+
+    edges = _edges(out, edge_type="ADJUDICATED")
+    named = [v for v in records.verdicts if v.declaration_id is not None]
+    assert len(edges) == len(named), (
+        f"{len(edges)} ADJUDICATED edges for {len(named)} verdicts that named a "
+        "declaration. One per verdict, never one per declaration."
+    )
+    assert len(edges) > len(records.declarations)
+
+    by_declaration: dict[str, set[str]] = {}
+    verdict_outcomes = {v.verdict_id: v.outcome for v in records.verdicts}
+    for row in edges:
+        by_declaration.setdefault(str(row["dst_id"]), set()).add(
+            verdict_outcomes[str(row["src_id"])]
+        )
+    both = sorted(k for k, o in by_declaration.items() if len(o) > 1)
+    assert both, (
+        "no declaration in the artifact is adjudicated more than one way. The "
+        "run contains one; a schema that cannot express it has lost when the "
+        "violation began, which is the demo sentence's second clause."
+    )
+    assert {"PERMIT", "CLAMP"} <= by_declaration[both[0]]
+
+
+def test_the_records_survive_persistence_byte_for_byte(attested) -> None:
+    """A record read back out of SQLite is the record that was signed.
+
+    Equality of the dataclasses is the strong form of it: every field, including
+    the WKB bytes and both hashes. If this fails, the canonical serialization is
+    not surviving persistence and every MAC in the artifact is unverifiable for
+    a reason nothing in the file records.
+    """
+    out, records = attested
+    conn = store.connect(out)
+    try:
+        assert store.read_declarations(conn) == list(records.declarations)
+        assert store.read_verdicts(conn) == list(records.verdicts)
+    finally:
+        conn.close()
+
+
+def test_the_records_still_verify_under_the_keys_that_signed_them(attested) -> None:
+    """The point of storing the MAC at all, per record type.
+
+    And the third state beside it: with no key the check is
+    COULD_NOT_EVALUATE, never VALID. A verifier without the key has learned
+    nothing about the record.
+    """
+    out, _ = attested
+    conn = store.connect(out)
+    try:
+        declarations = store.read_declarations(conn)
+        verdicts = store.read_verdicts(conn)
+    finally:
+        conn.close()
+
+    assert declarations and verdicts
+    for declaration in declarations:
+        assert (
+            verify_declaration(declaration, FIXTURE_KEYRING.key("policy")).state
+            is MacState.VALID
+        )
+        assert verify_declaration(declaration, None).state is MacState.COULD_NOT_EVALUATE
+    for verdict in verdicts:
+        assert (
+            verify_verdict(verdict, FIXTURE_KEYRING.key("enforcement")).state
+            is MacState.VALID
+        )
+        assert verify_verdict(verdict, None).state is MacState.COULD_NOT_EVALUATE
+
+
+def test_record_timestamps_are_not_quantized_on_the_way_in(attested) -> None:
+    """The edge layer's endpoints are observations; a record's `t` is signed.
+
+    `TIME_TOL_S` is the resolution the artifact reports *transitions* at. A
+    declaration's `t_issued` is a value the MAC covers, so rounding it would
+    store an instant nobody signed — and the DECLARED edge would then name a
+    window the record does not.
+    """
+    out, records = attested
+    edges = {str(r["src_id"]): r for r in _edges(out, edge_type="DECLARED")}
+    for declaration in records.declarations:
+        row = edges[declaration.declaration_id]
+        assert row["t_start"] == declaration.t_issued
+        assert row["t_end"] == declaration.t_issued + declaration.horizon
+
+
+def test_every_attestation_edge_is_layer_a_and_names_no_entity(attested) -> None:
+    """docs/sufficiency.md §2, asserted on a real artifact rather than argued.
+
+    Every declaration, every verdict, every bound and every chain link in this
+    file is answerable without trusting a perceiver. `Entity` appears at neither
+    end of any of the four types — which is why the attestation half of the
+    artifact survives an uncertifiable perceiver and the scene half does not.
+    """
+    out, _ = attested
+    attestation = ("DECLARED", "ADJUDICATED", "ENFORCED", "FOLLOWS")
+    seen = 0
+    for edge_type in attestation:
+        rows = _edges(out, edge_type=edge_type)
+        seen += len(rows)
+        for row in rows:
+            assert row["layer"] == "A", edge_type
+            assert row["src_kind"] != "Entity"
+            assert row["dst_kind"] != "Entity"
+    assert seen, "no attestation edges were written; this test proved nothing"
+
+    # And the other direction, so the assertion above is not vacuous for a
+    # build that simply tagged everything A: the entity-naming edges are B.
+    for row in _edges(out, layer="B"):
+        assert "Entity" in (row["src_kind"], row["dst_kind"])
+
+
+def test_follows_links_two_chains_and_not_one(attested) -> None:
+    """Declarations chain under the policy key, verdicts under enforcement's.
+
+    So the artifact holds two chains, each beginning at the genesis hash, and a
+    `FOLLOWS` edge never crosses between them — a link from a verdict to a
+    declaration would assert that one signed over the other, which neither did.
+    """
+    out, records = attested
+    rows = _edges(out, edge_type="FOLLOWS")
+    assert len(rows) == (len(records.declarations) - 1) + (len(records.verdicts) - 1)
+    kinds = Counter((str(r["src_kind"]), str(r["dst_kind"])) for r in rows)
+    assert set(kinds) == {("Declaration", "Declaration"), ("Verdict", "Verdict")}
+    assert kinds[("Declaration", "Declaration")] == len(records.declarations) - 1
+
+    # Every link is the one the record itself carries, resolved to a row.
+    by_id = {d.declaration_id: d for d in records.declarations}
+    by_id.update({v.verdict_id: v for v in records.verdicts})
+    for row in rows:
+        successor = by_id[str(row["src_id"])]
+        predecessor = by_id[str(row["dst_id"])]
+        assert successor.prev_hash == chain_hash(predecessor, predecessor.prev_hash)
+
+
+def test_the_declared_and_the_clamped_bound_are_separate_rows(attested) -> None:
+    """docs/lossiness.md Retained #8: "a clamp is only legible if the declared
+    and the computed bound both survive".
+
+    On this fixture the clamp is *to* the declared envelope, so the two rows
+    hold the same region — and they are still two rows, because "what the policy
+    claimed" and "what enforcement applied" are different answers that happen to
+    coincide here. Collapsing them would make a clamp to something narrower
+    indistinguishable from a clamp to the declaration.
+    """
+    out, records = attested
+    rows = {
+        str(r["source"]): r
+        for r in _rows(out, "SELECT * FROM envelope ORDER BY source")
+    }
+    assert {"computed", "declared", "clamped"} <= set(rows)
+    assert rows["declared"]["envelope_hash"] == rows["clamped"]["envelope_hash"]
+    assert rows["declared"]["envelope_id"] != rows["clamped"]["envelope_id"]
+
+    # The declared bound carries the declaration's validity window; the clamped
+    # one carries no horizon, because the Verdict record states none.
+    assert rows["declared"]["horizon"] == FIXTURE_HORIZON_S
+    assert rows["clamped"]["horizon"] is None
+
+    # Both store their polygon: GEOMETRY_RETENTION discards only what can be
+    # recomputed from a config in this file, and a policy's bound cannot be.
+    for source in ("declared", "clamped"):
+        assert rows[source]["geometry_wkb"] is not None
+        assert rows[source]["config_id"] is None
+    stored = store.from_wkb(rows["declared"]["geometry_wkb"])
+    assert stored.equals(records.declarations[0].envelope())
+
+
+def test_enforced_exists_for_a_clamp_and_for_nothing_else(attested) -> None:
+    """A PERMIT bounds nothing; a VETO and a SAFE_STATE permit no action to
+    bound. An ENFORCED edge to a region on a PERMIT would read as though
+    something had been allowed inside it."""
+    out, records = attested
+    rows = _edges(out, edge_type="ENFORCED")
+    clamps = [v for v in records.verdicts if v.outcome == "CLAMP"]
+    assert clamps, "precondition failed: this fixture produced no clamp"
+    assert {str(r["src_id"]) for r in rows} == {v.verdict_id for v in clamps}
+
+
+def test_the_artifact_says_whether_it_was_given_a_record_stream(
+    tmp_path: Path,
+) -> None:
+    """An empty `declaration` table is two different facts and it has to say
+    which. `None` is "this build stored no record stream"; an empty
+    `AttestationRecords` is "this run produced no records"."""
+    csv, records = _held_attested(tmp_path)
+
+    with_records = tmp_path / "with.sqlite"
+    _build(csv, with_records, records=records)
+    meta = _meta(with_records)
+    assert meta[graph.META_ATTESTATION_RECORDS] == "present"
+    assert meta[graph.META_DECLARATION_COUNT] == str(len(records.declarations))
+    assert meta[graph.META_VERDICT_COUNT] == str(len(records.verdicts))
+    assert graph.ATTESTATION_RETENTION == meta[graph.META_ATTESTATION_RETENTION]
+
+    none_given = tmp_path / "none.sqlite"
+    _build(csv, none_given)
+    meta = _meta(none_given)
+    assert meta[graph.META_ATTESTATION_RECORDS] == "absent"
+    assert graph.META_DECLARATION_COUNT not in meta
+
+    produced_none = tmp_path / "empty.sqlite"
+    result = _build(
+        csv, produced_none, records=AttestationRecords(declarations=(), verdicts=())
+    )
+    meta = _meta(produced_none)
+    assert meta[graph.META_ATTESTATION_RECORDS] == "present"
+    assert meta[graph.META_DECLARATION_COUNT] == "0"
+    assert result.nodes["Declaration"] == 0
+
+
+def test_the_attestation_layer_is_deterministic(tmp_path: Path) -> None:
+    """CLAUDE.md rule 2, over the half of the artifact that carries MACs.
+
+    Same stream, same keyring, same parameters, same bytes. A record stream is
+    the easiest place for an artifact to stop being reproducible — a clock, a
+    UUID or an unordered iteration would all show up here first.
+    """
+    csv, records = _held_attested(tmp_path)
+    again = _records_for(csv, SCENARIOS["contact"], tmp_path)
+    assert again == records, "the producer is not deterministic; the build cannot be"
+
+    a = tmp_path / "a.sqlite"
+    b = tmp_path / "b.sqlite"
+    _build(csv, a, records=records)
+    _build(csv, b, records=again)
+    assert a.read_bytes() == b.read_bytes()
+
+
+# --- the enforcement occurrences ------------------------------------------
+
+
+def _verdict_chain(specs) -> tuple[Verdict, ...]:
+    """A signed, chained verdict stream from `(t, outcome, fault)` triples.
+
+    Synthetic, and deliberately so: the five enforcement occurrences include
+    four that no *scenario* yet drives (issue #46 adds the fixtures). These are
+    real `Verdict` records all the same — constructed, signed with the
+    enforcement key and chained — so what is being tested is the builder's
+    mapping and not a mock of it.
+    """
+    clamped = envelope_wkb(Point(0.0, 0.0).buffer(0.5))
+    out: list[Verdict] = []
+    prev = GENESIS_HASH
+    for i, (t, outcome, fault) in enumerate(specs):
+        verdict = Verdict(
+            verdict_id=f"synthetic-verdict-{i:05d}",
+            declaration_id=None,
+            seq=i,
+            t=t,
+            outcome=outcome,
+            fault=fault,
+            clamped_envelope=clamped if outcome == "CLAMP" else None,
+            prev_hash=prev,
+            mac=UNSIGNED_MAC,
+        )
+        signed = sign_verdict(verdict, FIXTURE_KEYRING.key("enforcement"))
+        out.append(signed)
+        prev = chain_hash(signed, prev)
+    return tuple(out)
+
+
+#: One verdict stream that reaches every enforcement occurrence, and the rows it
+#: must produce. The two things being pinned are what *does not* produce a row:
+#: a PERMIT while running, which is the run proceeding normally and would be one
+#: row per frame; and a SAFE_STATE while already passivated, which reports a
+#: passivation this layer has already recorded.
+_OCCURRENCE_WALK = (
+    (0.00, "PERMIT", None),
+    (0.02, "SAFE_STATE", "watchdog_expiry"),
+    (0.04, "SAFE_STATE", "watchdog_expiry"),
+    (0.06, "PERMIT", None),
+    (0.08, "CLAMP", "declaration_action_mismatch"),
+    (0.10, "VETO", "unattributed"),
+    (0.12, "SAFE_STATE", "escalation_failure"),
+    (0.14, "PERMIT", None),
+)
+_OCCURRENCE_WALK_EXPECTED = (
+    "safe_state_entered",
+    "reintegrated",
+    "action_clamped",
+    "declaration_vetoed",
+    "escalation_failed",
+    "reintegrated",
+)
+
+
+def test_the_five_enforcement_occurrences_are_emitted(tmp_path: Path) -> None:
+    """Every verdict-derived occurrence type, and the two suppressions.
+
+    Eight verdicts, six rows. The three PERMITs produce one row between them and
+    it is a `reintegrated`, not a permission; the second consecutive SAFE_STATE
+    produces nothing at all.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 8)
+    out = tmp_path / "held.sqlite"
+    _build(
+        csv,
+        out,
+        records=AttestationRecords(
+            declarations=(), verdicts=_verdict_chain(_OCCURRENCE_WALK)
+        ),
+    )
+
+    enforcement = {
+        name
+        for name, spec in store.OCCURRENCE_SPECS.items()
+        if name
+        in (
+            "declaration_vetoed",
+            "action_clamped",
+            "safe_state_entered",
+            "reintegrated",
+            "escalation_failed",
+        )
+    }
+    got = tuple(
+        str(row["type"])
+        for row in _occurrences(out)
+        if str(row["type"]) in enforcement
+    )
+    assert got == _OCCURRENCE_WALK_EXPECTED
+    assert enforcement <= set(got), "a type in the vocabulary was never reachable"
+
+    # Layer A, every one of them: an enforcement event names no entity, and the
+    # schema ties the two together.
+    for row in _occurrences(out):
+        if str(row["type"]) in enforcement:
+            assert row["layer"] == "A"
+            assert row["entity_id"] is None
+            assert str(row["reason"]).strip()
+
+
+def test_a_permitted_run_produces_no_enforcement_occurrence(tmp_path: Path) -> None:
+    """THE NEGATIVE for the rule above, on a stream where nothing goes wrong.
+
+    A row per permitted action is a row per frame wearing a coarser timestamp,
+    which is the cost this layer exists to escape. So a run in which the policy
+    kept its word must leave the occurrence layer exactly as it was.
+    """
+    csv, records = _held_attested(tmp_path)
+    assert {v.outcome for v in records.verdicts} == {"PERMIT"}, (
+        "precondition failed: this fixture was supposed to be compliant"
+    )
+
+    without = tmp_path / "without.sqlite"
+    with_records = tmp_path / "with.sqlite"
+    _build(csv, without)
+    _build(csv, with_records, records=records)
+    assert Counter(str(r["type"]) for r in _occurrences(without)) == Counter(
+        str(r["type"]) for r in _occurrences(with_records)
+    )
+
+
+# --- the negatives ---------------------------------------------------------
+
+
+def test_the_store_does_not_launder_a_bad_mac(tmp_path: Path) -> None:
+    """THE NEGATIVE TEST: persistence must not make a broken record verify.
+
+    **It is stored, not refused, and that is the deliberate half.** This module
+    holds no keys and cannot tell a good MAC from a bad one; a store that could
+    would be a store that can quietly repair a chain. What it must never do is
+    make the record come back out clean — so the same declaration is asserted
+    VALID before and INVALID after, both through the artifact.
+    """
+    csv, records = _held_attested(tmp_path)
+    good = records.declarations[0]
+    assert (
+        verify_declaration(good, FIXTURE_KEYRING.key("policy")).state is MacState.VALID
+    )
+
+    # A well-formed digest that is not this record's. Well-formed on purpose:
+    # `Declaration` refuses to construct with a malformed one, so the
+    # interesting case — a MAC that looks entirely fine — is this one.
+    flipped = ("0" if good.mac[0] != "0" else "1") + good.mac[1:]
+    tampered = replace(good, mac=flipped)
+
+    conn = store.create(tmp_path / "laundry.sqlite")
+    try:
+        store.insert_declaration(conn, tampered)
+        conn.commit()
+        read_back = store.read_declarations(conn)
+    finally:
+        conn.close()
+
+    assert len(read_back) == 1
+    assert read_back[0] == tampered
+    assert (
+        verify_declaration(read_back[0], FIXTURE_KEYRING.key("policy")).state
+        is MacState.INVALID
+    )
+
+
+def test_a_verdict_naming_a_declaration_that_is_not_there_is_refused(
+    tmp_path: Path,
+) -> None:
+    """THE NEGATIVE: an ADJUDICATED edge to nothing is an answer nobody can
+    check, so the verdict is refused before the edge can be written."""
+    csv, records = _held_attested(tmp_path)
+    verdict = next(v for v in records.verdicts if v.declaration_id is not None)
+
+    conn = store.create(tmp_path / "dangling.sqlite")
+    try:
+        with pytest.raises(store.StoreError, match="no Declaration node"):
+            store.insert_verdict(conn, verdict)
+    finally:
+        conn.close()
+
+
+def test_a_verdict_naming_no_declaration_is_stored_and_gets_no_edge(
+    tmp_path: Path,
+) -> None:
+    """The other side of it: `declaration_id=None` is a *finding*, not a gap.
+
+    It is what `no_declaration` and `watchdog_expiry` look like in the record,
+    and the absent ADJUDICATED edge is what says so.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 8)
+    out = tmp_path / "held.sqlite"
+    verdicts = _verdict_chain([(0.0, "SAFE_STATE", "watchdog_expiry")])
+    result = _build(
+        csv, out, records=AttestationRecords(declarations=(), verdicts=verdicts)
+    )
+    assert result.nodes["Verdict"] == 1
+    assert result.edges["ADJUDICATED"] == 0
+    conn = store.connect(out)
+    try:
+        assert store.read_verdicts(conn) == list(verdicts)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("drop", [0, 1])
+def test_a_record_stream_that_is_not_one_chain_is_refused(
+    tmp_path: Path, drop: int
+) -> None:
+    """THE NEGATIVE for `FOLLOWS`: no edge is written across a break.
+
+    Two ways to break it, and both are refusals rather than a shorter chain.
+    Dropping the first record leaves a stream whose head links to a predecessor
+    the artifact does not hold; dropping a later one leaves two records that are
+    not consecutive. A `FOLLOWS` edge written over either would let a chain walk
+    cleanly across records nobody ever saw.
+    """
+    csv, records = _held_attested(tmp_path, n_frames=60)
+    assert len(records.verdicts) > 3
+    broken = tuple(v for i, v in enumerate(records.verdicts) if i != drop)
+
+    with pytest.raises(GraphBuildError, match="genesis|consecutive"):
+        _build(
+            csv,
+            tmp_path / "broken.sqlite",
+            records=AttestationRecords(
+                declarations=records.declarations, verdicts=broken
+            ),
+        )
+    assert not (tmp_path / "broken.sqlite").exists(), (
+        "a refused build must leave no artifact: a half-written one queries "
+        "cleanly and is missing everything after the failure."
+    )
+
+
+def test_a_record_that_was_altered_after_signing_breaks_its_successors_link(
+    tmp_path: Path,
+) -> None:
+    """The same check, doing the job it is really there for.
+
+    `_check_link` recomputes the *predecessor's* chain hash over the record as
+    it stands, MAC included. So a record edited after it was signed no longer
+    matches what its successor committed to, and the build refuses rather than
+    storing a chain that walks over the edit.
+    """
+    csv, records = _held_attested(tmp_path, n_frames=60)
+    altered = list(records.verdicts)
+    altered[1] = replace(altered[1], t=altered[1].t + 1.0)
+
+    with pytest.raises(GraphBuildError, match="consecutive"):
+        _build(
+            csv,
+            tmp_path / "altered.sqlite",
+            records=AttestationRecords(
+                declarations=records.declarations, verdicts=tuple(altered)
+            ),
+        )
+
+
+def test_records_must_be_records(tmp_path: Path) -> None:
+    """An object that resembles a record has not been through the validation
+    that makes it one, and `build` refuses the whole stream rather than storing
+    part of it."""
+    with pytest.raises(GraphBuildError, match="not a Declaration"):
+        AttestationRecords(declarations=("decl-0",), verdicts=())
+    with pytest.raises(GraphBuildError, match="must be a tuple"):
+        AttestationRecords(declarations=[], verdicts=())
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    with pytest.raises(GraphBuildError, match="AttestationRecords or None"):
+        _build(csv, tmp_path / "held.sqlite", records=("not", "records"))
+
+
+def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:
+    """THE NEGATIVE for the nullable column: the two directions are tied.
+
+    A clamped bound with a horizon reports a validity window the `Verdict`
+    record does not state, and a declared or computed one without drops the
+    interval its region is a claim about. Neither is a value to invent.
+    """
+    disc = Point(0.0, 0.0).buffer(0.4)
+    with pytest.raises(store.StoreError, match="clamped bound"):
+        store.insert_envelope(
+            seeded,
+            "env_clamped",
+            envelope_hash="def",
+            area=0.5,
+            geometry=disc,
+            config_id=None,
+            horizon=0.2,
+            source="clamped",
+        )
+    with pytest.raises(store.StoreError, match="clamped bound"):
+        store.insert_envelope(
+            seeded,
+            "env_declared",
+            envelope_hash="def",
+            area=0.5,
+            geometry=disc,
+            config_id=None,
+            horizon=None,
+            source="declared",
+        )
+
+
+def test_a_follows_edge_must_say_which_records_it_joins(seeded) -> None:
+    """THE NEGATIVE for the one polymorphic edge type. No likeliest kind.
+
+    `FOLLOWS` is the only edge whose endpoints vary, so the kind is the caller's
+    to state and out-of-vocabulary is a refusal. An edge stored against the
+    wrong table is a dangling reference, and every join over it returns nothing
+    — which reads as "these records do not follow one another".
+    """
+    with pytest.raises(store.StoreError, match="has to be stated"):
+        store.open_edge(seeded, "FOLLOWS", "a", "b", 0.0)
+    with pytest.raises(store.StoreError, match="cannot run from"):
+        store.open_edge(
+            seeded, "FOLLOWS", "a", "b", 0.0, src_kind="Envelope", dst_kind="Envelope"
+        )
+    # And the converse: a fixed-endpoint type does not take one either.
+    with pytest.raises(store.StoreError, match="always runs from"):
+        store.open_edge(
+            seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, src_kind="Verdict"
+        )
+
+
+# --- the CLI ---------------------------------------------------------------
+
+
+def test_cli_builds_the_attestation_layer(tmp_path: Path, capsys) -> None:
+    """The deliverable end to end: a stream and a keyring in, records out."""
+    csv = _held_stream(tmp_path / "held.csv", 8)
+    out = tmp_path / "held.sqlite"
+    code = graph.main(
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(out),
+            "--horizon",
+            "0.1",
+            "--n-samples",
+            "4",
+            "--substep-dt",
+            "0.05",
+            "--keyring",
+            str(_keyring_file(tmp_path)),
+            "--replan-interval",
+            str(FIXTURE_REPLAN_S),
+            "--declaration-horizon",
+            str(FIXTURE_HORIZON_S),
+            "--watchdog-period",
+            str(FIXTURE_WATCHDOG_S),
+        ]
+    )
+    assert code == 0
+    conn = store.connect(out)
+    try:
+        assert store.read_declarations(conn)
+        assert store.read_verdicts(conn)
+    finally:
+        conn.close()
+    assert _meta(out)[graph.META_ATTESTATION_RECORDS] == "present"
+
+
+@pytest.mark.parametrize(
+    "omit",
+    ["--replan-interval", "--declaration-horizon", "--watchdog-period"],
+)
+def test_cli_refuses_a_keyring_without_the_parameters_it_needs(
+    tmp_path: Path, omit: str
+) -> None:
+    """THE NEGATIVE for the never-invent-a-default rule at the CLI.
+
+    docs/plan.md fixes no replan rate, no declaration horizon and no watchdog
+    period, and each of the three decides which of the nine faults can fire. A
+    plausible number substituted here would be indistinguishable downstream from
+    one somebody stated — so the missing one is named and nothing is built.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    argv = [
+        "build",
+        str(csv),
+        "--out",
+        str(tmp_path / "held.sqlite"),
+        "--keyring",
+        str(_keyring_file(tmp_path)),
+        "--replan-interval",
+        "0.5",
+        "--declaration-horizon",
+        "0.5",
+        "--watchdog-period",
+        "1.0",
+    ]
+    at = argv.index(omit)
+    del argv[at : at + 2]
+    with pytest.raises(SystemExit) as excinfo:
+        graph.main(argv)
+    assert excinfo.value.code == graph.EXIT_USAGE
+    assert not (tmp_path / "held.sqlite").exists()
+
+
+def test_cli_refuses_the_parameters_without_a_keyring(tmp_path: Path) -> None:
+    """The other direction: nothing signs a declaration without a keyring, so
+    there is no record stream for the three to parameterise."""
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    with pytest.raises(SystemExit) as excinfo:
+        graph.main(
+            [
+                "build",
+                str(csv),
+                "--out",
+                str(tmp_path / "held.sqlite"),
+                "--replan-interval",
+                "0.5",
+            ]
+        )
+    assert excinfo.value.code == graph.EXIT_USAGE
+
+
+def test_cli_refuses_a_keyring_it_cannot_read(tmp_path: Path, capsys) -> None:
+    """A could-not-evaluate, named, and no artifact written."""
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    bad = tmp_path / "not-a-keyring.json"
+    bad.write_text("{}\n", encoding="utf-8")
+    code = graph.main(
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(tmp_path / "held.sqlite"),
+            "--keyring",
+            str(bad),
+            "--replan-interval",
+            "0.5",
+            "--declaration-horizon",
+            "0.5",
+            "--watchdog-period",
+            "1.0",
+        ]
+    )
+    assert code == graph.EXIT_USAGE
+    assert "keyring" in capsys.readouterr().err
+    assert not (tmp_path / "held.sqlite").exists()

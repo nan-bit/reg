@@ -51,6 +51,24 @@ would otherwise be indistinguishable from a right one:
 * an occurrence outside the vocabulary, or one whose entity or metric does not
   match what its type is — see `OCCURRENCE_SPECS` and `insert_occurrence`.
 
+THE RECORD TABLES STORE WHAT THE RECORD CARRIES, AND NOTHING DERIVED
+--------------------------------------------------------------------
+`declaration` and `verdict` (issue #45) hold the Milestone 3 records verbatim:
+every field, including `prev_hash` and `mac`, exactly as the record was signed.
+This module **never re-signs and never re-hashes**. It holds no keys, so it
+cannot check a MAC at all — and that is the property that matters, because a
+store that could recompute a MAC is a store that can quietly repair a broken
+chain, which is precisely what the chain exists to make visible. A record whose
+MAC does not match is stored, and `read_declarations` / `read_verdicts` hand back
+a record that still fails verification under the key that signed the original.
+`tests/test_graph.py` asserts that persistence does not launder it.
+
+Reconstruction is therefore byte-exact by construction: text columns for the
+hashes and the ids, `REAL` for the two floats (an IEEE-754 double round-trips
+through SQLite unchanged), and the WKB stored as the record's own bytes rather
+than re-serialized through shapely — a second rendering of the same polygon is
+the same region and a different preimage.
+
 THE OCCURRENCE TABLE IS A SECOND RESOLUTION, NOT A SECOND ARTIFACT
 ------------------------------------------------------------------
 Issue #35 added `occurrence` beside `edge`. It is the same run at DSSAD's
@@ -91,6 +109,7 @@ __all__ = [
     "EDGE_SPECS",
     "NODE_TABLES",
     "OCCURRENCE_SPECS",
+    "RECORD_KINDS",
     "StoreError",
     "create",
     "connect",
@@ -99,16 +118,20 @@ __all__ = [
     "put_meta",
     "get_meta",
     "all_meta",
+    "insert_declaration",
     "insert_envelope",
     "attach_envelope_geometry",
     "envelope_row",
     "insert_entity",
     "insert_occurrence",
     "insert_robot_config",
+    "insert_verdict",
     "open_edge",
     "extend_edge",
+    "read_declarations",
     "read_edges",
     "read_occurrences",
+    "read_verdicts",
     "to_wkb",
     "from_wkb",
 ]
@@ -134,7 +157,17 @@ __all__ = [
 #: file cannot see it at all, so every question the occurrence layer answers
 #: would come back "this artifact records no such thing" rather than "this reader
 #: does not understand this artifact".
-SCHEMA_VERSION = 4
+#:
+#: 5: the `declaration` and `verdict` tables arrived with the `DECLARED`,
+#: `ADJUDICATED`, `ENFORCED` and `FOLLOWS` edges and the five enforcement
+#: occurrence types (issue #45) — Milestone 3's records become queryable
+#: evidence. `envelope.horizon` became nullable in the same change, because a
+#: clamped bound is the region a verdict applied at an instant and the `Verdict`
+#: record states no horizon for it. A v4 reader meeting a v5 file would read
+#: `horizon` as always present and would not see the attestation layer at all,
+#: so "this run had no verdicts" and "this reader cannot see verdicts" would be
+#: the same answer.
+SCHEMA_VERSION = 5
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -150,6 +183,15 @@ META_FRAME_PERIOD = "frame_period_s"
 ENVELOPE_SOURCES = ("computed", "declared", "clamped")
 
 
+#: The node kinds a chain link may join. `FOLLOWS` is the one edge type whose
+#: endpoints are polymorphic: declarations chain among themselves under the
+#: policy key and verdicts among themselves under the enforcement key, so the
+#: same edge type runs `Declaration -> Declaration` in one chain and
+#: `Verdict -> Verdict` in the other. A separate edge type per chain would make
+#: "walk the record chain" two queries that have to be kept in step.
+RECORD_KINDS: frozenset[str] = frozenset({"Declaration", "Verdict"})
+
+
 @dataclass(frozen=True)
 class EdgeSpec:
     """What one edge type is: its layer, its endpoints, and its metric column.
@@ -157,25 +199,39 @@ class EdgeSpec:
     This table is the single definition of the edge vocabulary. `open_edge`
     reads the layer and the endpoint kinds off it rather than taking them from
     the caller, so there is no call site at which they can be got wrong.
+
+    An endpoint may be a `frozenset` of kinds instead of one kind, for an edge
+    type whose endpoints genuinely vary — `FOLLOWS`, and only `FOLLOWS`. The
+    caller then states the kind and `open_edge` refuses anything outside the
+    set; the *layer* still comes from here and is never the caller's to supply.
     """
 
     layer: Layer
-    src_kind: str
-    dst_kind: str
+    src_kind: str | frozenset[str]
+    dst_kind: str | frozenset[str]
     #: The one metric column this edge type carries, or `None` if it carries
     #: none. Presence is enforced both here and by a `CHECK` in the schema.
     metric: str | None
 
 
-#: The edge vocabulary for this milestone (docs/plan.md Phase 5, issue #14).
-#: `DECLARED`, `ADJUDICATED`, `ENFORCED` and `FOLLOWS` are Milestone 3 and are
-#: deliberately absent — an edge type in the vocabulary that nothing ever emits
-#: makes an empty result indistinguishable from an unimplemented one.
+#: The edge vocabulary (docs/plan.md Phase 5, issues #14 and #45).
 #:
 #: `HAS_ENVELOPE` is Layer A: an envelope is computed from proprioception and
-#: actuation limits alone (`reg.envelope`). The other three are Layer B without
-#: exception, because each one names an entity, and where an entity is comes
-#: from perception in any real system.
+#: actuation limits alone (`reg.envelope`). `INTERSECTS`, `SEPARATION` and
+#: `CONTACT` are Layer B without exception, because each one names an entity, and
+#: where an entity is comes from perception in any real system.
+#:
+#: **The four attestation edges are Layer A, every one of them, and not one names
+#: an `Entity`.** That is not a coincidence and it is not a convenience: it is
+#: the asymmetry docs/sufficiency.md §2 is about. A declaration is a statement
+#: the policy made about itself, a verdict is enforcement's finding about a
+#: commanded action, the bound in each case is a region computed from `Limits`
+#: and proprioception, and the chain link is a fact about the record. None of it
+#: needs to know where anybody is standing — so every attestation answer in this
+#: artifact survives an uncertifiable perceiver, while every answer about who was
+#: near the robot does not. `tests/test_graph.py::
+#: test_layer_b_is_exactly_the_entity_naming_edges` holds the line: an edge that
+#: names an `Entity` is Layer B whatever its author intended.
 #:
 #: `HAS_ENVELOPE` runs `RobotConfig -> Envelope` and not `Timestep -> Envelope`
 #: (issue #29). docs/plan.md Phase 5's table originally said `Timestep`; it now
@@ -191,6 +247,10 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
     "INTERSECTS": EdgeSpec("B", "Envelope", "Entity", "overlap_area"),
     "SEPARATION": EdgeSpec("B", "RobotConfig", "Entity", "min_distance"),
     "CONTACT": EdgeSpec("B", "RobotConfig", "Entity", None),
+    "DECLARED": EdgeSpec("A", "Declaration", "Envelope", None),
+    "ADJUDICATED": EdgeSpec("A", "Verdict", "Declaration", None),
+    "ENFORCED": EdgeSpec("A", "Verdict", "Envelope", None),
+    "FOLLOWS": EdgeSpec("A", RECORD_KINDS, RECORD_KINDS, None),
 }
 
 
@@ -220,15 +280,21 @@ class OccurrenceSpec:
 #: small, like `ENVELOPE_SOURCES` and `EDGE_SPECS`**: an out-of-vocabulary
 #: occurrence is a detectable fault rather than a new category nobody agreed to.
 #:
-#: Every type here is one the six fixtures can actually produce. `escalation_
-#: failure`, `veto` and the rest of the Phase 4 taxonomy are deliberately absent
-#: — an occurrence type nothing emits makes "no escalation failed in this run"
-#: indistinguishable from "this build does not record escalation failures".
-#:
 #: The layers split exactly where the project's does: the run's own ends are
 #: Layer A (they are facts about the record), and everything naming an entity is
 #: Layer B without exception, because where an entity is comes from perception in
 #: any real system.
+#:
+#: The five enforcement types arrived with issue #45 and are the **first Layer A
+#: occurrences that are about something happening**, which is what lets the
+#: coarse layer answer an attestation question at all. Issue #35 left them out
+#: because no fixture produced a verdict; `reg.enforce` produces them now.
+#: `action_clamped` is emitted by the `declared_violation` fixture today; the
+#: other four are emitted by verdict streams the enforcer produces but that no
+#: *scenario* yet drives, which is issue #46's subject — so they are covered by
+#: `tests/test_graph.py` against real signed verdicts rather than by a fixture,
+#: and the distinction is written here rather than left to be inferred from a
+#: zero count.
 OCCURRENCE_SPECS: dict[str, OccurrenceSpec] = {
     "run_began": OccurrenceSpec("A", "run", None),
     "run_ended": OccurrenceSpec("A", "run", None),
@@ -237,6 +303,11 @@ OCCURRENCE_SPECS: dict[str, OccurrenceSpec] = {
     "contact_began": OccurrenceSpec("B", "entity", None),
     "contact_ended": OccurrenceSpec("B", "entity", None),
     "closest_approach": OccurrenceSpec("B", "entity", "min_distance_m"),
+    "declaration_vetoed": OccurrenceSpec("A", "run", None),
+    "action_clamped": OccurrenceSpec("A", "run", None),
+    "safe_state_entered": OccurrenceSpec("A", "run", None),
+    "reintegrated": OccurrenceSpec("A", "run", None),
+    "escalation_failed": OccurrenceSpec("A", "run", None),
 }
 
 #: Node kind -> (table, primary key column). Used to check that an edge's
@@ -252,6 +323,8 @@ NODE_TABLES: dict[str, tuple[str, str]] = {
     "Entity": ("entity", "entity_id"),
     "RobotConfig": ("robot_config", "config_id"),
     "Occurrence": ("occurrence", "occurrence_id"),
+    "Declaration": ("declaration", "declaration_id"),
+    "Verdict": ("verdict", "verdict_id"),
 }
 
 _SQL_EDGE_TYPES = ", ".join(f"'{name}'" for name in EDGE_SPECS)
@@ -313,16 +386,25 @@ CREATE TABLE robot_config (
 -- other: a row with neither stores no region and names nothing to recompute one
 -- from, and a query hitting it could only answer "no envelope at t", which is
 -- indistinguishable from a frame that genuinely had none.
+--
+-- WHY THE HORIZON MAY BE NULL, AND ONLY FOR A CLAMP. A `computed` envelope was
+-- integrated over one, and a `declared` envelope carries the declaration's
+-- validity window — the interval the policy claimed its body would stay inside
+-- the region. A `clamped` envelope has neither: it is the bound enforcement
+-- applied to one commanded action at one instant, and the `Verdict` record
+-- states no horizon for it (docs/plan.md Phase 4). NULL is that record's silence
+-- carried through rather than a plausible number invented at the write.
 CREATE TABLE envelope (
     envelope_id   TEXT PRIMARY KEY,
     envelope_hash TEXT NOT NULL,
     area          REAL NOT NULL,
     geometry_wkb  BLOB,
     config_id     TEXT REFERENCES robot_config (config_id),
-    horizon       REAL NOT NULL,
+    horizon       REAL,
     source        TEXT NOT NULL CHECK (source IN ({_SQL_ENVELOPE_SOURCES})),
     UNIQUE (envelope_hash, source, horizon),
-    CHECK (geometry_wkb IS NOT NULL OR config_id IS NOT NULL)
+    CHECK (geometry_wkb IS NOT NULL OR config_id IS NOT NULL),
+    CHECK ((horizon IS NULL) = (source = 'clamped'))
 );
 
 -- `geometry_wkb` is the entity's world-frame boundary and is present exactly
@@ -334,6 +416,72 @@ CREATE TABLE entity (
     is_static    INTEGER NOT NULL CHECK (is_static IN (0, 1)),
     geometry_wkb BLOB,
     CHECK ((is_static = 1) = (geometry_wkb IS NOT NULL))
+);
+
+-- THE ATTESTATION RECORDS (issue #45). Milestone 3's `Declaration` and
+-- `Verdict`, stored field for field as `reg.declare` and `reg.enforce` signed
+-- them. Columns are the dataclass fields, so that reading a row back and
+-- reconstructing the record is a rename and nothing else — a store that had to
+-- transform a field on the way out would be a store whose output is a different
+-- preimage from the one the MAC covers.
+--
+-- `mac` and `prev_hash` are stored and never recomputed. This module holds no
+-- keys; it cannot tell a good MAC from a bad one, and that is the correct
+-- capability for it to have. What it must never do is make a bad one verify.
+--
+-- `seq` is NOT unique here, unlike `occurrence.seq`. Reuse or regression of a
+-- declaration's `seq` is the `replay_or_reorder` fault in Phase 4's taxonomy —
+-- an artifact that could not hold the record that triggered a fault could not
+-- hold the evidence for it either.
+--
+-- WHY THERE IS NO `CHECK (action_class IN (...))`, AND NONE ON `outcome` OR
+-- `fault` BELOW. The three vocabularies are defined once, in
+-- `reg.declare.ACTION_CLASSES` and `reg.enforce.OUTCOMES` / `FAULTS`, and
+-- restating them here would be a second copy — which is how a value becomes a
+-- detectable fault on one side and invisible on the other. Importing them is
+-- what this module cannot do: `reg.declare` reaches `reg.stream` through
+-- `reg.chain`, `reg.query` imports this module, and Claim 2's "answered from
+-- the graph alone" is enforced as a property of the import graph
+-- (`tests/test_query.py`). So the vocabulary check lives at both ends of the
+-- record's life instead: the dataclasses refuse an out-of-vocabulary value at
+-- construction, and `read_declarations` / `read_verdicts` refuse to reconstruct
+-- a row carrying one. A value that reached these columns without passing a
+-- record — which means raw SQL, which means tampering — is a loud
+-- could-not-evaluate on the way out and never a quietly accepted row.
+CREATE TABLE declaration (
+    declaration_id        TEXT PRIMARY KEY,
+    seq                   INTEGER NOT NULL CHECK (seq >= 0),
+    t_issued              REAL    NOT NULL,
+    horizon               REAL    NOT NULL CHECK (horizon > 0),
+    action_class          TEXT    NOT NULL,
+    declared_envelope_wkb BLOB    NOT NULL,
+    prev_hash             TEXT    NOT NULL,
+    mac                   TEXT    NOT NULL
+);
+
+-- `declaration_id` is nullable and its absence is a *finding*, not a gap: it is
+-- what `no_declaration` and `watchdog_expiry` look like in the record. A verdict
+-- that does name one names a declaration this artifact holds — `insert_verdict`
+-- refuses a dangling reference, because an `ADJUDICATED` edge pointing at
+-- nothing is an audit answer nobody can check.
+CREATE TABLE verdict (
+    verdict_id           TEXT    PRIMARY KEY,
+    declaration_id       TEXT    REFERENCES declaration (declaration_id),
+    seq                  INTEGER NOT NULL CHECK (seq >= 0),
+    t                    REAL    NOT NULL,
+    outcome              TEXT    NOT NULL,
+    fault                TEXT,
+    clamped_envelope_wkb BLOB,
+    prev_hash            TEXT    NOT NULL,
+    mac                  TEXT    NOT NULL,
+    -- The two invariants `Verdict.__post_init__` enforces, restated where the
+    -- rows live: a PERMIT with a fault says "allowed, and here is what went
+    -- wrong", and a CLAMP with no bound says "I limited it to nothing in
+    -- particular". Both are could-not-evaluate wearing a decision's clothes.
+    -- These name two outcomes rather than enumerating the four — the invariant
+    -- is what is being stated, not the vocabulary, which is `reg.enforce`'s.
+    CHECK ((outcome = 'PERMIT') = (fault IS NULL)),
+    CHECK ((outcome = 'CLAMP') = (clamped_envelope_wkb IS NOT NULL))
 );
 
 CREATE TABLE edge (
@@ -662,7 +810,7 @@ def insert_envelope(
     area: float,
     geometry: BaseGeometry | None,
     config_id: str | None,
-    horizon: float,
+    horizon: float | None,
     source: str,
 ) -> str:
     """An envelope the artifact retains. Idempotent on `envelope_id`.
@@ -679,6 +827,13 @@ def insert_envelope(
     different costs, and a caller that did not state which one it made would have
     the schema make it silently. Passing both is normal — the geometry is what a
     reader gets, the config is what makes the *next* build able to check it.
+
+    `horizon` is `None` for exactly one source: `clamped`. The `Verdict` record
+    states no horizon for the bound it applied, so there is none to store, and
+    the schema's `CHECK` ties the two together in both directions — a clamped
+    bound carrying a horizon would be reporting a validity window nobody wrote
+    down, and a computed or declared envelope missing one would be silently
+    dropping the interval its region is a claim about.
 
     Re-inserting an id whose row already exists fills in a geometry or a
     `config_id` the first insert left `NULL`, and refuses a *different* value for
@@ -702,13 +857,22 @@ def insert_envelope(
             "answers 'there was none' — which is what a frame with no envelope "
             "at all looks like."
         )
+    if (horizon is None) != (source == "clamped"):
+        raise StoreError(
+            f"envelope {envelope_id!r} has source={source!r} and "
+            f"horizon={horizon!r}. A clamped bound is the region applied to one "
+            "commanded action and the Verdict record states no horizon for it, so "
+            "it is stored as NULL; a computed or a declared envelope has one and "
+            "storing it without would drop the interval its region is a claim "
+            "about. Neither direction is a value to invent here."
+        )
 
     envelope_id = str(envelope_id)
     scalars = {
         "envelope_id": envelope_id,
         "envelope_hash": str(envelope_hash),
         "area": float(area),
-        "horizon": float(horizon),
+        "horizon": None if horizon is None else float(horizon),
         "source": str(source),
     }
 
@@ -987,6 +1151,233 @@ def read_occurrences(
     )
 
 
+# --------------------------------------------------------------------------
+# The attestation records (issue #45).
+#
+# Two functions in and two out, and the only thing that happens in between is a
+# rename. Everything that could make a stored record differ from the record that
+# was signed — a re-serialized polygon, a reformatted float, a recomputed MAC —
+# is a thing this module deliberately does not do. See the module header.
+# --------------------------------------------------------------------------
+
+
+def _record_types() -> tuple[type, type]:
+    """`(Declaration, Verdict)`, imported here and not at module scope.
+
+    `reg.declare` reaches `reg.stream` through `reg.chain` — the canonical
+    serialization commits floats at the raw stream's own precision, deliberately
+    (`reg/chain.py`). `reg.query` imports *this* module, and Claim 2's "answered
+    from the graph alone" is held as a property of the import graph rather than
+    as a promise: `tests/test_query.py` fails if `import reg.query` puts the
+    stream reader in `sys.modules` by any route, including this one.
+
+    So the record classes are imported where they are used. It is the same move
+    `reg.graph._resolve_world` makes for the same kind of reason, and it costs
+    one dict lookup per call.
+    """
+    from reg.declare import Declaration
+    from reg.enforce import Verdict
+
+    return Declaration, Verdict
+
+
+def insert_declaration(conn: sqlite3.Connection, declaration: object) -> str:
+    """Store one `Declaration` verbatim. Idempotent on `declaration_id`.
+
+    **This does not check the MAC, and it cannot.** The store holds no keys. A
+    declaration whose MAC does not match is stored exactly as it arrived and
+    comes back out of `read_declarations` still failing verification under the
+    key that signed the original — persistence is not an opportunity to launder
+    a record, and a store able to recompute a MAC is a store able to repair a
+    chain nobody should be able to repair.
+
+    Raises:
+        StoreError: the argument is not a `Declaration`, or an id already in the
+            artifact carries different contents. The second is either a hash
+            collision or two records given one id, and either way the two
+            histories would merge into an answer about neither.
+    """
+    declaration_type, _ = _record_types()
+    if not isinstance(declaration, declaration_type):
+        raise StoreError(
+            f"insert_declaration takes a reg.declare.Declaration, got "
+            f"{type(declaration).__name__}. The record is what is stored; an "
+            "object that resembles one has not been through the validation that "
+            "makes it a record."
+        )
+    return _insert_node(
+        conn,
+        "declaration",
+        "declaration_id",
+        {
+            "declaration_id": declaration.declaration_id,
+            "seq": int(declaration.seq),
+            "t_issued": float(declaration.t_issued),
+            "horizon": float(declaration.horizon),
+            "action_class": declaration.action_class,
+            "declared_envelope_wkb": declaration.declared_envelope,
+            "prev_hash": declaration.prev_hash,
+            "mac": declaration.mac,
+        },
+    )
+
+
+def insert_verdict(conn: sqlite3.Connection, verdict: object) -> str:
+    """Store one `Verdict` verbatim. Idempotent on `verdict_id`.
+
+    A verdict naming a declaration is refused unless that declaration is already
+    in the artifact: an `ADJUDICATED` edge to a record nobody holds is an audit
+    answer nobody can check, and the join that would read it returns nothing —
+    which is indistinguishable from "this declaration was never adjudicated".
+    Store the declarations of a run before its verdicts.
+
+    A verdict naming *no* declaration is stored as it stands. `None` there is a
+    finding rather than a gap: it is what `no_declaration` and `watchdog_expiry`
+    look like in the record.
+
+    Like `insert_declaration`, this checks no MAC and recomputes no hash.
+
+    Raises:
+        StoreError: the argument is not a `Verdict`, it names a declaration this
+            artifact does not hold, or an id already present carries different
+            contents.
+    """
+    _, verdict_type = _record_types()
+    if not isinstance(verdict, verdict_type):
+        raise StoreError(
+            f"insert_verdict takes a reg.enforce.Verdict, got "
+            f"{type(verdict).__name__}."
+        )
+    if verdict.declaration_id is not None:
+        _require_node(conn, "Declaration", verdict.declaration_id)
+    return _insert_node(
+        conn,
+        "verdict",
+        "verdict_id",
+        {
+            "verdict_id": verdict.verdict_id,
+            "declaration_id": verdict.declaration_id,
+            "seq": int(verdict.seq),
+            "t": float(verdict.t),
+            "outcome": verdict.outcome,
+            "fault": verdict.fault,
+            "clamped_envelope_wkb": verdict.clamped_envelope,
+            "prev_hash": verdict.prev_hash,
+            "mac": verdict.mac,
+        },
+    )
+
+
+def _record_bytes(value: object, column: str, record_id: str) -> bytes:
+    if not isinstance(value, (bytes, bytearray, memoryview)):
+        raise StoreError(
+            f"{column} of record {record_id!r} is a {type(value).__name__}, not a "
+            "WKB blob. The record's geometry is bytes and is stored as the bytes "
+            "it was signed with; anything else here means the row was not written "
+            "by this module."
+        )
+    return bytes(value)
+
+
+def read_declarations(conn: sqlite3.Connection) -> list:
+    """Every stored declaration, reconstructed, ordered by `(seq, declaration_id)`.
+
+    `seq` is the chain's own order and is what the record commits to; the id
+    breaks a tie, because a replayed `seq` is a fault this artifact is required
+    to be able to hold rather than a state it may refuse. The order is total, so
+    two reads of one artifact agree.
+
+    What comes back is the record as it was signed, so
+    `reg.declare.verify_declaration` gives the same answer it gave before the
+    record was written. That round trip is the whole reason the columns are the
+    dataclass fields.
+
+    Raises:
+        StoreError: a row cannot be reconstructed — a malformed MAC, an
+            unreadable envelope, a value outside a vocabulary. Each is a
+            could-not-evaluate about a record this artifact holds, and it is
+            raised rather than skipped: a reader that silently dropped it would
+            report a shorter chain with no break in it.
+    """
+    declaration_type, _ = _record_types()
+    rows = conn.execute(
+        "SELECT * FROM declaration ORDER BY seq, declaration_id"
+    ).fetchall()
+    out: list = []
+    for row in rows:
+        record_id = str(row["declaration_id"])
+        try:
+            out.append(
+                declaration_type(
+                    declaration_id=record_id,
+                    seq=int(row["seq"]),
+                    t_issued=float(row["t_issued"]),
+                    horizon=float(row["horizon"]),
+                    action_class=str(row["action_class"]),
+                    declared_envelope=_record_bytes(
+                        row["declared_envelope_wkb"],
+                        "declared_envelope_wkb",
+                        record_id,
+                    ),
+                    prev_hash=str(row["prev_hash"]),
+                    mac=str(row["mac"]),
+                )
+            )
+        except ValueError as exc:
+            raise StoreError(
+                f"declaration row {record_id!r} cannot be reconstructed as the "
+                f"record it claims to be: {exc}"
+            ) from None
+    return out
+
+
+def read_verdicts(conn: sqlite3.Connection) -> list:
+    """Every stored verdict, reconstructed, ordered by `(seq, verdict_id)`.
+
+    The same contract as `read_declarations`, under the enforcement key. Note
+    that this is **not** one row per declaration: a verdict is per commanded
+    action, so one declaration is adjudicated repeatedly and a run routinely
+    holds tens of verdicts naming the same `declaration_id` with different
+    outcomes (`reg.enforce`, module header).
+    """
+    _, verdict_type = _record_types()
+    rows = conn.execute("SELECT * FROM verdict ORDER BY seq, verdict_id").fetchall()
+    out: list = []
+    for row in rows:
+        record_id = str(row["verdict_id"])
+        clamped = row["clamped_envelope_wkb"]
+        try:
+            out.append(
+                verdict_type(
+                    verdict_id=record_id,
+                    declaration_id=(
+                        None
+                        if row["declaration_id"] is None
+                        else str(row["declaration_id"])
+                    ),
+                    seq=int(row["seq"]),
+                    t=float(row["t"]),
+                    outcome=str(row["outcome"]),
+                    fault=None if row["fault"] is None else str(row["fault"]),
+                    clamped_envelope=(
+                        None
+                        if clamped is None
+                        else _record_bytes(
+                            clamped, "clamped_envelope_wkb", record_id
+                        )
+                    ),
+                    prev_hash=str(row["prev_hash"]),
+                    mac=str(row["mac"]),
+                )
+            )
+        except ValueError as exc:
+            raise StoreError(
+                f"verdict row {record_id!r} cannot be reconstructed as the record "
+                f"it claims to be: {exc}"
+            ) from None
+    return out
+
+
 def insert_robot_config(
     conn: sqlite3.Connection, config_id: str, q: str, qd: str
 ) -> str:
@@ -1028,6 +1419,42 @@ def _require_node(conn: sqlite3.Connection, kind: str, node_id: str) -> None:
         )
 
 
+def _endpoint_kind(
+    spec_kind: str | frozenset[str], given: str | None, edge_type: str, side: str
+) -> str:
+    """The node kind for one end of an edge. From the spec unless it says to ask.
+
+    A fixed kind is not the caller's to state: passing one that disagrees is
+    refused rather than honoured, because the spec is the vocabulary's single
+    definition. A polymorphic one — `FOLLOWS`, and only `FOLLOWS` — must be
+    stated, and must be inside the set. There is no fallback to a first or a
+    likeliest kind: an edge stored against the wrong table is a dangling
+    reference that every join reads as "the relationship never held".
+    """
+    if isinstance(spec_kind, str):
+        if given is not None and given != spec_kind:
+            raise StoreError(
+                f"a {edge_type} edge always runs from a {spec_kind} on the "
+                f"{side} side, but {given!r} was supplied. The endpoint kinds "
+                "come from EDGE_SPECS, not from the call site."
+            )
+        return spec_kind
+    if given is None:
+        raise StoreError(
+            f"a {edge_type} edge joins any of {sorted(spec_kind)} on the {side} "
+            f"side, so {side}_kind has to be stated and there is no default to "
+            "fall back on. A chain link stored against the wrong table points at "
+            "nothing, and a join over it returns nothing — which reads as 'these "
+            "records do not follow one another'."
+        )
+    if given not in spec_kind:
+        raise StoreError(
+            f"a {edge_type} edge cannot run from a {given!r} on the {side} side; "
+            f"the record kinds are {sorted(spec_kind)}."
+        )
+    return given
+
+
 def open_edge(
     conn: sqlite3.Connection,
     edge_type: str,
@@ -1038,6 +1465,8 @@ def open_edge(
     t_end: float | None = None,
     overlap_area: float | None = None,
     min_distance: float | None = None,
+    src_kind: str | None = None,
+    dst_kind: str | None = None,
 ) -> int:
     """Insert an edge and return its `edge_id`. `t_end` defaults to `t_start`.
 
@@ -1047,16 +1476,24 @@ def open_edge(
     invented horizon, and both read as "still true" long after the relationship
     stopped holding.
 
-    The layer and the endpoint kinds come from `EDGE_SPECS`, never from the
-    caller. The metric argument for the edge type is required and the other one
-    must be absent: an `INTERSECTS` with no `overlap_area` answers "how much"
-    with `NULL`, which compares false against every threshold and turns an
-    incident into a non-incident.
+    The layer comes from `EDGE_SPECS` and never from the caller. So do the
+    endpoint kinds, except for the one edge type whose endpoints genuinely vary:
+    `src_kind` and `dst_kind` are required for `FOLLOWS`, which joins two
+    declarations in one chain and two verdicts in the other, and are refused for
+    every other type.
+
+    The metric argument for the edge type is required and the other one must be
+    absent: an `INTERSECTS` with no `overlap_area` answers "how much" with
+    `NULL`, which compares false against every threshold and turns an incident
+    into a non-incident.
     """
     spec = EDGE_SPECS.get(edge_type)
     if spec is None:
         layer_of(edge_type)  # raises with the full vocabulary
         raise AssertionError  # pragma: no cover - layer_of always raises here
+
+    resolved_src = _endpoint_kind(spec.src_kind, src_kind, edge_type, "src")
+    resolved_dst = _endpoint_kind(spec.dst_kind, dst_kind, edge_type, "dst")
 
     metrics = {"overlap_area": overlap_area, "min_distance": min_distance}
     for name, value in metrics.items():
@@ -1073,8 +1510,8 @@ def open_edge(
                 f"supplied. Its metric is {spec.metric!r}."
             )
 
-    _require_node(conn, spec.src_kind, str(src_id))
-    _require_node(conn, spec.dst_kind, str(dst_id))
+    _require_node(conn, resolved_src, str(src_id))
+    _require_node(conn, resolved_dst, str(dst_id))
 
     t_start = float(t_start)
     t_end = t_start if t_end is None else float(t_end)
@@ -1094,9 +1531,9 @@ def open_edge(
         (
             edge_type,
             spec.layer,
-            spec.src_kind,
+            resolved_src,
             str(src_id),
-            spec.dst_kind,
+            resolved_dst,
             str(dst_id),
             t_start,
             t_end,

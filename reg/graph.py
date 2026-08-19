@@ -103,13 +103,47 @@ can still answer. The layer is **additive** — not one edge row exists or fails
 to exist because of it — because the deliverable is a curve over views of one
 run, and three different builds would not be one.
 
+AND THE ATTESTATION LAYER BESIDE BOTH — ISSUE #45
+--------------------------------------------------
+Everything above is about the *scene*: where the reachable set was and who was
+in it. The other half of docs/plan.md Phase 5 is the record — the declarations
+the policy signed, the verdicts enforcement signed back, and the chain links
+between them — and until it is persisted, Milestone 3 exists only in memory and
+none of it is queryable evidence.
+
+`build` takes an `AttestationRecords` and writes four things: the two record
+tables, an `Envelope` node per distinct region claimed or applied, the four
+edges (`DECLARED`, `ADJUDICATED`, `ENFORCED`, `FOLLOWS`), and one occurrence per
+enforcement event. Three properties are load-bearing and each has a test:
+
+* **Nothing is re-signed or re-hashed.** The records go in verbatim and come
+  back out of `reg.store.read_declarations` still verifying — or still failing
+  to — under the key they were signed with. A store that could recompute a MAC
+  could quietly repair a broken chain.
+* **`ADJUDICATED` does not flatten.** A verdict is per *commanded action*, not
+  per declaration: `declared_violation` produces 251 verdicts against 11
+  declarations that all carry an identical `declared_envelope`, and two of those
+  declarations are adjudicated PERMIT and then CLAMP. A one-row-per-declaration
+  schema would pass every other test here while destroying the ability to say
+  *when* the violation began — which is the demo sentence's second clause.
+* **Every one of these edges is Layer A**, and not one names an `Entity`. That
+  asymmetry is docs/sufficiency.md §2 and it is stated at the schema
+  (`reg.store.EDGE_SPECS`) rather than here, where it would be a comment about
+  someone else's table.
+
+Record timestamps are stored as the record carries them, **not** quantized to
+`TIME_TOL_S`. The scene layer's endpoints are observations and are good to the
+frame period; a record's `t_issued` is a value the MAC covers, and reporting a
+rounded version of it would be reporting an instant nobody signed.
+
 WHAT IS NOT HERE
 ----------------
-Declarations and verdicts. They are Milestone 3, and the `DECLARED`,
-`ADJUDICATED`, `ENFORCED` and `FOLLOWS` edge types are absent from
-`reg.store.EDGE_SPECS` rather than present and never written — an edge type
-nothing emits makes "no declarations in this run" indistinguishable from "this
-build does not do declarations".
+`verify_chain()` and `--tamper`. The `FOLLOWS` edges are written here from the
+links the records already carry, and walking them to check every hash and every
+MAC is the next issue's; so are the attestation queries. What this module does
+check is that the stream it was handed *is* a chain — a record whose `prev_hash`
+does not match its predecessor is a refusal, because a `FOLLOWS` edge written
+across a break would assert a link that is not there.
 
 Also not here: `CONTAINS`. docs/plan.md lists it beside `INTERSECTS`, issue #14
 scopes this milestone to `INTERSECTS`, and containment is recoverable from
@@ -149,6 +183,9 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from reg import __version__, store
+from reg.chain import GENESIS_HASH, KeyringError, chain_hash
+from reg.declare import Declaration, DeclarationError
+from reg.enforce import PASSIVATING_FAULTS, EnforcementError, Verdict
 from reg.envelope import SUBSTEP_DT, compute_envelope, envelope_hash
 from reg.kinematics import link_polygons
 from reg.stream import FLOAT_PRECISION, read_comments, read_frames
@@ -166,6 +203,9 @@ from reg.tolerances import (
 from reg.types import Limits, Obstacle, ProprioState, StateFrame
 
 __all__ = [
+    "ATTESTATION_RETENTION",
+    "CLAMPED_ENVELOPE_SOURCE",
+    "DECLARED_ENVELOPE_SOURCE",
     "ENVELOPE_HORIZON",
     "ENVELOPE_N_SAMPLES",
     "ENVELOPE_RETENTION",
@@ -175,14 +215,20 @@ __all__ = [
     "GEOMETRY_RETENTION",
     "HUMAN_ENTITY_ID",
     "HUMAN_KIND",
+    "META_ATTESTATION_RECORDS",
+    "META_ATTESTATION_RETENTION",
+    "META_DECLARATION_COUNT",
     "META_ENVELOPE_RETENTION",
     "META_GEOMETRY_RETENTION",
     "META_OCCURRENCE_RESOLUTION",
     "META_OCCURRENCE_RETENTION",
     "META_OCCURRENCE_SW_VERSION",
+    "META_VERDICT_COUNT",
     "OCCURRENCE_MATERIAL_EDGES",
     "OCCURRENCE_RETENTION",
     "OCCURRENCE_TIME_RESOLUTION_S",
+    "OCCURRENCE_VERDICT_EVENTS",
+    "AttestationRecords",
     "BuildResult",
     "GraphBuildError",
     "GraphQueryError",
@@ -205,11 +251,19 @@ EXIT_USAGE = 2
 HUMAN_ENTITY_ID = "human"
 HUMAN_KIND = "human"
 
-#: Only `computed` envelopes exist in this milestone. `declared` and `clamped`
-#: arrive with `declare/` and `enforce/`; all three are retained separately
-#: because "a clamp is only legible if the declared and the computed bound both
-#: survive" (docs/lossiness.md Retained #8).
+#: The source every envelope computed from proprioception carries. The other two
+#: arrive with the record stream below. All three are retained separately because
+#: "a clamp is only legible if the declared and the computed bound both survive"
+#: (docs/lossiness.md Retained #8) — and they are separate *rows*, never one row
+#: with three meanings, so a query for "what the policy claimed" cannot come back
+#: with what the arm could actually reach.
 ENVELOPE_SOURCE = "computed"
+
+#: The region a `Declaration` claimed its body would stay inside.
+DECLARED_ENVELOPE_SOURCE = "declared"
+
+#: The bound a CLAMP verdict actually applied.
+CLAMPED_ENVELOPE_SOURCE = "clamped"
 
 # --------------------------------------------------------------------------
 # Envelope parameters.
@@ -375,6 +429,24 @@ OCCURRENCE_MATERIAL_EDGES: dict[str, tuple[str, str]] = {
     "CONTACT": ("contact_began", "contact_ended"),
 }
 
+#: Verdict outcome -> the occurrence it produces. The enforcement half of
+#: `OCCURRENCE_MATERIAL_EDGES` (issue #45), and the first Layer A occurrences
+#: that record something *happening*.
+#:
+#: `PERMIT` is deliberately absent, and it is the same rule the two missing edge
+#: types above follow: a permitted action is the run proceeding normally, and one
+#: row per permitted action is one row per frame — the per-frame cost this layer
+#: exists to escape, wearing a coarser timestamp. The two events that are not in
+#: this table are in `_OccurrenceLog.verdict_recorded`, because neither is a
+#: property of one verdict: `escalation_failed` is a SAFE_STATE distinguished by
+#: its fault, and `reintegrated` is the *absence* of a passivation that was there
+#: a verdict ago.
+OCCURRENCE_VERDICT_EVENTS: dict[str, str] = {
+    "VETO": "declaration_vetoed",
+    "CLAMP": "action_clamped",
+    "SAFE_STATE": "safe_state_entered",
+}
+
 #: The reason element, per occurrence type. DSSAD records "the reason for the
 #: occurrence, where applicable" beside the flag; these are this project's, in
 #: prose, because the artifact is what an assessor holds and `envelope_entered`
@@ -394,6 +466,26 @@ OCCURRENCE_REASONS: dict[str, str] = {
         "the smallest robot-to-entity separation observed in the run, at the "
         "earliest frame it was observed at"
     ),
+    "declaration_vetoed": (
+        "enforcement refused a declaration outright; the verdict of the same "
+        "instant names which of the nine faults it was refused for"
+    ),
+    "action_clamped": (
+        "a commanded action lay outside the declared envelope and was bounded to "
+        "it rather than permitted as issued"
+    ),
+    "safe_state_entered": (
+        "enforcement passivated the robot; recovery needs a fresh accepted "
+        "declaration and an acknowledgment, and is not automatic"
+    ),
+    "reintegrated": (
+        "enforcement resumed adjudicating commanded actions after a passivation"
+    ),
+    "escalation_failed": (
+        "a declaration was issued while passivated and unacknowledged and was "
+        "not an escalation, which is the one fault in the taxonomy with no "
+        "transport-protocol analogue"
+    ),
 }
 
 #: The occurrence retention rule, in one sentence, as it is recorded in the
@@ -406,9 +498,18 @@ OCCURRENCE_RETENTION = (
     "nothing else: run_began and run_ended at the two ends of the run; "
     "envelope_entered and envelope_left at the frames an INTERSECTS "
     "relationship with an entity begins and ceases to hold; contact_began and "
-    "contact_ended likewise for CONTACT; and one closest_approach per entity, "
+    "contact_ended likewise for CONTACT; one closest_approach per entity, "
     "at the earliest frame at which the run's smallest quantized separation to "
-    "that entity was observed, carrying that separation in metres. Nothing is "
+    "that entity was observed, carrying that separation in metres; and one "
+    "enforcement event per verdict that decided something — declaration_vetoed "
+    "per VETO, action_clamped per CLAMP, escalation_failed per SAFE_STATE "
+    "raised for an escalation failure, safe_state_entered at the verdict that "
+    "passivated the enforcer, and reintegrated at the first action adjudicated "
+    "after a passivation ended. A PERMIT produces none: a permitted action is "
+    "the run proceeding, and one row per permitted action is one row per frame. "
+    "A SAFE_STATE emitted while already passivated produces none either — it "
+    "reports a passivation this layer has already recorded, and repeating it "
+    "would count the frames a stopped robot did not move. Nothing is "
     "written when a metric merely crosses a quantization boundary — those are "
     "the transitions the edge layer records, and recording them here would "
     "reintroduce the per-frame cost this layer exists to measure against. Every "
@@ -429,6 +530,61 @@ OCCURRENCE_RETENTION = (
 META_OCCURRENCE_RETENTION = "occurrence_retention"
 META_OCCURRENCE_RESOLUTION = "occurrence_time_resolution_s"
 META_OCCURRENCE_SW_VERSION = "occurrence_sw_version"
+
+# --------------------------------------------------------------------------
+# The attestation layer (issue #45, docs/plan.md Phase 5's other half).
+#
+# The same discipline as the two retention rules above and for the same reason:
+# a reader holding only the file has to be able to tell "this run produced no
+# verdicts" from "this build does not store verdicts", and an empty table does
+# not distinguish them. So the rule is in the artifact, and so is whether a
+# record stream was supplied at all.
+# --------------------------------------------------------------------------
+
+#: The rule, as it is recorded in the artifact's meta table.
+ATTESTATION_RETENTION = (
+    "every Declaration and every Verdict the run produced is stored in full and "
+    "verbatim — every field, including prev_hash and mac, exactly as the record "
+    "was signed. Nothing is summarised, sampled or dropped (docs/lossiness.md "
+    "Retained #4 and #5), and nothing is re-signed or re-hashed on the way in: "
+    "this artifact cannot repair a record and cannot launder one, and a record "
+    "read back out of it verifies, or fails to, exactly as it did before it was "
+    "written. A DECLARED edge runs from each declaration to the region it "
+    "claimed, spanning that declaration's own validity window [t_issued, "
+    "t_issued + horizon]. An ADJUDICATED edge runs from each verdict to the "
+    "declaration it adjudicated, at the instant of the commanded action: there "
+    "is one per verdict and NOT one per declaration, because a verdict is per "
+    "commanded action and one declaration is routinely adjudicated PERMIT and "
+    "later CLAMP, so a count of ADJUDICATED edges is a count of adjudications. "
+    "A verdict naming no declaration — which is what no_declaration and "
+    "watchdog_expiry look like in the record — has no ADJUDICATED edge, and that "
+    "absence is the finding. An ENFORCED edge runs from a verdict to the bound "
+    "it actually applied and exists only for a CLAMP: a PERMIT bounds nothing, "
+    "and a VETO or a SAFE_STATE permits no action to bound. A FOLLOWS edge links "
+    "each record to its predecessor in its own chain; declarations chain under "
+    "the policy key and verdicts under the enforcement key, so this artifact "
+    "holds two chains and each begins at the genesis hash. Record timestamps are "
+    "stored as the record carries them and are NOT quantized to the tolerance "
+    "the edge layer's endpoints use — the record commits to its own instants and "
+    "the MAC covers them. Declared and clamped envelope geometry is always "
+    "stored: the envelope_geometry_retention rule discards a polygon only where "
+    "it can be recomputed from a robot_config in this file, and a bound that came "
+    "from a policy is not a function of any configuration here. The absence of "
+    "the declaration_count key from this meta table means this build was given "
+    "no record stream at all, which is not the same fact as a run that produced "
+    "no records."
+)
+
+#: Where the attestation-layer facts land in `meta`.
+META_ATTESTATION_RETENTION = "attestation_retention"
+
+#: `present` or `absent` — whether this build was handed a record stream. The
+#: counts below are written only when it was, so their absence is the same fact
+#: said twice; this key is here so a reader does not have to infer it from a
+#: missing one.
+META_ATTESTATION_RECORDS = "attestation_records"
+META_DECLARATION_COUNT = "declaration_count"
+META_VERDICT_COUNT = "verdict_count"
 
 #: The `meta` keys `envelope_at` reads back to recompute a discarded polygon.
 #: Named constants because the writer and the reader are one contract now: a key
@@ -464,6 +620,56 @@ class GraphQueryError(Exception):
     frame's polygon — which is a region of the plane the robot demonstrably
     could reach, at a time it could not.
     """
+
+
+@dataclass(frozen=True)
+class AttestationRecords:
+    """One run's signed record stream, as the producers emitted it.
+
+    Both fields are required and neither has a default. `AttestationRecords((),
+    ())` is a run that produced nothing, and passing `records=None` to `build` is
+    a build that was not given a record stream; those are different facts, the
+    artifact records which one it holds, and a default here would collapse them
+    at the one place where the distinction is still available.
+
+    The two tuples are two chains, not one interleaved stream: declarations link
+    to declarations under the policy key and verdicts to verdicts under the
+    enforcement key, each starting at `GENESIS_HASH`. Both must be in chain
+    order — `build` refuses a stream whose links do not hold, because a FOLLOWS
+    edge written across a break asserts a link that is not there.
+
+    Acknowledgments are not here. They share the verdict chain, and a run that
+    contains one therefore has a verdict whose `prev_hash` names a record this
+    artifact does not hold; `build` refuses that stream rather than writing a
+    FOLLOWS edge over the gap. Storing them is issue #46's, which is where the
+    fixtures that produce a passivation arrive.
+    """
+
+    declarations: tuple[Declaration, ...]
+    verdicts: tuple[Verdict, ...]
+
+    def __post_init__(self) -> None:
+        for name, expected in (
+            ("declarations", Declaration),
+            ("verdicts", Verdict),
+        ):
+            values = getattr(self, name)
+            if not isinstance(values, tuple):
+                raise GraphBuildError(
+                    f"AttestationRecords.{name} must be a tuple, got "
+                    f"{type(values).__name__}. A generator would be consumed by "
+                    "the first pass over it and the second would see an empty "
+                    "run."
+                )
+            for i, value in enumerate(values):
+                if not isinstance(value, expected):
+                    raise GraphBuildError(
+                        f"AttestationRecords.{name}[{i}] is a "
+                        f"{type(value).__name__}, not a {expected.__name__}. The "
+                        "record is what is stored; an object that resembles one "
+                        "has not been through the validation that makes it a "
+                        "record."
+                    )
 
 
 @dataclass(frozen=True)
@@ -769,6 +975,11 @@ class _OccurrenceLog:
         #: and not on the float, for the reason `_Observation.compare` is:
         #: comparing two roundings of a float decides whether a row is written.
         self._closest: dict[str, tuple[int, float, float]] = {}
+        #: Whether the verdict stream has passivated the enforcer and not yet
+        #: resumed. Derived from the verdicts alone — see `verdict_recorded` —
+        #: because the enforcer is not here and a second source for it would be a
+        #: second answer to "was the robot stopped at t".
+        self._passivated = False
 
     @property
     def count(self) -> int:
@@ -855,6 +1066,57 @@ class _OccurrenceLog:
         if current is None or bucket < current[0]:
             self._closest[entity_id] = (int(bucket), float(distance), float(t))
 
+    def verdict_recorded(self, verdict: Verdict) -> None:
+        """One verdict's entry in the event layer, or nothing. Layer A.
+
+        The mapping is `OCCURRENCE_VERDICT_EVENTS` plus two events that are not
+        properties of a single verdict:
+
+        * **escalation_failed** — a SAFE_STATE whose fault is the escalation
+          failure. It is recorded every time, unlike the plain safe state,
+          because each one is a distinct declaration that arrived when an
+          `escalate` was obliged.
+        * **reintegrated** — a PERMIT or a CLAMP arriving while this log believes
+          the enforcer is passivated. `reg.enforce.Enforcer.adjudicate` returns
+          SAFE_STATE for every action for as long as it is passivated, so an
+          action that came back permitted or clamped is proof that a fresh
+          declaration and an acknowledgment cleared it. Derived rather than
+          reported: the enforcer is not here, and the verdict stream is the
+          evidence a reader would have to work from too.
+
+        A SAFE_STATE emitted while already passivated writes nothing. That is
+        `reg.enforce`'s *continuation* — a verdict reporting the passivation it
+        is already in rather than raising a new fault — and one row per frame of
+        a robot that is not moving is exactly the per-frame cost this layer
+        exists to escape. A VETO, a CLAMP and an escalation failure each write
+        one every time, because each is a decision about a *distinct* record or
+        commanded action and collapsing a run of them would lose which
+        declarations were refused and which actions were bounded.
+        """
+        outcome = str(verdict.outcome)
+        fault = None if verdict.fault is None else str(verdict.fault)
+        t = float(verdict.t)
+
+        if self._passivated and outcome in ("PERMIT", "CLAMP"):
+            self._emit("reintegrated", t=t)
+            self._passivated = False
+
+        if outcome == "SAFE_STATE" and fault == "escalation_failure":
+            self._emit("escalation_failed", t=t)
+        elif outcome == "SAFE_STATE":
+            if not self._passivated:
+                self._emit("safe_state_entered", t=t)
+        else:
+            event = OCCURRENCE_VERDICT_EVENTS.get(outcome)
+            if event is not None:
+                self._emit(event, t=t)
+
+        # Read off the taxonomy rather than off the outcome: which faults stop
+        # the robot is `reg.enforce`'s decision and is stated there in one line,
+        # and a second copy of it here would be a second answer to it.
+        if fault is not None and fault in PASSIVATING_FAULTS:
+            self._passivated = True
+
     def closest_approaches(self) -> None:
         """One `closest_approach` per entity observed, in first-seen order.
 
@@ -865,6 +1127,226 @@ class _OccurrenceLog:
         """
         for entity_id, (_, distance, t) in self._closest.items():
             self._emit("closest_approach", t=t, entity_id=entity_id, value=distance)
+
+
+# --------------------------------------------------------------------------
+# The attestation layer: the records, their regions, and the four edges.
+# --------------------------------------------------------------------------
+
+
+def _record_id(record: Declaration | Verdict) -> str:
+    return (
+        record.declaration_id
+        if isinstance(record, Declaration)
+        else record.verdict_id
+    )
+
+
+def _check_link(
+    record: Declaration | Verdict, previous: Declaration | Verdict | None
+) -> None:
+    """Refuse a record that does not link to the one before it. No repair.
+
+    The `FOLLOWS` edge asserts that one record commits to another, and it is only
+    true if the successor's `prev_hash` *is* the predecessor's chain hash. So it
+    is checked against `reg.chain.chain_hash` before the edge is written, and a
+    break is a refusal of the whole build.
+
+    Two things this deliberately does not do. It does not touch the `mac` — the
+    hash it computes is over the record as it stands, MAC included, so a record
+    whose MAC was altered breaks its successor's link and is *caught* here rather
+    than repaired. And it writes nothing derived into the artifact: the chain
+    hash is recomputed to check a claim and then discarded, because storing it
+    would put a value in the file that a reader would have to trust instead of
+    recompute.
+
+    Raises:
+        GraphBuildError: the first record of a chain does not link to
+            `GENESIS_HASH`, or a later one does not link to its predecessor.
+            Writing the edges anyway would produce a chain that walks cleanly
+            over a break, which is the one thing `verify_chain` must never be
+            able to do.
+    """
+    kind = type(record).__name__
+    if previous is None:
+        if record.prev_hash != GENESIS_HASH:
+            raise GraphBuildError(
+                f"the first {kind} in the stream, {_record_id(record)!r}, links "
+                f"to prev_hash={record.prev_hash!r} and not to the genesis hash. "
+                "It claims a predecessor this artifact does not hold, so the "
+                "chain stored here would begin mid-way with nothing saying so — "
+                "and a verifier walking it would report an unbroken chain over "
+                "records it never saw."
+            )
+        return
+    expected = chain_hash(previous, previous.prev_hash)
+    if record.prev_hash != expected:
+        raise GraphBuildError(
+            f"{kind} {_record_id(record)!r} carries prev_hash="
+            f"{record.prev_hash!r}, but the chain hash of its predecessor "
+            f"{_record_id(previous)!r} is {expected!r}. These two records are not "
+            "consecutive links of one chain: either the stream was assembled out "
+            "of order or from two runs, or a record between them is missing, or "
+            "one of them has been altered since it was signed. A FOLLOWS edge "
+            "written across that is an assertion nobody checked."
+        )
+
+
+def _attestation_envelope(
+    conn,
+    geometry: BaseGeometry,
+    *,
+    source: str,
+    horizon: float | None,
+) -> str:
+    """The `Envelope` row for a region a record names. Returns its id.
+
+    The geometry is **always stored**, and neither simplified nor quantized on
+    the way in. `GEOMETRY_RETENTION` discards a polygon only where the artifact
+    can recompute it from a `robot_config` it holds; a bound that came from a
+    policy is not a function of any configuration in this file, so discarding it
+    would not be a discard but a deletion. Simplifying it would be worse — the
+    stored region would no longer be the region the record's MAC covers.
+
+    Two records naming the same region share one row: the id is a content hash,
+    so the five identical declarations of `declared_violation` produce one
+    envelope row and five `DECLARED` edges pointing at it.
+    """
+    digest = envelope_hash(geometry)
+    envelope_id = "env_" + _digest(
+        source, "" if horizon is None else f"{horizon:.9f}", digest
+    )
+    return store.insert_envelope(
+        conn,
+        envelope_id,
+        envelope_hash=digest,
+        area=quantize_area(geometry.area),
+        geometry=geometry,
+        config_id=None,
+        horizon=horizon,
+        source=source,
+    )
+
+
+def _write_attestation(
+    conn, records: AttestationRecords, occurrences: _OccurrenceLog
+) -> None:
+    """The record tables, the regions they name, and the four edges.
+
+    Declarations first, and not for tidiness: `reg.store.insert_verdict` refuses
+    a verdict naming a declaration the artifact does not hold, so the order is
+    what turns "this verdict adjudicated something not in the file" from a
+    dangling edge into a refusal.
+
+    Edge times come from the records and are not quantized — see the module
+    header.
+    """
+    previous_declaration: Declaration | None = None
+    for declaration in records.declarations:
+        _check_link(declaration, previous_declaration)
+        store.insert_declaration(conn, declaration)
+        envelope_id = _attestation_envelope(
+            conn,
+            declaration.envelope(),
+            source=DECLARED_ENVELOPE_SOURCE,
+            horizon=declaration.horizon,
+        )
+        # The interval is the claim's own validity window: what the policy said
+        # it would do, for exactly as long as it said the statement was good
+        # for. That is what `declared_bound(t)` reads (docs/plan.md Phase 7,
+        # query 5), and it is why a stale declaration is answerable from the
+        # artifact rather than only from the verdict that caught it.
+        store.open_edge(
+            conn,
+            "DECLARED",
+            declaration.declaration_id,
+            envelope_id,
+            declaration.t_issued,
+            t_end=declaration.t_issued + declaration.horizon,
+        )
+        if previous_declaration is not None:
+            _open_follows(conn, declaration, previous_declaration, "Declaration")
+        previous_declaration = declaration
+
+    previous_verdict: Verdict | None = None
+    for verdict in records.verdicts:
+        _check_link(verdict, previous_verdict)
+        store.insert_verdict(conn, verdict)
+
+        # One ADJUDICATED edge per verdict, at the instant of the commanded
+        # action. **Not one per declaration** — see ATTESTATION_RETENTION and
+        # `reg.enforce`'s module header: on `declared_violation` a single
+        # declaration is adjudicated PERMIT dozens of times and then CLAMP, and
+        # collapsing that would destroy the ability to say when the violation
+        # began.
+        if verdict.declaration_id is not None:
+            store.open_edge(
+                conn,
+                "ADJUDICATED",
+                verdict.verdict_id,
+                verdict.declaration_id,
+                verdict.t,
+            )
+
+        clamped = verdict.envelope()
+        if clamped is not None:
+            store.open_edge(
+                conn,
+                "ENFORCED",
+                verdict.verdict_id,
+                _attestation_envelope(
+                    conn,
+                    clamped,
+                    source=CLAMPED_ENVELOPE_SOURCE,
+                    # The Verdict record states no horizon for the bound it
+                    # applied, and there is none to be had: it is the region one
+                    # action was held inside, not a window. NULL is that silence
+                    # carried through rather than a number invented here.
+                    horizon=None,
+                ),
+                verdict.t,
+            )
+
+        if previous_verdict is not None:
+            _open_follows(conn, verdict, previous_verdict, "Verdict")
+        previous_verdict = verdict
+
+        occurrences.verdict_recorded(verdict)
+
+
+def _open_follows(
+    conn,
+    record: Declaration | Verdict,
+    previous: Declaration | Verdict,
+    kind: str,
+) -> None:
+    """One chain link, from a record to the record it commits to.
+
+    The interval is the span between the two records, so a query over a time
+    window sees the links that were made inside it. `min`/`max` rather than the
+    pair in order because the chain's order is `seq` and `prev_hash` and not the
+    clock: a verdict raised against a declaration issued earlier can carry the
+    earlier timestamp, and an interval that ran backwards would drop out of every
+    timeline query instead of erroring.
+    """
+    a = _record_time(record)
+    b = _record_time(previous)
+    store.open_edge(
+        conn,
+        "FOLLOWS",
+        _record_id(record),
+        _record_id(previous),
+        min(a, b),
+        t_end=max(a, b),
+        src_kind=kind,
+        dst_kind=kind,
+    )
+
+
+def _record_time(record: Declaration | Verdict) -> float:
+    return float(
+        record.t_issued if isinstance(record, Declaration) else record.t
+    )
 
 
 # --------------------------------------------------------------------------
@@ -968,6 +1450,7 @@ def build(
     seed: int = ENVELOPE_SEED,
     substep_dt: float = SUBSTEP_DT,
     occurrence_resolution_s: float = OCCURRENCE_TIME_RESOLUTION_S,
+    records: AttestationRecords | None = None,
 ) -> BuildResult:
     """Turn a raw CSV stream into a SQLite evidence graph. Overwrites `out_path`.
 
@@ -995,6 +1478,13 @@ def build(
             a resolution costs is the point of the layer (docs/plan.md Claim 1,
             "What replaces it"); it does **not** touch the edge layer, whose
             resolution is `TIME_TOL_S` and is not a parameter of anything.
+        records: the run's signed declarations and verdicts, or `None` for a
+            build that was given none. The two are different facts and the
+            artifact records which one it holds (`ATTESTATION_RETENTION`): an
+            empty `AttestationRecords` is a run that produced nothing, `None` is
+            a build that was not asked to store anything, and an empty
+            `declaration` table on its own does not say which. The record stream
+            is stored verbatim — see `_write_attestation` and `_check_link`.
 
     Returns:
         A `BuildResult` with the row counts and the artifact's size.
@@ -1007,9 +1497,17 @@ def build(
 
     Raises:
         GraphBuildError: the stream could not be understood — too short, a
-            non-uniform frame period, or an obstacle that moved. Each is a
-            could-not-evaluate, and none of them writes a usable artifact.
+            non-uniform frame period, or an obstacle that moved — or the record
+            stream is not one unbroken chain. Each is a could-not-evaluate, and
+            none of them writes a usable artifact.
     """
+    if records is not None and not isinstance(records, AttestationRecords):
+        raise GraphBuildError(
+            f"records must be an AttestationRecords or None, got "
+            f"{type(records).__name__}. `None` means this build was given no "
+            "record stream; a run that produced none is AttestationRecords((), "
+            "()), and the artifact says which of the two it holds."
+        )
     frames = tuple(read_frames(csv_path))
     period = _frame_period(frames, csv_path)
     obstacles = _entity_set(frames, csv_path)
@@ -1041,6 +1539,7 @@ def build(
             substep_dt=substep_dt,
             occurrence_resolution_s=occurrence_resolution_s,
             stamp=stamp,
+            records=records,
         )
 
         # Entity set, once. Static geometry is simplified because
@@ -1216,6 +1715,14 @@ def build(
         if previous is not None:  # pragma: no branch - >= 2 frames, checked above
             envelope_timeline(previous)
 
+        # The record layer, after the scene layer and before the two occurrences
+        # that are facts about the whole run. Its edges do not participate in the
+        # incremental rule at all — a declaration is already coarse, and there is
+        # no relationship here to extend — so it is written in one pass rather
+        # than woven into the frame loop.
+        if records is not None:
+            _write_attestation(conn, records, occurrences)
+
         # A relationship still holding at the last frame gets no `..._left` or
         # `..._ended` occurrence — it did not end, the recording did, and
         # `run_ended` is what says so. `OCCURRENCE_RETENTION` states it in the
@@ -1386,6 +1893,7 @@ def _write_provenance(
     substep_dt: float,
     occurrence_resolution_s: float,
     stamp: str,
+    records: AttestationRecords | None,
 ) -> None:
     """Everything needed to say what produced this artifact, and nothing else.
 
@@ -1431,6 +1939,19 @@ def _write_provenance(
         conn, META_OCCURRENCE_RESOLUTION, _float_text(occurrence_resolution_s)
     )
     store.put_meta(conn, META_OCCURRENCE_SW_VERSION, stamp)
+
+    # The attestation layer's rule, and whether this build was given anything to
+    # store under it. The counts are written only when it was, so an artifact
+    # with no `declaration_count` is one nobody handed a record stream — which is
+    # a different fact from a run that produced no records, and the empty table
+    # is the same in both cases.
+    store.put_meta(conn, META_ATTESTATION_RETENTION, ATTESTATION_RETENTION)
+    store.put_meta(
+        conn, META_ATTESTATION_RECORDS, "absent" if records is None else "present"
+    )
+    if records is not None:
+        store.put_meta(conn, META_DECLARATION_COUNT, str(len(records.declarations)))
+        store.put_meta(conn, META_VERDICT_COUNT, str(len(records.verdicts)))
 
     store.put_meta(conn, "tolerance_distance_tol_m", _float_text(DISTANCE_TOL_M))
     store.put_meta(conn, "tolerance_area_quant_sigfigs", str(AREA_QUANT_SIGFIGS))
@@ -1688,8 +2209,8 @@ def envelope_at(conn, t: float) -> BaseGeometry:
 # --------------------------------------------------------------------------
 
 
-def _resolve_world(csv_path: str | os.PathLike[str]):
-    """The world that produced a stream, from the stream's own provenance block.
+def _resolve_scenario(csv_path: str | os.PathLike[str]):
+    """The scenario that produced a stream, from the stream's own provenance block.
 
     This is the CLI's answer to the two Layer B parameters `build` refuses to
     invent — the robot's `Limits` and the human's radius. Neither is in the CSV's
@@ -1722,12 +2243,112 @@ def _resolve_world(csv_path: str | os.PathLike[str]):
     # Testing membership here would leave a long-run stream as the one kind of
     # file whose own provenance block names something this build cannot resolve.
     try:
-        return scenario(name).world
+        return scenario(name)
     except KeyError as exc:
         raise GraphBuildError(
             f"{csv_path} says scenario={name!r}, which this build does not "
             f"know: {exc.args[0]}"
         ) from None
+
+
+def _resolve_world(csv_path: str | os.PathLike[str]):
+    """The world that produced a stream. `_resolve_scenario`, narrowed."""
+    return _resolve_scenario(csv_path).world
+
+
+def _attestation_from_stream(
+    csv_path: str | os.PathLike[str],
+    scenario,
+    *,
+    keyring_path: str | os.PathLike[str],
+    replan_interval_s: float,
+    declaration_horizon_s: float,
+    watchdog_period_s: float,
+) -> AttestationRecords:
+    """Run the scripted policy and the enforcer over a stream, and return both.
+
+    This is the CLI's producer, and it is the same wiring `tests/test_enforce.py`
+    does by hand: the policy issues a declaration per replan interval, each is
+    offered to the enforcer at the instant it was issued, and every frame is
+    adjudicated. Nothing goes back the other way — the black channel is the
+    premise (docs/plan.md Phase 3), so a verdict never reaches the policy.
+
+    The keyring is a file the caller names. It is **not** generated here: key
+    material is the one thing in this project that must not be reproducible from
+    a seed (`reg.chain.generate_keyring`), and a keyring made up per build would
+    give the same run a different set of MACs every time — which would break
+    determinism and be worthless as attribution besides.
+
+    Args:
+        csv_path: the stream, read a second time for its proprioception. The
+            envelope pass in `build` reads it too; this one is cheap beside it.
+        scenario: the scenario named in the stream's own provenance block. Its
+            `declared_q_bounds` is what the policy declares — the fixed box that
+            makes `declared_violation` a policy that can be caught.
+        replan_interval_s, declaration_horizon_s, watchdog_period_s: stated by
+            the caller and never invented. docs/plan.md fixes none of the three,
+            and each decides how much of the taxonomy can fire at all.
+
+    Raises:
+        GraphBuildError: a declaration was issued at an instant no frame carries,
+            so it could never be offered. That is a producer this module does not
+            understand, and dropping it would silently shorten the chain.
+    """
+    from reg.chain import load_keyring
+    from reg.declare import emit_declarations
+    from reg.enforce import Enforcer
+
+    keyring = load_keyring(keyring_path)
+    states = [frame.proprio() for frame in read_frames(csv_path)]
+    declarations = emit_declarations(
+        states,
+        scenario.world.limits,
+        key=keyring.key("policy"),
+        replan_interval_s=replan_interval_s,
+        horizon_s=declaration_horizon_s,
+        declared_q_bounds=scenario.declared_q_bounds,
+        id_prefix=scenario.name,
+    )
+
+    # Keyed on the rounded instant, matching the fixture harness: `t_issued` is
+    # copied from a state's own `t`, so equality holds, and the rounding is
+    # against a float that made one round trip through the CSV.
+    pending = {round(d.t_issued, 9): d for d in declarations}
+    enforcer = Enforcer(
+        scenario.world.limits,
+        key=keyring.key("enforcement"),
+        policy_key=keyring.key("policy"),
+        watchdog_period_s=watchdog_period_s,
+        # Enforcement comes up at the stream's first frame. Stated rather than
+        # defaulted to zero: the watchdog is measured from here, and a t_start
+        # before the run would fire it on the first action of a stream that
+        # simply does not begin at the epoch.
+        t_start=float(states[0].t),
+        id_prefix=scenario.name,
+    )
+
+    verdicts: list[Verdict] = []
+    for state in states:
+        due = pending.pop(round(state.t, 9), None)
+        if due is not None:
+            refusal = enforcer.offer(due)
+            # `offer` returns a verdict only when it refuses. An acceptance
+            # adjudicates no action, so there is nothing to record for it.
+            if refusal is not None:
+                verdicts.append(refusal)
+        verdicts.append(enforcer.adjudicate(state))
+
+    if pending:
+        raise GraphBuildError(
+            f"{sorted(pending)}: the policy issued declaration(s) at instants no "
+            "frame of the stream carries, so they could never be offered to "
+            "enforcement. Storing them would put records in the artifact that "
+            "nothing in the run ever adjudicated; dropping them would shorten "
+            "the chain with nothing saying so."
+        )
+    return AttestationRecords(
+        declarations=tuple(declarations), verdicts=tuple(verdicts)
+    )
 
 
 def _positive_float(raw: str) -> float:
@@ -1827,6 +2448,52 @@ def _parser() -> argparse.ArgumentParser:
             "layer, whose interval endpoints are at TIME_TOL_S."
         ),
     )
+    # The attestation layer. Off unless a keyring is named, and then all four
+    # are required together: there is no default replan interval, declaration
+    # horizon or watchdog period anywhere in docs/plan.md, and each of the three
+    # decides which of the nine faults can fire at all. A plausible number
+    # invented here would be indistinguishable downstream from a stated one.
+    build_parser.add_argument(
+        "--keyring",
+        metavar="PATH",
+        help=(
+            "a keyring file (reg.chain.write_keyring). Supplying one runs the "
+            "scripted policy and the enforcer over the stream and stores the "
+            "declarations, the verdicts and the chain. Without it the artifact "
+            "holds no attestation layer and says so in its meta table. Key "
+            "material is never generated here — a keyring made up per build "
+            "would give one run a different set of MACs every time."
+        ),
+    )
+    build_parser.add_argument(
+        "--replan-interval",
+        type=_positive_float,
+        metavar="SECONDS",
+        help=(
+            "seconds between declarations. Required with --keyring and has no "
+            "default: it sets how coarse the entire declaration stream is."
+        ),
+    )
+    build_parser.add_argument(
+        "--declaration-horizon",
+        type=_positive_float,
+        metavar="SECONDS",
+        help=(
+            "the validity window each declaration claims, at least "
+            "--replan-interval. Required with --keyring and has no default: it "
+            "is what makes a declaration stale."
+        ),
+    )
+    build_parser.add_argument(
+        "--watchdog-period",
+        type=_positive_float,
+        metavar="SECONDS",
+        help=(
+            "seconds of silence from the declaration channel before enforcement "
+            "drives to a safe state. Required with --keyring and has no default: "
+            "it decides whether that check ever fires."
+        ),
+    )
     return parser
 
 
@@ -1842,8 +2509,44 @@ def main(argv: Sequence[str] | None = None) -> int:
             "a path nobody named is how runs get lost."
         )
 
+    attestation_args = {
+        "--replan-interval": args.replan_interval,
+        "--declaration-horizon": args.declaration_horizon,
+        "--watchdog-period": args.watchdog_period,
+    }
+    supplied = [name for name, value in attestation_args.items() if value is not None]
+    if args.keyring is None and supplied:
+        parser.error(
+            f"{', '.join(supplied)} only mean something with --keyring, which "
+            "was not given. Without a keyring nothing signs a declaration, so "
+            "there is no record stream for these to parameterise."
+        )
+    if args.keyring is not None:
+        missing = [name for name, value in attestation_args.items() if value is None]
+        if missing:
+            parser.error(
+                f"--keyring was given, so {', '.join(missing)} "
+                f"{'is' if len(missing) == 1 else 'are'} required. None of the "
+                "three has a default: docs/plan.md fixes no replan rate, no "
+                "declaration horizon and no watchdog period, and each decides "
+                "which of the nine faults can fire at all. A plausible number "
+                "invented here would be indistinguishable downstream from one "
+                "somebody stated."
+            )
+
     try:
-        world = _resolve_world(args.csv)
+        scenario = _resolve_scenario(args.csv)
+        world = scenario.world
+        records = None
+        if args.keyring is not None:
+            records = _attestation_from_stream(
+                args.csv,
+                scenario,
+                keyring_path=args.keyring,
+                replan_interval_s=args.replan_interval,
+                declaration_horizon_s=args.declaration_horizon,
+                watchdog_period_s=args.watchdog_period,
+            )
         result = build(
             args.csv,
             args.out,
@@ -1854,11 +2557,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed=args.envelope_seed,
             substep_dt=args.substep_dt,
             occurrence_resolution_s=args.occurrence_resolution,
+            records=records,
         )
     except GraphBuildError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except (KeyringError, DeclarationError, EnforcementError) as exc:
+        # The record stream could not be produced: an unreadable keyring, or a
+        # policy or enforcement parameter the producers refuse. Same exit as the
+        # rest — a could-not-evaluate that wrote no artifact.
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
 

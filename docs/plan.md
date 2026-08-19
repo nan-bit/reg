@@ -446,6 +446,7 @@ not raw state.
 | `Envelope` | `envelope_id`, `area`, `geometry_wkb`, `horizon`, `source` (`computed` / `declared` / `clamped`) |
 | `Entity` | `entity_id`, `kind`, `geometry_wkb` |
 | `RobotConfig` | `config_id`, `q`, `qd` (quantized) |
+| `Occurrence` | `occurrence_id`, `seq`, `type` (the DSSAD occurrence flag), `layer`, `reason`, `t` (at `occurrence_time_resolution_s`), `entity_id`, `value`, `sw_version` (`R157SWIN`) — **added, issue #35.** The event-level layer, additive beside the edges; see [`docs/lossiness.md`](lossiness.md) *The three resolution levels* and [`docs/prior-art.md` §9](prior-art.md) |
 | `Declaration` | as Phase 3 |
 | `Verdict` | as Phase 4 |
 

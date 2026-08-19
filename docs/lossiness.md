@@ -22,6 +22,13 @@ partial failure, transition demand, minimal-risk manoeuvre) precisely so that mo
 later someone can reconstruct who was driving. `reg` is not inventing the retention
 principle; it is applying it to a manipulator and stating the loss explicitly.
 
+**One thing this document said only implicitly until 2026-08-19.** The *Retained*,
+*Discarded* and *Unanswerable* lists below describe one resolution — the finest
+one — and issue #35 added two more beside it. Read
+[The three resolution levels](#the-three-resolution-levels) before reading the
+lists as the whole contract: the levels are why "how much resolution does this
+answer actually need" is now a measured question rather than an assumption.
+
 ---
 
 ## The supported question set
@@ -250,6 +257,127 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
 
 ---
 
+## The three resolution levels
+
+**Added 2026-08-19 (issue #35).** Everything above this section describes the
+**finest** level and was written as though it were the only one. It is not, and
+saying so is the point: `docs/plan.md` Claim 1's original form — the graph is
+orders of magnitude smaller than the stream — was measured and refuted (issue
+#30), and what replaced it is the question *how coarse can the evidence get
+before it stops answering the question?*
+
+The coarsest level is not invented here. UN R157's **DSSAD** is the only mandated
+evidence recorder for autonomy that exists, and it stores **occurrences**: an
+occurrence flag, a reason, a date, a timestamp accurate to **±1.0 second**, and
+the software version identifier present at the event
+([`docs/prior-art.md` §9](prior-art.md)). `reg` chose cm / 10 ms, every frame —
+two orders of magnitude finer than the only comparable thing required by law —
+and chose it without noticing it was choosing.
+
+All three levels are **views of one artifact**, not three artifacts. `reg.graph`
+writes both layers; `python -m reg.bench --resolution` projects the build into
+each level, measures what each costs in bytes/hour, and reports whether each
+still answers the supported questions within the tolerances above. The fine layer
+is not deleted to make the coarse number better — a single coarse artifact would
+not be a measurement.
+
+### Level 1 — occurrence (DSSAD-aligned, ±1.0 s by default)
+
+**Retains.** One row per semantically material event, from a fixed vocabulary
+(`reg.store.OCCURRENCE_SPECS`): `run_began`, `run_ended`, `envelope_entered`,
+`envelope_left`, `contact_began`, `contact_ended`, and one `closest_approach` per
+entity carrying the smallest separation of the run. Each row carries DSSAD's
+elements — the flag (the type), the reason, the timestamp, and a provenance stamp
+binding the event to the `reg` version and the envelope parameters that produced
+it, which is `R157SWIN` in this project's terms. The entity set and the run's
+provenance stay, because an occurrence naming an entity the file does not contain
+is not a record of anything. The rule itself is written into `meta` under
+`occurrence_retention`.
+
+**Discards.** Every interval, every metric between events, every timestamp digit
+finer than the stated resolution, and the order of two events inside one quantum.
+Nothing is emitted when a metric crosses a quantization boundary — those are the
+transitions level 2 records, and recording them here would reintroduce the
+per-frame cost this level exists to be measured against. A relationship still
+holding at the last frame gets no `..._left` or `..._ended`; `run_ended` bounds
+it.
+
+**There is no date element, and that is a deviation stated rather than hidden.**
+DSSAD records `yyyy/mm/dd` because a recorder in a car has a clock. This artifact
+must be byte-reproducible from its seeds, and a wall-clock date is exactly the
+ambient value that would break it. What stands in for it is the run's own time
+base plus the source stream's provenance block: an assessor gets *when in this
+run* and *which run*, not *which afternoon*.
+
+**Cannot answer.** Anything per-frame. The separation timeline, the envelope in
+force at `t`, `frames_at_risk`, and every metric between two events are outside
+this level — and `reg.bench --resolution` reports them as *could-not-evaluate*,
+never as agreement. "When did it happen" is answerable only to the stated
+resolution, which for a short event is two orders of magnitude worse than
+`TIME_TOL_S`.
+
+**One closed-world reading, and it is load-bearing.** The absence of a
+`contact_began` row means no contact occurred, not "unknown" — but *only* because
+the retention rule in `meta` says one would have been written. That is the same
+reason DSSAD's absent occurrence flag is readable. Without the rule in the file
+it is silence, and silence is not agreement.
+
+### Level 2 — transition (the edge layer, `TIME_TOL_S` endpoints)
+
+**Retains.** Everything under *Retained* above: one interval per relationship per
+quantized value, with its metric, its layer tag and its endpoints at
+`TIME_TOL_S`, plus the nodes those intervals anchor under *Discarded* #9 and #10.
+
+**Discards.** Everything under *Discarded* above — the joint path between
+transitions, sub-quantum geometry, metric detail below the quantum, and the
+frames that anchor nothing.
+
+**Cannot answer.** Everything under [*Unanswerable*](#unanswerable), which follows
+this section rather than preceding it — it is the finest level's refusal list, and
+levels 1 and 3 inherit it.
+
+This level is what the rest of this document specifies, and it is the one the
+agreement table at the bottom is written against.
+
+### Level 3 — per-frame (the incremental rule run backwards)
+
+**Retains.** One row per frame per relationship: the same facts as level 2, with
+the intervals expanded. It invents nothing — an interval already asserts that the
+relationship held at every frame under it — and it exists so that the cost of
+*not* having the incremental rule is a measurement in the same table rather than
+an argument.
+
+**Discards.** The same quantization as level 2. Per-frame rows do not restore
+resolution; they restore *redundancy*, which is why the rule that removes them is
+a discard of duplication rather than of evidence.
+
+**Cannot answer.** The same questions as level 2, for the same reasons. That is
+the finding: the finest level in this project answers nothing the transition
+level does not, and `reg.bench --resolution` prices the difference.
+
+**What the benchmark's per-frame row is not.** It expands the retained intervals;
+it cannot restore the per-frame `robot_config` and `envelope` rows *Discarded*
+#10 removed, because those were discarded at build time. So the measured
+per-frame cost is a **lower bound**, and the direction matters: it understates
+what the fine layer costs, which makes the coarser levels look *less* good rather
+than more.
+
+### What the levels do not license
+
+**Widening `DISTANCE_TOL_M`, `TIME_TOL_S` or `AREA_QUANT_SIGFIGS`.** The
+resolution parameter is the occurrence timestamp granularity and what qualifies
+as material — not the tolerances this contract advertises. Loosening those
+changes what the artifact *claims*; the levels change what it *costs*, and cost
+is the variable under study. `reg.graph.OCCURRENCE_TIME_RESOLUTION_S` is
+deliberately **not** in `reg/tolerances.py` for exactly this reason: it is a
+parameter of a measurement, not one of the four constants above.
+
+**Deleting the fine layer.** The occurrence layer is additive: not one edge row
+exists or fails to exist because of it, and `tests/test_graph.py::test_the_
+occurrence_layer_is_additive` is the gate on that.
+
+---
+
 ## Unanswerable
 
 Questions the artifact cannot answer, and must refuse rather than approximate. A
@@ -409,5 +537,7 @@ has not been shown to be able to fail at all. The `--tamper` flag in
   principle this contract bounds; **Phase 7**, the query set it is defined against.
 - [`docs/prior-art.md`](prior-art.md) — **§1**, UNECE DSSAD: event-level retention
   as an already-mandated conclusion for automated driving, and why the framing here
-  is "we discard deliberately" rather than "we compress well". Also **§4**, the
-  under-approximation that makes item 3 of *Unanswerable* unanswerable.
+  is "we discard deliberately" rather than "we compress well". **§9**, DSSAD's
+  actual data elements and how far this project overshot them — the source of the
+  occurrence level above. Also **§4**, the under-approximation that makes item 3 of
+  *Unanswerable* unanswerable.

@@ -296,15 +296,28 @@ def test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes(
 # --------------------------------------------------------------------------
 
 
-def _check(name: str, answers: bench.LevelAnswers, truth: bench.GroundTruth) -> str:
+def _check(
+    name: str,
+    answers: bench.LevelAnswers,
+    truth: bench.GroundTruth,
+    *,
+    timestamp_resolution_s: float,
+) -> str:
     """One query's verdict, from `reg.bench.check_level`. Not a second checker.
 
     docs/lossiness.md's agreement predicates are already implemented once, in the
     benchmark, and issue #37 says to reuse them. Writing a comparison here would
     be the same trap the whole issue is about, one level down.
+
+    `timestamp_resolution_s` is passed through without a default for the reason
+    `check_level` requires one: an artifact asked a timing question has to say
+    how precisely it records time, or it gets graded against a precision it
+    never claimed.
     """
     spec = next(q for q in bench.RESOLUTION_QUERIES if q.name == name)
-    return bench.check_level(spec, answers, truth).verdict
+    return bench.check_level(
+        spec, answers, truth, timestamp_resolution_s=timestamp_resolution_s
+    ).verdict
 
 
 def test_the_separation_timeline_agrees_with_the_raw_stream(
@@ -321,6 +334,7 @@ def test_the_separation_timeline_agrees_with_the_raw_stream(
             "separation_timeline",
             bench.LevelAnswers(None, None, answer.value.samples, None, None),
             truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
         )
         == AGREE
     )
@@ -349,6 +363,7 @@ def test_the_timeline_check_says_no_when_the_graph_is_perturbed(
             "separation_timeline",
             bench.LevelAnswers(None, None, answer.value.samples, None, None),
             truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
         )
         == DISAGREE
     )
@@ -373,9 +388,21 @@ def test_min_separation_and_the_contact_flag_agree_with_the_raw_stream(
         contact_occurred=contact.value,
         attestation=None,
     )
-    assert _check("min_separation", answers, truth) == AGREE
-    assert _check("did_contact_occur", answers, truth) == AGREE
-    assert _check("time_of_closest_approach", answers, truth) == AGREE
+    assert _check(
+        "min_separation", answers, truth, timestamp_resolution_s=bench.TIME_TOL_S
+    ) == AGREE
+    assert _check(
+        "did_contact_occur", answers, truth, timestamp_resolution_s=bench.TIME_TOL_S
+    ) == AGREE
+    assert (
+        _check(
+            "time_of_closest_approach",
+            answers,
+            truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        )
+        == AGREE
+    )
 
 
 def test_frames_at_risk_covers_every_frame_the_stream_says_is_at_risk(
@@ -584,8 +611,18 @@ def test_the_occurrence_level_still_answers_what_it_can(
     assert smallest.layer == query.OCCURRENCE_LAYER
     assert contact.verdict == ANSWERED and contact.value is True
     answers = bench.LevelAnswers(smallest.value, None, None, contact.value, None)
-    assert _check("min_separation", answers, truth) == AGREE
-    assert _check("did_contact_occur", answers, truth) == AGREE
+    # This view records occurrences to 1.0 s, so that is the precision its
+    # answers are graded at. Neither question below is a timing question, but
+    # stating it is what keeps the coarse level from being asked a fine one.
+    coarse = graph.OCCURRENCE_TIME_RESOLUTION_S
+    assert (
+        _check("min_separation", answers, truth, timestamp_resolution_s=coarse)
+        == AGREE
+    )
+    assert (
+        _check("did_contact_occur", answers, truth, timestamp_resolution_s=coarse)
+        == AGREE
+    )
 
 
 def test_the_occurrence_answer_reports_the_coarse_tolerance(

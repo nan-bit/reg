@@ -2335,7 +2335,11 @@ def _timeline_of(answer) -> tuple[tuple[float, float], ...] | None:
 
 
 def check_level(
-    query: ResolutionQuery, answers: LevelAnswers, truth: GroundTruth
+    query: ResolutionQuery,
+    answers: LevelAnswers,
+    truth: GroundTruth,
+    *,
+    timestamp_resolution_s: float,
 ) -> LevelCheck:
     """One query, at one level, against ground truth. Three outcomes.
 
@@ -2343,13 +2347,24 @@ def check_level(
     answer returns `COULD-NOT-EVALUATE` — never `AGREE` on the strength of an
     absent answer. `tests/test_bench.py` feeds each of them the condition it
     guards against.
+
+    `timestamp_resolution_s` is the level's own quantum and has **no default**,
+    for the reason `_measure` takes `records` without one: the check that
+    forgets to ask what resolution it is checking does not fail, it reports a
+    level as wrong for being exactly as coarse as it says it is. See
+    `_closest_approach_time_check`.
     """
     if query.name == "min_separation":
         return _scalar_check(
             query, answers.min_separation, truth.min_separation, "m"
         )
     if query.name == "time_of_closest_approach":
-        return _closest_approach_time_check(query, answers.t_closest_approach, truth)
+        return _closest_approach_time_check(
+            query,
+            answers.t_closest_approach,
+            truth,
+            timestamp_resolution_s=timestamp_resolution_s,
+        )
     if query.name == "separation_timeline":
         return _timeline_check(query, answers.timeline, truth)
     if query.name == "did_contact_occur":
@@ -2392,7 +2407,11 @@ def _scalar_check(
 
 
 def _closest_approach_time_check(
-    query: ResolutionQuery, level_answer: float | None, truth: GroundTruth
+    query: ResolutionQuery,
+    level_answer: float | None,
+    truth: GroundTruth,
+    *,
+    timestamp_resolution_s: float,
 ) -> LevelCheck:
     """"When was the closest approach" against the set of frames that qualify.
 
@@ -2400,6 +2419,30 @@ def _closest_approach_time_check(
     the reported delta is the distance to the nearest one. See `GroundTruth`:
     the set, not a single argmin, is what the lossiness contract leaves as the
     answer, and the tolerance in force is still `TIME_TOL_S`.
+
+    **`timestamp_resolution_s` separates "imprecise" from "wrong".** Three
+    outcomes, and the middle one is the whole reason this argument exists:
+
+    * within `TIME_TOL_S` of some candidate — `AGREE`. A coarse timestamp can
+      still land inside the answer set, and on a minimum sustained longer than
+      the quantum it reliably does. Whether a coarse timestamp is good enough
+      is a property of the *event*, not of the recorder, which is what a curve
+      over resolution is for — see
+      `test_a_sustained_minimum_is_locatable_even_at_one_second`.
+    * outside that but within the level's own quantum — `COULD-NOT-EVALUATE`.
+      The level did not answer wrongly; it answered as precisely as it claims
+      to. `occurrence` records to 1.0 s and answered 46.00 s against a true
+      45.98 s: fifty times better than it promises. Reporting that `DISAGREE`
+      made `ResolutionPoint.verdict` propagate it and the whole DSSAD-aligned
+      level read as broken. `docs/lossiness.md` *Unanswerable* #4 already
+      decides this — a difference finer than the tolerance is **unanswerable
+      rather than false** — and this is that case one level down, against the
+      level's quantum rather than the query's.
+    * outside the quantum too — `DISAGREE`, and it must stay reachable here.
+      A level that misplaces the closest approach by more than its own
+      resolution is not imprecise, it is wrong, and widening the tolerance to
+      `max(TIME_TOL_S, timestamp_resolution_s)` instead of refusing would print
+      that as `AGREE`.
     """
     if level_answer is None:
         return LevelCheck(
@@ -2412,16 +2455,25 @@ def _closest_approach_time_check(
         truth.closest_approach_candidates, key=lambda t: abs(level_answer - t)
     )
     difference = abs(float(level_answer) - nearest)
-    return LevelCheck(
-        query=query.name,
-        verdict=AGREE if difference <= tolerance else DISAGREE,
-        detail=(
-            f"{float(level_answer):.4f} s against "
-            f"{len(truth.closest_approach_candidates):,} frame(s) within "
-            f"{DISTANCE_TOL_M} m of the minimum, nearest at {nearest:.4f} s, "
-            f"Δ {difference:.4f} s (tol {tolerance} s)"
-        ),
+    quantum = float(timestamp_resolution_s)
+    if difference <= tolerance:
+        verdict = AGREE
+    elif difference <= quantum:
+        verdict = COULD_NOT_EVALUATE
+    else:
+        verdict = DISAGREE
+    detail = (
+        f"{float(level_answer):.4f} s against "
+        f"{len(truth.closest_approach_candidates):,} frame(s) within "
+        f"{DISTANCE_TOL_M} m of the minimum, nearest at {nearest:.4f} s, "
+        f"Δ {difference:.4f} s (tol {tolerance} s)"
     )
+    if verdict == COULD_NOT_EVALUATE:
+        detail += (
+            f" — inside this level's own {quantum} s quantum, so it is "
+            "imprecise here rather than wrong"
+        )
+    return LevelCheck(query=query.name, verdict=verdict, detail=detail)
 
 
 def _timeline_check(
@@ -2865,14 +2917,18 @@ def run_resolution_curve(
         answers = answers_at_level(
             view, level, attestation=truth.attestation, keyring=keyring
         )
+        # One local, used both to describe the level and to check it. Two
+        # copies of this expression would let the table state one resolution
+        # and grade against another.
+        timestamp_resolution_s = (
+            float(occurrence_resolution_s)
+            if level == OCCURRENCE_LEVEL
+            else TIME_TOL_S
+        )
         points.append(
             ResolutionPoint(
                 level=level,
-                timestamp_resolution_s=(
-                    float(occurrence_resolution_s)
-                    if level == OCCURRENCE_LEVEL
-                    else TIME_TOL_S
-                ),
+                timestamp_resolution_s=timestamp_resolution_s,
                 size_bytes=view.stat().st_size,
                 nodes=nodes,
                 edges=edges,
@@ -2880,7 +2936,12 @@ def run_resolution_curve(
                 records=record_rows,
                 run_seconds=(result.frames - 1) * float(scn.dt),
                 checks=tuple(
-                    check_level(query, answers, truth)
+                    check_level(
+                        query,
+                        answers,
+                        truth,
+                        timestamp_resolution_s=timestamp_resolution_s,
+                    )
                     for query in RESOLUTION_QUERIES
                 ),
             )

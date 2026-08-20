@@ -1153,12 +1153,28 @@ def truth(built) -> bench.GroundTruth:
     )
 
 
+def _resolution_of(level: str) -> float:
+    """The level's own timestamp quantum, the way `run_resolution_curve` sets it.
+
+    A test that passed `TIME_TOL_S` for every level would grade `occurrence`
+    against a precision it does not claim — the defect this mirrors exists to
+    keep out.
+    """
+    return (
+        graph.OCCURRENCE_TIME_RESOLUTION_S
+        if level == bench.OCCURRENCE_LEVEL
+        else bench.TIME_TOL_S
+    )
+
+
 def _checks(view: Path, level: str, truth: bench.GroundTruth) -> dict[str, str]:
     answers = bench.answers_at_level(
         view, level, attestation=truth.attestation, keyring=None
     )
     return {
-        q.name: bench.check_level(q, answers, truth).verdict
+        q.name: bench.check_level(
+            q, answers, truth, timestamp_resolution_s=_resolution_of(level)
+        ).verdict
         for q in bench.RESOLUTION_QUERIES
     }
 
@@ -1295,7 +1311,12 @@ def test_the_occurrence_level_cannot_answer_the_separation_timeline(
     query = next(
         q for q in bench.RESOLUTION_QUERIES if q.name == "separation_timeline"
     )
-    check = bench.check_level(query, answers, truth)
+    check = bench.check_level(
+        query,
+        answers,
+        truth,
+        timestamp_resolution_s=_resolution_of(bench.OCCURRENCE_LEVEL),
+    )
     assert check.verdict == COULD_NOT_EVALUATE
     assert "per-frame" in check.detail
 
@@ -1338,7 +1359,12 @@ def test_the_coarse_timestamp_is_reported_as_a_disagreement() -> None:
         contact_occurred=False,
         attestation=None,
     )
-    check = bench.check_level(query, coarse, _timing_truth((2.51, 2.53, 2.55)))
+    check = bench.check_level(
+        query,
+        coarse,
+        _timing_truth((2.51, 2.53, 2.55)),
+        timestamp_resolution_s=bench.TIME_TOL_S,
+    )
     assert check.verdict == DISAGREE
     assert "0.5100" in check.detail
     assert "tol" in check.detail
@@ -1360,14 +1386,69 @@ def test_an_answer_inside_the_candidate_set_agrees() -> None:
         attestation=None,
     )
     assert (
-        bench.check_level(query, fine, _timing_truth((2.51, 2.53, 2.55))).verdict
+        bench.check_level(
+            query,
+            fine,
+            _timing_truth((2.51, 2.53, 2.55)),
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        ).verdict
         == AGREE
     )
     # And a level that records no closest approach at all does not thereby agree.
     silent = bench.LevelAnswers(None, None, None, None, None)
     assert (
-        bench.check_level(query, silent, _timing_truth((2.51,))).verdict
+        bench.check_level(
+            query,
+            silent,
+            _timing_truth((2.51,)),
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        ).verdict
         == COULD_NOT_EVALUATE
+    )
+
+
+def test_a_coarse_level_is_imprecise_within_its_quantum_and_wrong_outside_it() -> None:
+    """THE NEGATIVE TEST for the quantum-aware comparison.
+
+    The fix that stopped `occurrence` scoring `DISAGREE` for being coarse must
+    not have stopped it scoring `DISAGREE` for being *wrong*. A check that
+    cannot fail is not a check, and "widen the tolerance until the level
+    passes" is the failure mode this guards.
+
+    One quantum (1.0 s), three answers, three verdicts.
+    """
+    query = next(
+        q for q in bench.RESOLUTION_QUERIES if q.name == "time_of_closest_approach"
+    )
+    truth = _timing_truth((45.98,))
+    quantum = 1.0
+
+    def verdict_for(answer: float) -> str:
+        return bench.check_level(
+            query,
+            bench.LevelAnswers(None, answer, None, None, None),
+            truth,
+            timestamp_resolution_s=quantum,
+        ).verdict
+
+    # Inside TIME_TOL_S — the coarse timestamp landed on the answer anyway.
+    assert verdict_for(45.98) == AGREE
+    # Outside the tolerance, inside the quantum — the real occurrence case,
+    # 0.02 s out on a level that promises only 1.0 s. Imprecise, not wrong.
+    assert verdict_for(46.00) == COULD_NOT_EVALUATE
+    # Outside the quantum too. The level misplaced the event by more than its
+    # own resolution, and no widening of the tolerance may excuse that.
+    assert verdict_for(48.00) == DISAGREE
+
+    check = bench.check_level(
+        query,
+        bench.LevelAnswers(None, 46.00, None, None, None),
+        truth,
+        timestamp_resolution_s=quantum,
+    )
+    assert "quantum" in check.detail, (
+        "a refusal on these grounds has to say so in the detail column, or the "
+        "table shows a blank where a level declined to answer"
     )
 
 
@@ -1396,7 +1477,15 @@ def test_a_sustained_minimum_is_locatable_even_at_one_second(
         attestation=None,
         keyring=None,
     )
-    assert bench.check_level(query, answers, truth).verdict == AGREE
+    assert (
+        bench.check_level(
+            query,
+            answers,
+            truth,
+            timestamp_resolution_s=_resolution_of(bench.OCCURRENCE_LEVEL),
+        ).verdict
+        == AGREE
+    )
 
 
 def test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong(
@@ -1423,7 +1512,15 @@ def test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong(
     answers = bench.answers_at_level(
         tampered, bench.OCCURRENCE_LEVEL, attestation=None, keyring=None
     )
-    assert bench.check_level(query, answers, truth).verdict == DISAGREE
+    assert (
+        bench.check_level(
+            query,
+            answers,
+            truth,
+            timestamp_resolution_s=_resolution_of(bench.OCCURRENCE_LEVEL),
+        ).verdict
+        == DISAGREE
+    )
 
 
 def test_a_perturbed_value_is_caught_at_every_level(
@@ -1461,7 +1558,12 @@ def test_a_perturbed_value_is_caught_at_every_level(
         answers = bench.answers_at_level(
             tampered, level, attestation=None, keyring=None
         )
-        assert bench.check_level(query, answers, truth).verdict == DISAGREE, level
+        assert (
+            bench.check_level(
+                query, answers, truth, timestamp_resolution_s=_resolution_of(level)
+            ).verdict
+            == DISAGREE
+        ), level
 
 
 def test_an_artifact_with_no_rows_at_a_level_could_not_evaluate(
@@ -1486,7 +1588,9 @@ def test_an_artifact_with_no_rows_at_a_level_could_not_evaluate(
     # occurred" (issue #37 — before the query layer, this answered `False`).
     assert answers.contact_occurred is None
     verdicts = {
-        q.name: bench.check_level(q, answers, truth).verdict
+        q.name: bench.check_level(
+            q, answers, truth, timestamp_resolution_s=bench.TIME_TOL_S
+        ).verdict
         for q in bench.RESOLUTION_QUERIES
     }
     assert verdicts["min_separation"] == COULD_NOT_EVALUATE
@@ -1800,10 +1904,20 @@ def test_cli_resolution_writes_the_curve(tmp_path: Path) -> None:
 def test_cli_resolution_does_not_fail_on_its_own_finding(tmp_path: Path) -> None:
     """The exit code must not gate on the per-level verdicts.
 
-    The occurrence level disagreeing about *when* the closest approach happened
-    is the measurement, not a regression. A command that exited non-zero on its
-    own finding would push the next person to tune the finding away — which is
-    the one thing issue #35 says not to do.
+    The occurrence level being unable to say *when* the closest approach
+    happened is the measurement, not a regression. A command that exited
+    non-zero on its own finding would push the next person to tune the finding
+    away — which is the one thing issue #35 says not to do.
+
+    **This assertion used to look for `DISAGREE`.** It changed with the
+    quantum-aware comparison in `_closest_approach_time_check`: the occurrence
+    level records to 1.0 s and was being graded against 0.01 s, so answering
+    46.00 s against a true 45.98 s scored `DISAGREE` — a level marked wrong for
+    being exactly as coarse as it says it is. The natural finding at this level
+    is a refusal, so that is what is asserted, and it is asserted specifically
+    rather than as "not AGREE": a run where every level agreed would prove
+    nothing about the exit code, and so would one that had quietly started
+    disagreeing again.
     """
     out = tmp_path / "resolution.md"
     code = bench.main(
@@ -1824,10 +1938,18 @@ def test_cli_resolution_does_not_fail_on_its_own_finding(tmp_path: Path) -> None
         ]
     )
     assert code == bench.EXIT_OK
-    assert DISAGREE in out.read_text(encoding="utf-8"), (
-        "no level disagreed at this length, so this run does not show that the "
+    report = out.read_text(encoding="utf-8")
+    assert COULD_NOT_EVALUATE in report, (
+        "no level refused at this length, so this run does not show that the "
         "exit code is independent of the per-level verdicts. Pick a fixture or a "
         "resolution where they diverge rather than deleting the assertion."
+    )
+    assert DISAGREE not in report, (
+        "a level disagreed on this fixture, where nothing is tampered with and "
+        "every level is as accurate as it claims to be. Before treating this as "
+        "the finding, check it is not a check grading a level against a "
+        "precision finer than that level's own quantum — which is what this "
+        "assertion previously mistook for a measurement."
     )
 
 
@@ -1884,7 +2006,9 @@ def _record_checks(
         keyring=bench.measurement_keyring(0),
     )
     return {
-        q.name: bench.check_level(q, answers, curve.truth)
+        q.name: bench.check_level(
+            q, answers, curve.truth, timestamp_resolution_s=_resolution_of(level)
+        )
         for q in bench.RESOLUTION_QUERIES
         if q.name in _RECORD_QUERIES
     }
@@ -2149,6 +2273,7 @@ def test_a_chain_that_verified_over_a_short_record_is_still_a_disagreement(
         spec,
         bench.LevelAnswers(None, None, None, None, short),
         truth,
+        timestamp_resolution_s=bench.TIME_TOL_S,
     )
     assert check.verdict == DISAGREE
     assert "truncated" in check.detail
@@ -2164,7 +2289,10 @@ def test_a_chain_that_verified_over_a_short_record_is_still_a_disagreement(
     )
     assert (
         bench.check_level(
-            spec, bench.LevelAnswers(None, None, None, None, whole), truth
+            spec,
+            bench.LevelAnswers(None, None, None, None, whole),
+            truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
         ).verdict
         == AGREE
     )
@@ -2189,7 +2317,13 @@ def test_the_chain_walked_without_a_key_is_not_a_chain_that_verified(
     )
     spec = next(q for q in bench.RESOLUTION_QUERIES if q.name == "verify_chain")
     assert (
-        bench.check_level(spec, answers, curve.truth).verdict == COULD_NOT_EVALUATE
+        bench.check_level(
+            spec,
+            answers,
+            curve.truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        ).verdict
+        == COULD_NOT_EVALUATE
     )
 
 

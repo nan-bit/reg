@@ -921,6 +921,43 @@ LONG_RUN_HUMAN_DRIFT = 0.10
 LONG_RUN_Q_JITTER = 0.01
 LONG_RUN_HUMAN_JITTER = 0.01
 
+#: The joint box this run's policy declares, added 2026-08-20 with issue #59.
+#:
+#: **Why the long run needs one at all.** `reg.bench --resolution` prices what
+#: each resolution level can still answer, and until issue #59 it measured an
+#: artifact built with `records=None` — so every Layer A question came back
+#: could-not-evaluate for a reason that had nothing to do with resolution. The
+#: curve's fixture is this one, so this is where Layer A has to enter the
+#: measurement.
+#:
+#: **Why this box.** Measured over the trajectory rather than picked: at every
+#: seed tried the run commands `q0` inside [-0.13, 0.13] and `q1` inside
+#: [0.69, 1.65], so `((-0.20, 0.20), (0.60, 1.70))` strictly contains **every
+#: configuration the run visits**. The policy is therefore telling the truth
+#: about where the arm *is*, at every frame of the run.
+#:
+#: **And enforcement still refuses on some of them, which is the point.**
+#: `reg.enforce` does not compare the declared box against the commanded
+#: configuration; it computes the region reachable over the declaration's own
+#: horizon from the arm's state and actuation limits, and checks the declared
+#: region contains it. A moving arm can reach outside a box it never statically
+#: enters, so the claim is honest about position and wrong about reachability —
+#: which is exactly the distinction an attestation layer exists to record, and
+#: it is `declaration_action_mismatch` in the Phase 4 taxonomy.
+#:
+#: **Measured, at 0.5 s replan and 0.5 s horizon** (the parameterization
+#: `reg.bench` states and `tests/test_chain.py` and `tests/test_enforce.py`
+#: already use): over 3,000 frames the run produces 120 declarations, 3,000
+#: verdicts and 24–72 clamped actions at seeds 0–7 — a startup episode plus one
+#: to three mid-run ones, under 2.5% of frames. Rare, seed-robust and non-zero,
+#: which is what a fixture for a *long* run should produce: a fault that only
+#: fires at one seed is a golden value in disguise, and one that fires on most
+#: frames is a robot that is never doing what it said.
+LONG_RUN_DECLARED_Q_BOUNDS: tuple[tuple[float, float], ...] = (
+    (-0.20, 0.20),
+    (0.60, 1.70),
+)
+
 #: Golden-ratio conjugate. `k * _DRIFT_ROTATION mod 1` is equidistributed and
 #: never returns the same value twice, which is exactly the property wanted: the
 #: cycles differ from each other at every run length, with no random draw and no
@@ -1021,7 +1058,9 @@ def long_run(n_frames: int, *, dt: float = DEFAULT_DT) -> Scenario:
             "Generated at any length, for the scaling half of Claim 1 "
             "(issue #30) — the six hand-authored fixtures all run for about six "
             "seconds, which is the one length at which a claim about scaling "
-            "cannot be tested."
+            "cannot be tested. Its policy declares the joint box it works "
+            "within and is occasionally refused for a reachable set that leaves "
+            "it, so the run carries Layer A as well (issue #59)."
         ),
         world=DEMO_WORLD,
         duration=duration,
@@ -1029,6 +1068,13 @@ def long_run(n_frames: int, *, dt: float = DEFAULT_DT) -> Scenario:
         human_waypoints=_pattern_knots(LONG_RUN_HUMAN_PERIOD_S / 2.0, duration, human),
         q_jitter=LONG_RUN_Q_JITTER,
         human_jitter=LONG_RUN_HUMAN_JITTER,
+        # The two policy fields, added by issue #59. Neither touches the motion
+        # and neither reaches the stream's provenance block, so no byte count
+        # measured before this change moves: a build handed `records=None` is
+        # byte-identical to what it was. What they change is that a build handed
+        # a keyring now has declarations, verdicts, faults and two chains in it.
+        declared_q_bounds=LONG_RUN_DECLARED_Q_BOUNDS,
+        fault="declaration_action_mismatch",
         dt=dt,
     )
 

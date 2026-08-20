@@ -25,8 +25,8 @@ indistinguishable from a measurement two pages later.
 
 **3. Compression is only a result if the answers survive it.** A ratio on its own
 is a statement about an encoder. Every scenario therefore also answers one fixed
-audit question — the minimum robot-to-human separation over the run, query 1 of
-docs/lossiness.md's supported set, reduced to a scalar — twice: from the graph
+audit question — the minimum robot-to-human separation over the run,
+`separation_timeline` of docs/lossiness.md's supported set, reduced to a scalar — twice: from the graph
 alone, and from the raw CSV as ground truth. The report carries both answers, the
 verdict (`AGREE` / `DISAGREE` / `COULD-NOT-EVALUATE`), and the wall-clock cost of
 each path. A `DISAGREE` is a bug in the graph, not a tolerance to widen
@@ -62,6 +62,15 @@ tolerances. It reports the divergence rather than tuning it away, and it quotes
 **no ratio against the CSV** — docs/plan.md Claim 1 forbids one while the
 measured ratio is below 1.
 
+**7. What a level costs is only a finding beside what it stops answering**
+(issue #59). The resolution table therefore prices the *questions* as well as the
+bytes: it carries a column naming what each level loses, a coverage block stating
+how many of `docs/lossiness.md`'s supported question set are priced and why every
+other one is excluded, and — since the curve's fixture now carries a policy, an
+enforcer and two hash chains — the four Layer A questions beside the four Layer B
+ones. An excluded question renders as `EXCLUDED` and never as a pass: five
+silently-omitted questions under a row reading `AGREE` reads as full coverage.
+
 WHAT THIS BENCHMARK DOES NOT CLAIM
 ----------------------------------
 * The raw stream is a *simulator state stream*, not a sensor log. It is the
@@ -89,6 +98,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import gzip
+import hashlib
 import math
 import shutil
 import sqlite3
@@ -104,6 +114,7 @@ from typing import Literal
 from shapely.ops import unary_union
 
 from reg import __version__, graph, store
+from reg.chain import KEY_BYTES, ROLES, Keyring, write_keyring
 from reg.envelope import SUBSTEP_DT
 from reg.kinematics import link_polygons
 
@@ -112,18 +123,30 @@ from reg.kinematics import link_polygons
 # of the same name sitting in the global scope is a shadowing bug waiting for the
 # first person who reaches for it inside one of them.
 from reg.query import (
+    CHAIN_VERIFIED,
     COULD_NOT_EVALUATE,
     EDGE_LAYER,
+    LAYER_A,
+    LAYER_B,
     OCCURRENCE_LAYER,
+    PERMITTED_OUTCOME,
     QueryError,
     available_layers,
+    declared_bound,
     did_contact_occur,
     frame_period,
     frame_times,
     min_separation,
+    run_interval,
     separation_timeline,
     time_of_closest_approach,
+    verify_chain,
+    violations,
 )
+# `reg.query.verdicts` under a name that cannot be mistaken for the verdict
+# *vocabulary* this module already owns (`AGREE`/`DISAGREE`/...). Two different
+# meanings of one word inside one file is how the wrong one gets read.
+from reg.query import verdicts as verdicts_of_declaration
 from reg.scenarios import SCENARIOS, Scenario, long_run, scenario
 from reg.sim import DEFAULT_SEED, provenance
 from reg.stream import FLOAT_PRECISION, read_frames, write_frames
@@ -148,16 +171,26 @@ __all__ = [
     "OCCURRENCE_LEVEL",
     "PER_FRAME_LEVEL",
     "QUESTION",
+    "EXCLUDED",
+    "PRICED",
+    "RESOLUTION_DECLARATION_HORIZON_S",
     "RESOLUTION_FRAME_COUNT",
     "RESOLUTION_LEVELS",
     "RESOLUTION_QUERIES",
+    "RESOLUTION_REPLAN_INTERVAL_S",
+    "RESOLUTION_WATCHDOG_PERIOD_S",
+    "RETAINED_CLAUSES_NOT_IN_THE_QUESTION_SET",
     "SCALING_FRAME_COUNTS",
     "SCALING_N_SAMPLES",
+    "SUPPORTED_QUESTIONS",
     "TIMING_REPEATS",
     "TRANSITION_LEVEL",
+    "AttestationAnswers",
+    "AttestationTruth",
     "BenchError",
     "Crossover",
     "GroundTruth",
+    "LevelAnswers",
     "LevelCheck",
     "ResolutionCurve",
     "ResolutionPoint",
@@ -166,10 +199,14 @@ __all__ = [
     "ScenarioResult",
     "SeparationCheck",
     "Sizes",
+    "SupportedQuestion",
     "Timing",
     "agreement",
     "answers_at_level",
+    "attestation_truth",
     "check_level",
+    "coverage",
+    "measurement_keyring",
     "claim_verdict",
     "compression_ratio",
     "crossover",
@@ -219,8 +256,8 @@ GZIP_MTIME = 0
 #: the precision of the timing columns and nothing else in the report.
 TIMING_REPEATS = 3
 
-#: The fixed audit question both paths answer. Query 1 of docs/lossiness.md's
-#: supported question set (`separation_timeline`), reduced to the scalar an
+#: The fixed audit question both paths answer. `separation_timeline` of
+#: docs/lossiness.md's supported question set, reduced to the scalar an
 #: incident review actually asks for. Chosen because it is answerable from
 #: *both* sides: the graph holds it as `min_distance` on `SEPARATION` edges, and
 #: the CSV can be replayed into it frame by frame. A question the CSV could only
@@ -325,6 +362,97 @@ RESOLUTION_FRAME_COUNT = 3_000
 #: quotes for retention and a literal 3600 in the middle of an arithmetic
 #: expression is the kind of number nobody checks.
 SECONDS_PER_HOUR = 3_600.0
+
+# --------------------------------------------------------------------------
+# LAYER A IN THE CURVE (issue #59).
+#
+# Until this issue `_measure` called `graph.build` without `records=`, so every
+# artifact the resolution curve measured held zero declarations, zero verdicts,
+# zero faults and no chain — and the four attestation questions were left out of
+# the table with a note saying no fixture produced them. Both halves of that were
+# true when they were written and neither is now, so the curve carries Layer A
+# and the report prices it.
+#
+# The three parameters below are what a record stream needs and what
+# `reg.graph attestation_from_stream` refuses to invent. They are **stated here
+# and printed in the report**, which is a different thing from a default: a
+# reader of the table can see which parameterization produced the record counts,
+# and `--resolution-replan-interval` and its two siblings move them.
+# --------------------------------------------------------------------------
+
+#: How often the scripted policy replans and issues a declaration, in seconds.
+#: The value `tests/test_chain.py`, `tests/test_declare.py` and
+#: `tests/test_enforce.py` all parameterise their fixtures at, and the one
+#: docs/lossiness.md Retained #5 quotes ("at a 0.5 s replan interval
+#: `declared_violation` produces 251 verdicts"). Not derived from anything in
+#: this file; imported from what the rest of the project already runs at, so
+#: the record counts here are comparable with the ones stated elsewhere.
+RESOLUTION_REPLAN_INTERVAL_S = 0.5
+
+#: How long each declaration claims to be valid for, in seconds. Equal to the
+#: replan interval, which is the shortest `reg.declare` permits: every instant of
+#: the run is covered by a live declaration and none is stale, so the fault the
+#: fixture produces is about the *region* a declaration claimed and never about
+#: its timing. A longer horizon would put two claims in force at once for reasons
+#: that have nothing to do with resolution.
+RESOLUTION_DECLARATION_HORIZON_S = 0.5
+
+#: Seconds of silence from the declaration channel before enforcement passivates.
+#: Twice the replan interval — one missed declaration is a hiccup, two is a dead
+#: channel — and the value `tests/test_chain.py` and `tests/test_enforce.py` use.
+#: The long-run fixture has no silent window, so nothing in this curve should
+#: ever reach it; it is stated because the producer requires it and because a
+#: watchdog that fired would be visible in the fault column rather than silent.
+RESOLUTION_WATCHDOG_PERIOD_S = 1.0
+
+#: Domain separation for `measurement_keyring`. A string rather than a bare
+#: hash so that nothing else in this project can accidentally derive the same
+#: bytes for a different purpose.
+_KEYRING_DOMAIN = "reg.bench measurement keyring — NOT A SECRET"
+
+
+def measurement_keyring(seed: int) -> Keyring:
+    """A keyring derived from the run seed. **These MACs attest to nothing.**
+
+    `reg.chain.generate_keyring` draws from OS entropy and says why: "a seeded
+    secret is not a secret, and a keyring recomputable from a number in the
+    record would make every MAC in that record forgeable by its reader". That is
+    correct, and it is correct *for evidence*. This function is the deliberate
+    exception, in the one place where the records are not evidence:
+
+    * **What is being measured needs a key of the right shape, not a secret.**
+      The curve reports byte counts and whether each level still answers the
+      supported questions. A MAC is 64 hex characters whatever key produced it,
+      so the key's value moves no number in the table.
+    * **Determinism is not optional here** (CLAUDE.md rule 2). Two runs of
+      `python -m reg.bench --resolution` at one seed must produce the same bytes,
+      and `tests/test_bench.py` compares them. A keyring from `secrets` would
+      make the artifact differ between runs in the one column an audit artifact
+      may not.
+    * **It lives here and not in `reg.chain`.** A forgeable-by-construction
+      keyring in the module that signs records is a keyring somebody will sign a
+      run with. The report prints this function's name beside the record counts
+      so that no reader mistakes the curve's chain for a verified provenance.
+
+    Args:
+        seed: the run seed, so two seeds do not share key material even here.
+
+    Returns:
+        A `reg.chain.Keyring` with a key for every role in `reg.chain.ROLES`.
+    """
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise BenchError(
+            f"seed must be an int, got {type(seed).__name__}. The measurement "
+            "keyring is a function of it and has to round-trip exactly."
+        )
+    return Keyring.from_material(
+        **{
+            role: hashlib.sha256(
+                f"{_KEYRING_DOMAIN}/{role}/seed={seed}".encode()
+            ).digest()[:KEY_BYTES]
+            for role in ROLES
+        }
+    )
 
 #: The agreement predicate for query 1, quoted from docs/lossiness.md's table:
 #: "per sampled frame, |d_graph - d_csv| <= DISTANCE_TOL_M". It is imported, not
@@ -823,6 +951,12 @@ def run_scenario(
         substep_dt=substep_dt,
         occurrence_resolution_s=occurrence_resolution_s,
         timing_repeats=timing_repeats,
+        # The per-scenario table is a size comparison against the raw stream and
+        # nothing here is asked a Layer A question, so no record stream is
+        # produced for it. Written down rather than omitted: `records=None` is a
+        # statement that this artifact holds no record, and the artifact says the
+        # same thing in `meta[attestation_records]`.
+        records=None,
     )
 
 
@@ -858,6 +992,10 @@ def run_scaling_point(
             substep_dt=substep_dt,
             occurrence_resolution_s=occurrence_resolution_s,
             timing_repeats=timing_repeats,
+            # The ladder measures the ratio as a function of length, and a
+            # record stream would add a term that scales with the replan rate
+            # rather than with the run. Stated, like `run_scenario`'s.
+            records=None,
         ),
         n_samples=int(n_samples),
         frame_period_s=scn.dt,
@@ -869,11 +1007,16 @@ class ResolutionQuery:
     """One question the curve asks at every level, and how agreement is judged.
 
     `tolerance` is `None` for a question whose answer is not a number — those get
-    exact equality, the same way docs/lossiness.md gives queries 4-8 no numeric
-    tolerance. It is never a knob: every value here is imported from
+    exact equality, the same way docs/lossiness.md gives the attestation queries
+    no numeric tolerance. It is never a knob: every value here is imported from
     `reg.tolerances`, and issue #35 forbids widening any of them, because
     loosening a tolerance changes what the artifact *claims* rather than what it
     *costs*, and cost is the variable under study.
+
+    `layer` is `A` or `B` as docs/plan.md Phase 9 spells them. It is here so the
+    report can state whether the certifiable layer survives coarsening **as a
+    measured result** rather than leaving it to be read off four identical rows
+    (issue #59).
     """
 
     name: str
@@ -884,25 +1027,46 @@ class ResolutionQuery:
     tolerance: float | None
     #: Units for the report's delta column. Prose, not arithmetic.
     unit: str
+    #: `A` (proprioception, the record) or `B` (anything in the world).
+    layer: str
+
+    def __post_init__(self) -> None:
+        if self.layer not in (LAYER_A, LAYER_B):
+            raise BenchError(
+                f"{self.name}: layer is {self.layer!r}, which is neither "
+                f"{LAYER_A!r} nor {LAYER_B!r}. An untagged question cannot be "
+                "counted towards 'the certifiable layer is retained in full', "
+                "which is a claim this report makes from these tags."
+            )
 
 
-#: The questions the curve asks. Every one is answerable from the **raw CSV by
-#: forward kinematics alone**, and that is the selection rule rather than an
-#: accident of what was easy:
+# --------------------------------------------------------------------------
+# THE QUESTIONS ARE NAMED, NOT NUMBERED (issue #59).
+#
+# docs/lossiness.md carries **two** numbered lists — "The supported question
+# set" (nine queries) and "Retained" (ten clauses) — and they do not agree: its
+# Retained #4 is the Declaration clause while its supported-set #4 is
+# `reachable_entities`. A bare "query 4" in this file therefore names one of two
+# different things depending on which list the reader has open, and the comment
+# that used to sit here said "queries 5-8" meaning the first while issue #59
+# read it as the second. Naming them costs a few characters and removes the
+# ambiguity permanently; every name below is a function in `reg.query`.
+# --------------------------------------------------------------------------
+
+#: The questions the curve asks, and it asks every one at every level.
 #:
-#: * docs/lossiness.md's queries 2 and 4 (`first_envelope_intersection`,
-#:   `reachable_entities`) are about the *envelope*, and the only ground truth
-#:   available for them here would be recomputing an envelope per frame with
-#:   `reg.envelope` — the builder's own computation. A check whose ground truth
-#:   reruns the code under test cannot fail, and shipping one would be exactly
-#:   the "harness that has only ever been run against a healthy graph" that
-#:   docs/lossiness.md rules out.
-#: * queries 5-8 are declarations, verdicts and the chain. They are Milestone 3
-#:   and no fixture produces them; asking them here would report
-#:   `COULD-NOT-EVALUATE` for every level and say nothing about resolution.
+#: The four Layer B questions are answerable from the **raw CSV by forward
+#: kinematics alone**, which is their selection rule: a ground truth that
+#: recomputed an envelope would be rerunning `reg.envelope`, the builder's own
+#: computation, and a check whose ground truth reruns the code under test cannot
+#: fail. See `SUPPORTED_QUESTIONS` for the questions that are *not* here and why
+#: each one is out — an omission nobody wrote down reads as full coverage.
 #:
-#: So four questions, each answerable independently, spanning the two things
-#: resolution can cost: a *value* and a *time*.
+#: The four Layer A questions arrived with issue #59, when the curve's fixture
+#: gained a policy and `_measure` started threading `records=` through. Their
+#: ground truth is **the declaration and verdict stream the run emitted**, held
+#: in memory and never read back out of the artifact — the same trap the
+#: envelope questions are excluded for, from the other direction.
 RESOLUTION_QUERIES: tuple[ResolutionQuery, ...] = (
     ResolutionQuery(
         name="min_separation",
@@ -910,6 +1074,7 @@ RESOLUTION_QUERIES: tuple[ResolutionQuery, ...] = (
         predicate="|d_level - d_csv| <= DISTANCE_TOL_M",
         tolerance=DISTANCE_TOL_M,
         unit="m",
+        layer=LAYER_B,
     ),
     ResolutionQuery(
         name="time_of_closest_approach",
@@ -920,16 +1085,19 @@ RESOLUTION_QUERIES: tuple[ResolutionQuery, ...] = (
         ),
         tolerance=TIME_TOL_S,
         unit="s",
+        layer=LAYER_B,
     ),
     ResolutionQuery(
         name="separation_timeline",
         question=(
-            "the robot-to-human separation at every frame (query 1 of "
-            "docs/lossiness.md's supported set, in full)"
+            "the robot-to-human separation at every frame "
+            "(`separation_timeline` of docs/lossiness.md's supported set, in "
+            "full)"
         ),
         predicate="per sampled frame, |d_level - d_csv| <= DISTANCE_TOL_M",
         tolerance=DISTANCE_TOL_M,
         unit="m",
+        layer=LAYER_B,
     ),
     ResolutionQuery(
         name="did_contact_occur",
@@ -937,13 +1105,297 @@ RESOLUTION_QUERIES: tuple[ResolutionQuery, ...] = (
         predicate="exact equality — a missed or invented contact is a failure",
         tolerance=None,
         unit="",
+        layer=LAYER_B,
+    ),
+    ResolutionQuery(
+        name="declared_bound",
+        question=(
+            "every Declaration in force at one instant, in full — the clause "
+            "docs/lossiness.md Retained #4 makes"
+        ),
+        predicate=(
+            "exact equality of (declaration_id, seq, t_issued, horizon, "
+            "action_class) against the emitted stream, and the region each "
+            "claimed must still be reachable from the record"
+        ),
+        tolerance=None,
+        unit="",
+        layer=LAYER_A,
+    ),
+    ResolutionQuery(
+        name="violations",
+        question=(
+            "every commanded action that was not permitted, with its fault code "
+            "and the declaration it was raised against (Retained #6, faults with "
+            "full attribution)"
+        ),
+        predicate=(
+            "exact set equality of (verdict_id, seq, t, outcome, fault, "
+            "declaration_id) — a missed or invented fault is a failure"
+        ),
+        tolerance=None,
+        unit="",
+        layer=LAYER_A,
+    ),
+    ResolutionQuery(
+        name="verdicts",
+        question=(
+            "every Verdict adjudicating one declaration, in full — Retained #5, "
+            "including the bound a CLAMP actually applied"
+        ),
+        predicate=(
+            "exact equality of (verdict_id, seq, t, outcome, fault) against the "
+            "emitted stream; a verdict the record clamped must still name an "
+            "applied region"
+        ),
+        tolerance=None,
+        unit="",
+        layer=LAYER_A,
+    ),
+    ResolutionQuery(
+        name="verify_chain",
+        question=(
+            "both hash chains, walked end to end under the key that signed them "
+            "(Retained #7, the complete hash chain)"
+        ),
+        predicate=(
+            "VERIFIED, and the number of records walked on each chain equals "
+            "the number the run emitted — a chain that verified over a truncated "
+            "record is not a chain that verified"
+        ),
+        tolerance=None,
+        unit="",
+        layer=LAYER_A,
     ),
 )
 
 
+# --------------------------------------------------------------------------
+# COVERAGE (issue #59). Five silently-omitted questions under a row reading
+# AGREE reads as full coverage, so the omissions are enumerated here and printed
+# with the table. An excluded question is a could-not-evaluate and must never
+# render as a pass.
+# --------------------------------------------------------------------------
+
+#: This question is one of `RESOLUTION_QUERIES` and the table prices it.
+PRICED = "PRICED"
+
+#: This question is not asked, for the stated reason. **Not a pass.**
+EXCLUDED = "EXCLUDED"
+
+
+@dataclass(frozen=True)
+class SupportedQuestion:
+    """One question of docs/lossiness.md's supported set, and its bucket here."""
+
+    #: The `reg.query` function that answers it, which is also how
+    #: docs/lossiness.md's table spells it.
+    name: str
+    layer: str
+    status: str
+    #: Why it is excluded, or how it is priced. Never empty: an exclusion with no
+    #: reason is an omission with a label on it.
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.status not in (PRICED, EXCLUDED):
+            raise BenchError(f"{self.name}: {self.status!r} is not a coverage status")
+        if not self.reason:
+            raise BenchError(
+                f"{self.name}: a coverage row with no reason is an omission with "
+                "a label on it."
+            )
+
+
+#: **The denominator.** All nine of docs/lossiness.md's supported question set,
+#: in its order, each in exactly one bucket. Adding a query to that document is
+#: a change to its contract; adding a row here without asking the question is
+#: how a report claims coverage it does not have.
+SUPPORTED_QUESTIONS: tuple[SupportedQuestion, ...] = (
+    SupportedQuestion(
+        name="separation_timeline",
+        layer=LAYER_B,
+        status=PRICED,
+        reason=(
+            "asked in full, plus its two scalar reductions `min_separation` and "
+            "`time_of_closest_approach`"
+        ),
+    ),
+    SupportedQuestion(
+        name="first_envelope_intersection",
+        layer=LAYER_B,
+        status=EXCLUDED,
+        reason=(
+            "the only ground truth available here is recomputing an envelope per "
+            "frame with `reg.envelope`, which is the builder's own computation. "
+            "A check whose ground truth reruns the code under test cannot fail, "
+            "and shipping one would be the 'harness that has only ever been run "
+            "against a healthy graph' docs/lossiness.md rules out"
+        ),
+    ),
+    SupportedQuestion(
+        name="frames_at_risk",
+        layer=LAYER_B,
+        status=EXCLUDED,
+        reason=(
+            "it takes a **threshold** and nothing supplies one. This project "
+            "does not invent a threshold to make a table wider (CLAUDE.md, "
+            "'never invent a default'), and a distance picked here would be "
+            "indistinguishable downstream from one somebody chose. The metric it "
+            "thresholds is priced in full by `separation_timeline`"
+        ),
+    ),
+    SupportedQuestion(
+        name="reachable_entities",
+        layer=LAYER_B,
+        status=EXCLUDED,
+        reason="the envelope again — same reason as `first_envelope_intersection`",
+    ),
+    SupportedQuestion(
+        name="declared_bound",
+        layer=LAYER_A,
+        status=PRICED,
+        reason="added by issue #59, against the declaration stream the run emitted",
+    ),
+    SupportedQuestion(
+        name="violations",
+        layer=LAYER_A,
+        status=PRICED,
+        reason="added by issue #59, against the verdict stream the run emitted",
+    ),
+    SupportedQuestion(
+        name="verdicts",
+        layer=LAYER_A,
+        status=PRICED,
+        reason="added by issue #59, against the verdict stream the run emitted",
+    ),
+    SupportedQuestion(
+        name="verify_chain",
+        layer=LAYER_A,
+        status=PRICED,
+        reason=(
+            "added by issue #59, walked under `measurement_keyring` against the "
+            "record lengths the run emitted"
+        ),
+    ),
+    SupportedQuestion(
+        name="incident_report",
+        layer="A + B",
+        status=EXCLUDED,
+        reason=(
+            "a composition of the eight above, so its agreement is the "
+            "conjunction of theirs and pricing it separately would count the "
+            "same evidence twice under a new name. Its scene clause also "
+            "inherits the envelope exclusion, so it could not come back clean "
+            "here for a reason that has nothing to do with resolution"
+        ),
+    ),
+)
+
+#: Two clauses of docs/lossiness.md's **Retained** list that are not questions in
+#: the supported set, recorded so that neither is silently unmentioned (issue
+#: #59 asked for both to land in a bucket).
+#:
+#: * *Retained #1, every topological relationship* — priced through the
+#:   questions that read it: `did_contact_occur` is the CONTACT relationship and
+#:   `separation_timeline` is the metric on SEPARATION. INTERSECTS has its own
+#:   question, `first_envelope_intersection`, and that one is excluded above, so
+#:   the clause is **partly** priced and the part that is not is the envelope
+#:   part.
+#: * *Retained #9, the layer tag on every edge* — not a question at all. It is
+#:   Claim 3's predicate rather than an audit query, and a level cannot answer it
+#:   right or wrong; `reg.store.EDGE_SPECS` derives the tag from the edge type so
+#:   no view can retag an edge. Out of the denominator, and said rather than
+#:   omitted.
+RETAINED_CLAUSES_NOT_IN_THE_QUESTION_SET: tuple[tuple[str, str], ...] = (
+    (
+        "Retained #1 — every topological relationship",
+        "partly priced: CONTACT by `did_contact_occur`, SEPARATION's metric by "
+        "`separation_timeline`, INTERSECTS only through the excluded "
+        "`first_envelope_intersection`",
+    ),
+    (
+        "Retained #9 — the layer tag on every edge",
+        "not a question: Claim 3's predicate, derived from the edge type by "
+        "`reg.store.EDGE_SPECS`, so no level can answer it right or wrong",
+    ),
+)
+
+
+def coverage() -> tuple[int, int]:
+    """`(priced, total)` over `SUPPORTED_QUESTIONS`. The report's headline
+    fraction, computed rather than typed into a sentence that would go stale."""
+    return (
+        sum(1 for q in SUPPORTED_QUESTIONS if q.status == PRICED),
+        len(SUPPORTED_QUESTIONS),
+    )
+
+
+# A question marked PRICED that nobody asks is the failure this whole section
+# exists to prevent, wearing the label of its own fix. Checked at import so it
+# cannot be introduced by an edit to one of the two tables alone.
+_UNASKED = {q.name for q in SUPPORTED_QUESTIONS if q.status == PRICED} - {
+    q.name for q in RESOLUTION_QUERIES
+}
+if _UNASKED:  # pragma: no cover - construction-time invariant
+    raise BenchError(
+        f"{sorted(_UNASKED)} are marked {PRICED} in SUPPORTED_QUESTIONS and are "
+        "not in RESOLUTION_QUERIES, so the coverage line would claim a question "
+        "the table never asks."
+    )
+del _UNASKED
+
+
+@dataclass(frozen=True)
+class AttestationTruth:
+    """Layer A ground truth: **the record stream the run emitted**, reduced.
+
+    Not read back out of the artifact, and that is the whole design of it. A
+    ground truth recovered from the file under test cannot disagree with the file
+    under test, which is precisely why docs/lossiness.md's envelope questions are
+    excluded from this table — and a Layer A check built that way would fall into
+    the same hole from the other side. Everything here comes from the
+    `AttestationRecords` the producers returned, before anything was stored.
+
+    `t_probe` and `probe_declaration_id` are **derived, not chosen**:
+    `declared_bound` and `verdicts` each take an argument, so the curve has to
+    ask about *some* instant and *some* declaration, and picking one by hand
+    would make the answer a property of the pick. See `attestation_truth`.
+    """
+
+    #: How many records the run emitted, per chain. What `verify_chain` must
+    #: have walked: a chain that verified over a truncated record is not a chain
+    #: that verified.
+    declaration_count: int
+    verdict_count: int
+    #: Every adjudication the run produced that was not a PERMIT. This is the
+    #: fault set with its attribution attached.
+    fault_count: int
+
+    #: The instant `declared_bound` is asked about.
+    t_probe: float
+    #: `(declaration_id, seq, t_issued, horizon, action_class)` for every
+    #: declaration in force at `t_probe`, in chain order.
+    declared_at_probe: tuple[tuple[str, int, float, float, str], ...]
+
+    #: `(verdict_id, seq, t, outcome, fault, declaration_id)` for every verdict
+    #: the run emitted whose outcome was not PERMIT, in chain order.
+    violations: tuple[tuple[str, int, float, str, str | None, str | None], ...]
+
+    #: The declaration `verdicts` is asked about.
+    probe_declaration_id: str
+    #: `(verdict_id, seq, t, outcome, fault, applied_a_bound)` for every verdict
+    #: naming `probe_declaration_id`. `applied_a_bound` is whether the *record*
+    #: carries a clamped envelope, which is the field docs/lossiness.md Retained
+    #: #5 means by "the clamped envelope where one was applied".
+    adjudications_of_probe: tuple[
+        tuple[str, int, float, str, str | None, bool], ...
+    ]
+
+
 @dataclass(frozen=True)
 class GroundTruth:
-    """The four answers recomputed from the raw stream. Computed **once**.
+    """The Layer B answers recomputed from the raw stream. Computed **once**.
 
     Once, and shared by every level, for the same reason the curve is three views
     of one build: a ground truth recomputed per level would differ between levels
@@ -979,10 +1431,48 @@ class GroundTruth:
     #: `(t, unquantized distance)` per frame, in frame order.
     timeline: tuple[tuple[float, float], ...]
     contact_occurred: bool
+    #: Layer A truth, or `None` for a build that was handed no record stream.
+    #:
+    #: **Required, with no default** (issue #59). `None` here means every Layer A
+    #: question comes back could-not-evaluate, which is a real state — it is what
+    #: `run_scenario` produces — and it is also exactly the state the curve was
+    #: silently in before this issue. A default would let a caller reach it
+    #: without saying so, which is how the bug happened the first time.
+    attestation: AttestationTruth | None
 
     @property
     def frames(self) -> int:
         return len(self.timeline)
+
+
+@dataclass(frozen=True)
+class AttestationAnswers:
+    """What one level can say about the record, with `None` for "it cannot say".
+
+    A separate dataclass from `LevelAnswers` because these four answers are read
+    through a different door: `reg.query`'s record readers refuse on
+    `meta[attestation_records]` rather than on which layer table has rows, and
+    `reg.chain` walks the chain itself. Keeping them apart means a level with no
+    record cannot accidentally be scored against a Layer B refusal.
+    """
+
+    #: `(declaration_id, seq, t_issued, horizon, action_class)` in force at the
+    #: probe instant, or `None` where the level refused.
+    declared_at_probe: tuple[tuple[str, int, float, float, str], ...] | None
+    #: Whether every declaration in force at the probe instant still names the
+    #: region it claimed. `None` where the level refused outright.
+    declared_regions_present: bool | None
+    #: `(verdict_id, seq, t, outcome, fault, declaration_id)` for every
+    #: adjudication in the run window that was not a PERMIT.
+    violations: tuple[tuple[str, int, float, str, str | None, str | None], ...] | None
+    #: `(verdict_id, seq, t, outcome, fault, applied_a_bound)` for the probe
+    #: declaration, where `applied_a_bound` is whether the artifact still holds
+    #: the ENFORCED edge to the region the clamp applied.
+    adjudications_of_probe: (
+        tuple[tuple[str, int, float, str, str | None, bool], ...] | None
+    )
+    #: `(state, declarations_walked, verdicts_walked)` from `reg.chain`.
+    chain: tuple[str, int, int] | None
 
 
 @dataclass(frozen=True)
@@ -999,6 +1489,9 @@ class LevelAnswers:
     t_closest_approach: float | None
     timeline: tuple[tuple[float, float], ...] | None
     contact_occurred: bool | None
+    #: The record answers. **Required, with no default**, for the reason
+    #: `GroundTruth.attestation` gives.
+    attestation: AttestationAnswers | None
 
 
 @dataclass(frozen=True)
@@ -1024,10 +1517,26 @@ class ResolutionPoint:
     nodes: int
     edges: int
     occurrences: int
+    #: `declaration` + `verdict` rows retained at this level (issue #59). Zero on
+    #: a build that was handed no record stream, which the report distinguishes
+    #: from a run that produced none.
+    records: int
     #: Robot time in the run, so `bytes_per_hour` is a rate this point can state
     #: on its own rather than one only the curve can assemble.
     run_seconds: float
     checks: tuple[LevelCheck, ...]
+
+    @property
+    def lost(self) -> tuple[str, ...]:
+        """The questions this level does **not** answer, by name.
+
+        The price column (issue #59). A row of byte counts beside a column of
+        verdicts leaves "what do you lose for the 12x" as an exercise for the
+        reader, and a reader who does not do the exercise reads a small number
+        and a clean-looking table. This is the same information stated as a
+        list, in the units the question set is written in.
+        """
+        return tuple(c.query for c in self.checks if c.verdict != AGREE)
 
     @property
     def bytes_per_hour(self) -> float:
@@ -1085,10 +1594,68 @@ class ResolutionCurve:
     source: ScenarioResult
     truth: GroundTruth
     points: tuple[ResolutionPoint, ...]
+    #: The record-stream parameterization the fixture's policy ran under, so a
+    #: reader can see which one produced the counts below. Three numbers, none of
+    #: them invented at a call site (issue #59).
+    replan_interval_s: float
+    declaration_horizon_s: float
+    watchdog_period_s: float
 
     @property
     def run_seconds(self) -> float:
         return (self.frames - 1) * float(self.frame_period_s)
+
+    @property
+    def attestation_counts(self) -> dict[str, int]:
+        """What Layer A the build actually contains. **All four, always.**
+
+        `declarations`, `verdicts`, `faults` and `chain_records`. A zero here is
+        the bug issue #59 exists to fix, so the report prints the four numbers
+        and `tests/test_bench.py` asserts each is non-zero — a silently-zero
+        count is invisible in a byte column and in an agreement column alike.
+        """
+        attestation = self.truth.attestation
+        if attestation is None:
+            return {
+                "declarations": 0,
+                "verdicts": 0,
+                "faults": 0,
+                "chain_records": 0,
+            }
+        return {
+            "declarations": attestation.declaration_count,
+            "verdicts": attestation.verdict_count,
+            "faults": attestation.fault_count,
+            # Both chains, which is what `verify_chain` walks. Not a third
+            # number: the chain is the two record streams linked, so its length
+            # is their sum by construction and stating it separately would
+            # invite the two to drift.
+            "chain_records": (
+                attestation.declaration_count + attestation.verdict_count
+            ),
+        }
+
+    @property
+    def layer_a_is_resolution_independent(self) -> bool:
+        """Whether every Layer A question `AGREE`s at **every** level.
+
+        The result issue #59 asked to be stated rather than inferred: if the
+        certifiable layer survives coarsening intact, the report says so in a
+        sentence, and if it does not, the report says which question is lost
+        where. Reading it off four identical rows is what this replaces.
+
+        `False` when there is no Layer A to be independent *of* — a curve with no
+        record stream has not demonstrated anything about retaining one.
+        """
+        layer_a = {q.name for q in RESOLUTION_QUERIES if q.layer == LAYER_A}
+        if not layer_a or self.truth.attestation is None or not self.points:
+            return False
+        return all(
+            check.verdict == AGREE
+            for point in self.points
+            for check in point.checks
+            if check.query in layer_a
+        )
 
 
 def _work_paths(scn: Scenario, work_dir: str | Path) -> tuple[Path, Path]:
@@ -1127,8 +1694,17 @@ def _measure(
     substep_dt: float,
     occurrence_resolution_s: float,
     timing_repeats: int,
+    records: graph.AttestationRecords | None,
 ) -> ScenarioResult:
-    """Simulate one scenario, build its graph, and measure both. No defaults."""
+    """Simulate one scenario, build its graph, and measure both. No defaults.
+
+    `records` is **required and has no default** (issue #59). Until then this
+    function called `graph.build` without the argument at all, so every artifact
+    it measured held zero declarations, zero verdicts and no chain — and nothing
+    said so, because a build handed no record stream and a run that produced none
+    look identical in a byte count. `None` is still a legitimate value; it is the
+    fact that a caller has to write it down that stops the omission recurring.
+    """
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1145,6 +1721,7 @@ def _measure(
         seed=envelope_seed,
         substep_dt=substep_dt,
         occurrence_resolution_s=occurrence_resolution_s,
+        records=records,
     )
 
     sizes = Sizes(
@@ -1273,13 +1850,44 @@ def materialize_level(
     return out_path
 
 
+#: The edge types the per-frame view expands, and the reason it is a list of
+#: types rather than `layer = 'B'` (issue #59).
+#:
+#: An interval on one of these asserts a relationship *held at every frame under
+#: it*, which is what makes expanding it a restatement rather than an invention.
+#: The four attestation edges assert nothing of the kind: a `DECLARED` edge spans
+#: a declaration's validity window, an `ADJUDICATED` edge names one instant, and
+#: a `FOLLOWS` edge links two records that are not events in the scene at all.
+#: Expanding those produced 26 copies of every declaration in force at an instant
+#: — `declared_bound` came back with 52 bounds where the run had 2 — which would
+#: have been reported as the per-frame *level* answering wrongly, a finding about
+#: this function wearing the label of a finding about resolution.
+#:
+#: `HAS_ENVELOPE` is here and is Layer A: it is proprioception over an interval
+#: and it does hold at every frame under it (docs/lossiness.md Discarded #10).
+#: So the split is by what an interval means, not by which layer wrote it — and
+#: naming the types keeps this view's byte count identical to what it measured
+#: before Layer A entered the curve.
+_EXPANDED_EDGE_TYPES: tuple[str, ...] = (
+    "HAS_ENVELOPE",
+    "INTERSECTS",
+    "SEPARATION",
+    "CONTACT",
+)
+
+
 def _expand_to_frames(conn: sqlite3.Connection) -> None:
-    """Replace every interval with one row per frame it covers.
+    """Replace every relationship interval with one row per frame it covers.
 
     The incremental rule run backwards. An edge spanning `[t_start, t_end]`
     asserts the relationship held at every frame in it, so expanding it invents
     nothing — it writes down what the interval already says, once per frame,
     which is what the artifact would have cost without the rule.
+
+    **The record edges are left exactly as they are.** See
+    `_EXPANDED_EDGE_TYPES`: they are not relationships-per-frame, and copying a
+    hash-chain link once per frame would assert a link at instants where there
+    is none.
 
     **What this view is not.** It does not restore the per-frame `robot_config`
     and `envelope` rows that issue #29 removed: those were discarded at build
@@ -1294,9 +1902,17 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
     # sampling would let the view and the query disagree about which frames the
     # run had, which is the disagreement no table would show.
     times = _asking(conn, "the per-frame view", frame_times)
-    rows = store.read_edges(conn)
+    rows = [
+        row
+        for row in store.read_edges(conn)
+        if str(row["type"]) in _EXPANDED_EDGE_TYPES
+    ]
     period = _asking(conn, "the per-frame view", frame_period)
-    conn.execute("DELETE FROM edge")
+    placeholders = ", ".join("?" for _ in _EXPANDED_EDGE_TYPES)
+    conn.execute(
+        f"DELETE FROM edge WHERE type IN ({placeholders})",  # noqa: S608 - literals
+        _EXPANDED_EDGE_TYPES,
+    )
     for row in rows:
         t_start = float(row["t_start"])
         t_end = float(row["t_end"])
@@ -1351,8 +1967,95 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
 # --------------------------------------------------------------------------
 
 
-def ground_truth_from_csv(csv_path: str | Path, world: World) -> GroundTruth:
-    """The four answers recomputed from the raw stream, in one pass.
+def attestation_truth(records: graph.AttestationRecords) -> AttestationTruth:
+    """Layer A ground truth from the emitted record stream. Never from the file.
+
+    **How the two probe arguments are derived.** `declared_bound` takes an
+    instant and `verdicts` takes a declaration id, so the curve has to name one
+    of each, and a hand-picked pair would make the answer a property of the pick.
+
+    * `t_probe` is the `t_issued` of the **middle declaration in chain order**.
+      The middle rather than the first because the first is a run's opening
+      frame, where nothing has happened yet; and `t_issued` rather than an
+      arbitrary instant because it is the one instant where two claims are in
+      force when the horizon equals the replan interval — which exercises
+      `DeclaredBounds` holding more than one bound, the case a single-bound
+      comparison would never reach.
+    * `probe_declaration_id` is the **first declaration any non-PERMIT verdict
+      names**, falling back to the first declaration when the run produced no
+      fault. A declaration that was adjudicated both ways is the one whose
+      verdict list says something; one that was permitted throughout would make
+      the check a check on a run of identical rows.
+
+    Raises:
+        BenchError: the stream holds no declaration at all. That is a run whose
+            policy never spoke, which is a finding
+            (`reg.scenarios.NO_DECLARATION` produces it) and not something to
+            probe — every question below would name a record that is not there.
+    """
+    declarations = records.declarations
+    verdicts = records.verdicts
+    if not declarations:
+        raise BenchError(
+            "this run emitted no declaration, so there is no instant to ask "
+            "`declared_bound` about and no record for `verdicts` to name. A "
+            "policy that never declared is a finding about the run — the "
+            "no_declaration fault — and not a fixture the resolution curve can "
+            "price Layer A on."
+        )
+
+    t_probe = float(declarations[len(declarations) // 2].t_issued)
+    declared_at_probe = tuple(
+        (d.declaration_id, int(d.seq), float(d.t_issued), float(d.horizon), d.action_class)
+        for d in declarations
+        if d.t_issued <= t_probe <= d.t_issued + d.horizon
+    )
+
+    faults = tuple(v for v in verdicts if v.outcome != PERMITTED_OUTCOME)
+    probe_declaration_id = next(
+        (v.declaration_id for v in faults if v.declaration_id is not None),
+        declarations[0].declaration_id,
+    )
+    return AttestationTruth(
+        declaration_count=len(declarations),
+        verdict_count=len(verdicts),
+        fault_count=len(faults),
+        t_probe=t_probe,
+        declared_at_probe=declared_at_probe,
+        violations=tuple(
+            (
+                v.verdict_id,
+                int(v.seq),
+                float(v.t),
+                v.outcome,
+                v.fault,
+                v.declaration_id,
+            )
+            for v in faults
+        ),
+        probe_declaration_id=probe_declaration_id,
+        adjudications_of_probe=tuple(
+            (
+                v.verdict_id,
+                int(v.seq),
+                float(v.t),
+                v.outcome,
+                v.fault,
+                v.clamped_envelope is not None,
+            )
+            for v in verdicts
+            if v.declaration_id == probe_declaration_id
+        ),
+    )
+
+
+def ground_truth_from_csv(
+    csv_path: str | Path,
+    world: World,
+    *,
+    records: graph.AttestationRecords | None,
+) -> GroundTruth:
+    """The Layer B answers recomputed from the raw stream, in one pass.
 
     Forward kinematics from `frame.proprio()` and `world.limits` — Layer A inputs
     even here — against the human disc, exactly as `min_separation_from_csv`
@@ -1363,6 +2066,13 @@ def ground_truth_from_csv(csv_path: str | Path, world: World) -> GroundTruth:
     It takes no entity argument, unlike `answers_at_level`: the human is the only
     entity whose position the raw stream carries per frame, so it is the only one
     this path can recompute anything about at all.
+
+    `records` is required and has no default (issue #59). It is the run's emitted
+    record stream, or `None` for a build that was handed none — in which case
+    every Layer A question in `RESOLUTION_QUERIES` reports could-not-evaluate,
+    which is the honest answer and is what the whole coverage block exists to
+    make visible rather than silent. The records are **not** read from the
+    artifact and must not be: see `AttestationTruth`.
     """
     timeline: list[tuple[float, float]] = []
     contact = False
@@ -1403,6 +2113,7 @@ def ground_truth_from_csv(csv_path: str | Path, world: World) -> GroundTruth:
         closest_approach_candidates=candidates,
         timeline=tuple(timeline),
         contact_occurred=contact,
+        attestation=None if records is None else attestation_truth(records),
     )
 
 
@@ -1427,13 +2138,18 @@ def _answer_value(answer) -> object | None:
 
 
 def answers_at_level(
-    view_path: str | Path, level: str, entity_id: str = graph.HUMAN_ENTITY_ID
+    view_path: str | Path,
+    level: str,
+    *,
+    attestation: AttestationTruth | None,
+    keyring: Keyring | None,
+    entity_id: str = graph.HUMAN_ENTITY_ID,
 ) -> LevelAnswers:
     """What one level's view can answer — asked through `reg.query`.
 
     **This function no longer knows how to answer anything** (issue #37). It
     opens the view, checks the view really is the level it claims to be, and
-    puts the four questions to `reg.query`, which is the module that cannot read
+    puts the questions to `reg.query`, which is the module that cannot read
     the raw stream. The benchmark used to hold its own copies of these queries,
     and two implementations of one question is two answers to it — with the
     graph-versus-CSV comparison in this file silently checking one of them.
@@ -1445,6 +2161,22 @@ def answers_at_level(
     fall back on the finer layer would report the finer layer's answers at the
     coarser layer's byte count — so the fallback is checked for, and a view
     still holding a foreign layer is a `BenchError` rather than a good number.
+
+    **The record layer is not one of the two layers that check applies to**
+    (issue #59). `reg.query.available_layers` deliberately answers "which
+    resolution of the *scene* is in this file", and the record is beside both —
+    it is never coarsened, and `materialize_level` empties no record table. So an
+    attested view is not a contaminated view, and the four Layer A questions are
+    asked at every level rather than gated on the level.
+
+    Args:
+        attestation: Layer A ground truth, or `None`. `None` is "this build was
+            handed no record stream", and the four record questions then come
+            back `None` — could-not-evaluate, never agreement.
+        keyring: the keyring the records were signed under, or `None`. Required
+            and undefaulted for the reason `reg.chain.verify_chain` gives: a
+            caller that had not thought about the key would otherwise get
+            something that looks like a verification and checked no signature.
     """
     if level not in RESOLUTION_LEVELS:
         raise BenchError(
@@ -1473,10 +2205,121 @@ def answers_at_level(
                 ),
                 timeline=_timeline_of(separation_timeline(c, entity_id)),
                 contact_occurred=_answer_value(did_contact_occur(c, entity_id)),
+                attestation=(
+                    None
+                    if attestation is None
+                    else _record_answers(c, attestation, keyring)
+                ),
             ),
         )
     finally:
         conn.close()
+
+
+def _record_answers(
+    conn: sqlite3.Connection,
+    truth: AttestationTruth,
+    keyring: Keyring | None,
+) -> AttestationAnswers:
+    """The four record questions, put to one view. Every refusal stays a refusal.
+
+    Each `None` below is a `reg.query` refusal travelling out unchanged. None of
+    them is turned into an empty tuple on the way: "this level holds no
+    declaration in force at t" and "the policy claimed nothing at t" are
+    different facts and the second is a serious finding.
+    """
+    declared = declared_bound(conn, truth.t_probe)
+    declared_value = _answer_value(declared)
+    refused = violations(conn, _run_window(conn))
+    refused_value = _answer_value(refused)
+    adjudications = _adjudications_of(conn, truth.probe_declaration_id)
+    report = verify_chain(conn, keyring)
+
+    return AttestationAnswers(
+        declared_at_probe=(
+            None
+            if declared_value is None
+            else tuple(
+                (b.declaration_id, b.seq, b.t_issued, b.horizon, b.action_class)
+                for b in declared_value.bounds  # type: ignore[union-attr]
+            )
+        ),
+        declared_regions_present=(
+            None
+            if declared_value is None
+            else all(
+                b.envelope_id is not None
+                for b in declared_value.bounds  # type: ignore[union-attr]
+            )
+        ),
+        violations=(
+            None
+            if refused_value is None
+            else tuple(
+                (a.verdict_id, a.seq, a.t, a.outcome, a.fault, a.declaration_id)
+                for a in refused_value.actions  # type: ignore[union-attr]
+            )
+        ),
+        adjudications_of_probe=adjudications,
+        chain=_chain_summary(report),
+    )
+
+
+def _run_window(conn: sqlite3.Connection) -> tuple[float, float]:
+    """The whole run, as a window for `violations`.
+
+    From `meta` through `reg.query.run_interval` rather than from the record's
+    own timestamps: a window derived from the verdicts would be a window that
+    cannot exclude a verdict, and the check would be unable to notice a record
+    the artifact placed outside the run.
+    """
+    return _asking(conn, "the run window", run_interval)
+
+
+def _adjudications_of(
+    conn: sqlite3.Connection, declaration_id: str
+) -> tuple[tuple[str, int, float, str, str | None, bool], ...] | None:
+    """`verdicts(declaration_id)` reduced, or `None` where the level refused.
+
+    A `QueryError` here — the view holds no such declaration — is a refusal and
+    not a benchmark failure, unlike everywhere else in this file: a level whose
+    record table lost the declaration cannot adjudicate it, and that is exactly
+    the could-not-evaluate this question exists to be able to report.
+    """
+    try:
+        answer = verdicts_of_declaration(conn, declaration_id)
+    except QueryError:
+        return None
+    value = _answer_value(answer)
+    if value is None:
+        return None
+    return tuple(
+        (
+            a.verdict_id,
+            a.seq,
+            a.t,
+            a.outcome,
+            a.fault,
+            a.applied_envelope_id is not None,
+        )
+        for a in value.adjudications  # type: ignore[union-attr]
+    )
+
+
+def _chain_summary(report) -> tuple[str, int, int] | None:
+    """`(state, declarations_walked, verdicts_walked)` from a `ChainReport`.
+
+    `None` when the report names no chain at all, which is a file this walk did
+    not recognise rather than a chain that verified.
+    """
+    walked = {result.kind: int(result.records_walked) for result in report.chains}
+    if not walked:  # pragma: no cover - CHAINS is a fixed pair
+        return None
+    return (
+        str(report.state.value),
+        walked.get("Declaration", 0),
+        walked.get("Verdict", 0),
+    )
 
 
 def _timeline_of(answer) -> tuple[tuple[float, float], ...] | None:
@@ -1511,6 +2354,8 @@ def check_level(
         return _timeline_check(query, answers.timeline, truth)
     if query.name == "did_contact_occur":
         return _boolean_check(query, answers.contact_occurred, truth)
+    if query.name in _RECORD_CHECKS:
+        return _record_check(query, answers, truth)
     raise BenchError(  # pragma: no cover - RESOLUTION_QUERIES is the only source
         f"{query.name!r} has no implementation. A query in the table with no way "
         "to answer it would print as could-not-evaluate at every level, which "
@@ -1652,10 +2497,270 @@ def _boolean_check(
     )
 
 
-def _level_counts(view_path: Path) -> tuple[int, int, int]:
-    """`(nodes, edges, occurrences)` in one view. Occurrences counted twice on
-    purpose — once inside the node total, once on their own — because the whole
-    table exists to compare a layer of occurrences against a layer of edges."""
+# --------------------------------------------------------------------------
+# The four record questions, judged (issue #59).
+#
+# THE GROUND TRUTH IS THE EMITTED STREAM AND NEVER THE ARTIFACT. Every predicate
+# below compares a level's answer against `AttestationTruth`, which was built
+# from the `AttestationRecords` the producers returned before anything was
+# stored. Reading the truth back out of the file under test is the trap
+# `first_envelope_intersection` is excluded for, and it is available here in a
+# form that looks much more innocent: `reg.store.read_declarations` would hand
+# back exactly what was written, so the check would pass on any artifact that
+# was internally consistent, including one that lost half the run.
+#
+# NO NUMERIC TOLERANCE ON ANY OF THEM. docs/lossiness.md: "Attestation queries
+# get no numeric tolerance. They are Layer A, they are exact by construction, and
+# a tolerance on them would mean the record is fuzzy about what the policy
+# declared."
+# --------------------------------------------------------------------------
+
+#: The record questions, so `check_level` can dispatch on membership rather than
+#: on four more string comparisons that could fall through to the raise.
+_RECORD_CHECKS: frozenset[str] = frozenset(
+    {"declared_bound", "violations", "verdicts", "verify_chain"}
+)
+
+
+def _record_check(
+    query: ResolutionQuery, answers: LevelAnswers, truth: GroundTruth
+) -> LevelCheck:
+    """Route one record question, after the two ways it can be unaskable."""
+    if truth.attestation is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail=(
+                "this build was handed no record stream, so there is no emitted "
+                "declaration or verdict to check the artifact against"
+            ),
+        )
+    if answers.attestation is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail="this level was not asked the record questions",
+        )
+    if query.name == "declared_bound":
+        return _declared_bound_check(query, answers.attestation, truth.attestation)
+    if query.name == "violations":
+        return _violations_check(query, answers.attestation, truth.attestation)
+    if query.name == "verdicts":
+        return _verdicts_check(query, answers.attestation, truth.attestation)
+    return _chain_check(query, answers.attestation, truth.attestation)
+
+
+def _declared_bound_check(
+    query: ResolutionQuery, answers: AttestationAnswers, truth: AttestationTruth
+) -> LevelCheck:
+    """"What did the policy claim at `t`?" — Retained #4, in full.
+
+    Three outcomes, and the middle one is the interesting one: a level that holds
+    the declaration rows but no longer holds the region each declaration claimed
+    answers the smaller question in the shape of this one, so it reports
+    could-not-evaluate rather than agreement. `reg.query.declared_bound` already
+    refuses that case outright, which is what this check is relying on and why
+    the second branch exists at all: it is here so that a future artifact which
+    *did* answer with a missing region could not be scored as a pass.
+    """
+    if answers.declared_at_probe is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail=(
+                f"this level states no declaration in force at t={truth.t_probe}"
+            ),
+        )
+    if answers.declared_regions_present is False:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail=(
+                "the declarations in force are present but the region each "
+                "claimed is not; a claim without its region is not a bound"
+            ),
+        )
+    if answers.declared_at_probe == truth.declared_at_probe:
+        return LevelCheck(
+            query=query.name,
+            verdict=AGREE,
+            detail=(
+                f"{len(truth.declared_at_probe)} declaration(s) in force at "
+                f"t={truth.t_probe}, every field equal to the emitted record"
+            ),
+        )
+    return LevelCheck(
+        query=query.name,
+        verdict=DISAGREE,
+        detail=(
+            f"at t={truth.t_probe} the level reports "
+            f"{[b[0] for b in answers.declared_at_probe]} and the emitted stream "
+            f"has {[b[0] for b in truth.declared_at_probe]}"
+        ),
+    )
+
+
+def _violations_check(
+    query: ResolutionQuery, answers: AttestationAnswers, truth: AttestationTruth
+) -> LevelCheck:
+    """Every refused action with its fault and its attribution — Retained #6.
+
+    Exact set equality, which docs/lossiness.md states for this question and
+    means literally: "a missed or invented fault is a failure". The tuple carries
+    `declaration_id` because a fault with no attributable origin is a defect
+    rather than a retained fault, so a level that kept the fault codes and lost
+    which claim they were raised against has not answered this question.
+    """
+    if answers.violations is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail="this level holds no adjudication to read a fault out of",
+        )
+    if answers.violations == truth.violations:
+        detail = (
+            f"{len(truth.violations)} refused action(s), every "
+            "(verdict, t, outcome, fault, declaration) equal to the emitted "
+            "stream"
+        )
+        if not truth.violations:
+            detail += " — and the run refused none, so this is agreement on a negative"
+        return LevelCheck(query=query.name, verdict=AGREE, detail=detail)
+    missing = [v for v in truth.violations if v not in set(answers.violations)]
+    invented = [v for v in answers.violations if v not in set(truth.violations)]
+    return LevelCheck(
+        query=query.name,
+        verdict=DISAGREE,
+        detail=(
+            f"{len(missing)} refused action(s) missing and {len(invented)} not in "
+            f"the emitted stream, of {len(truth.violations)} emitted"
+        ),
+    )
+
+
+def _verdicts_check(
+    query: ResolutionQuery, answers: AttestationAnswers, truth: AttestationTruth
+) -> LevelCheck:
+    """Every Verdict adjudicating one declaration, in full — Retained #5.
+
+    The record fields are compared exactly. The **applied bound** is compared
+    separately and reports could-not-evaluate rather than disagreement when it is
+    the only thing missing, because those are two different failures: a level
+    that named a verdict enforcement never issued is wrong, and a level that
+    holds the verdict but has lost the region the clamp applied has not answered.
+    Collapsing them would let the second read as the first — or, if it went the
+    other way, let a level that lost the clamped bound score `AGREE` on "in
+    full".
+    """
+    if answers.adjudications_of_probe is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail=(
+                f"this level holds no adjudication of "
+                f"{truth.probe_declaration_id!r}"
+            ),
+        )
+    level_fields = tuple(a[:5] for a in answers.adjudications_of_probe)
+    truth_fields = tuple(a[:5] for a in truth.adjudications_of_probe)
+    if level_fields != truth_fields:
+        return LevelCheck(
+            query=query.name,
+            verdict=DISAGREE,
+            detail=(
+                f"{len(level_fields)} adjudication(s) of "
+                f"{truth.probe_declaration_id!r} against "
+                f"{len(truth_fields)} in the emitted stream, or a field differs"
+            ),
+        )
+    lost_bounds = [
+        a[0]
+        for a, expected in zip(answers.adjudications_of_probe, truth.adjudications_of_probe)
+        if expected[5] and not a[5]
+    ]
+    if lost_bounds:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail=(
+                f"every field of {len(truth_fields)} adjudication(s) matches, and "
+                f"{len(lost_bounds)} of them applied a bound this level no longer "
+                f"holds (first: {lost_bounds[0]}) — 'in full' includes the "
+                "clamped envelope"
+            ),
+        )
+    return LevelCheck(
+        query=query.name,
+        verdict=AGREE,
+        detail=(
+            f"{len(truth_fields)} adjudication(s) of "
+            f"{truth.probe_declaration_id!r}, every field and every applied bound "
+            "equal to the emitted record"
+        ),
+    )
+
+
+def _chain_check(
+    query: ResolutionQuery, answers: AttestationAnswers, truth: AttestationTruth
+) -> LevelCheck:
+    """Both chains, walked — Retained #7.
+
+    `VERIFIED` alone is not the predicate, and that is the point of comparing the
+    walked counts against the emitted ones: `reg.chain` walks the records the
+    artifact holds, so a view that lost the tail of a chain would come back
+    verified over what is left. The emitted counts are the only thing outside the
+    file that knows how long each chain should have been.
+    """
+    if answers.chain is None:
+        return LevelCheck(
+            query=query.name,
+            verdict=COULD_NOT_EVALUATE,
+            detail="this level holds no chain to walk",
+        )
+    state, declarations, verdict_records = answers.chain
+    expected = (truth.declaration_count, truth.verdict_count)
+    if state != CHAIN_VERIFIED:
+        return LevelCheck(
+            query=query.name,
+            verdict=(
+                COULD_NOT_EVALUATE if state == COULD_NOT_EVALUATE else DISAGREE
+            ),
+            detail=(
+                f"the walk came back {state}, over {declarations} declaration(s) "
+                f"and {verdict_records} verdict(s)"
+            ),
+        )
+    if (declarations, verdict_records) != expected:
+        return LevelCheck(
+            query=query.name,
+            verdict=DISAGREE,
+            detail=(
+                f"VERIFIED over {declarations} declaration(s) and "
+                f"{verdict_records} verdict(s), where the run emitted "
+                f"{expected[0]} and {expected[1]}. A chain that verified over a "
+                "truncated record is not a chain that verified"
+            ),
+        )
+    return LevelCheck(
+        query=query.name,
+        verdict=AGREE,
+        detail=(
+            f"VERIFIED, {declarations} declaration(s) and {verdict_records} "
+            "verdict(s) walked — the lengths the run emitted"
+        ),
+    )
+
+
+def _level_counts(view_path: Path) -> tuple[int, int, int, int]:
+    """`(nodes, edges, occurrences, records)` in one view.
+
+    Occurrences are counted twice on purpose — once inside the node total, once
+    on their own — because the whole table exists to compare a layer of
+    occurrences against a layer of edges. `records` is counted the same way and
+    for the same reason (issue #59): the question the table now has to answer is
+    what the *certifiable* layer costs at each level, and a Layer A row count
+    buried inside the node total cannot answer it.
+    """
     conn = store.connect(view_path)
     try:
         # `store.node_counts` and not a `SELECT count(*)` per table: a view of a
@@ -1664,12 +2769,13 @@ def _level_counts(view_path: Path) -> tuple[int, int, int]:
         counts = store.node_counts(conn)
         nodes = sum(counts.values())
         occurrences = counts["Occurrence"]
+        records = counts["Declaration"] + counts["Verdict"]
         edges = int(
             conn.execute("SELECT count(*) AS n FROM edge").fetchone()["n"]
         )
     finally:
         conn.close()
-    return nodes, edges, occurrences
+    return nodes, edges, occurrences, records
 
 
 def run_resolution_curve(
@@ -1683,6 +2789,9 @@ def run_resolution_curve(
     substep_dt: float,
     occurrence_resolution_s: float,
     timing_repeats: int = TIMING_REPEATS,
+    replan_interval_s: float = RESOLUTION_REPLAN_INTERVAL_S,
+    declaration_horizon_s: float = RESOLUTION_DECLARATION_HORIZON_S,
+    watchdog_period_s: float = RESOLUTION_WATCHDOG_PERIOD_S,
 ) -> ResolutionCurve:
     """Build the long-run fixture once and measure all three views of it.
 
@@ -1691,16 +2800,48 @@ def run_resolution_curve(
     is a correctness requirement as much as a cost one: three builds would differ
     in more than resolution, and the curve would not be about resolution.
 
+    **And the build carries Layer A** (issue #59). The scripted policy and the
+    enforcer run over the stream first, and the record stream they produce goes
+    into the same single build. Everything about that is stated: the three
+    parameters default to the module constants above and the report prints them;
+    the keyring is `measurement_keyring(seed)` and the report says its MACs
+    attest to nothing.
+
     Args:
         frames: the run length. `RESOLUTION_FRAME_COUNT` is what the CLI passes.
         work_dir: where the stream, the artifact and the three views go.
         occurrence_resolution_s: what the occurrence timestamps are rounded to.
             This is the variable the curve exists to price.
+        replan_interval_s, declaration_horizon_s, watchdog_period_s: the record
+            stream's parameterization. Each decides how much of the fault
+            taxonomy can fire at all, so each is a stated value printed with the
+            table rather than a number invented at the call below.
 
     Returns:
         A `ResolutionCurve`, coarsest point first.
     """
     scn = long_run(frames)
+    work_dir = Path(work_dir)
+    csv_path, sqlite_path = _work_paths(scn, work_dir)
+
+    # The producers read the stream, so the stream has to exist before the build
+    # that stores what they produced. `_measure` writes it again at the same path
+    # a moment later, byte for byte — `_write_stream` is a deterministic function
+    # of `(scenario, seed)` — which is cheaper than teaching `_measure` to take a
+    # callback and much cheaper than two definitions of where a stream lives.
+    work_dir.mkdir(parents=True, exist_ok=True)
+    _write_stream(scn, seed, csv_path)
+    keyring = measurement_keyring(seed)
+    keyring_path = write_keyring(keyring, work_dir / "measurement-keyring.json")
+    records = graph.attestation_from_stream(
+        csv_path,
+        scn,
+        keyring_path=keyring_path,
+        replan_interval_s=replan_interval_s,
+        declaration_horizon_s=declaration_horizon_s,
+        watchdog_period_s=watchdog_period_s,
+    )
+
     result = _measure(
         scn,
         work_dir,
@@ -1711,17 +2852,19 @@ def run_resolution_curve(
         substep_dt=substep_dt,
         occurrence_resolution_s=occurrence_resolution_s,
         timing_repeats=timing_repeats,
+        records=records,
     )
-    csv_path, sqlite_path = _work_paths(scn, work_dir)
-    truth = ground_truth_from_csv(csv_path, scn.world)
+    truth = ground_truth_from_csv(csv_path, scn.world, records=records)
 
     points: list[ResolutionPoint] = []
     for level in RESOLUTION_LEVELS:
         view = materialize_level(
-            sqlite_path, level, Path(work_dir) / "views" / f"{level}.sqlite"
+            sqlite_path, level, work_dir / "views" / f"{level}.sqlite"
         )
-        nodes, edges, occurrences = _level_counts(view)
-        answers = answers_at_level(view, level)
+        nodes, edges, occurrences, record_rows = _level_counts(view)
+        answers = answers_at_level(
+            view, level, attestation=truth.attestation, keyring=keyring
+        )
         points.append(
             ResolutionPoint(
                 level=level,
@@ -1734,6 +2877,7 @@ def run_resolution_curve(
                 nodes=nodes,
                 edges=edges,
                 occurrences=occurrences,
+                records=record_rows,
                 run_seconds=(result.frames - 1) * float(scn.dt),
                 checks=tuple(
                     check_level(query, answers, truth)
@@ -1751,6 +2895,9 @@ def run_resolution_curve(
         source=result,
         truth=truth,
         points=tuple(points),
+        replan_interval_s=float(replan_interval_s),
+        declaration_horizon_s=float(declaration_horizon_s),
+        watchdog_period_s=float(watchdog_period_s),
     )
 
 
@@ -2157,6 +3304,200 @@ def _bytes_per_hour_text(value: float) -> str:
     return f"{value:,.0f} B/h"
 
 
+def _lost_text(point: ResolutionPoint) -> str:
+    """The "what you lose" cell: named questions, or the fact that there are none.
+
+    Never an empty cell. A blank in this column would be indistinguishable from a
+    column somebody forgot to fill in, and this is the column that attaches a
+    price to the byte counts beside it.
+    """
+    lost = point.lost
+    if not lost:
+        return "nothing in this table"
+    return ", ".join(f"`{name}`" for name in lost)
+
+
+def _attestation_block(curve: ResolutionCurve) -> list[str]:
+    """What Layer A the measured build actually contains, in four numbers.
+
+    **This block exists because all four were zero and nothing said so.** Until
+    issue #59 the curve called `graph.build` without `records=`, so the artifact
+    every published byte count came from held no declaration, no verdict, no
+    fault and no chain — and the four attestation questions were omitted from the
+    table with a note that no fixture produced them. A zero is invisible in a
+    byte column, so it is printed here as a count and asserted in
+    `tests/test_bench.py`.
+    """
+    counts = curve.attestation_counts
+    lines = ["", "### The Layer A this build contains", ""]
+    if not any(counts.values()):
+        return lines + [
+            "**None.** This build was handed no record stream, so every Layer A",
+            "question below is `COULD-NOT-EVALUATE` for a reason that has nothing",
+            "to do with resolution. That is the state the curve was silently in",
+            "before issue #59, and it is printed rather than left to be inferred",
+            "from a column of identical verdicts.",
+        ]
+    return lines + [
+        f"The fixture's policy declares `{curve.scenario}`'s joint box and is",
+        "occasionally refused for a reachable set that leaves it, so the one build",
+        "the three views come from carries the certifiable layer:",
+        "",
+    ] + _table(
+        ("record", "count", "what it is"),
+        [
+            (
+                "declarations",
+                _int_text(counts["declarations"]),
+                "one per replan interval, each signed under the policy key",
+            ),
+            (
+                "verdicts",
+                _int_text(counts["verdicts"]),
+                "one per commanded action, each signed under the enforcement key",
+            ),
+            (
+                "faults",
+                _int_text(counts["faults"]),
+                "adjudications that were not `PERMIT`, each with a fault code and "
+                "the declaration it was raised against",
+            ),
+            (
+                "chain records",
+                _int_text(counts["chain_records"]),
+                "both chains end to end — what `verify_chain` must walk",
+            ),
+        ],
+    )
+
+
+def _price_of_coarsening(points: Sequence[ResolutionPoint]) -> list[str]:
+    """The size ratio between two adjacent levels **with its price attached**.
+
+    A ratio between two byte counts is a statement about an encoder until it is
+    put beside the questions the smaller one stops answering. This writes both in
+    one sentence per step, which is the thing issue #59 says the 12x was missing.
+    """
+    if len(points) < 2:
+        return []
+    lines = ["", "**What each step down the curve costs, and buys.**", ""]
+    for coarser, finer in zip(points, points[1:]):
+        if coarser.size_bytes <= 0:  # pragma: no cover - a view is never empty
+            continue
+        ratio = finer.size_bytes / coarser.size_bytes
+        # What the *step* costs, not what the coarser level cannot do: a question
+        # neither level answers was not lost by coarsening and attributing it to
+        # this step would price the wrong thing.
+        newly_lost = tuple(name for name in coarser.lost if name not in finer.lost)
+        priced = (
+            "and answers every question in this table that "
+            f"`{finer.level}` does"
+            if not newly_lost
+            else "and stops answering "
+            + ", ".join(f"`{name}`" for name in newly_lost)
+        )
+        lines.append(
+            f"* `{coarser.level}` is **{ratio:,.1f}x smaller** than "
+            f"`{finer.level}` ({_int_text(coarser.size_bytes)} B against "
+            f"{_int_text(finer.size_bytes)} B) {priced}."
+        )
+    return lines
+
+
+def _layer_a_finding(curve: ResolutionCurve) -> list[str]:
+    """Whether the certifiable layer survives coarsening — **as a result**.
+
+    Issue #59: "If Layer A does turn out to be resolution-independent, the report
+    says so as a result rather than leaving it to be inferred from four identical
+    rows." And if it does not, the report has to say which question is lost where,
+    because "mostly independent" printed as a column of verdicts is a reader's job
+    the reader will not do.
+    """
+    layer_a = [q.name for q in RESOLUTION_QUERIES if q.layer == LAYER_A]
+    if curve.truth.attestation is None or not layer_a:
+        return [
+            "",
+            "**Nothing is claimed about Layer A here.** This build holds no record",
+            "stream, so the certifiable layer was not measured at any level and",
+            "the rows above say only that it was not there.",
+        ]
+    if curve.layer_a_is_resolution_independent:
+        return [
+            "",
+            "**The certifiable layer is retained in full at every level; resolution",
+            "costs Layer B geometry only.** Every one of",
+            ", ".join(f"`{name}`" for name in layer_a),
+            "agrees at the occurrence level, at the transition level and at the",
+            "per-frame expansion — `materialize_level` deletes envelope, config,",
+            "edge and occurrence rows and touches no `declaration`, `verdict` or",
+            "chain row at any of them. That is a result of this measurement rather",
+            "than a design statement: it is what the retention rules happen to do,",
+            "and it is written here so the next change to them has something to",
+            "contradict.",
+        ]
+    lost_where = [
+        (f"`{point.level}`", ", ".join(f"`{n}`" for n in point.lost if n in layer_a))
+        for point in curve.points
+        if any(n in layer_a for n in point.lost)
+    ]
+    return [
+        "",
+        "**The certifiable layer is *not* fully resolution-independent, and this",
+        "is where it is lost.** Most of it survives every level — the `declaration`",
+        "and `verdict` tables are untouched by every retention rule, so the record",
+        "itself and both hash chains are there at ±1 s exactly as they are at",
+        "10 ms. But a record is more than its row: the levels that empty the `edge`",
+        "and `envelope` tables take the *region* each record named with them, and a",
+        "declaration without the bound it claimed is not a bound.",
+        "",
+    ] + _table(("level", "Layer A question(s) not answered"), lost_where) + [
+        "",
+        "That is a measurement of `materialize_level`'s retention rules, not a",
+        "claim about what an occurrence-level artifact *must* lose: a rule that",
+        "kept the declared and clamped regions would keep these answers, at a byte",
+        "count this table would then show.",
+    ]
+
+
+def _coverage_block() -> list[str]:
+    """Coverage as a fraction of `docs/lossiness.md`'s supported question set.
+
+    **Five silently-omitted questions under a row reading `AGREE` reads as full
+    coverage.** So the denominator is printed, every omission is named with its
+    reason, and an excluded question is rendered as `EXCLUDED` — a
+    could-not-evaluate — and never as a pass.
+    """
+    priced, total = coverage()
+    return [
+        "",
+        "### Coverage",
+        "",
+        f"**{priced} of {total}** questions in `docs/lossiness.md`'s supported",
+        f"question set are priced by the table above. The other {total - priced}",
+        "are `EXCLUDED`, each with its reason, and an excluded question is a",
+        "**could-not-evaluate** — it is not a question this artifact was shown to",
+        "answer at any resolution.",
+        "",
+    ] + _table(
+        ("question", "layer", "status", "reason"),
+        [(f"`{q.name}`", q.layer, q.status, q.reason) for q in SUPPORTED_QUESTIONS],
+    ) + [
+        "",
+        "Two clauses of the same document's **Retained** list are not questions in",
+        "that set, and are recorded here rather than left unmentioned:",
+        "",
+    ] + _table(
+        ("clause", "where it sits"),
+        list(RETAINED_CLAUSES_NOT_IN_THE_QUESTION_SET),
+    ) + [
+        "",
+        "The questions are **named and not numbered** on purpose:",
+        "`docs/lossiness.md` carries two numbered lists — the supported question",
+        "set and *Retained* — and they disagree, so a bare \"query 4\" names one of",
+        "two different things depending on which one the reader has open.",
+    ]
+
+
 def _resolution_section(curve: ResolutionCurve) -> list[str]:
     """What evidence costs per unit of resolution (issue #35).
 
@@ -2232,8 +3573,39 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
                 "`TIME_TOL_S`, and **not** a parameter. Widening it would change "
                 "what the artifact claims rather than what it costs",
             ),
+            (
+                "replan interval",
+                f"{curve.replan_interval_s} s",
+                "how often the scripted policy declares. It sets how many "
+                "declarations the run emits and is stated, not defaulted into "
+                "(`--resolution-replan-interval`)",
+            ),
+            (
+                "declaration horizon",
+                f"{curve.declaration_horizon_s} s",
+                "how long each claim is valid for. Equal to the replan interval, "
+                "so no declaration in this run is ever stale "
+                "(`--resolution-declaration-horizon`)",
+            ),
+            (
+                "watchdog period",
+                f"{curve.watchdog_period_s} s",
+                "silence before enforcement passivates. This fixture has no "
+                "silent window, so a watchdog fault here would be a finding "
+                "(`--resolution-watchdog-period`)",
+            ),
+            (
+                "record keyring",
+                "`reg.bench.measurement_keyring(seed)`",
+                "**derived from the seed, so these MACs attest to nothing.** A "
+                "keyring from OS entropy would make the artifact differ between "
+                "two runs of one command, which is the one column an audit "
+                "artifact may not vary in",
+            ),
         ],
     )
+
+    lines += _attestation_block(curve)
 
     lines += ["", "### The curve", ""]
     query_names = [q.name for q in RESOLUTION_QUERIES]
@@ -2246,8 +3618,10 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
             "nodes",
             "edges",
             "occurrences",
+            "records",
             *query_names,
             "all queries",
+            "what you lose",
         ),
         [
             (
@@ -2258,6 +3632,7 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
                 _int_text(p.nodes),
                 _int_text(p.edges),
                 _int_text(p.occurrences),
+                _int_text(p.records),
                 *[
                     next(
                         (c.verdict for c in p.checks if c.query == name),
@@ -2266,10 +3641,14 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
                     for name in query_names
                 ],
                 p.verdict,
+                _lost_text(p),
             )
             for p in points
         ],
     )
+
+    lines += _price_of_coarsening(points)
+    lines += _layer_a_finding(curve)
 
     lines += [
         "",
@@ -2311,24 +3690,26 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
 
     lines += ["", "The questions, and the predicate each is judged under:", ""]
     lines += _table(
-        ("query", "question", "agreement predicate"),
+        ("query", "layer", "question", "agreement predicate"),
         [
-            (f"`{q.name}`", q.question, f"`{q.predicate}`")
+            (f"`{q.name}`", q.layer, q.question, f"`{q.predicate}`")
             for q in RESOLUTION_QUERIES
         ],
     )
 
     lines += [
         "",
-        "Ground truth for all four is recomputed from the raw CSV by forward",
-        "kinematics, exactly as the cross-check in *Query wall-clock* is. The",
-        "envelope queries of `docs/lossiness.md`'s set (2 and 4) are **not** here:",
-        "their only available ground truth would be recomputing an envelope per",
-        "frame with `reg.envelope`, which is the builder's own computation, and a",
-        "check whose ground truth reruns the code under test cannot fail.",
-        "Queries 5–8 are declarations, verdicts and the chain — Milestone 3, no",
-        "fixture, and asking them here would print `COULD-NOT-EVALUATE` at every",
-        "level for a reason that has nothing to do with resolution.",
+        "Ground truth for the Layer B questions is recomputed from the raw CSV by",
+        "forward kinematics, exactly as the cross-check in *Query wall-clock* is.",
+        "Ground truth for the Layer A questions is **the declaration and verdict",
+        "stream this run emitted**, held in memory and never read back out of the",
+        "artifact: a ground truth recovered from the file under test cannot",
+        "disagree with the file under test.",
+    ]
+
+    lines += _coverage_block()
+
+    lines += [
         "",
         "### What this table is not",
         "",
@@ -2629,8 +4010,9 @@ def render(
         "",
         "## Query wall-clock",
         "",
-        f"One fixed question — **{QUESTION}** (query 1 of `docs/lossiness.md`'s",
-        "supported set, reduced to a scalar) — answered from the graph alone and",
+        f"One fixed question — **{QUESTION}** (`separation_timeline` of",
+        "`docs/lossiness.md`'s supported set, reduced to a scalar) — answered",
+        "from the graph alone and",
         "recomputed from the raw CSV as ground truth. Median of",
         f"{_repeats_text(results)} runs each.",
         "",
@@ -2952,6 +4334,40 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--resolution-replan-interval",
+        type=_positive_float,
+        default=RESOLUTION_REPLAN_INTERVAL_S,
+        metavar="SECONDS",
+        help=(
+            "how often --resolution's scripted policy declares (default: "
+            f"{RESOLUTION_REPLAN_INTERVAL_S}, the value the rest of this project "
+            "parameterises its fixtures at). It sets how many declarations the "
+            "run emits and is printed in the report either way."
+        ),
+    )
+    parser.add_argument(
+        "--resolution-declaration-horizon",
+        type=_positive_float,
+        default=RESOLUTION_DECLARATION_HORIZON_S,
+        metavar="SECONDS",
+        help=(
+            "how long each of --resolution's declarations claims to be valid "
+            f"for (default: {RESOLUTION_DECLARATION_HORIZON_S}, equal to the "
+            "replan interval, so no declaration in the run is ever stale)."
+        ),
+    )
+    parser.add_argument(
+        "--resolution-watchdog-period",
+        type=_positive_float,
+        default=RESOLUTION_WATCHDOG_PERIOD_S,
+        metavar="SECONDS",
+        help=(
+            "silence before --resolution's enforcement passivates (default: "
+            f"{RESOLUTION_WATCHDOG_PERIOD_S}). The long-run fixture has no "
+            "silent window, so a watchdog fault in this curve is a finding."
+        ),
+    )
+    parser.add_argument(
         "--occurrence-resolution",
         type=_positive_float,
         default=graph.OCCURRENCE_TIME_RESOLUTION_S,
@@ -3048,6 +4464,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 envelope_seed=args.envelope_seed,
                 substep_dt=args.substep_dt,
                 occurrence_resolution_s=args.occurrence_resolution,
+                replan_interval_s=args.resolution_replan_interval,
+                declaration_horizon_s=args.resolution_declaration_horizon,
+                watchdog_period_s=args.resolution_watchdog_period,
             )
         if args.scaling:
             for frames in args.scaling_frames:
@@ -3137,11 +4556,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
     if resolution is not None:
+        counts = resolution.attestation_counts
+        print(
+            "resolution: Layer A in the measured build: "
+            + " ".join(f"{name}={n}" for name, n in sorted(counts.items())),
+            file=sys.stderr,
+        )
+        priced, total = coverage()
+        print(
+            f"resolution: coverage {priced}/{total} of the supported question "
+            f"set priced, {total - priced} excluded with a stated reason",
+            file=sys.stderr,
+        )
         for point in resolution.points:
             print(
                 f"resolution: {point.level}: {point.size_bytes} B "
                 f"({_bytes_per_hour_text(point.bytes_per_hour)}) -> "
-                f"{point.verdict}",
+                f"{point.verdict}; loses {_lost_text(point)}",
                 file=sys.stderr,
             )
     print(

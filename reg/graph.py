@@ -232,6 +232,7 @@ __all__ = [
     "BuildResult",
     "GraphBuildError",
     "GraphQueryError",
+    "attestation_from_stream",
     "build",
     "envelope_at",
     "main",
@@ -2268,7 +2269,7 @@ def _resolve_world(csv_path: str | os.PathLike[str]):
     return _resolve_scenario(csv_path).world
 
 
-def _attestation_from_stream(
+def attestation_from_stream(
     csv_path: str | os.PathLike[str],
     scenario,
     *,
@@ -2278,6 +2279,12 @@ def _attestation_from_stream(
     watchdog_period_s: float,
 ) -> AttestationRecords:
     """Run the scripted policy and the enforcer over a stream, and return both.
+
+    **Public since issue #59**, which is when it gained a second caller. It was
+    `_attestation_from_stream` while the CLI was the only one; `reg.bench` now
+    needs a record stream too, and the alternative to naming this is a second
+    copy of the wiring — which would be a second answer to "what did this run's
+    policy declare", with the benchmark quietly measuring one of them.
 
     This is the CLI's producer, and it is the same wiring `tests/test_enforce.py`
     does by hand: the policy issues a declaration per replan interval, each is
@@ -2580,7 +2587,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         world = scenario.world
         records = None
         if args.keyring is not None:
-            records = _attestation_from_stream(
+            records = attestation_from_stream(
                 args.csv,
                 scenario,
                 keyring_path=args.keyring,

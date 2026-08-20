@@ -542,7 +542,17 @@ def claim_verdict(ratio: float) -> str:
 #: the file — the automatic and declared indexes, the schema — is summed into
 #: `INDEX_LABEL`, because "which table" is the actionable question and "which
 #: index" is not.
-_TABLE_LABELS: tuple[str, ...] = (*[t for t, _ in store.NODE_TABLES.values()], "edge", "meta")
+#:
+#: `node` is named rather than swept into `INDEX_LABEL` (issue #55). It is where
+#: every readable identifier in the artifact now lives, and identifier text is
+#: exactly what that issue's measurement was about — attributing it to "indexes
+#: + schema" would hide the cost of the thing being traded against.
+_TABLE_LABELS: tuple[str, ...] = (
+    "node",
+    *[t for t, _ in store.NODE_TABLES.values()],
+    "edge",
+    "meta",
+)
 INDEX_LABEL = "indexes + schema"
 
 
@@ -1238,13 +1248,18 @@ def materialize_level(
             # retention rule itself, so the view still says what its own silences
             # mean.
             conn.execute("DELETE FROM edge")
-            conn.execute("DELETE FROM envelope")
-            conn.execute("DELETE FROM robot_config")
+            # `drop_nodes` and not `DELETE FROM envelope` (issue #55): the
+            # readable identifier lives in `node` now, and a view that kept
+            # identity rows for envelopes it no longer holds would measure as
+            # larger than the view is. Each point on the curve has to cost what
+            # that level costs.
+            store.drop_nodes(conn, "Envelope")
+            store.drop_nodes(conn, "RobotConfig")
         else:
             # The other two levels are the edge layer, so the occurrence rows go:
             # each point must cost what *that* level costs and not what it costs
             # plus a layer it does not use.
-            conn.execute("DELETE FROM occurrence")
+            store.drop_nodes(conn, "Occurrence")
         if level == PER_FRAME_LEVEL:
             _expand_to_frames(conn)
         conn.commit()
@@ -1306,8 +1321,8 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
         for t in covered:
             conn.execute(
                 """
-                INSERT INTO edge (type, layer, src_kind, src_id, dst_kind,
-                                  dst_id, t_start, t_end, overlap_area,
+                INSERT INTO edge (type, layer, src_kind, src_key, dst_kind,
+                                  dst_key, t_start, t_end, overlap_area,
                                   min_distance)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -1315,9 +1330,14 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
                     row["type"],
                     row["layer"],
                     row["src_kind"],
-                    row["src_id"],
+                    # The surrogates the source rows already carry (issue #55).
+                    # The endpoints are the same nodes, so re-resolving their
+                    # identifiers per frame would be the same answer at the cost
+                    # of a lookup per row of a view built to be measured at
+                    # length.
+                    row["src_key"],
                     row["dst_kind"],
-                    row["dst_id"],
+                    row["dst_key"],
                     t,
                     t,
                     row["overlap_area"],

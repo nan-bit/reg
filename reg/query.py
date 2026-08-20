@@ -1162,8 +1162,18 @@ def frame_times(conn: sqlite3.Connection) -> tuple[float, ...]:
 
 
 def entity_ids(conn: sqlite3.Connection) -> tuple[str, ...]:
-    """Every entity the artifact declares, in id order."""
-    rows = conn.execute("SELECT entity_id FROM entity ORDER BY entity_id").fetchall()
+    """Every entity the artifact declares, in id order.
+
+    Through `node`, which is where a readable identifier lives since issue #55 —
+    an inner join, so an `entity` row whose identity is gone is *not* silently
+    reported as an entity nobody can name. The entity set is what every negative
+    scene answer is read against (docs/lossiness.md *Unanswerable* #2), and a
+    nameless member of it would be an entity a caller could never ask about.
+    """
+    rows = conn.execute(
+        "SELECT n.node_id AS entity_id FROM entity e "
+        "JOIN node n ON n.node_key = e.entity_key ORDER BY n.node_id"
+    ).fetchall()
     return tuple(str(row["entity_id"]) for row in rows)
 
 
@@ -1216,8 +1226,11 @@ def _in_edge_layer(conn: sqlite3.Connection, entity_id: str) -> bool:
     every frame, so an entity with no edges is a filtered or broken artifact,
     not a quiet run.
     """
+    key = store.node_key(conn, str(entity_id))
+    if key is None:
+        return False
     row = conn.execute(
-        "SELECT 1 FROM edge WHERE dst_id = ? LIMIT 1", (str(entity_id),)
+        "SELECT 1 FROM edge WHERE dst_key = ? LIMIT 1", (key,)
     ).fetchone()
     return row is not None
 
@@ -1804,7 +1817,8 @@ def attestation_state(conn: sqlite3.Connection) -> str | None:
 def declaration_ids(conn: sqlite3.Connection) -> tuple[str, ...]:
     """Every declaration this artifact holds, in chain order."""
     rows = conn.execute(
-        "SELECT declaration_id FROM declaration ORDER BY seq, declaration_id"
+        "SELECT n.node_id AS declaration_id FROM declaration d "
+        "JOIN node n ON n.node_key = d.declaration_key ORDER BY d.seq, n.node_id"
     ).fetchall()
     return tuple(str(row["declaration_id"]) for row in rows)
 
@@ -1862,23 +1876,31 @@ def _declaration_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     `DECLARED` edge is missing has to come back and be *refused*, because an
     inner join would drop it and the caller would be told the policy claimed
     nothing at an instant where it claimed something this artifact has lost.
+
+    The joins run on `node_key` and the readable ids come off `node` (issue
+    #55). The report cites `dn.node_id`, never the surrogate — an incident
+    report naming an integer is worse evidence than one that costs a few bytes.
     """
     return list(
         conn.execute(
             """
-            SELECT d.declaration_id AS declaration_id,
-                   d.seq            AS seq,
-                   d.t_issued       AS t_issued,
-                   d.horizon        AS horizon,
-                   d.action_class   AS action_class,
-                   e.dst_id         AS envelope_id,
-                   n.area           AS area
+            SELECT dn.node_id     AS declaration_id,
+                   d.seq          AS seq,
+                   d.t_issued     AS t_issued,
+                   d.horizon      AS horizon,
+                   d.action_class AS action_class,
+                   en.node_id     AS envelope_id,
+                   v.area         AS area
             FROM declaration d
+            JOIN node dn
+              ON dn.node_key = d.declaration_key
             LEFT JOIN edge e
-                   ON e.type = 'DECLARED' AND e.src_id = d.declaration_id
-            LEFT JOIN envelope n
-                   ON n.envelope_id = e.dst_id
-            ORDER BY d.seq, d.declaration_id
+                   ON e.type = 'DECLARED' AND e.src_key = d.declaration_key
+            LEFT JOIN envelope v
+                   ON v.envelope_key = e.dst_key
+            LEFT JOIN node en
+                   ON en.node_key = e.dst_key
+            ORDER BY d.seq, dn.node_id
             """
         ).fetchall()
     )
@@ -1893,26 +1915,32 @@ def _verdict_rows(
     PERMIT bounds nothing and a VETO or SAFE_STATE permits no action to bound, so
     a NULL here is the record's own silence and not a lost row.
     """
-    clause = "" if declaration_id is None else "WHERE v.declaration_id = ?"
+    clause = "" if declaration_id is None else "WHERE dn.node_id = ?"
     params: tuple[object, ...] = () if declaration_id is None else (declaration_id,)
     return list(
         conn.execute(
             f"""
-            SELECT v.verdict_id     AS verdict_id,
-                   v.declaration_id AS declaration_id,
-                   v.seq            AS seq,
-                   v.t              AS t,
-                   v.outcome        AS outcome,
-                   v.fault          AS fault,
-                   e.dst_id         AS envelope_id,
-                   n.area           AS area
+            SELECT vn.node_id AS verdict_id,
+                   dn.node_id AS declaration_id,
+                   v.seq      AS seq,
+                   v.t        AS t,
+                   v.outcome  AS outcome,
+                   v.fault    AS fault,
+                   en.node_id AS envelope_id,
+                   p.area     AS area
             FROM verdict v
+            JOIN node vn
+              ON vn.node_key = v.verdict_key
+            LEFT JOIN node dn
+                   ON dn.node_key = v.declaration_key
             LEFT JOIN edge e
-                   ON e.type = 'ENFORCED' AND e.src_id = v.verdict_id
-            LEFT JOIN envelope n
-                   ON n.envelope_id = e.dst_id
+                   ON e.type = 'ENFORCED' AND e.src_key = v.verdict_key
+            LEFT JOIN envelope p
+                   ON p.envelope_key = e.dst_key
+            LEFT JOIN node en
+                   ON en.node_key = e.dst_key
             {clause}
-            ORDER BY v.seq, v.verdict_id
+            ORDER BY v.seq, vn.node_id
             """,  # noqa: S608 - `clause` is a literal, the id is a bound param
             params,
         ).fetchall()

@@ -812,10 +812,14 @@ class ChainSpec:
     #: The record class name, as `reg.store.RECORD_KINDS` spells it. It is also
     #: the `src_kind` of this chain's `FOLLOWS` edges.
     kind: str
-    #: The table the records live in, and its primary key — which is also the
-    #: name of the record's own id field.
+    #: The table the records live in, the name of the record's own id field, and
+    #: the surrogate key column that field resolves to (issue #55). The row is
+    #: addressed by the surrogate; the *record* is still named by its id
+    #: everywhere a person reads one, and `_row_key` is the single place the two
+    #: meet.
     table: str
     id_field: str
+    key_column: str
     #: The `reg.store` reader for this chain, by name. By name because the
     #: import is deferred (see `_read_records`).
     reader: str
@@ -830,6 +834,7 @@ CHAINS: tuple[ChainSpec, ...] = (
         kind="Declaration",
         table="declaration",
         id_field="declaration_id",
+        key_column="declaration_key",
         reader="read_declarations",
         count_key=META_DECLARATION_COUNT,
     ),
@@ -838,6 +843,7 @@ CHAINS: tuple[ChainSpec, ...] = (
         kind="Verdict",
         table="verdict",
         id_field="verdict_id",
+        key_column="verdict_key",
         reader="read_verdicts",
         count_key=META_VERDICT_COUNT,
     ),
@@ -1505,6 +1511,24 @@ def _select(records: list, spec: ChainSpec, selector: str):
     )
 
 
+def _row_key(conn: sqlite3.Connection, spec: ChainSpec, record_id: str) -> int:
+    """The surrogate key of one record's row (issue #55).
+
+    The tamper tool addresses rows by `node_key`, because that is what the record
+    tables are keyed on since the identifiers moved into `node`. It refuses
+    rather than guesses: a tamper that silently matched no row would report
+    itself as applied and leave an untouched artifact behind, which is the one
+    outcome a tamper demonstration must never produce.
+    """
+    key = store.node_key(conn, record_id)
+    if key is None:
+        raise TamperError(
+            f"this artifact holds no node with id {record_id!r}, so there is no "
+            f"{spec.kind} row to alter."
+        )
+    return key
+
+
 def _column_type(conn: sqlite3.Connection, table: str, column: str) -> str:
     """The declared type of a column, or a `TamperError` naming the columns."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # noqa: S608
@@ -1590,13 +1614,18 @@ def tamper(
         record = _select(records, chain_spec, spec.selector)
         record_id = str(getattr(record, chain_spec.id_field))
         seq = int(record.seq)
+        row_key = _row_key(conn, chain_spec, record_id)
 
         if spec.deletes:
             before = record_id
+            # The record row goes and its `node` row stays (issue #55). That is
+            # what a deletion from the record table actually looks like, and it
+            # is what keeps the second witness readable: the FOLLOWS edge left
+            # pointing at this record can still say *which* record is gone.
             conn.execute(
                 f"DELETE FROM {chain_spec.table} "  # noqa: S608
-                f"WHERE {chain_spec.id_field} = ?",
-                (record_id,),
+                f"WHERE {chain_spec.key_column} = ?",
+                (row_key,),
             )
             after: object = None
             field = None
@@ -1619,14 +1648,14 @@ def tamper(
                 ) from None
             row = conn.execute(
                 f"SELECT {field} AS v FROM {chain_spec.table} "  # noqa: S608
-                f"WHERE {chain_spec.id_field} = ?",
-                (record_id,),
+                f"WHERE {chain_spec.key_column} = ?",
+                (row_key,),
             ).fetchone()
             before = None if row is None else row["v"]
             conn.execute(
                 f"UPDATE {chain_spec.table} SET {field} = ? "  # noqa: S608
-                f"WHERE {chain_spec.id_field} = ?",
-                (after, record_id),
+                f"WHERE {chain_spec.key_column} = ?",
+                (after, row_key),
             )
 
         resigned = False
@@ -1645,8 +1674,8 @@ def tamper(
             fresh = sign(altered, keyring.key(chain_spec.role))
             conn.execute(
                 f"UPDATE {chain_spec.table} SET {MAC_FIELD} = ? "  # noqa: S608
-                f"WHERE {chain_spec.id_field} = ?",
-                (fresh, record_id),
+                f"WHERE {chain_spec.key_column} = ?",
+                (fresh, row_key),
             )
             resigned = True
 

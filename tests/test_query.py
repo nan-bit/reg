@@ -1996,13 +1996,18 @@ def test_the_cli_answers_the_verdicts_query(attested, capsys) -> None:
 # --------------------------------------------------------------------------
 
 
-def _every_query(conn) -> tuple:
+def _every_query(conn, *, declaration_id: str = "any-declaration-id") -> tuple:
     """Every supported question, asked with fixed arguments. One tuple.
 
     `query.QUERIES` is iterated rather than listed so a query added later is
     covered here without anybody remembering to add it — the arguments are
     keyed by name and a missing key is a `KeyError`, not a silently skipped
     query.
+
+    `declaration_id` defaults to one no build produces, because the artifacts
+    this is asked of hold no record layer and the refusal *is* the answer. An
+    attested artifact refuses that id as a caller error before any query runs,
+    so a caller with one passes a declaration the file actually holds.
     """
     arguments = {
         "separation_timeline": (graph.HUMAN_ENTITY_ID,),
@@ -2014,7 +2019,7 @@ def _every_query(conn) -> tuple:
         "did_contact_occur": (graph.HUMAN_ENTITY_ID,),
         "declared_bound": (1.0,),
         "violations": ((0.0, 5.0),),
-        "verdicts": ("any-declaration-id",),
+        "verdicts": (declaration_id,),
     }
     return tuple(
         getattr(query, name)(conn, *arguments[name]) for name in query.QUERIES
@@ -2209,3 +2214,210 @@ def test_the_incident_report_still_tells_the_two_empty_runs_apart(
     empty_text = "\n".join(c.text for c in produced_none.clauses)
     assert "no record stream" in absent_text
     assert "no record stream" not in empty_text
+
+
+# --------------------------------------------------------------------------
+# THE SURROGATE KEYS (issue #55), from the query side.
+#
+# `node_key` is storage. Two properties have to hold for that sentence to be
+# true, and neither is provable by the answers alone: the numbering must not
+# reach any answer, and no answer may cite a surrogate where it used to cite an
+# identifier.
+# --------------------------------------------------------------------------
+
+#: Every column in the schema that holds a `node.node_key`. Listed rather than
+#: derived, because the point of the test below is to renumber **all** of them:
+#: a derivation that missed one would renumber a consistent artifact into a
+#: consistent artifact and prove nothing.
+_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
+    "node": ("node_key",),
+    "robot_config": ("config_key",),
+    "envelope": ("envelope_key", "config_key"),
+    "entity": ("entity_key",),
+    "occurrence": ("occurrence_key", "entity_key"),
+    "edge": ("src_key", "dst_key"),
+    "declaration": ("declaration_key",),
+    "verdict": ("verdict_key", "declaration_key"),
+}
+
+#: Far above any key a build allocates, so the shift collides with nothing.
+_RENUMBER_BY = 1_000_000
+
+
+def _renumber(source: Path, target: Path, *tables: str) -> Path:
+    """A copy of `source` with the surrogate keys of `tables` shifted.
+
+    Given every table, the artifact is renumbered and stays consistent — the
+    same nodes with different integers on them. Given a subset, it is
+    *inconsistent*, which is how the negative below feeds this check the
+    condition it guards against.
+    """
+    import shutil
+
+    shutil.copyfile(source, target)
+    conn = store.connect(target)
+    try:
+        for table in tables:
+            for column in _KEY_COLUMNS[table]:
+                conn.execute(
+                    f"UPDATE {table} SET {column} = {column} + ?"  # noqa: S608
+                    f" WHERE {column} IS NOT NULL",
+                    (_RENUMBER_BY,),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return target
+
+
+def test_renumbering_the_surrogate_keys_changes_no_answer(
+    attested, tmp_path: Path
+) -> None:
+    """**Equality, not agreement within tolerance.** Every query, both layers.
+
+    The strongest available statement that `node_key` is an encoding detail: the
+    same artifact with every surrogate shifted by a million answers every
+    supported question with the identical value, refusals and reasons included,
+    and produces the identical incident report. If any join, index or answer had
+    come to depend on the numbering — or if a `node_key` had leaked into a field
+    that used to carry an identifier — the two would differ.
+
+    It compares the artifact against itself rather than against a recorded
+    answer set, which is what keeps it a statement about the *encoding*: a
+    golden would also fail on a shapely upgrade that moved a polygon by a
+    nanometre, and would then report that as an encoding regression.
+    """
+    artifact, _ = attested
+    renumbered = _renumber(
+        artifact, tmp_path / "renumbered.sqlite", *_KEY_COLUMNS
+    )
+
+    conn = store.connect(renumbered)
+    try:
+        moved = conn.execute(
+            "SELECT min(node_key) AS lo FROM node"
+        ).fetchone()["lo"]
+    finally:
+        conn.close()
+    assert moved >= _RENUMBER_BY, "precondition failed: nothing was renumbered"
+
+    before = _every_query_on(artifact)
+    after = _every_query_on(renumbered)
+    assert len(before) == len(query.QUERIES)
+    for old, new in zip(before, after, strict=True):
+        assert old == new, f"{old.query} changed when the surrogates were renumbered"
+    assert any(a.verdict == ANSWERED for a in before), (
+        "every query refused, so this compared refusals and nothing else"
+    )
+
+    assert _report(artifact, INCIDENT_T, CHAIN_KEYRING) == _report(
+        renumbered, INCIDENT_T, CHAIN_KEYRING
+    )
+
+
+def test_a_half_renumbered_artifact_is_refused_rather_than_answered(
+    attested, tmp_path: Path
+) -> None:
+    """THE NEGATIVE for the test above. It has to be able to fail.
+
+    Shifting the `edge` endpoints and nothing else leaves every edge pointing at
+    a node that is not there. The scene queries must **refuse** — the artifact
+    holds rows it cannot resolve, which is a could-not-evaluate — and must not
+    quietly answer from an edge layer whose endpoints resolve to nothing.
+    """
+    artifact, _ = attested
+    broken = _renumber(artifact, tmp_path / "half.sqlite", "edge")
+
+    answer = _ask(broken, query.separation_timeline, graph.HUMAN_ENTITY_ID)
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+
+    intact = _ask(artifact, query.separation_timeline, graph.HUMAN_ENTITY_ID)
+    assert intact.verdict == ANSWERED, (
+        "precondition failed: the intact artifact does not answer either, so "
+        "the refusal above is not evidence of anything"
+    )
+
+
+def _every_attested_query(conn) -> tuple:
+    """`_every_query`, with a `declaration_id` this artifact actually holds.
+
+    `_every_query`'s fixed id is deliberately one no build produces — it is
+    asked of an artifact with no record layer, where the refusal is the answer.
+    On an attested artifact that same id is a `QueryError` before any query
+    runs, so query 7 is asked about a real declaration here and the attestation
+    half of the comparison is a comparison of answers rather than of raisers.
+    """
+    return _every_query(conn, declaration_id=query.declaration_ids(conn)[0])
+
+
+def _every_query_on(path: Path) -> tuple:
+    conn = store.connect(path)
+    try:
+        return _every_attested_query(conn)
+    finally:
+        conn.close()
+
+
+def test_no_answer_cites_a_surrogate_key(attested) -> None:
+    """Issue #52's output, after issue #55: readable identifiers, never integers.
+
+    `declared_violation-verdict-00150` is what an assessor reads and what
+    `docs/` quotes. Every id-shaped field of every answer and of the incident
+    report is checked against the artifact's own `node` table, so a field that
+    started returning `147` fails here rather than in somebody's PDF — and a
+    field returning an id the artifact does not hold fails too, which is the
+    other way a resolved join can go wrong.
+    """
+    import dataclasses
+
+    artifact, _ = attested
+    conn = store.connect(artifact)
+    try:
+        known = {
+            str(row["node_id"])
+            for row in conn.execute("SELECT node_id FROM node")
+        }
+        answers = _every_attested_query(conn)
+        report = query.incident_report(conn, INCIDENT_T, CHAIN_KEYRING)
+    finally:
+        conn.close()
+    assert known, "precondition failed: the artifact declares no nodes"
+
+    def id_fields(value, seen: list[tuple[str, object]]) -> None:
+        if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            for f in dataclasses.fields(value):
+                item = getattr(value, f.name)
+                if f.name.endswith("_id") or f.name.endswith("_ids"):
+                    seen.append((f.name, item))
+                else:
+                    id_fields(item, seen)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                id_fields(item, seen)
+
+    found: list[tuple[str, object]] = []
+    for answer in answers:
+        id_fields(answer.value, found)
+    id_fields(report, found)
+    for item in report.solution:
+        found.append(("ref", item.ref))
+
+    assert found, "precondition failed: no answer carried an identifier at all"
+    cited = 0
+    for name, value in found:
+        for one in value if isinstance(value, (list, tuple)) else (value,):
+            if one is None:
+                continue
+            assert isinstance(one, str), f"{name} came back as {one!r}, not an id"
+            assert not one.isdigit(), f"{name} is {one!r}, which is a surrogate"
+            # `ref` carries prose alongside ids in some clauses, so it is only
+            # required to *contain* one the artifact holds; the `*_id` fields
+            # must be one exactly.
+            if name == "ref":
+                continue
+            assert one in known, (
+                f"{name} is {one!r}, which is not a node this artifact holds"
+            )
+            cited += 1
+    assert cited, "no answer cited an identifier, so nothing above was checked"

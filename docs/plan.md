@@ -443,7 +443,8 @@ not raw state.
 | Type | Fields |
 |---|---|
 | ~~`Timestep`~~ | ~~`t`, `frame_id`~~ — **dropped, issue #29.** Every edge already carries `t_start`/`t_end`; a node per instant was a second and denser representation of time, one row per frame, and nothing in Phase 7's query set reads it. See [`docs/lossiness.md`](lossiness.md) *Discarded* #10 |
-| `Envelope` | `envelope_id`, `area`, `geometry_wkb`, `horizon`, `source` (`computed` / `declared` / `clamped`) |
+| `node` | `node_key`, `node_id` — **added, issue #55.** Not a node kind: the identity table. The readable identifier of every node of every kind is stored here once, and the INTEGER `node_key` is what each payload row is keyed on and what every join and index below carries. The `*_id` columns in the rows that follow name the identifier a reader still gets from `reg.store`; the *column* is `node.node_id`. A storage decision — the identifiers, the reports that cite them and the answers are unchanged |
+| `Envelope` | `envelope_id`, `area`, `geometry_wkb`, `horizon`, `source` (`computed` / `declared` / `clamped`), `envelope_hash` (stored as 32 raw bytes since issue #55; hex on the wire) |
 | `Entity` | `entity_id`, `kind`, `geometry_wkb` |
 | `RobotConfig` | `config_id`, `q`, `qd` (quantized) |
 | `Occurrence` | `occurrence_id`, `seq`, `type` (the DSSAD occurrence flag), `layer`, `reason`, `t` (at `occurrence_time_resolution_s`), `entity_id`, `value`, `sw_version` (`R157SWIN`) — **added, issue #35.** The event-level layer, additive beside the edges; see [`docs/lossiness.md`](lossiness.md) *The three resolution levels* and [`docs/prior-art.md` §9](prior-art.md) |

@@ -2184,8 +2184,13 @@ def envelope_at(conn, t: float) -> BaseGeometry:
             f"envelope {envelope_id!r} stores neither geometry nor the config it "
             "was computed from."
         )
+    # By the envelope's own `config_key` rather than by re-resolving the readable
+    # id (issue #55): the surrogate is what the row stores, and going back
+    # through the identifier would look up a *second* time something the row has
+    # already said once.
     config = conn.execute(
-        "SELECT q, qd FROM robot_config WHERE config_id = ?", (str(config_id),)
+        "SELECT q, qd FROM robot_config WHERE config_key = ?",
+        (row["config_key"],),
     ).fetchone()
     if config is None:
         raise GraphQueryError(

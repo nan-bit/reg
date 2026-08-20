@@ -1638,17 +1638,12 @@ def _level_counts(view_path: Path) -> tuple[int, int, int]:
     table exists to compare a layer of occurrences against a layer of edges."""
     conn = store.connect(view_path)
     try:
-        nodes = 0
-        occurrences = 0
-        for kind, (table, _) in store.NODE_TABLES.items():
-            count = int(
-                conn.execute(
-                    f"SELECT count(*) AS n FROM {table}"  # noqa: S608
-                ).fetchone()["n"]
-            )
-            nodes += count
-            if kind == "Occurrence":
-                occurrences = count
+        # `store.node_counts` and not a `SELECT count(*)` per table: a view of a
+        # build handed no record stream has no `declaration` or `verdict` table
+        # to count (issue #54). The numbers are the same ones.
+        counts = store.node_counts(conn)
+        nodes = sum(counts.values())
+        occurrences = counts["Occurrence"]
         edges = int(
             conn.execute("SELECT count(*) AS n FROM edge").fetchone()["n"]
         )

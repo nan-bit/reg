@@ -1976,3 +1976,236 @@ def test_the_cli_answers_the_verdicts_query(attested, capsys) -> None:
     assert code == query.EXIT_OK
     assert declarations[0].declaration_id in out
     assert "adjudication(s)" in out
+
+
+# --------------------------------------------------------------------------
+# ENCODING IS NOT RETENTION (issue #54).
+#
+# Two changes in `reg.store` — a 1 KiB page size, and not creating the record
+# tables for a build that was handed no record stream — that are supposed to
+# alter how the artifact is written and nothing else. "Nothing else" is not a
+# property of a diff; it is a property that has to be checked, and the check is
+# equality: the same stream built under either encoding answers every supported
+# question with the *same* `Answer`, not with one that agrees within tolerance.
+#
+# The capability the second change could plausibly have cost is the #48
+# distinction, which #52's incident report depends on: "this build was given no
+# record stream" and "a run that produced none" are different facts, and the
+# tables are now absent in the first case. `meta[attestation_records]` still
+# carries it, and the two tests at the end of this section are what say so.
+# --------------------------------------------------------------------------
+
+
+def _every_query(conn) -> tuple:
+    """Every supported question, asked with fixed arguments. One tuple.
+
+    `query.QUERIES` is iterated rather than listed so a query added later is
+    covered here without anybody remembering to add it — the arguments are
+    keyed by name and a missing key is a `KeyError`, not a silently skipped
+    query.
+    """
+    arguments = {
+        "separation_timeline": (graph.HUMAN_ENTITY_ID,),
+        "first_envelope_intersection": (graph.HUMAN_ENTITY_ID,),
+        "frames_at_risk": (graph.HUMAN_ENTITY_ID, THRESHOLD_M),
+        "reachable_entities": (0.0, 5.0),
+        "min_separation": (graph.HUMAN_ENTITY_ID,),
+        "time_of_closest_approach": (graph.HUMAN_ENTITY_ID,),
+        "did_contact_occur": (graph.HUMAN_ENTITY_ID,),
+        "declared_bound": (1.0,),
+        "violations": ((0.0, 5.0),),
+        "verdicts": ("any-declaration-id",),
+    }
+    return tuple(
+        getattr(query, name)(conn, *arguments[name]) for name in query.QUERIES
+    )
+
+
+def _build_at(csv_path: Path, out: Path, *, page_size: int, always_create: bool):
+    """Build `csv_path` under a named encoding. Returns the artifact path.
+
+    `always_create=True` is the pre-#54 behaviour — the record tables created
+    whether or not there is anything to put in them — reproduced by wrapping
+    `store.create` rather than by keeping a second schema around, so what is
+    compared is this build with one boolean flipped.
+    """
+    real_create = store.create
+    real_page_size = store.PAGE_SIZE
+
+    def create(path, *, record_tables):
+        return real_create(path, record_tables=record_tables or always_create)
+
+    store.PAGE_SIZE = page_size
+    store.create = create
+    try:
+        graph.build(
+            csv_path,
+            out,
+            scenario(SCENARIO).world.limits,
+            human_radius=scenario(SCENARIO).world.human_radius,
+            horizon=_FAST["horizon"],
+            n_samples=_FAST["n_samples"],
+            seed=_FAST["envelope_seed"],
+            substep_dt=_FAST["substep_dt"],
+            occurrence_resolution_s=_FAST["occurrence_resolution_s"],
+        )
+    finally:
+        store.create = real_create
+        store.PAGE_SIZE = real_page_size
+    return out
+
+
+@pytest.fixture(scope="module")
+def old_encoding(built, tmp_path_factory) -> Path:
+    """The `artifact` fixture's stream, built the way it was built before #54."""
+    csv_path, _ = built
+    work = tmp_path_factory.mktemp("old-encoding")
+    return _build_at(csv_path, work / "old.sqlite", page_size=4096, always_create=True)
+
+
+def test_the_two_encodings_hold_the_same_rows(artifact: Path, old_encoding: Path) -> None:
+    """Row for row, table for table — except the two the new one does not create.
+
+    The strongest form of "no behavioural change" available without a second
+    checkout: the same stream, the same seed, one boolean and one page size
+    apart, and every row of every table identical.
+    """
+    new_conn = store.connect(artifact)
+    old_conn = store.connect(old_encoding)
+    try:
+        assert store.has_record_tables(old_conn) is True
+        assert store.has_record_tables(new_conn) is False
+
+        tables = [
+            table
+            for table, _ in store.NODE_TABLES.values()
+            if table not in store.RECORD_TABLE_NAMES
+        ] + ["edge", "meta"]
+        for table in tables:
+            new_rows = [
+                tuple(row) for row in new_conn.execute(f"SELECT * FROM {table}")
+            ]
+            old_rows = [
+                tuple(row) for row in old_conn.execute(f"SELECT * FROM {table}")
+            ]
+            assert new_rows == old_rows, f"{table} differs between the encodings"
+
+        # And the two tables the new encoding leaves out held nothing anyway,
+        # which is the entire justification for leaving them out.
+        for table in sorted(store.RECORD_TABLE_NAMES):
+            assert (
+                old_conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"]
+                == 0
+            )
+    finally:
+        new_conn.close()
+        old_conn.close()
+
+
+def test_every_query_answers_identically_under_either_encoding(
+    artifact: Path, old_encoding: Path
+) -> None:
+    """Equality, not agreement within tolerance. All ten, refusals included.
+
+    The three attestation queries refuse on both, and the refusals have to be
+    the *same* refusal: a build with no record stream and no record tables must
+    not start saying something new about why it cannot answer.
+    """
+    new_conn = store.connect(artifact)
+    old_conn = store.connect(old_encoding)
+    try:
+        new_answers = _every_query(new_conn)
+        old_answers = _every_query(old_conn)
+    finally:
+        new_conn.close()
+        old_conn.close()
+
+    assert len(new_answers) == len(query.QUERIES)
+    for new, old in zip(new_answers, old_answers, strict=True):
+        assert new == old, f"{new.query} changed with the encoding"
+    assert any(answer.verdict == ANSWERED for answer in new_answers), (
+        "every query refused, so this test compared ten refusals and nothing else"
+    )
+    assert any(answer.verdict == COULD_NOT_EVALUATE for answer in new_answers)
+
+
+@pytest.fixture(scope="module")
+def empty_record_stream(built, tmp_path_factory) -> Path:
+    """A build handed a record stream that holds nothing.
+
+    The other side of the distinction: `meta[attestation_records]` is `present`,
+    the record tables exist, and they are empty because the run produced
+    nothing — not because nobody was asked.
+    """
+    csv_path, _ = built
+    out = tmp_path_factory.mktemp("empty-records") / "empty.sqlite"
+    graph.build(
+        csv_path,
+        out,
+        scenario(SCENARIO).world.limits,
+        human_radius=scenario(SCENARIO).world.human_radius,
+        records=graph.AttestationRecords(declarations=(), verdicts=()),
+        horizon=_FAST["horizon"],
+        n_samples=_FAST["n_samples"],
+        seed=_FAST["envelope_seed"],
+        substep_dt=_FAST["substep_dt"],
+        occurrence_resolution_s=_FAST["occurrence_resolution_s"],
+    )
+    return out
+
+
+def test_a_build_with_no_record_stream_creates_no_record_tables(
+    artifact: Path, empty_record_stream: Path
+) -> None:
+    """The saving, asserted beside the fact it must not have cost.
+
+    Two artifacts, both holding zero declarations and zero verdicts. One was
+    offered a record stream and one was not, and that — not the presence of the
+    tables — is what `meta[attestation_records]` says.
+    """
+    absent = store.connect(artifact)
+    empty = store.connect(empty_record_stream)
+    try:
+        assert store.has_record_tables(absent) is False
+        assert query.attestation_state(absent) != query.ATTESTATION_PRESENT
+
+        assert store.has_record_tables(empty) is True
+        assert query.attestation_state(empty) == query.ATTESTATION_PRESENT
+        assert query.declaration_ids(empty) == ()
+    finally:
+        absent.close()
+        empty.close()
+
+
+def test_the_incident_report_still_tells_the_two_empty_runs_apart(
+    artifact: Path, empty_record_stream: Path
+) -> None:
+    """NEGATIVE, and the one the saving had to survive (issues #48, #52, #54).
+
+    Neither artifact can produce an incident report, and they must not fail to
+    for the same reason. The build that was handed no record stream is refused
+    on `meta[attestation_records]` and says so in as many words; the build that
+    was handed an empty one holds a record layer and refuses because that layer
+    states nothing in force at the instant asked about. If the second sentence
+    ever becomes the first, the artifact has lost the ability to say which of
+    the two happened, and no number of saved bytes is worth that.
+    """
+    no_stream = _ask(artifact, query.incident_report, 3.5, None)
+    produced_none = _ask(empty_record_stream, query.incident_report, 3.5, None)
+
+    assert no_stream.verdict == COULD_NOT_EVALUATE
+    assert produced_none.verdict == COULD_NOT_EVALUATE
+
+    assert query.META_ATTESTATION_RECORDS in no_stream.reason
+    assert "no record stream" in no_stream.reason
+    assert query.META_ATTESTATION_RECORDS not in produced_none.reason
+    assert no_stream.reason != produced_none.reason
+
+    # The chain clause tells them apart too, and it is the clause an assessor
+    # reads first when it did not verify.
+    could_not = chain.ChainState.COULD_NOT_EVALUATE.value
+    assert no_stream.integrity == produced_none.integrity == could_not
+    absent_text = "\n".join(c.text for c in no_stream.clauses)
+    empty_text = "\n".join(c.text for c in produced_none.clauses)
+    assert "no record stream" in absent_text
+    assert "no record stream" not in empty_text

@@ -798,7 +798,7 @@ def test_human_radius_has_no_default() -> None:
 @pytest.fixture()
 def seeded(tmp_path: Path):
     """A store with one node of each kind, so edge tests have endpoints."""
-    conn = store.create(tmp_path / "store.sqlite")
+    conn = store.create(tmp_path / "store.sqlite", record_tables=True)
     store.insert_robot_config(conn, "cfg_0", "0.000000,0.000000", "0.000000,0.000000")
     store.insert_envelope(
         conn,
@@ -1635,7 +1635,7 @@ def test_connect_refuses_a_file_that_is_not_an_evidence_graph(tmp_path: Path) ->
 
 def test_connect_refuses_an_unknown_schema_version(tmp_path: Path) -> None:
     path = tmp_path / "future.sqlite"
-    conn = store.create(path)
+    conn = store.create(path, record_tables=False)
     conn.execute(
         "UPDATE meta SET value = ? WHERE key = ?",
         (str(store.SCHEMA_VERSION + 1), store.META_SCHEMA_VERSION),
@@ -2745,7 +2745,7 @@ def test_the_store_does_not_launder_a_bad_mac(tmp_path: Path) -> None:
     flipped = ("0" if good.mac[0] != "0" else "1") + good.mac[1:]
     tampered = replace(good, mac=flipped)
 
-    conn = store.create(tmp_path / "laundry.sqlite")
+    conn = store.create(tmp_path / "laundry.sqlite", record_tables=True)
     try:
         store.insert_declaration(conn, tampered)
         conn.commit()
@@ -2769,7 +2769,7 @@ def test_a_verdict_naming_a_declaration_that_is_not_there_is_refused(
     csv, records = _held_attested(tmp_path)
     verdict = next(v for v in records.verdicts if v.declaration_id is not None)
 
-    conn = store.create(tmp_path / "dangling.sqlite")
+    conn = store.create(tmp_path / "dangling.sqlite", record_tables=True)
     try:
         with pytest.raises(store.StoreError, match="no Declaration node"):
             store.insert_verdict(conn, verdict)
@@ -3038,3 +3038,184 @@ def test_cli_refuses_a_keyring_it_cannot_read(tmp_path: Path, capsys) -> None:
     assert code == graph.EXIT_USAGE
     assert "keyring" in capsys.readouterr().err
     assert not (tmp_path / "held.sqlite").exists()
+
+
+# --------------------------------------------------------------------------
+# ENCODING (issue #54). Two decisions about how the file is written, and the
+# things they are not allowed to change.
+#
+# `PAGE_SIZE` and the conditional `RECORD_SCHEMA` alter no column, no row, no
+# answer and no tolerance. The tests here are the ones that hold that line at
+# the schema level; `tests/test_query.py` holds it at the answer level, by
+# building the same stream under both encodings and comparing every query.
+# --------------------------------------------------------------------------
+
+
+def test_the_artifact_is_written_at_the_page_size_the_store_states(
+    tmp_path: Path,
+) -> None:
+    """The header says what `reg.store.PAGE_SIZE` says, on a real build.
+
+    SQLite fixes the page size at file creation, so this is also the assertion
+    that nothing writes to the file before the schema does.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        assert int(conn.execute("PRAGMA page_size").fetchone()[0]) == store.PAGE_SIZE
+    finally:
+        conn.close()
+
+    # SQLite accepts a power of two in [512, 65536] and *silently ignores*
+    # anything else, so a constant outside the range would leave every artifact
+    # at the default with nothing to show for the change.
+    assert 512 <= store.PAGE_SIZE <= 65536
+    assert store.PAGE_SIZE & (store.PAGE_SIZE - 1) == 0
+
+
+def test_create_refuses_a_page_size_that_did_not_take(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """THE NEGATIVE for the check above. Feed it a page size SQLite will not use.
+
+    1000 is not a power of two, so SQLite ignores the PRAGMA and creates the
+    file at its own default — no error, no warning, and an artifact that is
+    perfectly readable while being nothing like the one that was measured.
+    That silence is the whole reason `create` reads the value back.
+    """
+    monkeypatch.setattr(store, "PAGE_SIZE", 1000)
+    with pytest.raises(store.StoreError, match="page size"):
+        store.create(tmp_path / "wrong-page-size.sqlite", record_tables=False)
+
+
+def test_a_store_created_without_the_record_tables_does_not_have_them(
+    tmp_path: Path,
+) -> None:
+    conn = store.create(tmp_path / "none.sqlite", record_tables=False)
+    try:
+        assert store.has_record_tables(conn) is False
+        tables = {
+            str(row["name"])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert not tables & store.RECORD_TABLE_NAMES
+        # Everything else is still there: this is two tables, not a level.
+        assert {"meta", "envelope", "entity", "robot_config", "edge", "occurrence"} <= tables
+    finally:
+        conn.close()
+
+    with_records = store.create(tmp_path / "with.sqlite", record_tables=True)
+    try:
+        assert store.has_record_tables(with_records) is True
+    finally:
+        with_records.close()
+
+
+def test_half_a_record_layer_is_a_could_not_evaluate(tmp_path: Path) -> None:
+    """NEGATIVE. One table without the other is neither state, so it is refused.
+
+    A verdict whose `declaration` table is gone names a record nobody can look
+    up, and a chain walked over half a record layer comes back shorter with no
+    break in it — which is the one thing the chain exists to make impossible.
+    """
+    conn = store.create(tmp_path / "half.sqlite", record_tables=True)
+    try:
+        conn.execute("DROP TABLE declaration")
+        conn.commit()
+        with pytest.raises(store.StoreError, match="both tables or neither"):
+            store.has_record_tables(conn)
+    finally:
+        conn.close()
+
+
+def test_the_record_layer_refuses_rather_than_answering_from_a_missing_table(
+    tmp_path: Path,
+) -> None:
+    """NEGATIVE. Every way into the record tables says what is missing.
+
+    An empty list from `read_declarations` would read as "this run declared
+    nothing", and a bare `no such table: declaration` out of SQLite names the
+    encoding rather than the fact. Both are refused with the sentence that
+    points at `meta[attestation_records]`.
+    """
+    csv, records = _held_attested(tmp_path)
+    conn = store.create(tmp_path / "none.sqlite", record_tables=False)
+    try:
+        for call in (
+            lambda: store.read_declarations(conn),
+            lambda: store.read_verdicts(conn),
+            lambda: store.insert_declaration(conn, records.declarations[0]),
+            lambda: store.insert_verdict(conn, records.verdicts[0]),
+        ):
+            with pytest.raises(store.StoreError, match="attestation_records"):
+                call()
+
+        # And the edge layer, which is the other way in: a FOLLOWS or a DECLARED
+        # edge resolves its endpoints through the same tables.
+        store.insert_envelope(
+            conn,
+            "env_0",
+            envelope_hash="abc",
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id=None,
+            horizon=0.2,
+            source="computed",
+        )
+        with pytest.raises(store.StoreError, match="attestation_records"):
+            store.open_edge(conn, "DECLARED", "dec_0", "env_0", 0.0)
+    finally:
+        conn.close()
+
+
+def test_node_counts_names_every_kind_even_where_the_table_is_absent(
+    tmp_path: Path,
+) -> None:
+    """A missing key is indistinguishable from a genuine zero, so there are none.
+
+    The fact a zero here does *not* carry — whether a record stream was offered
+    — is not carried by a row count in either encoding, because an empty table
+    counts zero too. `meta[attestation_records]` carries it, and the assertion
+    below is that it still does.
+    """
+    csv, records = _held_attested(tmp_path)
+
+    without = _build(csv, tmp_path / "without.sqlite")
+    assert set(without.nodes) == set(store.NODE_TABLES)
+    assert without.nodes["Declaration"] == 0
+    assert without.nodes["Verdict"] == 0
+    assert _meta(tmp_path / "without.sqlite")[graph.META_ATTESTATION_RECORDS] == "absent"
+
+    with_records = _build(csv, tmp_path / "with.sqlite", records=records)
+    assert set(with_records.nodes) == set(store.NODE_TABLES)
+    assert with_records.nodes["Declaration"] == len(records.declarations)
+    assert with_records.nodes["Verdict"] == len(records.verdicts)
+    assert _meta(tmp_path / "with.sqlite")[graph.META_ATTESTATION_RECORDS] == "present"
+
+
+def test_the_record_tables_follow_the_record_stream_and_nothing_else(
+    tmp_path: Path,
+) -> None:
+    """`record_tables` is exactly `records is not None`, on both sides.
+
+    Including the case that is *not* a saving and must not become one: a build
+    handed an empty record stream keeps its tables, because "produced none" is a
+    statement the artifact makes and an absent table is not that statement.
+    """
+    csv, records = _held_attested(tmp_path)
+    cases = {
+        "absent.sqlite": (None, False),
+        "empty.sqlite": (AttestationRecords(declarations=(), verdicts=()), True),
+        "full.sqlite": (records, True),
+    }
+    for name, (given, expected) in cases.items():
+        out = tmp_path / name
+        _build(csv, out, records=given)
+        conn = store.connect(out)
+        try:
+            assert store.has_record_tables(conn) is expected, name
+        finally:
+            conn.close()

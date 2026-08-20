@@ -648,12 +648,12 @@ def _stream(tmp_path: Path):
 def _records(csv: Path, scn, tmp_path: Path) -> AttestationRecords:
     """The record stream, through the CLI's own producer.
 
-    Through `graph._attestation_from_stream` rather than a second copy of the
+    Through `graph.attestation_from_stream` rather than a second copy of the
     policy/enforcer wiring, for the reason `tests/test_graph.py` gives: a fixture
     that assembled the records differently from the way the CLI does would be
     verifying a chain nobody can produce.
     """
-    return graph._attestation_from_stream(
+    return graph.attestation_from_stream(
         csv,
         scn,
         keyring_path=write_keyring(KEYRING, tmp_path / "keyring.json"),

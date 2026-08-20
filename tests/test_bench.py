@@ -37,6 +37,7 @@ call so no test depends on a default staying put.
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
 from pathlib import Path
 
@@ -1142,15 +1143,51 @@ def views(built, tmp_path_factory) -> dict[str, Path]:
 @pytest.fixture(scope="module")
 def truth(built) -> bench.GroundTruth:
     csv_path, _ = built
-    return bench.ground_truth_from_csv(csv_path, scenario(RESOLUTION_SCENARIO).world)
+    # `records=None`, written down rather than defaulted (issue #59): this
+    # fixture is built by `run_scenario`, which hands `graph.build` no record
+    # stream, so its Layer A ground truth genuinely does not exist. That is the
+    # state the whole curve was silently in before issue #59, and the tests below
+    # use it as the negative case rather than pretending it cannot happen.
+    return bench.ground_truth_from_csv(
+        csv_path, scenario(RESOLUTION_SCENARIO).world, records=None
+    )
+
+
+def _resolution_of(level: str) -> float:
+    """The level's own timestamp quantum, the way `run_resolution_curve` sets it.
+
+    A test that passed `TIME_TOL_S` for every level would grade `occurrence`
+    against a precision it does not claim — the defect this mirrors exists to
+    keep out.
+    """
+    return (
+        graph.OCCURRENCE_TIME_RESOLUTION_S
+        if level == bench.OCCURRENCE_LEVEL
+        else bench.TIME_TOL_S
+    )
 
 
 def _checks(view: Path, level: str, truth: bench.GroundTruth) -> dict[str, str]:
-    answers = bench.answers_at_level(view, level)
+    answers = bench.answers_at_level(
+        view, level, attestation=truth.attestation, keyring=None
+    )
     return {
-        q.name: bench.check_level(q, answers, truth).verdict
+        q.name: bench.check_level(
+            q, answers, truth, timestamp_resolution_s=_resolution_of(level)
+        ).verdict
         for q in bench.RESOLUTION_QUERIES
     }
+
+
+#: The Layer B half of the question set, by name. The unattested fixture above
+#: can only be asked these, and saying which is which here keeps every test that
+#: uses it from restating the split.
+_SCENE_QUERIES = tuple(
+    q.name for q in bench.RESOLUTION_QUERIES if q.layer == query.LAYER_B
+)
+_RECORD_QUERIES = tuple(
+    q.name for q in bench.RESOLUTION_QUERIES if q.layer == query.LAYER_A
+)
 
 
 def test_each_view_keeps_only_what_its_level_retains(views: dict[str, Path]) -> None:
@@ -1245,8 +1282,13 @@ def test_the_edge_levels_answer_every_question(
 
     This is the control. Without it, "the occurrence layer disagrees" would be
     indistinguishable from "the check disagrees with everything".
+
+    Scene questions only — this fixture holds no record stream, and what the
+    Layer A questions do on it is
+    `test_a_build_with_no_record_stream_cannot_evaluate_layer_a`.
     """
-    assert set(_checks(views[level], level, truth).values()) == {AGREE}
+    verdicts = _checks(views[level], level, truth)
+    assert {verdicts[name] for name in _SCENE_QUERIES} == {AGREE}
 
 
 def test_the_occurrence_level_cannot_answer_the_separation_timeline(
@@ -1260,13 +1302,21 @@ def test_the_occurrence_level_cannot_answer_the_separation_timeline(
     this whole file is written against.
     """
     answers = bench.answers_at_level(
-        views[bench.OCCURRENCE_LEVEL], bench.OCCURRENCE_LEVEL
+        views[bench.OCCURRENCE_LEVEL],
+        bench.OCCURRENCE_LEVEL,
+        attestation=None,
+        keyring=None,
     )
     assert answers.timeline is None
     query = next(
         q for q in bench.RESOLUTION_QUERIES if q.name == "separation_timeline"
     )
-    check = bench.check_level(query, answers, truth)
+    check = bench.check_level(
+        query,
+        answers,
+        truth,
+        timestamp_resolution_s=_resolution_of(bench.OCCURRENCE_LEVEL),
+    )
     assert check.verdict == COULD_NOT_EVALUATE
     assert "per-frame" in check.detail
 
@@ -1285,6 +1335,7 @@ def _timing_truth(candidates: tuple[float, ...]) -> bench.GroundTruth:
         closest_approach_candidates=candidates,
         timeline=tuple((t, 0.2) for t in candidates),
         contact_occurred=False,
+        attestation=None,
     )
 
 
@@ -1306,8 +1357,14 @@ def test_the_coarse_timestamp_is_reported_as_a_disagreement() -> None:
         t_closest_approach=2.0,  # what a 1 s resolution can say about t = 2.53
         timeline=None,
         contact_occurred=False,
+        attestation=None,
     )
-    check = bench.check_level(query, coarse, _timing_truth((2.51, 2.53, 2.55)))
+    check = bench.check_level(
+        query,
+        coarse,
+        _timing_truth((2.51, 2.53, 2.55)),
+        timestamp_resolution_s=bench.TIME_TOL_S,
+    )
     assert check.verdict == DISAGREE
     assert "0.5100" in check.detail
     assert "tol" in check.detail
@@ -1326,16 +1383,72 @@ def test_an_answer_inside_the_candidate_set_agrees() -> None:
         t_closest_approach=2.55,
         timeline=None,
         contact_occurred=False,
+        attestation=None,
     )
     assert (
-        bench.check_level(query, fine, _timing_truth((2.51, 2.53, 2.55))).verdict
+        bench.check_level(
+            query,
+            fine,
+            _timing_truth((2.51, 2.53, 2.55)),
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        ).verdict
         == AGREE
     )
     # And a level that records no closest approach at all does not thereby agree.
-    silent = bench.LevelAnswers(None, None, None, None)
+    silent = bench.LevelAnswers(None, None, None, None, None)
     assert (
-        bench.check_level(query, silent, _timing_truth((2.51,))).verdict
+        bench.check_level(
+            query,
+            silent,
+            _timing_truth((2.51,)),
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        ).verdict
         == COULD_NOT_EVALUATE
+    )
+
+
+def test_a_coarse_level_is_imprecise_within_its_quantum_and_wrong_outside_it() -> None:
+    """THE NEGATIVE TEST for the quantum-aware comparison.
+
+    The fix that stopped `occurrence` scoring `DISAGREE` for being coarse must
+    not have stopped it scoring `DISAGREE` for being *wrong*. A check that
+    cannot fail is not a check, and "widen the tolerance until the level
+    passes" is the failure mode this guards.
+
+    One quantum (1.0 s), three answers, three verdicts.
+    """
+    query = next(
+        q for q in bench.RESOLUTION_QUERIES if q.name == "time_of_closest_approach"
+    )
+    truth = _timing_truth((45.98,))
+    quantum = 1.0
+
+    def verdict_for(answer: float) -> str:
+        return bench.check_level(
+            query,
+            bench.LevelAnswers(None, answer, None, None, None),
+            truth,
+            timestamp_resolution_s=quantum,
+        ).verdict
+
+    # Inside TIME_TOL_S — the coarse timestamp landed on the answer anyway.
+    assert verdict_for(45.98) == AGREE
+    # Outside the tolerance, inside the quantum — the real occurrence case,
+    # 0.02 s out on a level that promises only 1.0 s. Imprecise, not wrong.
+    assert verdict_for(46.00) == COULD_NOT_EVALUATE
+    # Outside the quantum too. The level misplaced the event by more than its
+    # own resolution, and no widening of the tolerance may excuse that.
+    assert verdict_for(48.00) == DISAGREE
+
+    check = bench.check_level(
+        query,
+        bench.LevelAnswers(None, 46.00, None, None, None),
+        truth,
+        timestamp_resolution_s=quantum,
+    )
+    assert "quantum" in check.detail, (
+        "a refusal on these grounds has to say so in the detail column, or the "
+        "table shows a blank where a level declined to answer"
     )
 
 
@@ -1359,9 +1472,20 @@ def test_a_sustained_minimum_is_locatable_even_at_one_second(
         > 1.0
     ), "precondition failed: the minimum is not sustained for over a second here"
     answers = bench.answers_at_level(
-        views[bench.OCCURRENCE_LEVEL], bench.OCCURRENCE_LEVEL
+        views[bench.OCCURRENCE_LEVEL],
+        bench.OCCURRENCE_LEVEL,
+        attestation=None,
+        keyring=None,
     )
-    assert bench.check_level(query, answers, truth).verdict == AGREE
+    assert (
+        bench.check_level(
+            query,
+            answers,
+            truth,
+            timestamp_resolution_s=_resolution_of(bench.OCCURRENCE_LEVEL),
+        ).verdict
+        == AGREE
+    )
 
 
 def test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong(
@@ -1385,8 +1509,18 @@ def test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong(
         conn.close()
 
     query = next(q for q in bench.RESOLUTION_QUERIES if q.name == "did_contact_occur")
-    answers = bench.answers_at_level(tampered, bench.OCCURRENCE_LEVEL)
-    assert bench.check_level(query, answers, truth).verdict == DISAGREE
+    answers = bench.answers_at_level(
+        tampered, bench.OCCURRENCE_LEVEL, attestation=None, keyring=None
+    )
+    assert (
+        bench.check_level(
+            query,
+            answers,
+            truth,
+            timestamp_resolution_s=_resolution_of(bench.OCCURRENCE_LEVEL),
+        ).verdict
+        == DISAGREE
+    )
 
 
 def test_a_perturbed_value_is_caught_at_every_level(
@@ -1421,8 +1555,15 @@ def test_a_perturbed_value_is_caught_at_every_level(
         query = next(
             q for q in bench.RESOLUTION_QUERIES if q.name == "min_separation"
         )
-        answers = bench.answers_at_level(tampered, level)
-        assert bench.check_level(query, answers, truth).verdict == DISAGREE, level
+        answers = bench.answers_at_level(
+            tampered, level, attestation=None, keyring=None
+        )
+        assert (
+            bench.check_level(
+                query, answers, truth, timestamp_resolution_s=_resolution_of(level)
+            ).verdict
+            == DISAGREE
+        ), level
 
 
 def test_an_artifact_with_no_rows_at_a_level_could_not_evaluate(
@@ -1438,14 +1579,18 @@ def test_an_artifact_with_no_rows_at_a_level_could_not_evaluate(
     finally:
         conn.close()
 
-    answers = bench.answers_at_level(empty, bench.TRANSITION_LEVEL)
+    answers = bench.answers_at_level(
+        empty, bench.TRANSITION_LEVEL, attestation=None, keyring=None
+    )
     assert answers.min_separation is None
     # And the closed-world reading does not survive the layer it was licensed
     # by: a view with nothing in it does not thereby report "no contact
     # occurred" (issue #37 — before the query layer, this answered `False`).
     assert answers.contact_occurred is None
     verdicts = {
-        q.name: bench.check_level(q, answers, truth).verdict
+        q.name: bench.check_level(
+            q, answers, truth, timestamp_resolution_s=bench.TIME_TOL_S
+        ).verdict
         for q in bench.RESOLUTION_QUERIES
     }
     assert verdicts["min_separation"] == COULD_NOT_EVALUATE
@@ -1466,7 +1611,12 @@ def test_a_view_that_still_holds_a_foreign_layer_is_refused(built) -> None:
     """
     _, sqlite_path = built
     with pytest.raises(BenchError, match="foreign|still holds rows"):
-        bench.answers_at_level(sqlite_path, bench.OCCURRENCE_LEVEL)
+        bench.answers_at_level(
+            sqlite_path,
+            bench.OCCURRENCE_LEVEL,
+            attestation=None,
+            keyring=None,
+        )
 
 
 def test_the_benchmark_and_the_query_layer_answer_with_one_implementation(
@@ -1500,7 +1650,9 @@ def test_a_level_nobody_defined_is_refused(
     with pytest.raises(BenchError, match="not a resolution level"):
         bench.materialize_level(sqlite_path, level, tmp_path / "x.sqlite")
     with pytest.raises(BenchError, match="not a resolution level"):
-        bench.answers_at_level(sqlite_path, level)
+        bench.answers_at_level(
+            sqlite_path, level, attestation=None, keyring=None
+        )
 
 
 def test_the_curve_builds_the_graph_exactly_once(tmp_path: Path, monkeypatch) -> None:
@@ -1533,15 +1685,29 @@ def test_the_curve_builds_the_graph_exactly_once(tmp_path: Path, monkeypatch) ->
 
 
 def test_the_curve_is_deterministic(tmp_path: Path) -> None:
-    """Same seed and parameters, same bytes at every level (rule 2)."""
+    """Same seed and parameters, same bytes at every level (rule 2).
+
+    **Byte-for-byte, not merely the same length** (issue #59). The curve now
+    signs a record stream, and the obvious way to do that — `reg.chain.
+    generate_keyring`, which draws from OS entropy — would leave every size in
+    this table identical while every MAC in the artifact differed between two
+    runs of one command. A comparison of byte *counts* cannot see that, so this
+    compares the files.
+    """
     kwargs = {"seed": 0, "timing_repeats": 1, **_FAST}
     a = bench.run_resolution_curve(30, tmp_path / "a", **kwargs)
     b = bench.run_resolution_curve(30, tmp_path / "b", **kwargs)
     assert [p.size_bytes for p in a.points] == [p.size_bytes for p in b.points]
     assert [p.nodes for p in a.points] == [p.nodes for p in b.points]
+    assert [p.records for p in a.points] == [p.records for p in b.points]
+    assert a.attestation_counts == b.attestation_counts
     assert [c.verdict for p in a.points for c in p.checks] == [
         c.verdict for p in b.points for c in p.checks
     ]
+    for level in bench.RESOLUTION_LEVELS:
+        left = (tmp_path / "a" / "views" / f"{level}.sqlite").read_bytes()
+        right = (tmp_path / "b" / "views" / f"{level}.sqlite").read_bytes()
+        assert left == right, level
 
 
 # --- the report ------------------------------------------------------------
@@ -1555,6 +1721,7 @@ def _level(level: str, **overrides) -> bench.ResolutionPoint:
         "nodes": 12,
         "edges": 0,
         "occurrences": 12,
+        "records": 4,
         "run_seconds": 60.0,
         "checks": tuple(
             bench.LevelCheck(query=q.name, verdict=AGREE, detail="0.1 vs 0.1")
@@ -1563,6 +1730,25 @@ def _level(level: str, **overrides) -> bench.ResolutionPoint:
     }
     fields.update(overrides)
     return bench.ResolutionPoint(**fields)  # type: ignore[arg-type]
+
+
+#: A hand-built Layer A ground truth for the render tests. Hand-built for the
+#: same reason `_timing_truth` is: what is under test is the *shape* of the
+#: report — that the coverage fraction, the price column and the Layer A finding
+#: all render — and a measured fixture would tie those assertions to what one
+#: run's policy happened to declare.
+_ATTESTATION_TRUTH = bench.AttestationTruth(
+    declaration_count=12,
+    verdict_count=300,
+    fault_count=15,
+    t_probe=3.0,
+    declared_at_probe=(("d-5", 5, 2.5, 0.5, "retract"),),
+    violations=(("v-0", 0, 0.0, "CLAMP", "declaration_action_mismatch", "d-0"),),
+    probe_declaration_id="d-0",
+    adjudications_of_probe=(
+        ("v-0", 0, 0.0, "CLAMP", "declaration_action_mismatch", True),
+    ),
+)
 
 
 def _curve(points=None, **overrides) -> bench.ResolutionCurve:
@@ -1579,12 +1765,16 @@ def _curve(points=None, **overrides) -> bench.ResolutionCurve:
             closest_approach_candidates=(1.0,),
             timeline=((0.0, 0.2),),
             contact_occurred=True,
+            attestation=_ATTESTATION_TRUTH,
         ),
         "points": tuple(
             points
             if points is not None
             else [_level(name) for name in bench.RESOLUTION_LEVELS]
         ),
+        "replan_interval_s": bench.RESOLUTION_REPLAN_INTERVAL_S,
+        "declaration_horizon_s": bench.RESOLUTION_DECLARATION_HORIZON_S,
+        "watchdog_period_s": bench.RESOLUTION_WATCHDOG_PERIOD_S,
     }
     fields.update(overrides)
     return bench.ResolutionCurve(**fields)  # type: ignore[arg-type]
@@ -1714,10 +1904,20 @@ def test_cli_resolution_writes_the_curve(tmp_path: Path) -> None:
 def test_cli_resolution_does_not_fail_on_its_own_finding(tmp_path: Path) -> None:
     """The exit code must not gate on the per-level verdicts.
 
-    The occurrence level disagreeing about *when* the closest approach happened
-    is the measurement, not a regression. A command that exited non-zero on its
-    own finding would push the next person to tune the finding away — which is
-    the one thing issue #35 says not to do.
+    The occurrence level being unable to say *when* the closest approach
+    happened is the measurement, not a regression. A command that exited
+    non-zero on its own finding would push the next person to tune the finding
+    away — which is the one thing issue #35 says not to do.
+
+    **This assertion used to look for `DISAGREE`.** It changed with the
+    quantum-aware comparison in `_closest_approach_time_check`: the occurrence
+    level records to 1.0 s and was being graded against 0.01 s, so answering
+    46.00 s against a true 45.98 s scored `DISAGREE` — a level marked wrong for
+    being exactly as coarse as it says it is. The natural finding at this level
+    is a refusal, so that is what is asserted, and it is asserted specifically
+    rather than as "not AGREE": a run where every level agreed would prove
+    nothing about the exit code, and so would one that had quietly started
+    disagreeing again.
     """
     out = tmp_path / "resolution.md"
     code = bench.main(
@@ -1738,8 +1938,589 @@ def test_cli_resolution_does_not_fail_on_its_own_finding(tmp_path: Path) -> None
         ]
     )
     assert code == bench.EXIT_OK
-    assert DISAGREE in out.read_text(encoding="utf-8"), (
-        "no level disagreed at this length, so this run does not show that the "
+    report = out.read_text(encoding="utf-8")
+    assert COULD_NOT_EVALUATE in report, (
+        "no level refused at this length, so this run does not show that the "
         "exit code is independent of the per-level verdicts. Pick a fixture or a "
         "resolution where they diverge rather than deleting the assertion."
     )
+    assert DISAGREE not in report, (
+        "a level disagreed on this fixture, where nothing is tampered with and "
+        "every level is as accurate as it claims to be. Before treating this as "
+        "the finding, check it is not a check grading a level against a "
+        "precision finer than that level's own quantum — which is what this "
+        "assertion previously mistook for a measurement."
+    )
+
+
+# --------------------------------------------------------------------------
+# LAYER A IN THE CURVE (issue #59).
+#
+# THE TESTS THIS SECTION EXISTS FOR:
+# `test_the_measured_build_carries_a_non_zero_layer_a` and the four negative
+# tests under it. The bug this section was written against is silently-zero —
+# `_measure` never passed `records=`, so the artifact every published number came
+# from held no declaration, no verdict, no fault and no chain, and nothing said
+# so. A zero is invisible in a byte column, so the counts are asserted directly;
+# and a check that has only ever seen a healthy artifact has not been shown able
+# to fail, so each of the four record questions is fed the condition it guards
+# against.
+# --------------------------------------------------------------------------
+
+#: Long enough for the fixture to emit several declarations, several hundred
+#: verdicts and a non-zero number of faults, and short enough to build inside a
+#: test. Not a golden number: what the assertions below check is that each count
+#: is non-zero, never what it is.
+ATTESTED_FRAMES = 120
+
+
+@pytest.fixture(scope="module")
+def attested(tmp_path_factory) -> tuple[bench.ResolutionCurve, Path, dict[str, Path]]:
+    """One real attested curve: `(curve, artifact, views)`. Built once.
+
+    The curve's own views are on disk where `run_resolution_curve` left them, so
+    the tampering tests copy those rather than re-materializing — a second
+    projection would be a second artifact and the comparison would be against a
+    file the curve never measured.
+    """
+    work = tmp_path_factory.mktemp("attested")
+    curve = bench.run_resolution_curve(
+        ATTESTED_FRAMES, work, seed=0, timing_repeats=1, **_FAST
+    )
+    _, sqlite_path = bench._work_paths(long_run(ATTESTED_FRAMES), work)
+    views = {
+        level: work / "views" / f"{level}.sqlite"
+        for level in bench.RESOLUTION_LEVELS
+    }
+    return curve, sqlite_path, views
+
+
+def _record_checks(
+    view: Path, level: str, curve: bench.ResolutionCurve
+) -> dict[str, bench.LevelCheck]:
+    """Every Layer A check at one level, keyed by query name."""
+    answers = bench.answers_at_level(
+        view,
+        level,
+        attestation=curve.truth.attestation,
+        keyring=bench.measurement_keyring(0),
+    )
+    return {
+        q.name: bench.check_level(
+            q, answers, curve.truth, timestamp_resolution_s=_resolution_of(level)
+        )
+        for q in bench.RESOLUTION_QUERIES
+        if q.name in _RECORD_QUERIES
+    }
+
+
+def test_the_measured_build_carries_a_non_zero_layer_a(attested) -> None:
+    """**THE TEST THIS ISSUE EXISTS FOR.** Every Layer A count must be non-zero.
+
+    Before issue #59 all four were zero and the report said nothing, because
+    `_measure` called `graph.build` without `records=` and a build handed no
+    record stream is indistinguishable in a byte count from a run that produced
+    none. A test that only checked the report renders would have passed
+    throughout. This one fails on zero, which is the only thing that stops it
+    happening again.
+    """
+    curve, artifact, _ = attested
+    counts = curve.attestation_counts
+    for name in ("declarations", "verdicts", "faults", "chain_records"):
+        assert counts[name] > 0, (
+            f"{name} is zero in the artifact the resolution curve measured. That "
+            "is the bug issue #59 exists to fix: Layer A absent from every number "
+            "the curve publishes, with nothing saying so."
+        )
+    # And the rows really are in the file, not only in the ground truth: the
+    # counts above come from the emitted stream, and a build that dropped them on
+    # the way in would still satisfy them.
+    conn = store.connect(artifact)
+    try:
+        assert query.attestation_state(conn) == "present"
+        nodes = store.node_counts(conn)
+    finally:
+        conn.close()
+    assert nodes["Declaration"] == counts["declarations"]
+    assert nodes["Verdict"] == counts["verdicts"]
+
+
+def test_the_fixture_declares_a_box_it_never_leaves_and_is_still_refused(
+    attested,
+) -> None:
+    """The fixture's fault is a real one, and it is the one it claims.
+
+    `reg.scenarios.LONG_RUN_DECLARED_Q_BOUNDS` contains every configuration the
+    run commands, so the policy's claim about *where the arm is* is true at every
+    frame. The faults come from the reachable set over the declaration's horizon
+    leaving that box — which is `declaration_action_mismatch` and nothing else. A
+    fixture producing some other fault would be measuring a different run than
+    the one its docstring describes.
+    """
+    curve, _, _ = attested
+    faults = {v[4] for v in curve.truth.attestation.violations}
+    assert faults == {long_run(ATTESTED_FRAMES).fault} == {
+        "declaration_action_mismatch"
+    }
+    assert all(
+        v[3] != "PERMIT" for v in curve.truth.attestation.violations
+    ), "a PERMIT is not a violation"
+
+
+def test_every_layer_a_question_agrees_at_the_edge_levels(attested) -> None:
+    """The control for the four negative tests below.
+
+    Without it, "the tampered view disagrees" would be indistinguishable from
+    "this check disagrees with everything", which is the failure mode a harness
+    that has only ever been run against a broken artifact has.
+    """
+    curve, _, views = attested
+    for level in (bench.TRANSITION_LEVEL, bench.PER_FRAME_LEVEL):
+        checks = _record_checks(views[level], level, curve)
+        assert {c.verdict for c in checks.values()} == {AGREE}, (level, checks)
+
+
+def test_a_build_with_no_record_stream_cannot_evaluate_layer_a(
+    views: dict[str, Path], truth: bench.GroundTruth
+) -> None:
+    """**COULD-NOT-EVALUATE never resolves to AGREE**, for the record questions.
+
+    The `contact` fixture is built by `run_scenario`, which passes
+    `records=None`. Every Layer A question over it has to come back
+    could-not-evaluate at every level — not `AGREE` on the strength of an empty
+    record table, which is exactly what a closed-world read of a table nobody
+    wrote to would produce.
+    """
+    for level in bench.RESOLUTION_LEVELS:
+        verdicts = _checks(views[level], level, truth)
+        for name in _RECORD_QUERIES:
+            assert verdicts[name] == COULD_NOT_EVALUATE, (level, name)
+
+
+def _tamper(view: Path, out: Path, sql: str, params: tuple = ()) -> Path:
+    """A copy of one view with one statement run against it."""
+    shutil.copyfile(view, out)
+    conn = store.connect(out)
+    try:
+        conn.execute(sql, params)
+        conn.commit()
+    finally:
+        conn.close()
+    return out
+
+
+def test_declared_bound_says_no_when_the_declarations_are_wrong(
+    attested, tmp_path: Path
+) -> None:
+    """THE NEGATIVE TEST for "every Declaration, in full".
+
+    Two ways it must be able to say no, and they are different findings: a
+    declaration whose *field* was altered is a level answering wrongly, and a
+    declaration whose region the level no longer holds is a level that cannot
+    answer. Neither may come back `AGREE`.
+    """
+    curve, _, views = attested
+    level = bench.TRANSITION_LEVEL
+
+    altered = _tamper(
+        views[level],
+        tmp_path / "altered.sqlite",
+        "UPDATE declaration SET horizon = horizon + 10.0",
+    )
+    assert (
+        _record_checks(altered, level, curve)["declared_bound"].verdict == DISAGREE
+    )
+
+    # And the same question with the claimed region removed. `reg.query` refuses
+    # rather than reporting a declaration with no bound, and the check must carry
+    # that refusal through as could-not-evaluate rather than scoring the fields
+    # it can still see.
+    regionless = _tamper(
+        views[level],
+        tmp_path / "regionless.sqlite",
+        "DELETE FROM edge WHERE type = 'DECLARED'",
+    )
+    assert _record_checks(regionless, level, curve)["declared_bound"].verdict == (
+        COULD_NOT_EVALUATE
+    )
+
+
+def test_violations_says_no_when_a_fault_is_dropped_or_reattributed(
+    attested, tmp_path: Path
+) -> None:
+    """THE NEGATIVE TEST for "every fault, with full attribution".
+
+    docs/lossiness.md gives this question exact set equality — "a missed or
+    invented fault is a failure" — so a level that lost one refused action, and a
+    level that kept every fault code but forgot which declaration it was raised
+    against, both have to say no. The second is the one a check comparing fault
+    codes alone would miss.
+    """
+    curve, _, views = attested
+    level = bench.TRANSITION_LEVEL
+
+    dropped = _tamper(
+        views[level],
+        tmp_path / "dropped.sqlite",
+        "DELETE FROM verdict WHERE fault IS NOT NULL AND seq = "
+        "(SELECT min(seq) FROM verdict WHERE fault IS NOT NULL)",
+    )
+    assert _record_checks(dropped, level, curve)["violations"].verdict == DISAGREE
+
+    unattributed = _tamper(
+        views[level],
+        tmp_path / "unattributed.sqlite",
+        "UPDATE verdict SET declaration_key = NULL WHERE fault IS NOT NULL",
+    )
+    assert (
+        _record_checks(unattributed, level, curve)["violations"].verdict == DISAGREE
+    )
+
+
+def test_verdicts_says_no_when_an_adjudication_or_its_bound_is_lost(
+    attested, tmp_path: Path
+) -> None:
+    """THE NEGATIVE TEST for "every Verdict, in full".
+
+    An altered field is a wrong answer; a lost clamped bound is a missing one.
+    The two get different verdicts on purpose — collapsing them would let a level
+    that quietly dropped the region a clamp applied score `AGREE` on a question
+    whose whole predicate is "in full".
+
+    The altered field is `t` and not `outcome` because the schema refuses to hold
+    a CLAMP with no clamped envelope — which is the store doing its job, and
+    means an outcome cannot be edited in isolation at all.
+    """
+    curve, _, views = attested
+    level = bench.TRANSITION_LEVEL
+
+    altered = _tamper(
+        views[level],
+        tmp_path / "instant.sqlite",
+        "UPDATE verdict SET t = t + 1.0",
+    )
+    assert _record_checks(altered, level, curve)["verdicts"].verdict == DISAGREE
+
+    boundless = _tamper(
+        views[level],
+        tmp_path / "boundless.sqlite",
+        "DELETE FROM edge WHERE type = 'ENFORCED'",
+    )
+    check = _record_checks(boundless, level, curve)["verdicts"]
+    assert check.verdict == COULD_NOT_EVALUATE
+    assert "clamped envelope" in check.detail
+
+
+def test_the_chain_check_says_no_when_the_record_is_truncated_or_altered(
+    attested, tmp_path: Path
+) -> None:
+    """THE NEGATIVE TEST for "the complete hash chain". Two artifacts, two ways.
+
+    An altered field breaks a MAC and a removed record leaves a dangling
+    `FOLLOWS` link; the walk reports both, and this check must carry them through
+    as `DISAGREE` rather than reading "a chain came back" as a chain that
+    verified.
+    """
+    curve, _, views = attested
+    level = bench.TRANSITION_LEVEL
+
+    forged = _tamper(
+        views[level],
+        tmp_path / "forged.sqlite",
+        "UPDATE declaration SET horizon = horizon + 1.0 WHERE seq = 0",
+    )
+    assert _record_checks(forged, level, curve)["verify_chain"].verdict == DISAGREE
+
+    truncated = _tamper(
+        views[level],
+        tmp_path / "truncated.sqlite",
+        "DELETE FROM verdict WHERE seq = (SELECT max(seq) FROM verdict)",
+    )
+    check = _record_checks(truncated, level, curve)["verify_chain"]
+    assert check.verdict == DISAGREE
+    assert "BROKEN" in check.detail
+
+
+def test_a_chain_that_verified_over_a_short_record_is_still_a_disagreement(
+    attested,
+) -> None:
+    """Why the emitted lengths are in this predicate and not just `VERIFIED`.
+
+    `reg.chain` walks what the artifact holds and checks it against the
+    artifact's own stated count and its own `FOLLOWS` links, so on a real file a
+    truncation is caught three times over — which is why the test above cannot
+    produce this state without dismantling the artifact. The state is still worth
+    guarding: the number of records the *run emitted* is the only one that does
+    not come from the file, and a walk that came back verified over fewer than
+    that has verified a record with something missing from it. Fed directly,
+    because a check is a function and this is the input it must say no to.
+    """
+    curve, _, _ = attested
+    truth = curve.truth
+    spec = next(q for q in bench.RESOLUTION_QUERIES if q.name == "verify_chain")
+    short = bench.AttestationAnswers(
+        declared_at_probe=None,
+        declared_regions_present=None,
+        violations=None,
+        adjudications_of_probe=None,
+        chain=(
+            "VERIFIED",
+            truth.attestation.declaration_count,
+            truth.attestation.verdict_count - 1,
+        ),
+    )
+    check = bench.check_level(
+        spec,
+        bench.LevelAnswers(None, None, None, None, short),
+        truth,
+        timestamp_resolution_s=bench.TIME_TOL_S,
+    )
+    assert check.verdict == DISAGREE
+    assert "truncated" in check.detail
+    # And the whole record, verified, is the control: without it the assertion
+    # above would hold for a check that disagreed with everything.
+    whole = dataclasses.replace(
+        short,
+        chain=(
+            "VERIFIED",
+            truth.attestation.declaration_count,
+            truth.attestation.verdict_count,
+        ),
+    )
+    assert (
+        bench.check_level(
+            spec,
+            bench.LevelAnswers(None, None, None, None, whole),
+            truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        ).verdict
+        == AGREE
+    )
+
+
+def test_the_chain_walked_without_a_key_is_not_a_chain_that_verified(
+    attested,
+) -> None:
+    """A MAC nobody checked is unchecked, not valid.
+
+    `reg.chain.verify_chain(conn, None)` comes back COULD-NOT-EVALUATE with its
+    links walked, and this check must carry that through rather than scoring the
+    record counts it can still see. It is the same rule as everywhere else here,
+    applied to the one question that takes a key.
+    """
+    curve, _, views = attested
+    answers = bench.answers_at_level(
+        views[bench.TRANSITION_LEVEL],
+        bench.TRANSITION_LEVEL,
+        attestation=curve.truth.attestation,
+        keyring=None,
+    )
+    spec = next(q for q in bench.RESOLUTION_QUERIES if q.name == "verify_chain")
+    assert (
+        bench.check_level(
+            spec,
+            answers,
+            curve.truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        ).verdict
+        == COULD_NOT_EVALUATE
+    )
+
+
+def test_the_per_frame_view_does_not_duplicate_the_record_edges(attested) -> None:
+    """The per-frame expansion restates relationships, not records.
+
+    A `DECLARED` edge spans a validity window and a `FOLLOWS` edge links two
+    records; neither asserts anything "at every frame", so expanding them would
+    return one declaration 26 times and make the per-frame level look like it
+    answers `declared_bound` wrongly — a finding about this view's construction
+    wearing the label of a finding about resolution.
+    """
+    counts = {}
+    for level in (bench.TRANSITION_LEVEL, bench.PER_FRAME_LEVEL):
+        conn = store.connect(attested[2][level])
+        try:
+            counts[level] = {
+                str(row["type"]): int(row["n"])
+                for row in conn.execute(
+                    "SELECT type, count(*) AS n FROM edge GROUP BY type"
+                )
+            }
+        finally:
+            conn.close()
+    for record_edge in ("DECLARED", "ADJUDICATED", "ENFORCED", "FOLLOWS"):
+        assert counts[bench.PER_FRAME_LEVEL].get(record_edge, 0) == counts[
+            bench.TRANSITION_LEVEL
+        ].get(record_edge, 0), record_edge
+    # And the relationship edges *are* expanded, or the assertion above would
+    # hold for a view that expanded nothing at all.
+    assert (
+        counts[bench.PER_FRAME_LEVEL]["SEPARATION"]
+        > counts[bench.TRANSITION_LEVEL]["SEPARATION"]
+    )
+
+
+def test_the_measurement_keyring_is_a_function_of_the_seed(tmp_path: Path) -> None:
+    """Same seed, same key material; different seed, different (rule 2).
+
+    The curve's artifact has to be byte-reproducible, which a keyring from OS
+    entropy would prevent. What this must not become is a keyring shared across
+    seeds — key material that does not vary with the run is one step closer to
+    looking like a real one.
+    """
+    a = bench.measurement_keyring(0)
+    b = bench.measurement_keyring(0)
+    other = bench.measurement_keyring(1)
+    material = lambda k: tuple(key.material for key in k.keys)  # noqa: E731
+    assert material(a) == material(b)
+    assert material(a) != material(other)
+    # Both roles, and they are not the same bytes: one key doing both jobs would
+    # make the two chains forgeable from each other even in a measurement.
+    assert len({key.material for key in a.keys}) == 2
+    with pytest.raises(BenchError, match="must be an int"):
+        bench.measurement_keyring(0.5)  # type: ignore[arg-type]
+
+
+# --- coverage --------------------------------------------------------------
+
+
+def test_every_supported_question_is_in_exactly_one_bucket() -> None:
+    """The denominator is the whole supported set, with no question named twice.
+
+    Coverage as a fraction is only meaningful if the denominator is the document
+    it claims to be counting. A duplicate row would make the fraction wrong in
+    the flattering direction.
+    """
+    names = [q.name for q in bench.SUPPORTED_QUESTIONS]
+    assert len(names) == len(set(names)) == 9
+    assert all(
+        q.status in (bench.PRICED, bench.EXCLUDED) for q in bench.SUPPORTED_QUESTIONS
+    )
+    priced, total = bench.coverage()
+    assert total == len(names)
+    assert 0 < priced < total, (
+        "coverage is either total or zero, which means the table below stopped "
+        "distinguishing a priced question from an excluded one"
+    )
+
+
+def test_a_priced_question_is_one_the_table_actually_asks() -> None:
+    """A `PRICED` row nobody asks is the omission this block exists to prevent,
+    wearing the label of its own fix."""
+    asked = {q.name for q in bench.RESOLUTION_QUERIES}
+    for question in bench.SUPPORTED_QUESTIONS:
+        if question.status == bench.PRICED:
+            assert question.name in asked, question.name
+
+
+def test_an_excluded_question_carries_a_reason_and_is_not_a_pass() -> None:
+    """`EXCLUDED` is a could-not-evaluate. It must never render as `AGREE`."""
+    with pytest.raises(BenchError, match="no reason"):
+        bench.SupportedQuestion(
+            name="x", layer=query.LAYER_B, status=bench.EXCLUDED, reason=""
+        )
+    with pytest.raises(BenchError, match="not a coverage status"):
+        bench.SupportedQuestion(
+            name="x", layer=query.LAYER_B, status=AGREE, reason="because"
+        )
+    excluded = [q for q in bench.SUPPORTED_QUESTIONS if q.status == bench.EXCLUDED]
+    assert excluded, "nothing is excluded, so this assertion checks nothing"
+    assert all(q.status != AGREE for q in excluded)
+
+
+def test_the_report_states_coverage_as_a_fraction_of_the_supported_set() -> None:
+    """Five silently-omitted questions under a row reading AGREE reads as full
+    coverage, so the fraction and every exclusion are in the report itself."""
+    report = render([], sensor_multiplier=None, resolution=_curve(), **_RENDER_ARGS)
+    priced, total = bench.coverage()
+    assert f"**{priced} of {total}**" in report
+    for question in bench.SUPPORTED_QUESTIONS:
+        assert f"`{question.name}`" in report
+        if question.status == bench.EXCLUDED:
+            assert question.reason.split(".")[0][:40] in report, question.name
+    assert bench.EXCLUDED in report
+    # The two Retained clauses that are not questions are mentioned rather than
+    # silently left out of the denominator.
+    for clause, _ in bench.RETAINED_CLAUSES_NOT_IN_THE_QUESTION_SET:
+        assert clause in report
+
+
+def test_the_report_says_what_each_level_loses(attested) -> None:
+    """The 12x is only a finding with a price attached, so the price is a column.
+
+    Measured rather than hand-built: what has to appear is the name of a question
+    a real level really loses, and a fabricated point could carry any name at all.
+    """
+    curve, _, _ = attested
+    report = render([], sensor_multiplier=None, resolution=curve, **_RENDER_ARGS)
+    assert "what you lose" in report
+    lossy = [p for p in curve.points if p.lost]
+    assert lossy, "no level lost anything, so this run prices nothing"
+    for name in lossy[0].lost:
+        assert f"`{name}`" in report
+    assert "x smaller" in report
+    # A level that loses nothing says so rather than leaving the cell blank.
+    assert any(not p.lost for p in curve.points)
+    assert "nothing in this table" in report
+
+
+def test_the_layer_a_finding_is_stated_rather_than_left_to_be_inferred() -> None:
+    """Both branches, because the report has to say something either way.
+
+    "The certifiable layer is retained in full at every level" is a result, and
+    so is "it is not, and here is where it is lost". Four identical rows of
+    verdicts are neither.
+    """
+    intact = _curve()
+    assert intact.layer_a_is_resolution_independent
+    report = render([], sensor_multiplier=None, resolution=intact, **_RENDER_ARGS)
+    assert "retained in full at every level" in report
+
+    lossy_point = _level(
+        bench.OCCURRENCE_LEVEL,
+        checks=tuple(
+            bench.LevelCheck(
+                query=q.name,
+                verdict=COULD_NOT_EVALUATE if q.name == "declared_bound" else AGREE,
+                detail="",
+            )
+            for q in bench.RESOLUTION_QUERIES
+        ),
+    )
+    lossy = _curve([lossy_point, _level(bench.TRANSITION_LEVEL)])
+    assert not lossy.layer_a_is_resolution_independent
+    report = render([], sensor_multiplier=None, resolution=lossy, **_RENDER_ARGS)
+    assert "not* fully resolution-independent" in report
+    assert "`declared_bound`" in report
+
+
+def test_a_curve_with_no_record_stream_claims_nothing_about_layer_a() -> None:
+    """Absence is reported as absence. A curve that measured no Layer A has not
+    shown that Layer A survives coarsening — it has shown nothing about it."""
+    curve = _curve(truth=bench.GroundTruth(0.2, 1.0, (1.0,), ((0.0, 0.2),), True, None))
+    assert not curve.layer_a_is_resolution_independent
+    assert curve.attestation_counts == {
+        "declarations": 0,
+        "verdicts": 0,
+        "faults": 0,
+        "chain_records": 0,
+    }
+    report = render([], sensor_multiplier=None, resolution=curve, **_RENDER_ARGS)
+    assert "Nothing is claimed about Layer A here" in report
+
+
+def test_the_report_prints_the_record_parameterisation(attested) -> None:
+    """Which replan rate, horizon and watchdog produced these record counts.
+
+    Every one of the three decides how much of the fault taxonomy can fire at
+    all, so a table of record counts that did not say which values produced them
+    would be a measurement nobody could reproduce — and the keyring line is there
+    so nobody reads the chain column as a verified provenance.
+    """
+    curve, _, _ = attested
+    report = render([], sensor_multiplier=None, resolution=curve, **_RENDER_ARGS)
+    assert f"{curve.replan_interval_s} s" in report
+    assert "measurement_keyring" in report
+    assert "attest to nothing" in report
+    for name, count in curve.attestation_counts.items():
+        assert f"{count:,}" in report, name

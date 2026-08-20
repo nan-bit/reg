@@ -2334,11 +2334,11 @@ def _keyring_file(tmp_path: Path) -> Path:
 def _records_for(csv: Path, scn, tmp_path: Path) -> AttestationRecords:
     """The record stream for a stream, through the CLI's own producer.
 
-    Through `graph._attestation_from_stream` rather than a second copy of the
+    Through `graph.attestation_from_stream` rather than a second copy of the
     policy/enforcer wiring: a fixture that assembled the records differently
     from the way the CLI does would be testing a run nobody can produce.
     """
-    return graph._attestation_from_stream(
+    return graph.attestation_from_stream(
         csv,
         scn,
         keyring_path=_keyring_file(tmp_path),

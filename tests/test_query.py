@@ -124,7 +124,13 @@ def artifact(built) -> Path:
 @pytest.fixture(scope="module")
 def truth(built) -> bench.GroundTruth:
     csv_path, _ = built
-    return bench.ground_truth_from_csv(csv_path, scenario(SCENARIO).world)
+    # `records=None`: this fixture's build is handed no record stream, so the
+    # Layer A questions in `RESOLUTION_QUERIES` are could-not-evaluate here.
+    # Stated rather than defaulted (issue #59) — a default would let a caller
+    # reach that state without saying so.
+    return bench.ground_truth_from_csv(
+        csv_path, scenario(SCENARIO).world, records=None
+    )
 
 
 @pytest.fixture(scope="module")
@@ -290,15 +296,28 @@ def test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes(
 # --------------------------------------------------------------------------
 
 
-def _check(name: str, answers: bench.LevelAnswers, truth: bench.GroundTruth) -> str:
+def _check(
+    name: str,
+    answers: bench.LevelAnswers,
+    truth: bench.GroundTruth,
+    *,
+    timestamp_resolution_s: float,
+) -> str:
     """One query's verdict, from `reg.bench.check_level`. Not a second checker.
 
     docs/lossiness.md's agreement predicates are already implemented once, in the
     benchmark, and issue #37 says to reuse them. Writing a comparison here would
     be the same trap the whole issue is about, one level down.
+
+    `timestamp_resolution_s` is passed through without a default for the reason
+    `check_level` requires one: an artifact asked a timing question has to say
+    how precisely it records time, or it gets graded against a precision it
+    never claimed.
     """
     spec = next(q for q in bench.RESOLUTION_QUERIES if q.name == name)
-    return bench.check_level(spec, answers, truth).verdict
+    return bench.check_level(
+        spec, answers, truth, timestamp_resolution_s=timestamp_resolution_s
+    ).verdict
 
 
 def test_the_separation_timeline_agrees_with_the_raw_stream(
@@ -313,8 +332,9 @@ def test_the_separation_timeline_agrees_with_the_raw_stream(
     assert (
         _check(
             "separation_timeline",
-            bench.LevelAnswers(None, None, answer.value.samples, None),
+            bench.LevelAnswers(None, None, answer.value.samples, None, None),
             truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
         )
         == AGREE
     )
@@ -341,8 +361,9 @@ def test_the_timeline_check_says_no_when_the_graph_is_perturbed(
     assert (
         _check(
             "separation_timeline",
-            bench.LevelAnswers(None, None, answer.value.samples, None),
+            bench.LevelAnswers(None, None, answer.value.samples, None, None),
             truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
         )
         == DISAGREE
     )
@@ -365,10 +386,23 @@ def test_min_separation_and_the_contact_flag_agree_with_the_raw_stream(
         t_closest_approach=when.value,
         timeline=None,
         contact_occurred=contact.value,
+        attestation=None,
     )
-    assert _check("min_separation", answers, truth) == AGREE
-    assert _check("did_contact_occur", answers, truth) == AGREE
-    assert _check("time_of_closest_approach", answers, truth) == AGREE
+    assert _check(
+        "min_separation", answers, truth, timestamp_resolution_s=bench.TIME_TOL_S
+    ) == AGREE
+    assert _check(
+        "did_contact_occur", answers, truth, timestamp_resolution_s=bench.TIME_TOL_S
+    ) == AGREE
+    assert (
+        _check(
+            "time_of_closest_approach",
+            answers,
+            truth,
+            timestamp_resolution_s=bench.TIME_TOL_S,
+        )
+        == AGREE
+    )
 
 
 def test_frames_at_risk_covers_every_frame_the_stream_says_is_at_risk(
@@ -576,9 +610,19 @@ def test_the_occurrence_level_still_answers_what_it_can(
     assert smallest.verdict == ANSWERED
     assert smallest.layer == query.OCCURRENCE_LAYER
     assert contact.verdict == ANSWERED and contact.value is True
-    answers = bench.LevelAnswers(smallest.value, None, None, contact.value)
-    assert _check("min_separation", answers, truth) == AGREE
-    assert _check("did_contact_occur", answers, truth) == AGREE
+    answers = bench.LevelAnswers(smallest.value, None, None, contact.value, None)
+    # This view records occurrences to 1.0 s, so that is the precision its
+    # answers are graded at. Neither question below is a timing question, but
+    # stating it is what keeps the coarse level from being asked a fine one.
+    coarse = graph.OCCURRENCE_TIME_RESOLUTION_S
+    assert (
+        _check("min_separation", answers, truth, timestamp_resolution_s=coarse)
+        == AGREE
+    )
+    assert (
+        _check("did_contact_occur", answers, truth, timestamp_resolution_s=coarse)
+        == AGREE
+    )
 
 
 def test_the_occurrence_answer_reports_the_coarse_tolerance(
@@ -897,7 +941,7 @@ def _attested_build(tmp: Path, name: str) -> tuple[Path, Path]:
     """Build `name` with its own record stream. `(artifact, keyring)`.
 
     One definition, used by both attested fixtures below. Through
-    `graph._attestation_from_stream` rather than a second copy of the
+    `graph.attestation_from_stream` rather than a second copy of the
     policy/enforcer wiring, for the reason `tests/test_graph.py` gives: a
     fixture that assembled the records differently from the way the CLI does
     would be testing a run nobody can produce.
@@ -910,7 +954,7 @@ def _attested_build(tmp: Path, name: str) -> tuple[Path, Path]:
     scn = _replace(scenario(name), dt=CHAIN_DT)
     csv = write_frames(scn.states(0), tmp / f"{name}.csv", comments=provenance(scn, 0))
     keyring_path = chain.write_keyring(CHAIN_KEYRING, tmp / "keyring.json")
-    records = graph._attestation_from_stream(
+    records = graph.attestation_from_stream(
         csv,
         scn,
         keyring_path=keyring_path,

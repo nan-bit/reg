@@ -74,8 +74,14 @@ and the argument is built to survive it — see the sensitivity below.
 ## Sensitivity
 
 The ratio is **linear in the assumed rate**, so the assumption never hides: halve
-the rate and every ratio halves. Against the pre-#54/#55 artifact sizes, over the
-182.5-day retention floor:
+the rate and every ratio halves.
+
+The artifact sizes below are **provisional** — pre-#54/#55, and measured on an
+artifact that contains no Layer A records at all (issue #59), so the real sizes
+are larger and every ratio below is correspondingly optimistic. What the
+sensitivity establishes is *the shape of the dependence*, which does not change
+when the sizes do. Against those provisional sizes, over the 182.5-day retention
+floor:
 
 | sensor rate | log at 6 months | vs occurrence (18.9 GB) | vs transition (229.7 GB) | vs per-frame (589.3 GB) |
 |---|---|---|---|---|

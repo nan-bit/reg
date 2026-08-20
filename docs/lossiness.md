@@ -311,7 +311,8 @@ context, not a result". The CSV was a substitute this simulator forced, not a
 restatement of the claim. But the question it provoked is the durable part and it
 outlived its own premise: *how coarse can the evidence get before it stops
 answering the question?* The resolution levels below are what answer it, and
-they turn out to be **where the compression argument actually lives** — 18.9 GB
+they turn out to be **where the compression argument actually lives** — a
+provisional 18.9 GB (issue #59: Layer A is missing from that measurement)
 per robot per six months at occurrence resolution against a projected 182.5 TB of
 sensor log (`docs/plan.md` Claim 1; the sensor rate is an assumption with a
 sourced range and a sensitivity table, [`sensor-baseline.md`](sensor-baseline.md)).

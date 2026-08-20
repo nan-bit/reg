@@ -135,6 +135,13 @@ buyer is not a ratio, it is the absolute cost of retaining evidence for as long
 as the law requires it. EU AI Act Article 12 sets that floor at six months.
 Per robot, from the measured resolution curve:
 
+> **These figures are provisional and will change.** They predate the #54/#55
+> encoding work, and — more importantly — they measure an artifact containing
+> **no Layer A at all**: `bench._measure` never passes `records=` to
+> `graph.build`, so no declaration, verdict, fault or chain row is in any number
+> below (issue #59). The corrected sizes will be **larger**. The framing in this
+> section is what is being asserted; the specific bytes are not yet.
+
 | retained at | per robot, 6 months | fleet of 100 |
 |---|---|---|
 | **occurrence (±1 s, DSSAD-shaped)** | **18.9 GB** | 1.8 TB |

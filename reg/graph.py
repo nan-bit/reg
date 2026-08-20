@@ -681,6 +681,12 @@ class BuildResult:
     #: Rows per edge type, all four keys always present. A zero is a fact ("no
     #: contact in this run"); a missing key would be indistinguishable from one.
     edges: dict[str, int]
+    #: Rows per node kind, all six keys always present, for the same reason.
+    #: `Declaration` and `Verdict` count 0 on a build handed no record stream —
+    #: whose artifact has no such tables at all (issue #54) — and 0 is the count
+    #: of rows written either way. Whether a stream was offered is
+    #: `meta[attestation_records]`, not a row count, in both versions of the
+    #: schema: an empty table counts zero too.
     nodes: dict[str, int]
     size_bytes: int
 
@@ -1524,7 +1530,12 @@ def build(
         horizon=horizon, n_samples=n_samples, seed=seed, substep_dt=substep_dt
     )
 
-    conn = store.create(out_path)
+    # `record_tables` is exactly the fact `meta[attestation_records]` records,
+    # and it is stated here rather than always creating the two tables: a build
+    # given no record stream used to carry them, and their two automatic
+    # indexes, holding nothing (issue #54). Which of the two facts this artifact
+    # holds stays in `meta`, where every reader already looks for it.
+    conn = store.create(out_path, record_tables=records is not None)
     try:
         _write_provenance(
             conn,
@@ -1988,14 +1999,10 @@ def _summarize(conn, path: Path, frames: int) -> BuildResult:
         )
         for edge_type in store.EDGE_SPECS
     }
-    nodes = {
-        kind: int(
-            conn.execute(
-                f"SELECT count(*) AS n FROM {table}"  # noqa: S608
-            ).fetchone()["n"]
-        )
-        for kind, (table, _) in store.NODE_TABLES.items()
-    }
+    # Through `store.node_counts` rather than a `SELECT count(*)` per table: a
+    # build handed no record stream has no `declaration` or `verdict` table to
+    # count (issue #54), and the count of rows it wrote to them is 0 either way.
+    nodes = store.node_counts(conn)
     return BuildResult(
         path=path,
         frames=frames,

@@ -1,7 +1,7 @@
 """The evidence graph's persistence layer: SQLite schema and write primitives.
 
     from reg import store
-    conn = store.create("runs/contact.sqlite")
+    conn = store.create("runs/contact.sqlite", record_tables=False)
     store.insert_entity(conn, "obs_crate", "crate", geometry=disc)
     cfg_id = store.insert_robot_config(conn, "cfg_0", "0.0,0.0", "0.0,0.0")
     edge_id = store.open_edge(conn, "SEPARATION", cfg_id, "obs_crate", t_start=0.0,
@@ -79,6 +79,18 @@ read the edge layer before still reads it. `reg.bench --resolution` measures
 what each of the two costs and which questions each can still answer, which is
 what Claim 1 became after issue #30 refuted its original form.
 
+ENCODING IS NOT RETENTION
+-------------------------
+Two things here are decisions about *how* the file is written and about nothing
+else: `PAGE_SIZE`, and the fact that `RECORD_SCHEMA` is applied only when the
+build was handed a record stream (issue #54). Neither changes a column, a row,
+an answer or a tolerance docs/lossiness.md advertises, and neither bumps
+`SCHEMA_VERSION` — a reader does not have to know either one to read the file.
+The line to hold is that the second must not become a retention decision by
+accident: "this build was given no record stream" and "a run that produced no
+records" are different facts (issue #48), the absent tables say neither of them,
+and `meta[attestation_records]` says which — before any reader reaches a row.
+
 DETERMINISM
 -----------
 Same inserts in the same order produce the same file, byte for byte. Nothing here
@@ -105,14 +117,18 @@ __all__ = [
     "SCHEMA_VERSION",
     "META_SCHEMA_VERSION",
     "META_FRAME_PERIOD",
+    "PAGE_SIZE",
     "ENVELOPE_SOURCES",
     "EDGE_SPECS",
     "NODE_TABLES",
     "OCCURRENCE_SPECS",
     "RECORD_KINDS",
+    "RECORD_TABLE_NAMES",
     "StoreError",
     "create",
     "connect",
+    "has_record_tables",
+    "node_counts",
     "layer_of",
     "occurrence_layer",
     "put_meta",
@@ -173,6 +189,40 @@ SCHEMA_VERSION = 5
 #: wrote it; these are the ones a reader may rely on.
 META_SCHEMA_VERSION = "schema_version"
 META_FRAME_PERIOD = "frame_period_s"
+
+#: The SQLite page size every artifact is created with, in bytes (issue #54).
+#: **An encoding decision, not a retention one.** It changes no column, no row
+#: and no answer; `SCHEMA_VERSION` is deliberately not bumped for it, because a
+#: reader does not need to know the page size to read the file — SQLite reads it
+#: out of the header.
+#:
+#: WHY IT IS NOT SQLITE'S 4096 DEFAULT. Most objects in an artifact this size
+#: occupy one page whatever they hold, so padding dominates: `sustained_overlap`
+#: at 301 frames spread 172 KB over 42 pages, many of them holding a single row.
+#: At 1024 the same build is 65% of that, and every scenario fixture measured
+#: between 64% and 72%.
+#:
+#: **AND WHERE IT STOPS PAYING.** The trade reverses as the tables grow past a
+#: page, and it was measured until it did: on `long_run`, 1024 is 67% of the
+#: default at 301 frames, 85% at 1,000, 97% at 3,000 and **102% — a loss — at
+#: 10,000**. 512 reverses harder (104% at 10,000) and 2048 barely moves in
+#: either direction. 1024 is chosen because it is the best value at every
+#: length once the file is gzipped and never the worst on disk; a run long
+#: enough to care is a run whose pages are full, where the whole question stops
+#: mattering to within a couple of percent. The full table is in issue #54's PR.
+#:
+#: WHAT IT IS NOT WORTH. Gzipped, the same change is worth a small fraction of
+#: what it is worth on disk at short lengths — 97.5% against 65.5% on
+#: `sustained_overlap` — because most of what it removes is padding gzip
+#: already removes. The benchmark headline divides gz(CSV) by *on-disk* SQLite,
+#: so this flatters the headline more than it helps whoever stores the file.
+#: Past a few thousand frames that inverts: on disk it costs a little and
+#: gzipped it saves ~6%, which is the number an assessor's disk actually sees.
+#:
+#: It must be set **before any table is created** — SQLite fixes the page size
+#: at file creation, and a `PRAGMA` after the first page is written is silently
+#: ignored. `create` reads it back and refuses the file if it did not take.
+PAGE_SIZE = 1024
 
 #: Envelope `source` vocabulary, from docs/plan.md Phase 5. Fixed and small, so
 #: an out-of-vocabulary source is a detectable fault rather than a new category
@@ -327,6 +377,12 @@ NODE_TABLES: dict[str, tuple[str, str]] = {
     "Verdict": ("verdict", "verdict_id"),
 }
 
+#: The tables `RECORD_SCHEMA` creates, derived from `NODE_TABLES` rather than
+#: written out again — a second list of them is how one of the two gets missed.
+RECORD_TABLE_NAMES: frozenset[str] = frozenset(
+    NODE_TABLES[kind][0] for kind in RECORD_KINDS
+)
+
 _SQL_EDGE_TYPES = ", ".join(f"'{name}'" for name in EDGE_SPECS)
 _SQL_NODE_KINDS = ", ".join(f"'{name}'" for name in NODE_TABLES)
 _SQL_ENVELOPE_SOURCES = ", ".join(f"'{name}'" for name in ENVELOPE_SOURCES)
@@ -418,72 +474,6 @@ CREATE TABLE entity (
     CHECK ((is_static = 1) = (geometry_wkb IS NOT NULL))
 );
 
--- THE ATTESTATION RECORDS (issue #45). Milestone 3's `Declaration` and
--- `Verdict`, stored field for field as `reg.declare` and `reg.enforce` signed
--- them. Columns are the dataclass fields, so that reading a row back and
--- reconstructing the record is a rename and nothing else — a store that had to
--- transform a field on the way out would be a store whose output is a different
--- preimage from the one the MAC covers.
---
--- `mac` and `prev_hash` are stored and never recomputed. This module holds no
--- keys; it cannot tell a good MAC from a bad one, and that is the correct
--- capability for it to have. What it must never do is make a bad one verify.
---
--- `seq` is NOT unique here, unlike `occurrence.seq`. Reuse or regression of a
--- declaration's `seq` is the `replay_or_reorder` fault in Phase 4's taxonomy —
--- an artifact that could not hold the record that triggered a fault could not
--- hold the evidence for it either.
---
--- WHY THERE IS NO `CHECK (action_class IN (...))`, AND NONE ON `outcome` OR
--- `fault` BELOW. The three vocabularies are defined once, in
--- `reg.declare.ACTION_CLASSES` and `reg.enforce.OUTCOMES` / `FAULTS`, and
--- restating them here would be a second copy — which is how a value becomes a
--- detectable fault on one side and invisible on the other. Importing them is
--- what this module cannot do: `reg.declare` reaches `reg.stream` through
--- `reg.chain`, `reg.query` imports this module, and Claim 2's "answered from
--- the graph alone" is enforced as a property of the import graph
--- (`tests/test_query.py`). So the vocabulary check lives at both ends of the
--- record's life instead: the dataclasses refuse an out-of-vocabulary value at
--- construction, and `read_declarations` / `read_verdicts` refuse to reconstruct
--- a row carrying one. A value that reached these columns without passing a
--- record — which means raw SQL, which means tampering — is a loud
--- could-not-evaluate on the way out and never a quietly accepted row.
-CREATE TABLE declaration (
-    declaration_id        TEXT PRIMARY KEY,
-    seq                   INTEGER NOT NULL CHECK (seq >= 0),
-    t_issued              REAL    NOT NULL,
-    horizon               REAL    NOT NULL CHECK (horizon > 0),
-    action_class          TEXT    NOT NULL,
-    declared_envelope_wkb BLOB    NOT NULL,
-    prev_hash             TEXT    NOT NULL,
-    mac                   TEXT    NOT NULL
-);
-
--- `declaration_id` is nullable and its absence is a *finding*, not a gap: it is
--- what `no_declaration` and `watchdog_expiry` look like in the record. A verdict
--- that does name one names a declaration this artifact holds — `insert_verdict`
--- refuses a dangling reference, because an `ADJUDICATED` edge pointing at
--- nothing is an audit answer nobody can check.
-CREATE TABLE verdict (
-    verdict_id           TEXT    PRIMARY KEY,
-    declaration_id       TEXT    REFERENCES declaration (declaration_id),
-    seq                  INTEGER NOT NULL CHECK (seq >= 0),
-    t                    REAL    NOT NULL,
-    outcome              TEXT    NOT NULL,
-    fault                TEXT,
-    clamped_envelope_wkb BLOB,
-    prev_hash            TEXT    NOT NULL,
-    mac                  TEXT    NOT NULL,
-    -- The two invariants `Verdict.__post_init__` enforces, restated where the
-    -- rows live: a PERMIT with a fault says "allowed, and here is what went
-    -- wrong", and a CLAMP with no bound says "I limited it to nothing in
-    -- particular". Both are could-not-evaluate wearing a decision's clothes.
-    -- These name two outcomes rather than enumerating the four — the invariant
-    -- is what is being stated, not the vocabulary, which is `reg.enforce`'s.
-    CHECK ((outcome = 'PERMIT') = (fault IS NULL)),
-    CHECK ((outcome = 'CLAMP') = (clamped_envelope_wkb IS NOT NULL))
-);
-
 CREATE TABLE edge (
     edge_id      INTEGER PRIMARY KEY,
     type         TEXT NOT NULL CHECK (type  IN ({_SQL_EDGE_TYPES})),
@@ -557,6 +547,89 @@ CREATE INDEX edge_by_interval  ON edge (t_start, t_end);
 CREATE INDEX occurrence_by_type ON occurrence (type, entity_id);
 """
 
+#: The two record tables, created **only** when the build was handed a record
+#: stream (issue #54). A build without `--keyring` used to create them empty,
+#: along with their two automatic indexes, and pay for four objects holding zero
+#: rows.
+#:
+#: THEIR ABSENCE IS NOT THE FACT AN ASSESSOR READS. "This build was given no
+#: record stream" and "a run that produced no records" are different facts
+#: (issue #48), and `meta[attestation_records]` is what separates them — it is
+#: written on every build, it says `absent` or `present`, and it is what
+#: `reg.chain.verify_chain` and `reg.query`'s attestation queries consult before
+#: they read a row. The tables being gone changes no answer: every reader that
+#: could have seen an empty table refuses on the meta key first, and it refuses
+#: with the same sentence it refused with before. `reg.store.has_record_tables`
+#: exists so that a reader which does reach them says *that* rather than raising
+#: `no such table: declaration` from somewhere in SQLite.
+RECORD_SCHEMA = """
+-- THE ATTESTATION RECORDS (issue #45). Milestone 3's `Declaration` and
+-- `Verdict`, stored field for field as `reg.declare` and `reg.enforce` signed
+-- them. Columns are the dataclass fields, so that reading a row back and
+-- reconstructing the record is a rename and nothing else — a store that had to
+-- transform a field on the way out would be a store whose output is a different
+-- preimage from the one the MAC covers.
+--
+-- `mac` and `prev_hash` are stored and never recomputed. This module holds no
+-- keys; it cannot tell a good MAC from a bad one, and that is the correct
+-- capability for it to have. What it must never do is make a bad one verify.
+--
+-- `seq` is NOT unique here, unlike `occurrence.seq`. Reuse or regression of a
+-- declaration's `seq` is the `replay_or_reorder` fault in Phase 4's taxonomy —
+-- an artifact that could not hold the record that triggered a fault could not
+-- hold the evidence for it either.
+--
+-- WHY THERE IS NO `CHECK (action_class IN (...))`, AND NONE ON `outcome` OR
+-- `fault` BELOW. The three vocabularies are defined once, in
+-- `reg.declare.ACTION_CLASSES` and `reg.enforce.OUTCOMES` / `FAULTS`, and
+-- restating them here would be a second copy — which is how a value becomes a
+-- detectable fault on one side and invisible on the other. Importing them is
+-- what this module cannot do: `reg.declare` reaches `reg.stream` through
+-- `reg.chain`, `reg.query` imports this module, and Claim 2's "answered from
+-- the graph alone" is enforced as a property of the import graph
+-- (`tests/test_query.py`). So the vocabulary check lives at both ends of the
+-- record's life instead: the dataclasses refuse an out-of-vocabulary value at
+-- construction, and `read_declarations` / `read_verdicts` refuse to reconstruct
+-- a row carrying one. A value that reached these columns without passing a
+-- record — which means raw SQL, which means tampering — is a loud
+-- could-not-evaluate on the way out and never a quietly accepted row.
+CREATE TABLE declaration (
+    declaration_id        TEXT PRIMARY KEY,
+    seq                   INTEGER NOT NULL CHECK (seq >= 0),
+    t_issued              REAL    NOT NULL,
+    horizon               REAL    NOT NULL CHECK (horizon > 0),
+    action_class          TEXT    NOT NULL,
+    declared_envelope_wkb BLOB    NOT NULL,
+    prev_hash             TEXT    NOT NULL,
+    mac                   TEXT    NOT NULL
+);
+
+-- `declaration_id` is nullable and its absence is a *finding*, not a gap: it is
+-- what `no_declaration` and `watchdog_expiry` look like in the record. A verdict
+-- that does name one names a declaration this artifact holds — `insert_verdict`
+-- refuses a dangling reference, because an `ADJUDICATED` edge pointing at
+-- nothing is an audit answer nobody can check.
+CREATE TABLE verdict (
+    verdict_id           TEXT    PRIMARY KEY,
+    declaration_id       TEXT    REFERENCES declaration (declaration_id),
+    seq                  INTEGER NOT NULL CHECK (seq >= 0),
+    t                    REAL    NOT NULL,
+    outcome              TEXT    NOT NULL,
+    fault                TEXT,
+    clamped_envelope_wkb BLOB,
+    prev_hash            TEXT    NOT NULL,
+    mac                  TEXT    NOT NULL,
+    -- The two invariants `Verdict.__post_init__` enforces, restated where the
+    -- rows live: a PERMIT with a fault says "allowed, and here is what went
+    -- wrong", and a CLAMP with no bound says "I limited it to nothing in
+    -- particular". Both are could-not-evaluate wearing a decision's clothes.
+    -- These name two outcomes rather than enumerating the four — the invariant
+    -- is what is being stated, not the vocabulary, which is `reg.enforce`'s.
+    CHECK ((outcome = 'PERMIT') = (fault IS NULL)),
+    CHECK ((outcome = 'CLAMP') = (clamped_envelope_wkb IS NOT NULL))
+);
+"""
+
 
 class StoreError(Exception):
     """A write the schema or the edge vocabulary refuses.
@@ -613,13 +686,31 @@ def occurrence_layer(occurrence_type: str) -> Layer:
 # --------------------------------------------------------------------------
 
 
-def create(path: str | os.PathLike[str]) -> sqlite3.Connection:
+def create(
+    path: str | os.PathLike[str], *, record_tables: bool
+) -> sqlite3.Connection:
     """Create a fresh artifact at `path` and return an open connection.
 
     An existing file is **replaced**, matching `reg.sim`: re-running a build over
     its own output is the normal case, and merging new rows into a stale schema
     would produce an artifact describing two runs at once. Parent directories are
     created — the caller named the path, this only makes it writable.
+
+    Args:
+        record_tables: whether to create `declaration` and `verdict`
+            (`RECORD_SCHEMA`). **Required, with no default in either direction.**
+            A caller that did not say would either pay for two empty tables it
+            will never write to or, worse, get a `no such table` from the middle
+            of a build that did have records to store. It is one boolean and the
+            caller always knows it: it is `records is not None` in
+            `reg.graph.build`, and it is exactly `meta[attestation_records]`.
+
+    Raises:
+        StoreError: the page size did not take. SQLite fixes it at file creation
+            and *ignores* a `PRAGMA` that arrives late rather than failing, so
+            the value is read back — an artifact silently written at the default
+            would still be correct, but the measurement in `PAGE_SIZE` would be
+            about a file nobody produced.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -627,10 +718,107 @@ def create(path: str | os.PathLike[str]) -> sqlite3.Connection:
 
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    # Before the first table: the page size is a property of the file header and
+    # is fixed by the first page written.
+    conn.execute(f"PRAGMA page_size = {int(PAGE_SIZE)}")
     conn.executescript(SCHEMA)
+    if record_tables:
+        conn.executescript(RECORD_SCHEMA)
+
+    actual = int(conn.execute("PRAGMA page_size").fetchone()[0])
+    if actual != int(PAGE_SIZE):
+        conn.close()
+        raise StoreError(
+            f"{path} was created with a page size of {actual} B, not the "
+            f"{int(PAGE_SIZE)} B reg.store.PAGE_SIZE asks for. SQLite fixes the "
+            "page size at file creation and ignores a PRAGMA that arrives after "
+            "the first page, so this means something wrote to the file before "
+            "the schema did."
+        )
+
     put_meta(conn, META_SCHEMA_VERSION, str(SCHEMA_VERSION))
     conn.commit()
     return conn
+
+
+def has_record_tables(conn: sqlite3.Connection) -> bool:
+    """Whether this artifact holds the two record tables at all (issue #54).
+
+    **Not the same question as "did this run produce records".** A build handed
+    no record stream does not create the tables, and one handed an empty stream
+    creates them and stores nothing in them; `meta[attestation_records]` is what
+    separates those two facts, and it is what every reader consults first. This
+    is the narrower, purely structural question, and it exists so that a reader
+    which does reach a record table can say what is missing rather than let
+    `no such table: declaration` out of SQLite.
+
+    Raises:
+        StoreError: one table is present and the other is not. That is neither
+            state, so it is a could-not-evaluate: every verdict in a file with no
+            `declaration` table names a declaration nobody can look up, and a
+            walk over half a record layer would report a shorter chain with no
+            break in it.
+    """
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+        f"({', '.join(repr(name) for name in sorted(RECORD_TABLE_NAMES))})"
+    ).fetchall()
+    present = {str(row["name"]) for row in rows}
+    if present == RECORD_TABLE_NAMES:
+        return True
+    if not present:
+        return False
+    raise StoreError(
+        f"this artifact holds {sorted(present)} but not "
+        f"{sorted(RECORD_TABLE_NAMES - present)}. The record layer is both "
+        "tables or neither: a verdict whose declaration table is gone names a "
+        "record nobody can look up, and a chain walked over half a layer comes "
+        "back shorter with no break in it."
+    )
+
+
+def _require_record_tables(conn: sqlite3.Connection, doing: str) -> None:
+    """Refuse `doing` on an artifact created without the record tables."""
+    if has_record_tables(conn):
+        return
+    raise StoreError(
+        f"this artifact has no declaration and verdict tables, so {doing} is a "
+        "could-not-evaluate rather than an empty result. It was created with "
+        "`create(..., record_tables=False)` — the build was handed no record "
+        "stream — and meta[attestation_records] says so. That is a different "
+        "fact from a run that produced no records, and an empty answer here "
+        "would be indistinguishable from one."
+    )
+
+
+def node_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Rows per node kind, every kind in `NODE_TABLES` present.
+
+    A kind whose table this artifact does not create counts **0**, and that is
+    the honest number: it is the count of rows written, and no row was written.
+    The fact this does *not* carry — whether the build was handed a record
+    stream at all — is not carried by a row count in either version of the
+    schema, because an empty table counts zero too. It lives in
+    `meta[attestation_records]`, and `reg.chain.verify_chain` and `reg.query`'s
+    attestation queries read it there before they read a row.
+
+    Every key is present even at zero, for the same reason `BuildResult.edges`
+    keeps all four edge types: a missing key is indistinguishable from a
+    genuine zero, and a summary should not have to be read alongside the
+    argument list of the build that produced it.
+    """
+    has_records = has_record_tables(conn)
+    counts: dict[str, int] = {}
+    for kind, (table, _) in NODE_TABLES.items():
+        if kind in RECORD_KINDS and not has_records:
+            counts[kind] = 0
+            continue
+        counts[kind] = int(
+            conn.execute(
+                f"SELECT count(*) AS n FROM {table}"  # noqa: S608
+            ).fetchone()["n"]
+        )
+    return counts
 
 
 def connect(path: str | os.PathLike[str]) -> sqlite3.Connection:
@@ -1197,6 +1385,7 @@ def insert_declaration(conn: sqlite3.Connection, declaration: object) -> str:
             collision or two records given one id, and either way the two
             histories would merge into an answer about neither.
     """
+    _require_record_tables(conn, "storing a declaration")
     declaration_type, _ = _record_types()
     if not isinstance(declaration, declaration_type):
         raise StoreError(
@@ -1242,6 +1431,7 @@ def insert_verdict(conn: sqlite3.Connection, verdict: object) -> str:
             artifact does not hold, or an id already present carries different
             contents.
     """
+    _require_record_tables(conn, "storing a verdict")
     _, verdict_type = _record_types()
     if not isinstance(verdict, verdict_type):
         raise StoreError(
@@ -1299,6 +1489,7 @@ def read_declarations(conn: sqlite3.Connection) -> list:
             raised rather than skipped: a reader that silently dropped it would
             report a shorter chain with no break in it.
     """
+    _require_record_tables(conn, "reading the declarations back")
     declaration_type, _ = _record_types()
     rows = conn.execute(
         "SELECT * FROM declaration ORDER BY seq, declaration_id"
@@ -1340,6 +1531,7 @@ def read_verdicts(conn: sqlite3.Connection) -> list:
     holds tens of verdicts naming the same `declaration_id` with different
     outcomes (`reg.enforce`, module header).
     """
+    _require_record_tables(conn, "reading the verdicts back")
     _, verdict_type = _record_types()
     rows = conn.execute("SELECT * FROM verdict ORDER BY seq, verdict_id").fetchall()
     out: list = []
@@ -1407,6 +1599,8 @@ def insert_robot_config(
 
 
 def _require_node(conn: sqlite3.Connection, kind: str, node_id: str) -> None:
+    if kind in RECORD_KINDS:
+        _require_record_tables(conn, f"an edge to the {kind} {node_id!r}")
     table, key_column = NODE_TABLES[kind]
     row = conn.execute(
         f"SELECT 1 FROM {table} WHERE {key_column} = ?", (node_id,)  # noqa: S608

@@ -1,8 +1,8 @@
 # Sufficiency boundary — which audit claims survive an uncertifiable perceiver
 
 **Status:** normative for what this project may claim · written 2026-08-19 ·
-[`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable, and the last piece of
-Milestone 2 · keep current
+[`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable · written for
+Milestone 2, re-measured 2026-08-20 after Milestone 3 · keep current
 
 The mechanism this document argues from already exists. Every edge in the
 artifact carries a `layer` column, `A` or `B`, and so does every occurrence; the
@@ -128,8 +128,11 @@ occurrence resolution 1.0 s — reproduced for this document with
 | `transition` | 0.01 s | 2,490,368 | **149.47 MB/h** | 5,869 | 9,723 | 0 | 3,120 |
 | `per-frame` | 0.01 s | 3,620,864 | **217.32 MB/h** | 5,869 | 18,430 | 0 | 3,120 |
 
-**5 of the 9 supported questions are priced.** The other four are `EXCLUDED` with
-a stated reason and an exclusion is a could-not-evaluate, never a pass.
+**5 of the 9 supported questions are priced**, shown below as eight columns:
+`min_separation`, `time_of_closest_approach` and `did_contact_occur` are scalar
+reductions of `separation_timeline` and count as that one question. The other
+four questions are `EXCLUDED` with a stated reason, and an exclusion is a
+could-not-evaluate, never a pass.
 
 | question | layer | `occurrence` | `transition` | `per-frame` |
 |---|---|---|---|---|
@@ -187,13 +190,15 @@ not omitted, and it is not softened into a claim.
 | 6 | How close did the robot get to the human? (`min_separation`) | **B** — `SEPARATION` is `EdgeSpec("B", "RobotConfig", "Entity", "min_distance")`; `closest_approach` is `OccurrenceSpec("B", "entity", "min_distance_m")` | **occurrence** — AGREE, Δ 0.0007 m against a 0.01 m (`DISTANCE_TOL_M`) predicate | **only as strong as perception** |
 | 7 | Was the human inside the reachable set, and when did it first enter? (`first_envelope_intersection`) | **B** — `INTERSECTS` is `EdgeSpec("B", "Envelope", "Entity", "overlap_area")` | **transition** — `reg.query` declares it `answerable_from={edge}`: the occurrence layer locates entry only to ±1.0 s and carries no overlap area, so it cannot produce the intervals this query returns. Agreement **unmeasured**, for the same envelope-ground-truth reason as row 1 | **only as strong as perception** |
 | 8 | Which entities were inside the envelope during [t₀, t₁]? (`reachable_entities`) | **B** — `INTERSECTS`, as above | **transition** — `answerable_from={edge}`. The predicate is exact set equality with no tolerance to spend, and membership derived from ±1.0 s events would be exact-looking and wrong at the edges. Agreement **unmeasured**, as row 1 | **only as strong as perception** |
-| 9 | Which intervals had the human within a threshold? (`frames_at_risk`) | **B** — `SEPARATION`, as row 6 | **transition** — `answerable_from={edge}`: a threshold test is a per-frame question about a metric, and the occurrence layer retains no metric between events. Not among the curve's four questions, so **unmeasured** as an agreement verdict | **only as strong as perception** |
+| 9 | Which intervals had the human within a threshold? (`frames_at_risk`) | **B** — `SEPARATION`, as row 6 | **transition** — `answerable_from={edge}`: a threshold test is a per-frame question about a metric, and the occurrence layer retains no metric between events. `EXCLUDED` from the curve — it takes a threshold and nothing supplies one — so **unmeasured** as an agreement verdict | **only as strong as perception** |
 | 10 | What was the separation at every frame? (`separation_timeline`) | **B** — `SEPARATION`, as row 6 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level holds no per-frame separation"); transition: AGREE, worst frame Δ 0.0096 m over 3,000 frames against 0.01 m | **only as strong as perception** |
 | 11 | When exactly was the closest approach? (`time_of_closest_approach`) | **B** — as row 6 | **transition** — occurrence: **COULD-NOT-EVALUATE**, 46.0000 s against 5 frames within 0.01 m of the minimum, nearest at 45.9800 s, Δ 0.0200 s — inside that level's own 1.0 s quantum, so imprecise rather than wrong; transition: AGREE, Δ 0.0000 s | **only as strong as perception, *and* needs 10 ms** |
 
-Rows 1 and 5–11 are the questions Milestone 2 can actually be asked. Of those,
-**exactly one is Layer A** — and it is the one that says what the machine could
-have done, not what happened to anyone.
+Rows 1 and 5–11 were the questions **Milestone 2** could be asked, and of those
+exactly one was Layer A — the one saying what the machine could have done rather
+than what happened to anyone. That imbalance is what Milestone 3 corrected: rows
+2–4 are answerable and measured now, so four of the eleven are Layer A and three
+of those four are answerable at the coarsest level in the project.
 
 ---
 

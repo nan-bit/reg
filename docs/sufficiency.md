@@ -71,12 +71,14 @@ attestation questions route around both.
 
 Two honest bounds on that sentence, stated here rather than buried:
 
-- The asymmetry is a claim about **structure**, and in Milestone 2 the structure
-  is all that exists. `reg.declare` and `reg.chain` landed with issues #39/#40, but
-  no artifact carries declarations or verdicts yet: the schema (v4) has no
-  declaration or verdict table, `EDGE_SPECS` has no `DECLARED`, `ADJUDICATED`,
-  `ENFORCED` or `FOLLOWS`, and `reg.query.QUERIES` has none of queries 5–8. Rows
-  9–11 of the taxonomy below are therefore marked **unmeasured**, not asserted.
+- The asymmetry was a claim about **structure** only, when this was written in
+  Milestone 2: `reg.declare` and `reg.chain` existed but no artifact carried a
+  declaration, a verdict or a chain, so rows 2–4 read *unmeasured*. **Milestone 3
+  closed that gap** — the artifact carries them, and `reg.bench --resolution`
+  prices four of the attestation questions against the record stream the run
+  emitted (§5.4). What remains structural rather than measured is row 1, and for
+  a different reason: its only available ground truth is `reg.envelope` itself,
+  and a check whose ground truth reruns the code under test cannot fail.
 - Layer A is certifiable *in the sense that its failure modes are characterizable*
   — not in the sense that this prototype has characterized them. §7 lists what a
   Layer A answer here still inherits.
@@ -97,7 +99,7 @@ Layer A question can be unanswerable at a coarse level: the occurrence view hold
 **zero** edge rows, so nothing about the envelope survives into it and the
 reachability question dies there despite being certifiable. A Layer B question can
 be perfectly answerable at the coarsest level: *did the robot contact the human*
-is answered from a DSSAD-shaped occurrence flag at 4.43 MB/h, and is still only as
+is answered from a DSSAD-shaped occurrence flag at 60.05 MB/h, and is still only as
 strong as whatever said where the human was.
 
 The three levels are defined in [`docs/lossiness.md`](lossiness.md), *The three
@@ -111,15 +113,43 @@ resolution levels*: **occurrence** (DSSAD-aligned, timestamps at ±1.0 s),
 occurrence resolution 1.0 s — reproduced for this document with
 `python -m reg.bench --resolution`:
 
-| level | timestamp resolution | SQLite B | bytes/hour | nodes | edges | occurrences | `min_separation` | `time_of_closest_approach` | `separation_timeline` | `did_contact_occur` |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `occurrence` | 1.0 s | 73,728 | **4.43 MB/h** | 22 | 0 | 18 | AGREE | **DISAGREE** | **COULD-NOT-EVALUATE** | AGREE |
-| `transition` | 0.01 s | 897,024 | **53.84 MB/h** | 2,747 | 3,461 | 0 | AGREE | AGREE | AGREE | AGREE |
-| `per-frame` | 0.01 s | 2,301,952 | **138.16 MB/h** | 2,747 | 12,168 | 0 | AGREE | AGREE | AGREE | AGREE |
+> **Re-measured 2026-08-20.** This table predated issues #59, #60 and #61 and was
+> wrong in every column. It measured an artifact holding **no Layer A at all**
+> (`bench._measure` never passed `records=`), so its byte counts were a third of
+> the truth and it could price only four questions; and it recorded `occurrence`
+> as **DISAGREE** on `time_of_closest_approach`, because the check graded every
+> level against `TIME_TOL_S` without consulting the level's own quantum. A ±1.0 s
+> level answered within 0.02 s and was marked wrong for it. Both are fixed; the
+> figures below come from one execution on the merged code.
 
-Twelve times the bytes buys two questions and no others. That is the entire
-content of the resolution axis, and the rows below cite it rather than restating
-it.
+| level | ts res | SQLite B | bytes/hour | nodes | edges | occ | records |
+|---|---|---|---|---|---|---|---|
+| `occurrence` | 1.0 s | 1,000,448 | **60.05 MB/h** | 3,166 | 0 | 42 | 3,120 |
+| `transition` | 0.01 s | 2,490,368 | **149.47 MB/h** | 5,869 | 9,723 | 0 | 3,120 |
+| `per-frame` | 0.01 s | 3,620,864 | **217.32 MB/h** | 5,869 | 18,430 | 0 | 3,120 |
+
+**5 of the 9 supported questions are priced.** The other four are `EXCLUDED` with
+a stated reason and an exclusion is a could-not-evaluate, never a pass.
+
+| question | layer | `occurrence` | `transition` | `per-frame` |
+|---|---|---|---|---|
+| `min_separation` | B | AGREE | AGREE | AGREE |
+| `time_of_closest_approach` | B | **CNE** | AGREE | AGREE |
+| `separation_timeline` | B | **CNE** | AGREE | AGREE |
+| `did_contact_occur` | B | AGREE | AGREE | AGREE |
+| `declared_bound` | A | **CNE** | AGREE | AGREE |
+| `violations` | A | AGREE | AGREE | AGREE |
+| `verdicts` | A | **CNE** | AGREE | AGREE |
+| `verify_chain` | A | AGREE | AGREE | AGREE |
+| **level verdict** | | **CNE** | **AGREE** | **AGREE** |
+
+**2.5x the bytes buys four questions**, and the ratio used to read twelve because
+the artifact was missing the layer that does not coarsen. The declaration,
+verdict and chain records are emitted per action and **no level coarsens them**:
+at ±1 s they are 3,120 of `occurrence`'s 3,166 node rows. Coarsening the scene
+now has much less left to work on, which is the finding and not a defect in it.
+That is the entire content of the resolution axis, and the rows below cite it
+rather than restating it.
 
 ---
 
@@ -134,10 +164,15 @@ not omitted, and it is not softened into a claim.
 
 - **certifiable** — answerable from Layer A evidence alone. Inherits no perceptual
   failure mode. Still inherits this project's own stated limitations (§7).
+- **certifiable, and measured** — Layer A by the schema's vocabulary, *and* the
+  artifact carries the records, *and* the curve prices the question against the
+  stream the run emitted. Rows 2–4 earned this in Milestone 3.
 - **certifiable in structure, unmeasured** — Layer A by the schema's own
-  vocabulary, but no artifact in this milestone holds the records, so nothing has
-  been measured. The honest reading is "this is what the structure will support",
-  not "this is supported".
+  vocabulary, but no artifact holds the records, so nothing has been measured. The
+  honest reading is "this is what the structure will support", not "this is
+  supported". **No row carries this label any more**; it is kept because the
+  distinction is the one this document exists to hold, and the next unbuilt Layer
+  A question will need it again.
 - **only as strong as perception** — the answer is a conjunction with *the entity
   was where the artifact says it was*, and this project supplies no evidence for
   that conjunct. It is the finding, not a caveat.
@@ -145,16 +180,16 @@ not omitted, and it is not softened into a claim.
 | # | Question (query) | Layer, and the evidence for it | Minimum resolution, and the evidence for it | Claim strength |
 |---|---|---|---|---|
 | 1 | Could the robot have reached (x, y) at t? (`reg.graph.envelope_at`) | **A** — `HAS_ENVELOPE` is `EdgeSpec("A", "RobotConfig", "Envelope", …)`; it is the only Layer A edge type, and the only one naming no `Entity` | **transition** — the occurrence view holds **0 edges** (curve above) and, by the projection's own rule, no `envelope` and no `robot_config` rows either, so the question has no substrate there. Agreement at the transition level is **unmeasured, deliberately**: the only available ground truth is `reg.envelope` itself, and a check whose ground truth reruns the code under test cannot fail | **certifiable**, in the positive direction only |
-| 2 | Did the policy exceed its declared bound? (`violations(window)`) | **A** — [`docs/lossiness.md`](lossiness.md) supported-question set, query 6. No entity is named by a declaration or a verdict | **unmeasured** — no declaration or verdict table in schema v4, no `DECLARED`/`ADJUDICATED`/`ENFORCED` in `EDGE_SPECS`, no such query in `reg.query.QUERIES`. Milestone 3 | **certifiable in structure, unmeasured** |
-| 3 | What did the policy declare at t? (`declared_bound(t)`) | **A** — same, query 5 | **unmeasured** — same. `reg.declare.Declaration` exists (#39/#40); nothing writes one into an artifact | **certifiable in structure, unmeasured** |
-| 4 | Was the record tampered with? (`verify_chain()`) | **A** — same, query 8. A hash chain and a MAC over records that name no entity | **unmeasured** — `reg.chain.verify` checks a record's link and MAC today, but no artifact carries a chain and there is no `verify_chain()` query | **certifiable in structure, unmeasured** |
-| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 4.43 MB/h. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
+| 2 | Did the policy exceed its declared bound? (`violations(window)`) | **A** — [`docs/lossiness.md`](lossiness.md) supported-question set, query 6. No entity is named by a declaration or a verdict | **occurrence** — AGREE at every level. The record tables survive all three views intact, so this is the rare question the coarsest artifact answers in full | **certifiable**, and measured |
+| 3 | What did the policy declare at t? (`declared_bound(t)`) | **A** — same, query 5 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level states no declaration in force at t=30.0"), because the region a declaration names lives in the `edge` and `envelope` tables the occurrence view empties; transition and per-frame: AGREE | **certifiable**, and measured |
+| 4 | Was the record tampered with? (`verify_chain()`) | **A** — same, query 8. A hash chain and a MAC over records that name no entity | **occurrence** — AGREE at every level, walked under `measurement_keyring` over 3,120 chain records. Negative tests feed it a truncated chain, an altered record and a missing key | **certifiable**, and measured |
+| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 60.05 MB/h. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
 | 6 | How close did the robot get to the human? (`min_separation`) | **B** — `SEPARATION` is `EdgeSpec("B", "RobotConfig", "Entity", "min_distance")`; `closest_approach` is `OccurrenceSpec("B", "entity", "min_distance_m")` | **occurrence** — AGREE, Δ 0.0007 m against a 0.01 m (`DISTANCE_TOL_M`) predicate | **only as strong as perception** |
 | 7 | Was the human inside the reachable set, and when did it first enter? (`first_envelope_intersection`) | **B** — `INTERSECTS` is `EdgeSpec("B", "Envelope", "Entity", "overlap_area")` | **transition** — `reg.query` declares it `answerable_from={edge}`: the occurrence layer locates entry only to ±1.0 s and carries no overlap area, so it cannot produce the intervals this query returns. Agreement **unmeasured**, for the same envelope-ground-truth reason as row 1 | **only as strong as perception** |
 | 8 | Which entities were inside the envelope during [t₀, t₁]? (`reachable_entities`) | **B** — `INTERSECTS`, as above | **transition** — `answerable_from={edge}`. The predicate is exact set equality with no tolerance to spend, and membership derived from ±1.0 s events would be exact-looking and wrong at the edges. Agreement **unmeasured**, as row 1 | **only as strong as perception** |
 | 9 | Which intervals had the human within a threshold? (`frames_at_risk`) | **B** — `SEPARATION`, as row 6 | **transition** — `answerable_from={edge}`: a threshold test is a per-frame question about a metric, and the occurrence layer retains no metric between events. Not among the curve's four questions, so **unmeasured** as an agreement verdict | **only as strong as perception** |
 | 10 | What was the separation at every frame? (`separation_timeline`) | **B** — `SEPARATION`, as row 6 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level holds no per-frame separation"); transition: AGREE, worst frame Δ 0.0096 m over 3,000 frames against 0.01 m | **only as strong as perception** |
-| 11 | When exactly was the closest approach? (`time_of_closest_approach`) | **B** — as row 6 | **transition** — occurrence: **DISAGREE**, 46.0000 s against 5 frames within 0.01 m of the minimum, nearest at 45.9800 s, Δ 0.0200 s against `TIME_TOL_S` = 0.01 s; transition: AGREE, Δ 0.0000 s | **only as strong as perception, *and* needs 10 ms** |
+| 11 | When exactly was the closest approach? (`time_of_closest_approach`) | **B** — as row 6 | **transition** — occurrence: **COULD-NOT-EVALUATE**, 46.0000 s against 5 frames within 0.01 m of the minimum, nearest at 45.9800 s, Δ 0.0200 s — inside that level's own 1.0 s quantum, so imprecise rather than wrong; transition: AGREE, Δ 0.0000 s | **only as strong as perception, *and* needs 10 ms** |
 
 Rows 1 and 5–11 are the questions Milestone 2 can actually be asked. Of those,
 **exactly one is Layer A** — and it is the one that says what the machine could
@@ -197,7 +232,7 @@ is the level at which the certifiable question stops being answerable.
 ### 5.2 Layer B, and occurrence resolution is enough: contact, and how close
 
 *Did the robot contact the human?* is answered at the coarsest level in the
-project — one occurrence flag, timestamped to ±1.0 s, in a 73,728-byte artifact —
+project — one occurrence flag, timestamped to ±1.0 s, in a 1,000,448-byte artifact —
 and it AGREEs with ground truth recomputed from the raw stream by forward
 kinematics. *How close did it get?* likewise, to within 0.0007 m of a 0.01 m
 budget, carried on the `closest_approach` occurrence's `min_distance_m`.
@@ -208,7 +243,7 @@ contact, so the contact row is **agreement on a negative** at every level, and t
 check is shown able to say no in `tests/test_bench.py` rather than here.)
 
 **It is a real result about resolution.** These are the two questions an incident
-report leads with, and they survive a 12x reduction in retained bytes. That is
+report leads with, and they survive a 2.5x reduction in retained bytes. That is
 Claim 1's replacement doing its job: the questions this project cares about mostly
 do *not* need the resolution `reg` chose without noticing it was choosing.
 
@@ -230,40 +265,62 @@ resolve into agreement —
 `tests/test_bench.py::test_a_level_that_could_not_evaluate_does_not_summarise_as_
 agree` is the gate. An empty answer is not a matching answer.
 
-`time_of_closest_approach` is the more interesting failure, because the coarse
-level *does* answer it and the answer is wrong under the predicate the fine level
-advertises: 46.0000 s where the nearest instant whose separation is within one
-distance quantum of the minimum is 45.9800 s. Δ 0.0200 s, against a 0.01 s
-tolerance. The DISAGREE is not a defect to fix — the occurrence layer never
-promised better than ±1.0 s, and it happened to land 20 ms out. It is the
-measurement saying that a question phrased *when exactly* cannot be answered from
-a record whose timestamps are seconds wide, and that this is visible only because
-the fine layer is still there to be compared against.
+`time_of_closest_approach` is the more interesting refusal, because the coarse
+level *does* produce an answer: 46.0000 s, where the nearest instant whose
+separation is within one distance quantum of the minimum is 45.9800 s.
+Δ 0.0200 s, against a 0.01 s tolerance.
+
+**This read `DISAGREE` until issue #61, and the paragraph that stood here argued
+the verdict was fine because "the occurrence layer never promised better than
+±1.0 s."** That argument is right and it is an argument against the verdict, not
+for it. A level graded against a precision twenty times finer than it advertises
+is not answering wrongly; the check was asking a question the level had already
+said it could not take. `ResolutionPoint.verdict` then propagated `DISAGREE`
+upward and the whole DSSAD-aligned level — the one Claim 1 rests on — read as
+broken in a document about what it can be trusted for.
+
+The comparison now consults the level's own quantum, and
+[`docs/lossiness.md`](lossiness.md) carries the rule beside *Unanswerable* #4
+where the principle it specialises already lived: inside `TIME_TOL_S` is `AGREE`,
+outside it but inside the quantum is `COULD-NOT-EVALUATE`, and outside the
+quantum too is still `DISAGREE` — a level that misplaces an event by more than
+its own resolution *is* wrong, and that verdict has to stay reachable.
+
+So the measurement says a question phrased *when exactly* cannot be **put** to a
+record whose timestamps are seconds wide — not that such a record answers it
+falsely. And note the conditional this row is easy to over-read: `occurrence`
+locates events **sustained longer than its quantum** and refuses brief ones.
+`tests/test_bench.py::test_a_sustained_minimum_is_locatable_even_at_one_second`
+measures the sustained case coming back `AGREE` at the same 1.0 s. Whether a
+coarse timestamp suffices is a property of the event, not of the recorder.
 
 So this row carries both qualifiers: it is conditional on perception **and** it is
-conditional on retaining 53.84 MB/h instead of 4.43. The two are independent, and
+conditional on retaining 149.47 MB/h instead of 60.05. The two are independent, and
 a deployment could fail either one on its own.
 
-### 5.4 Layer A, structurally certifiable, and not yet measurable
+### 5.4 Layer A, certifiable and now measured
 
 Rows 2–4 — *did the policy exceed its declared bound*, *what did it declare*, *was
 the record tampered with* — are the asymmetry of §2 and the reason this project
-exists. They are also the rows nothing in this milestone can measure, and the
-correct thing to write in that cell is so.
+exists. **This section used to say nothing in the project could measure them, and
+that it would change by measurement when Milestone 3 landed. It landed, and this
+is that change.**
 
-What exists: `reg.declare` builds and signs a `Declaration`; `reg.chain` produces
-the hash links and the keyed MACs and verifies both. What does not exist: any
-artifact containing them. Schema v4 has no declaration or verdict table;
-`EDGE_SPECS` has four edge types and none of them is `DECLARED`, `ADJUDICATED`,
-`ENFORCED` or `FOLLOWS` — and that absence is deliberate, because *"an edge type
-nothing emits makes 'no declarations in this run' indistinguishable from 'this
-build does not do declarations'"* (`reg.graph`). `reg.bench --resolution` excludes
-queries 5–8 for the same reason: they would print COULD-NOT-EVALUATE at every
-level for a reason that has nothing to do with resolution.
+The artifact carries the records now: 120 declarations, 3,000 verdicts, 24 faults
+and 3,120 chain records over 60 s of robot time. `reg.bench --resolution` prices
+four of them — `declared_bound`, `violations`, `verdicts`, `verify_chain` —
+against **the record stream the run emitted**, held in memory and never read back
+out of the artifact under test. Ground truth that rereads the artifact cannot
+fail, which is the same trap `first_envelope_intersection` is still excluded for
+(row 1: its only available ground truth is `reg.envelope` itself).
 
-The claim these rows will support is strong and the evidence for it is currently a
-design, so the table says **certifiable in structure, unmeasured**. When Milestone
-3 lands, that cell is what has to change, and it changes by measurement.
+The resolution finding is not the one this section anticipated. **Layer A is very
+nearly resolution-independent**: no level coarsens the record tables, so
+`violations` and `verify_chain` are `AGREE` at ±1.0 s. The two that do degrade
+degrade for a Layer B reason — `declared_bound` and the clamped bound inside
+`verdicts` name regions that live in the `edge` and `envelope` tables the
+occurrence view empties. The certifiable layer survives coarsening; what it says
+*about the scene* does not.
 
 ### 5.5 The trap: `SEPARATION` is Layer B
 

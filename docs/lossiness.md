@@ -296,12 +296,20 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
 
 ## The three resolution levels
 
-**Added 2026-08-19 (issue #35).** Everything above this section describes the
-**finest** level and was written as though it were the only one. It is not, and
-saying so is the point: `docs/plan.md` Claim 1's original form — the graph is
-orders of magnitude smaller than the stream — was measured and refuted (issue
-#30), and what replaced it is the question *how coarse can the evidence get
-before it stops answering the question?*
+**Added 2026-08-19 (issue #35), amended 2026-08-20.** Everything above this
+section describes the **finest** level and was written as though it were the only
+one. It is not, and saying so is the point.
+
+This section was originally motivated by a refutation: `docs/plan.md` Claim 1's
+original form — the graph is orders of magnitude smaller than the stream — was
+measured against a gzipped proprioception CSV and came out 14x *worse* (issue
+#30). That refutation has since been withdrawn; the CSV was never the baseline
+the claim was about. But the question it provoked is the durable part and it
+outlived its own premise: *how coarse can the evidence get before it stops
+answering the question?* The resolution levels below are what answer it, and
+they turn out to be **where the compression argument actually lives** — 18.9 GB
+per robot per six months at occurrence resolution against a projected 182 TB of
+sensor log (`docs/plan.md` Claim 1).
 
 The coarsest level is not invented here. UN R157's **DSSAD** is the only mandated
 evidence recorder for autonomy that exists, and it stores **occurrences**: an

@@ -239,12 +239,21 @@ Not resolved in this pass; none block Phase 1.
 
 ---
 
-# Second pass — 2026-08-19, after Claim 1 was measured and failed
+# Second pass — 2026-08-19, after Claim 1 appeared to fail
 
 The first pass ran before any code existed. This one ran after the benchmark
-refuted the compression claim, and it was aimed at one question: **was the claim
-wrong, or was the measurement testing the wrong thing?** Both, in different
-proportions.
+appeared to refute the compression claim, and it was aimed at one question: **was
+the claim wrong, or was the measurement testing the wrong thing?** Both, in
+different proportions.
+
+**Postscript, later the same day.** The proportions turned out to be lopsided.
+§8 below is right that a float codec beats this artifact on floats and always
+will — but that contest was never the claim. The measurement was testing the
+wrong thing, and Claim 1 has been restored on the baseline it was always about —
+the sensor log named in the plan and the README hours before any benchmark ran,
+not a baseline selected after a bad result. Its rate is an assumption, not a
+measurement, and is documented as one in [`sensor-baseline.md`](sensor-baseline.md). §8 stands as
+written: it is the reason no further encoding work is worth doing.
 
 ## 8. Time-series compression is the baseline `reg` was actually competing with
 

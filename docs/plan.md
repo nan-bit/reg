@@ -31,15 +31,15 @@ a humanoid are terabytes/day and cannot leave an air-gapped site. A scene graph
 may be the only representation you can retain, export, and hand to an assessor or
 insurer.
 
-> **Amended 2026-08-19, after Claim 1 was measured and failed.** This paragraph
-> used to end "a scene graph is orders of magnitude smaller and may be the only
-> representation…". The clause is struck because it is not what was measured: the
-> graph is ~14x *larger* per frame than a gzipped copy of the proprioception
-> stream, at every run length up to 30,000 frames. What survives is the *retention*
-> half — the artifact is 51.5 MB/hour, which is retainable and exportable — and the
-> claim that it answers audit questions the raw stream cannot answer at all
-> (declarations, verdicts, faults, the chain). Size relative to a sensor log
-> remains plausible and remains **unmeasured**; see Claim 1.
+> **Amended twice on 2026-08-19; read the second amendment.** The clause "orders
+> of magnitude smaller" was struck that morning, because the benchmark showed the
+> graph is ~14x *larger* per frame than a gzipped proprioception stream. It was
+> restored the same day, because that stream was never what the claim was about — it is
+> ~3.8 MB/day and answers no audit question. Against a *sensor* log the artifact
+> is ~9,900x smaller over a six-month retention period at occurrence resolution
+> (18.9 GB vs 182 TB per robot). The artifact side is measured; the sensor side is
+> sourced and must always be labelled a projection. See Claim 1 for both numbers
+> and why the first amendment was wrong.
 
 **This is not:** a perception system, a safety controller, a physics engine, a
 research contribution to reachability analysis, or a proposed standard. It is an
@@ -114,10 +114,66 @@ If a task doesn't serve one of the four claims, cut it.
 Build in order. Each is independently shippable.
 
 ### Claim 1 — Compression (the commercial argument)
-Graph vs. raw logged state, size ratio, per scenario and — since issue #30 — as
-a function of run length.
 
 **Success, as originally stated:** 2–4 orders of magnitude, one number, one chart.
+
+> **Reframed 2026-08-19, and this reframing is a correction to a correction.**
+> The section below first recorded Claim 1 as *refuted*, on a benchmark that
+> compared the artifact against a gzipped nine-float proprioception CSV. That
+> comparison was never the claim. It was the only baseline this simulator can
+> produce, and treating "the only thing measurable" as "the thing being claimed"
+> is the error — the same error the project exists to warn about, committed in its
+> own success criterion.
+>
+> **Nobody has ever chosen between retaining a nine-float stream and retaining a
+> scene graph.** That stream is ~21 B/frame, about 3.8 MB/day, and it answers no
+> audit question. The economic argument was always the artifact against *sensor*
+> logs, which this simulator has none of.
+
+**The commercial argument, stated as it should have been.** What matters to a
+buyer is not a ratio, it is the absolute cost of retaining evidence for as long
+as the law requires it. EU AI Act Article 12 sets that floor at six months.
+Per robot, from the measured resolution curve:
+
+> **These figures are provisional and will change.** They predate the #54/#55
+> encoding work, and — more importantly — they measure an artifact containing
+> **no Layer A at all**: `bench._measure` never passes `records=` to
+> `graph.build`, so no declaration, verdict, fault or chain row is in any number
+> below (issue #59). The corrected sizes will be **larger**. The framing in this
+> section is what is being asserted; the specific bytes are not yet.
+
+| retained at | per robot, 6 months | fleet of 100 |
+|---|---|---|
+| **occurrence (±1 s, DSSAD-shaped)** | **18.9 GB** | 1.8 TB |
+| transition (10 ms) | 229.7 GB | 22.4 TB |
+| per-frame (10 ms) | 589.3 GB | 57.6 TB |
+| *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
+
+At occurrence resolution the artifact is **~9,700x smaller** than the sensor
+stream over the mandated retention period — comfortably inside the original
+2–4 order criterion. The artifact side of that comparison is measured. The
+sensor side is an **assumption with a sourced range**, set out in
+[`sensor-baseline.md`](sensor-baseline.md) with its citations and a sensitivity
+table; `reg.bench --sensor-multiplier` has no default, so the multiplier is
+always stated rather than assumed.
+
+**State it at two-to-three orders, not four.** The ratio is linear in the assumed
+sensor rate, and the sensitivity analysis is blunt about what that buys:
+occupancy of the 2-order band is robust down to 10 GB/day — a hundredfold below
+the assumption — but the 4-order figure is reached only above ~1.04 TB/day and
+therefore holds at the published assumption with essentially no margin. The
+robust claim is the one to make. It is also, conveniently, the resolution the
+only mandated evidence recorder in existence operates at (UN R157 DSSAD, ±1.0 s).
+The finer levels are weaker: transition clears two orders only above
+~0.13 TB/day and per-frame only above ~0.32 TB/day.
+
+**This is a purchasing decision, not a slogan.** 18.9 GB buys *did contact occur*
+and *how close did it come*. 229.7 GB buys *when exactly* and the full separation
+timeline. The resolution curve prices evidence per audit question, and that is
+the commercial argument in its useful form.
+
+#### The measured result against the wrong baseline, kept because it bounds the design
+
 
 **What was measured** (`python -m reg.bench --scaling`, long-run fixture, seed 0,
 16 envelope samples, 200 ms horizon):
@@ -142,12 +198,31 @@ distance to every entity continuously, so `SEPARATION` edges are emitted at a
 rate set by how fast the arm moves, and a row in SQLite with its indexes costs
 an order of magnitude more than a line of gzipped CSV.
 
+That result stands and is worth publishing, as a bounded engineering finding
+rather than a verdict: **the graph costs ~250 B/frame, which is expensive next to
+a float codec and negligible next to anything with a camera in it.** Reporting it
+openly is what makes the sensor-log projection credible rather than promotional —
+a paper that only reports the flattering comparison has told you which
+comparisons it ran.
+
+Two encoding passes (#54 page size and unused tables, #55 integer surrogate keys
+and a binary hash) took ~13% off on disk and ~3% compressed. That bounds the
+lever: **encoding does not move this number, and no further encoding work should
+be undertaken expecting it to.** The variable that moves it is resolution.
+
 **Success, restated to something a measurement can meet or miss:**
 
-1. The ratio is measured **across run lengths**, and the report states the
-   crossover at 1.0 or states plainly that there is none. Measured points only.
-2. Until a measured length clears 1.0, **the retainable-artifact argument does
-   not rest on compression.** It rests on Claims 2–4 — query, sufficiency
+1. The **absolute retention cost** is measured at each resolution level and
+   reported per robot per six months, beside what each level can answer.
+2. Any comparison against a sensor log is **labelled a projection**, computed
+   from a stated multiplier, and never quoted as a measured ratio.
+3. The ratio against the raw stream is reported **across run lengths** as a
+   design bound, with the crossover at 1.0 stated or its absence stated. Measured
+   points only.
+4. Superseded, and kept for the record: *until a measured length clears 1.0, the
+   retainable-artifact argument does not rest on compression.* It was written
+   when the wrong baseline was believed to be the right one. It rests on
+   compression again, correctly stated — and on Claims 2–4 — query, sufficiency
    boundary, attestation — none of which needs the artifact to be smaller than
    the stream. Nothing in this repository may quote a compression ratio as the
    commercial argument while the measured one is below 1.

@@ -106,6 +106,16 @@ DT = 0.02
 #: One static obstacle, well clear of the arm's 0.95 m of body.
 OBSTACLE = Obstacle(entity_id="obs_a", kind="crate", cx=1.6, cy=1.2, radius=0.25)
 
+#: Stand-in envelope digests for the hand-built store fixtures below. Full-width
+#: lowercase SHA-256 hex, because that is what `reg.envelope.envelope_hash`
+#: produces and what `reg.store` stores as 32 raw bytes since issue #55 — a
+#: three-character placeholder is refused now, and the test that feeds it one is
+#: `test_a_short_envelope_hash_is_refused`.
+_HASH_A = "a1" * 32
+_HASH_B = "b2" * 32
+_HASH_C = "c3" * 32
+_HASH_D = "d4" * 32
+
 #: Coarse but legal envelope parameters: 4 samples is exactly the corner count
 #: for a two-link arm, so `compute_envelope` accepts it and the result is still
 #: the union of the extreme controls.
@@ -586,12 +596,8 @@ def test_geometry_round_trips_through_wkb(tmp_path: Path) -> None:
     conn = store.connect(out)
     try:
         envelope_row = conn.execute("SELECT * FROM envelope").fetchone()
-        entity_row = conn.execute(
-            "SELECT * FROM entity WHERE entity_id = ?", (OBSTACLE.entity_id,)
-        ).fetchone()
-        human_row = conn.execute(
-            "SELECT * FROM entity WHERE entity_id = ?", (HUMAN_ENTITY_ID,)
-        ).fetchone()
+        entity_row = _entity_row(conn, OBSTACLE.entity_id)
+        human_row = _entity_row(conn, HUMAN_ENTITY_ID)
     finally:
         conn.close()
 
@@ -803,7 +809,7 @@ def seeded(tmp_path: Path):
     store.insert_envelope(
         conn,
         "env_0",
-        envelope_hash="abc",
+        envelope_hash=_HASH_A,
         area=0.25,
         geometry=Point(0.0, 0.0).buffer(0.5),
         config_id="cfg_0",
@@ -825,18 +831,20 @@ def test_the_schema_itself_refuses_a_backwards_interval(seeded) -> None:
     time window, so it must be impossible to get into the file at all."""
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
-            "INSERT INTO edge (type, layer, src_kind, src_id, dst_kind, dst_id, "
-            "t_start, t_end) VALUES ('HAS_ENVELOPE','A','RobotConfig','cfg_0',"
-            "'Envelope','env_0', 1.0, 0.0)"
+            "INSERT INTO edge (type, layer, src_kind, src_key, dst_kind, "
+            "dst_key, t_start, t_end) VALUES "
+            "('HAS_ENVELOPE','A','RobotConfig',?,'Envelope',?, 1.0, 0.0)",
+            (store.node_key(seeded, "cfg_0"), store.node_key(seeded, "env_0")),
         )
 
 
 def test_the_schema_refuses_an_untagged_layer(seeded) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
-            "INSERT INTO edge (type, layer, src_kind, src_id, dst_kind, dst_id, "
-            "t_start, t_end) VALUES ('HAS_ENVELOPE','?','RobotConfig','cfg_0',"
-            "'Envelope','env_0', 0.0, 1.0)"
+            "INSERT INTO edge (type, layer, src_kind, src_key, dst_kind, "
+            "dst_key, t_start, t_end) VALUES "
+            "('HAS_ENVELOPE','?','RobotConfig',?,'Envelope',?, 0.0, 1.0)",
+            (store.node_key(seeded, "cfg_0"), store.node_key(seeded, "env_0")),
         )
 
 
@@ -916,7 +924,7 @@ def test_an_out_of_vocabulary_envelope_source_is_refused(seeded) -> None:
         store.insert_envelope(
             seeded,
             "env_1",
-            envelope_hash="def",
+            envelope_hash=_HASH_B,
             area=0.25,
             geometry=Point(0.0, 0.0).buffer(0.5),
             config_id="cfg_0",
@@ -932,11 +940,43 @@ def test_an_out_of_vocabulary_envelope_source_is_refused(seeded) -> None:
 
 
 def _envelope_rows(path: Path) -> list[sqlite3.Row]:
+    """Every envelope row, with `envelope_id` and `config_id` resolved.
+
+    Since issue #55 the readable identifiers live in `node` and the payload
+    tables are keyed on an INTEGER surrogate, so a bare `SELECT * FROM envelope`
+    no longer names anything a reader can cite. This is the same join
+    `store.envelope_row` makes, over the whole table.
+    """
     conn = store.connect(path)
     try:
-        return list(conn.execute("SELECT * FROM envelope").fetchall())
+        return list(
+            conn.execute(
+                # The columns are named rather than `e.*`-ed: `sqlite3.Row`
+                # resolves a duplicate column name to the first one, so `e.*`
+                # beside an aliased `envelope_hash` would hand back the raw
+                # bytes and the alias would be unreachable.
+                "SELECT e.envelope_key AS envelope_key, "
+                "n.node_id AS envelope_id, "
+                "lower(hex(e.envelope_hash)) AS envelope_hash, "
+                "e.area AS area, e.geometry_wkb AS geometry_wkb, "
+                "e.config_key AS config_key, c.node_id AS config_id, "
+                "e.horizon AS horizon, e.source AS source "
+                "FROM envelope e JOIN node n ON n.node_key = e.envelope_key "
+                "LEFT JOIN node c ON c.node_key = e.config_key "
+                "ORDER BY e.envelope_key"
+            ).fetchall()
+        )
     finally:
         conn.close()
+
+
+def _entity_row(conn: sqlite3.Connection, entity_id: str) -> sqlite3.Row | None:
+    """One entity row by its readable id, through `node` (issue #55)."""
+    return conn.execute(
+        "SELECT e.*, n.node_id AS entity_id FROM entity e "
+        "JOIN node n ON n.node_key = e.entity_key WHERE n.node_id = ?",
+        (entity_id,),
+    ).fetchone()
 
 
 def _frames_with_geometry(path: Path) -> set[int]:
@@ -950,7 +990,7 @@ def _frames_with_geometry(path: Path) -> set[int]:
     try:
         rows = conn.execute(
             "SELECT edge.t_start AS t_start, e.geometry_wkb AS geometry_wkb "
-            "FROM edge JOIN envelope e ON e.envelope_id = edge.dst_id "
+            "FROM edge JOIN envelope e ON e.envelope_key = edge.dst_key "
             "WHERE edge.type = 'HAS_ENVELOPE' ORDER BY edge.t_start"
         ).fetchall()
     finally:
@@ -1158,8 +1198,9 @@ def test_envelope_at_recomputes_the_stored_polygon_exactly(tmp_path: Path) -> No
         conn.commit()
         for envelope_id, polygon in stored.items():
             edge = conn.execute(
-                "SELECT t_start FROM edge WHERE type = 'HAS_ENVELOPE' AND dst_id = ?",
-                (envelope_id,),
+                "SELECT t_start FROM edge WHERE type = 'HAS_ENVELOPE' "
+                "AND dst_key = ?",
+                (store.node_key(conn, envelope_id),),
             ).fetchone()
             assert edge is not None
             recomputed = graph.envelope_at(conn, edge["t_start"])
@@ -1206,7 +1247,7 @@ def test_envelope_at_answers_the_same_way_whether_stored_or_recomputed(
             polygon = graph.envelope_at(conn, quantize_time(frame_id * DT))
             row = conn.execute(
                 "SELECT e.area AS area FROM envelope e JOIN edge ON "
-                "edge.dst_id = e.envelope_id WHERE edge.type = 'HAS_ENVELOPE' "
+                "edge.dst_key = e.envelope_key WHERE edge.type = 'HAS_ENVELOPE' "
                 "AND edge.t_start = ?",
                 (quantize_time(frame_id * DT),),
             ).fetchone()
@@ -1519,8 +1560,8 @@ def test_envelope_at_refuses_when_a_parameter_it_needs_is_missing(
     conn = store.connect(out)
     try:
         discarded = conn.execute(
-            "SELECT t_start FROM edge WHERE type = 'HAS_ENVELOPE' AND dst_id IN "
-            "(SELECT envelope_id FROM envelope WHERE geometry_wkb IS NULL) "
+            "SELECT t_start FROM edge WHERE type = 'HAS_ENVELOPE' AND dst_key "
+            "IN (SELECT envelope_key FROM envelope WHERE geometry_wkb IS NULL) "
             "ORDER BY t_start"
         ).fetchone()
         assert discarded is not None, "precondition failed: nothing was discarded"
@@ -1544,14 +1585,14 @@ def test_envelope_at_refuses_when_the_config_it_names_is_gone(tmp_path: Path) ->
     conn = store.connect(out)
     try:
         row = conn.execute(
-            "SELECT edge.t_start AS t_start, e.config_id AS config_id FROM envelope e "
-            "JOIN edge ON edge.dst_id = e.envelope_id "
+            "SELECT edge.t_start AS t_start, e.config_key AS config_key "
+            "FROM envelope e JOIN edge ON edge.dst_key = e.envelope_key "
             "WHERE e.geometry_wkb IS NULL AND edge.type = 'HAS_ENVELOPE' "
             "ORDER BY edge.t_start"
         ).fetchone()
         assert row is not None, "precondition failed: nothing was discarded"
         conn.execute(
-            "DELETE FROM robot_config WHERE config_id = ?", (row["config_id"],)
+            "DELETE FROM robot_config WHERE config_key = ?", (row["config_key"],)
         )
         conn.commit()
         with pytest.raises(graph.GraphQueryError, match="not in this artifact"):
@@ -1568,7 +1609,7 @@ def test_an_envelope_with_neither_geometry_nor_config_is_refused(seeded) -> None
         store.insert_envelope(
             seeded,
             "env_empty",
-            envelope_hash="fed",
+            envelope_hash=_HASH_C,
             area=0.25,
             geometry=None,
             config_id=None,
@@ -1577,8 +1618,9 @@ def test_an_envelope_with_neither_geometry_nor_config_is_refused(seeded) -> None
         )
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
-            "INSERT INTO envelope (envelope_id, envelope_hash, area, horizon, "
-            "source) VALUES ('env_empty', 'fed', 0.25, 0.2, 'computed')"
+            "INSERT INTO envelope (envelope_key, envelope_hash, area, horizon, "
+            "source) VALUES (99, X'" + _HASH_C.upper() + "', 0.25, 0.2, "
+            "'computed')"
         )
 
 
@@ -1601,7 +1643,7 @@ def test_geometry_attached_later_fills_a_row_written_without_it(seeded) -> None:
     store.insert_envelope(
         seeded,
         "env_late",
-        envelope_hash="late",
+        envelope_hash=_HASH_D,
         area=0.25,
         geometry=None,
         config_id="cfg_0",
@@ -2078,9 +2120,20 @@ def test_the_occurrence_layer_is_additive(tmp_path: Path) -> None:
     assert with_layer.nodes["Occurrence"] > 0
 
     # And the rows themselves, not only their counts: every edge identical.
+    #
+    # Every column *except* the two surrogate keys (issue #55). `node_key` is
+    # allocated in insertion order from one space shared by every kind, so a
+    # build that also writes occurrence nodes numbers its envelopes differently
+    # — the same nodes with different integers on them. What must not move is
+    # the identity: `src_id`, `dst_id`, the kinds, the interval and the metrics,
+    # which is what an edge actually asserts and what every query reads. A test
+    # that compared the surrogates would fail on a renumbering that changed no
+    # answer, and would say "the occurrence layer is not additive" when it is.
+    _SURROGATES = ("src_key", "dst_key")
+
     def rows(path: Path):
         return [
-            tuple(row)
+            {k: row[k] for k in row.keys() if k not in _SURROGATES}
             for row in _edges(path)
         ]
 
@@ -2161,8 +2214,8 @@ def test_the_schema_itself_refuses_an_unknown_occurrence_type(seeded) -> None:
     """Not only the Python guard. The vocabulary is a CHECK in the file."""
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
-            "INSERT INTO occurrence (occurrence_id, seq, type, layer, reason, t, "
-            "sw_version) VALUES ('occ_x', 0, 'veto', 'A', 'because', 1.0, 'v')"
+            "INSERT INTO occurrence (occurrence_key, seq, type, layer, reason, "
+            "t, sw_version) VALUES (99, 0, 'veto', 'A', 'because', 1.0, 'v')"
         )
 
 
@@ -2513,10 +2566,7 @@ def test_the_declared_and_the_clamped_bound_are_separate_rows(attested) -> None:
     indistinguishable from a clamp to the declaration.
     """
     out, records = attested
-    rows = {
-        str(r["source"]): r
-        for r in _rows(out, "SELECT * FROM envelope ORDER BY source")
-    }
+    rows = {str(r["source"]): r for r in _envelope_rows(out)}
     assert {"computed", "declared", "clamped"} <= set(rows)
     assert rows["declared"]["envelope_hash"] == rows["clamped"]["envelope_hash"]
     assert rows["declared"]["envelope_id"] != rows["clamped"]["envelope_id"]
@@ -2879,7 +2929,7 @@ def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:
         store.insert_envelope(
             seeded,
             "env_clamped",
-            envelope_hash="def",
+            envelope_hash=_HASH_B,
             area=0.5,
             geometry=disc,
             config_id=None,
@@ -2890,7 +2940,7 @@ def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:
         store.insert_envelope(
             seeded,
             "env_declared",
-            envelope_hash="def",
+            envelope_hash=_HASH_B,
             area=0.5,
             geometry=disc,
             config_id=None,
@@ -3103,7 +3153,15 @@ def test_a_store_created_without_the_record_tables_does_not_have_them(
         }
         assert not tables & store.RECORD_TABLE_NAMES
         # Everything else is still there: this is two tables, not a level.
-        assert {"meta", "envelope", "entity", "robot_config", "edge", "occurrence"} <= tables
+        assert {
+            "meta",
+            "node",
+            "envelope",
+            "entity",
+            "robot_config",
+            "edge",
+            "occurrence",
+        } <= tables
     finally:
         conn.close()
 
@@ -3158,7 +3216,7 @@ def test_the_record_layer_refuses_rather_than_answering_from_a_missing_table(
         store.insert_envelope(
             conn,
             "env_0",
-            envelope_hash="abc",
+            envelope_hash=_HASH_A,
             area=0.25,
             geometry=Point(0.0, 0.0).buffer(0.5),
             config_id=None,
@@ -3219,3 +3277,324 @@ def test_the_record_tables_follow_the_record_stream_and_nothing_else(
             assert store.has_record_tables(conn) is expected, name
         finally:
             conn.close()
+
+
+# --------------------------------------------------------------------------
+# THE SURROGATE KEYS (issue #55).
+#
+# Node identity moved into the `node` table, every join and index carries the
+# INTEGER surrogate, and `envelope_hash` is 32 raw bytes rather than 64 hex
+# characters. It is a *storage* change, and the tests below are the ones that
+# fail if it ever stops being only that: the canonical serialization, the four
+# tamper modes, and the readable identifiers every report cites.
+# --------------------------------------------------------------------------
+
+
+def test_a_record_signed_before_the_change_still_verifies_after_it(
+    tmp_path: Path,
+) -> None:
+    """**THE NEGATIVE FOR THE WHOLE CHANGE.** The MAC preimage must not move.
+
+    A declaration and a verdict are signed, persisted through the new encoding,
+    read back and verified under the keys that signed them. If the surrogate
+    keys, the BLOB hash or the `declaration_key` join had disturbed a single
+    field of either record — a re-rendered float, a re-serialized polygon, a
+    `declaration_id` reconstructed from the wrong side of a join — the MAC would
+    be over different bytes and this would say INVALID.
+
+    It is checked field by field as well as by the MAC, because the two failures
+    are different: a MAC that still verifies over a record whose fields moved
+    would mean the signature covers less than it claims to.
+    """
+    csv, records = _held_attested(tmp_path)
+    declaration = records.declarations[0]
+    verdict = next(v for v in records.verdicts if v.declaration_id is not None)
+    clamp = next(
+        (v for v in records.verdicts if v.clamped_envelope is not None), None
+    )
+
+    conn = store.create(tmp_path / "signed.sqlite", record_tables=True)
+    try:
+        for record in records.declarations:
+            store.insert_declaration(conn, record)
+        for record in records.verdicts:
+            store.insert_verdict(conn, record)
+        conn.commit()
+        read_declarations = store.read_declarations(conn)
+        read_verdicts = store.read_verdicts(conn)
+    finally:
+        conn.close()
+
+    by_id = {d.declaration_id: d for d in read_declarations}
+    assert by_id[declaration.declaration_id] == declaration
+    assert (
+        verify_declaration(
+            by_id[declaration.declaration_id], FIXTURE_KEYRING.key("policy")
+        ).state
+        is MacState.VALID
+    )
+
+    verdicts_by_id = {v.verdict_id: v for v in read_verdicts}
+    assert verdicts_by_id[verdict.verdict_id] == verdict
+    # The one field that now travels through a join rather than a column.
+    assert (
+        verdicts_by_id[verdict.verdict_id].declaration_id == verdict.declaration_id
+    )
+    assert (
+        verify_verdict(
+            verdicts_by_id[verdict.verdict_id], FIXTURE_KEYRING.key("enforcement")
+        ).state
+        is MacState.VALID
+    )
+
+    # Every record of both chains, not only the two named above: one record
+    # surviving the round trip says nothing about the field a rarer one carries.
+    assert len(read_declarations) == len(records.declarations)
+    assert len(read_verdicts) == len(records.verdicts)
+    assert read_declarations == sorted(
+        records.declarations, key=lambda d: (d.seq, d.declaration_id)
+    )
+    assert read_verdicts == sorted(
+        records.verdicts, key=lambda v: (v.seq, v.verdict_id)
+    )
+    if clamp is not None:
+        # The WKB the record was signed with, byte for byte — not a second
+        # rendering of the same region, which is the same polygon and a
+        # different preimage.
+        assert (
+            verdicts_by_id[clamp.verdict_id].clamped_envelope
+            == clamp.clamped_envelope
+        )
+
+
+def test_the_four_tamper_modes_are_still_detected(tmp_path: Path) -> None:
+    """**THE NEGATIVE FOR THE ENCODING.** Issue #49's four faults, after #55.
+
+    An encoding change is exactly where a tamper check quietly stops working:
+    the tool now addresses rows by surrogate key, the record ids come out of a
+    join, and `--delete` removes a record row while deliberately leaving its
+    identity behind. Each of the four is applied to a copy of a real attested
+    artifact and the walk must come back BROKEN — the point is not that the
+    tool runs, it is that verification says no.
+
+    `tests/test_chain.py` owns these four faults in full detail. This is the
+    same four asserted against the *storage* change, and it lives here because
+    what it is guarding is the schema.
+    """
+    from reg.chain import ChainState, tamper, verify_chain
+
+    csv, records = _held_attested(tmp_path, n_frames=12)
+    out = tmp_path / "attested.sqlite"
+    _build(csv, out, records=records)
+
+    conn = store.connect(out)
+    try:
+        assert verify_chain(conn, FIXTURE_KEYRING).state is ChainState.VERIFIED, (
+            "precondition failed: the untampered artifact does not verify, so a "
+            "BROKEN verdict below would prove nothing"
+        )
+    finally:
+        conn.close()
+
+    faults = {
+        "field": "declaration:first:horizon=9.5",
+        "mac": f"declaration:first:mac={'0' * 64}",
+        "prev_hash": f"verdict:last:prev_hash={'0' * 64}",
+        "delete": "verdict:last:delete",
+    }
+    for name, spec in faults.items():
+        copy = tmp_path / f"tampered-{name}.sqlite"
+        report = tamper(out, copy, spec)
+        conn = store.connect(copy)
+        try:
+            result = verify_chain(conn, FIXTURE_KEYRING)
+        finally:
+            conn.close()
+        assert result.state is ChainState.BROKEN, f"{name} went undetected"
+        # And the failure names the record, which is what makes it usable. The
+        # deleted record is the one that depends on `node` outliving the row:
+        # its identity is gone from `verdict` and the FOLLOWS edge left pointing
+        # at it can still say which record is missing.
+        named = {f.record_id for f in result.failures if f.record_id is not None}
+        assert report.record_id in named, f"{name} did not name the record"
+
+
+def test_the_edge_table_holds_no_identifier_text(tmp_path: Path) -> None:
+    """The change, asserted structurally rather than assumed from a byte count.
+
+    Every edge endpoint is an INTEGER, and the identifier it resolves to is in
+    `node` exactly once. A regression that put the text back would still pass
+    every query test in this file — the answers would be identical — and would
+    silently undo the whole of issue #55, so the shape is checked directly.
+    """
+    csv, records = _held_attested(tmp_path)
+    out = tmp_path / "shape.sqlite"
+    _build(csv, out, records=records)
+
+    conn = store.connect(out)
+    try:
+        columns = {
+            str(row["name"]): str(row["type"]).upper()
+            for row in conn.execute("PRAGMA table_info(edge)")
+        }
+        assert columns["src_key"] == "INTEGER"
+        assert columns["dst_key"] == "INTEGER"
+        assert "src_id" not in columns and "dst_id" not in columns
+
+        # Nothing of any width but an integer reached the endpoint columns.
+        assert conn.execute(
+            "SELECT count(*) AS n FROM edge WHERE typeof(src_key) != 'integer' "
+            "OR typeof(dst_key) != 'integer'"
+        ).fetchone()["n"] == 0
+
+        # Every endpoint resolves, so no join over this table can come back
+        # empty for a reason nobody can see.
+        assert conn.execute(
+            "SELECT count(*) AS n FROM edge e "
+            "LEFT JOIN node s ON s.node_key = e.src_key "
+            "LEFT JOIN node d ON d.node_key = e.dst_key "
+            "WHERE s.node_id IS NULL OR d.node_id IS NULL"
+        ).fetchone()["n"] == 0
+
+        # And the three indexes issue #55 must not drop are all still there.
+        indexes = {
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' "
+                "AND tbl_name = 'edge'"
+            )
+        }
+        assert {"edge_by_layer", "edge_by_type_dst", "edge_by_interval"} <= indexes
+    finally:
+        conn.close()
+
+
+def test_the_envelope_hash_is_thirty_two_bytes_and_reads_back_as_hex(
+    tmp_path: Path,
+) -> None:
+    """Stored narrow, handed back wide. The digest on the wire does not change.
+
+    `reg.envelope.envelope_hash` returns hex, `insert_envelope` takes hex,
+    `envelope_row` returns hex — and the column holds 32 bytes in between. The
+    equality against a freshly computed digest is what makes this a round trip
+    rather than an assertion that two spellings of an unknown value agree.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        raw = conn.execute(
+            "SELECT envelope_hash FROM envelope LIMIT 1"
+        ).fetchone()["envelope_hash"]
+        assert isinstance(raw, bytes)
+        assert len(raw) == store.HASH_BYTES
+    finally:
+        conn.close()
+
+    rows = _envelope_rows(out)
+    assert rows
+    for row in rows:
+        digest = row["envelope_hash"]
+        assert isinstance(digest, str)
+        assert len(digest) == 2 * store.HASH_BYTES
+        assert store.to_hash(digest).hex() == digest
+        if row["geometry_wkb"] is not None:
+            assert digest == envelope_hash(store.from_wkb(row["geometry_wkb"]))
+
+
+def test_a_hash_that_is_not_a_full_width_digest_is_refused(seeded) -> None:
+    """THE NEGATIVE for the codec. Each of these compares unequal to a real
+    digest, so each one would read as "the envelope changed" on every frame and
+    turn the retention rule off without erroring anywhere."""
+    for bad, why in (
+        ("abc", "not 32 bytes"),
+        ("a1" * 16, "half width"),
+        ("a1" * 33, "over width"),
+        ("zz" * 32, "not hex"),
+        (("a1" * 32).upper(), "uppercase, so it would not survive the round trip"),
+    ):
+        with pytest.raises(store.StoreError):
+            store.to_hash(bad)
+        with pytest.raises(store.StoreError):
+            store.insert_envelope(
+                seeded,
+                f"env_{why}",
+                envelope_hash=bad,
+                area=0.25,
+                geometry=Point(0.0, 0.0).buffer(0.5),
+                config_id="cfg_0",
+                horizon=0.2,
+                source="computed",
+            )
+    with pytest.raises(store.StoreError, match="32"):
+        store.from_hash(b"\x00" * 16)
+    with pytest.raises(store.StoreError, match="from_hash"):
+        store.from_hash("a1" * 32)  # type: ignore[arg-type]
+
+    # And the schema refuses it too, not only the Python guard.
+    with pytest.raises(sqlite3.IntegrityError):
+        seeded.execute(
+            "INSERT INTO envelope (envelope_key, envelope_hash, area, horizon, "
+            "source, geometry_wkb) VALUES (98, X'00FF', 0.25, 0.2, 'computed', "
+            "X'00')"
+        )
+
+
+def test_one_id_cannot_name_two_different_kinds_of_node(seeded) -> None:
+    """THE NEGATIVE for the shared identity table.
+
+    `node_id` is unique across every kind since issue #55, and it has to be: an
+    edge endpoint resolves an id to one key, so two different things behind one
+    id would merge two histories into an answer about neither. The refusal is
+    loud; the state it prevents is silent.
+    """
+    with pytest.raises(store.StoreError, match="already the id of a"):
+        store.insert_entity(seeded, "cfg_0", "crate", geometry=Point(3.0, 0.0).buffer(0.2))
+    with pytest.raises(store.StoreError, match="already the id of a"):
+        store.insert_robot_config(seeded, "env_0", "0.0,0.0", "0.0,0.0")
+    # And nothing was half-written: the RobotConfig is still a RobotConfig.
+    assert store.node_key(seeded, "cfg_0") is not None
+    assert (
+        seeded.execute(
+            "SELECT count(*) AS n FROM entity WHERE entity_key = ?",
+            (store.node_key(seeded, "cfg_0"),),
+        ).fetchone()["n"]
+        == 0
+    )
+
+
+def test_node_key_refuses_to_resolve_an_id_the_artifact_never_held(seeded) -> None:
+    """`None`, and never a plausible integer. `0` is a usable `node_key`, so an
+    unresolved id that fell back to it would attach an edge to whichever node
+    happened to be first."""
+    assert store.node_key(seeded, "nothing_here") is None
+    assert store.node_id_of(seeded, 999_999) is None
+    assert store.node_key(seeded, "cfg_0") == store.node_key(seeded, "cfg_0")
+    assert store.node_id_of(seeded, store.node_key(seeded, "cfg_0")) == "cfg_0"
+
+
+def test_dropping_a_node_kind_takes_its_identity_with_it(tmp_path: Path) -> None:
+    """`drop_nodes` is for `reg.bench`'s coarser views, and it must not leave
+    identity rows behind for nodes the view no longer holds — a view that did
+    would measure as larger than the view is, which is the one number the
+    resolution curve exists to report."""
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        before = conn.execute("SELECT count(*) AS n FROM node").fetchone()["n"]
+        envelopes = store.node_counts(conn)["Envelope"]
+        assert envelopes > 0, "precondition failed: nothing to drop"
+        conn.execute("DELETE FROM edge")
+        store.drop_nodes(conn, "Envelope")
+        after = conn.execute("SELECT count(*) AS n FROM node").fetchone()["n"]
+        assert after == before - envelopes
+        assert store.node_counts(conn)["Envelope"] == 0
+        with pytest.raises(store.StoreError, match="not a node kind"):
+            store.drop_nodes(conn, "Timestep")
+    finally:
+        conn.close()

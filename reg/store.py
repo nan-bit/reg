@@ -91,6 +91,54 @@ accident: "this build was given no record stream" and "a run that produced no
 records" are different facts (issue #48), the absent tables say neither of them,
 and `meta[attestation_records]` says which — before any reader reaches a row.
 
+NODE IDENTITY IS ONE TABLE, AND JOINS CARRY THE INTEGER (ISSUE #55)
+--------------------------------------------------------------------
+`node` holds `(node_key, node_id)` and nothing else: the readable identifier
+every report cites, and the INTEGER surrogate every join and every index carries.
+A `robot_config`, an `envelope`, an `entity`, an `occurrence`, a `declaration`
+and a `verdict` row are all keyed on that surrogate, and `edge.src_key` /
+`edge.dst_key` are it.
+
+**This is a storage decision, not a retention one, and emphatically not a change
+to the wire.** `env_08192d8f17313b39` is 20 B; every edge carries two endpoints
+and three indexes carry the same text again, which measured ~128 B/edge of
+identifier at 301 frames — and identifier text is what dominates once #54's
+fixed costs have amortised away. What the change may not do is cost an
+identifier: every function here still takes and still returns the readable id,
+`envelope_row` renders the hash back to the hex it was handed, and an incident
+report cites `declared_violation-verdict-00150` exactly as it did before. An
+artifact whose report cites integers is worse evidence than one that costs a few
+more bytes.
+
+WHY IDENTITY IS ITS OWN TABLE RATHER THAN A COLUMN PER KIND. A `FOLLOWS` edge
+naming a record this artifact no longer holds is the *second* witness to a
+deleted record (`reg.chain._dangling_links`), and it is only evidence if it can
+still say **which** record is missing. A surrogate that lived on the record row
+would be deleted along with it, and the dangling link would come back naming
+nothing — a tamper check that quietly stopped working, which is exactly what an
+encoding change is most likely to break. The `node` row survives the payload row,
+so the link still names the record that was removed.
+
+`node_id` is unique across every kind, not per table. That is stricter than the
+old per-table primary keys and deliberately so: `_insert_node` already refused
+two different things sharing one id inside a table, and the same collision across
+two tables was previously invisible. It is a loud `StoreError` now.
+
+`envelope_hash` is stored as its 32 raw bytes rather than as 64 hex characters,
+for the same reason and under the same rule: `insert_envelope` takes the hex
+digest `reg.envelope.envelope_hash` produces, `envelope_row` hands the same hex
+back, and only the column between them is narrower. It is also checked — a hash
+that is not 32 bytes of lowercase hex is refused rather than stored, because a
+truncated digest compares unequal to everything and would read as "this envelope
+changed" on every frame.
+
+**The canonical serialization has not moved.** Nothing here touches a MAC
+preimage: `reg.chain` canonicalizes the record's own fields, this module stores
+those fields as it was handed them, and `read_declarations` / `read_verdicts`
+reconstruct the same bytes. `tests/test_graph.py` signs a declaration and a
+verdict, persists them, reads them back and verifies — the test that fails if
+this paragraph ever stops being true.
+
 DETERMINISM
 -----------
 Same inserts in the same order produce the same file, byte for byte. Nothing here
@@ -117,6 +165,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "META_SCHEMA_VERSION",
     "META_FRAME_PERIOD",
+    "HASH_BYTES",
     "PAGE_SIZE",
     "ENVELOPE_SOURCES",
     "EDGE_SPECS",
@@ -127,8 +176,10 @@ __all__ = [
     "StoreError",
     "create",
     "connect",
+    "drop_nodes",
     "has_record_tables",
     "node_counts",
+    "node_key",
     "layer_of",
     "occurrence_layer",
     "put_meta",
@@ -150,6 +201,8 @@ __all__ = [
     "read_verdicts",
     "to_wkb",
     "from_wkb",
+    "to_hash",
+    "from_hash",
 ]
 
 #: Bumped whenever a table, column or constraint changes. It is written into
@@ -183,12 +236,28 @@ __all__ = [
 #: `horizon` as always present and would not see the attestation layer at all,
 #: so "this run had no verdicts" and "this reader cannot see verdicts" would be
 #: the same answer.
-SCHEMA_VERSION = 5
+#:
+#: 6: node identity moved into the `node` table and every join and index carries
+#: its INTEGER surrogate, and `envelope.envelope_hash` became a 32-byte BLOB
+#: (issue #55). A v5 reader meeting a v6 file would look for `edge.src_id` and
+#: `entity.entity_id`, find neither, and — because it would find `edge` and
+#: `entity` — have no way to tell "this artifact holds no such relationship"
+#: from "these columns are somewhere else now". The readable identifiers are all
+#: still in the file and every function in this module still speaks them; it is
+#: the *columns* a v5 reader would be wrong about, which is precisely what the
+#: version exists to stop.
+SCHEMA_VERSION = 6
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
 META_SCHEMA_VERSION = "schema_version"
 META_FRAME_PERIOD = "frame_period_s"
+
+#: How wide an `envelope_hash` is, in bytes. `reg.envelope.envelope_hash` is a
+#: SHA-256, so this is 32 — and it is checked on the way in rather than assumed,
+#: because a digest that is not the full width compares unequal to everything and
+#: would read as "the envelope changed" on every frame of the run.
+HASH_BYTES = 32
 
 #: The SQLite page size every artifact is created with, in bytes (issue #54).
 #: **An encoding decision, not a retention one.** It changes no column, no row
@@ -360,8 +429,14 @@ OCCURRENCE_SPECS: dict[str, OccurrenceSpec] = {
     "escalation_failed": OccurrenceSpec("A", "run", None),
 }
 
-#: Node kind -> (table, primary key column). Used to check that an edge's
-#: endpoints exist before the edge is written.
+#: Node kind -> (table, surrogate key column). Used to check that an edge's
+#: endpoints exist before the edge is written, and to attribute rows to a kind.
+#:
+#: The second element is the INTEGER surrogate (issue #55), not the readable id:
+#: the readable id lives in `node` for every kind at once, and a payload table
+#: names it nowhere. Anything wanting to go from an id to a row goes through
+#: `node_key`, which is one indexed lookup and the only place that translation
+#: happens.
 #:
 #: `Occurrence` is in here so it is counted, attributed and checked like every
 #: other node kind, and **not** because any edge points at one: no `EdgeSpec`
@@ -369,12 +444,12 @@ OCCURRENCE_SPECS: dict[str, OccurrenceSpec] = {
 #: edges rather than joining them, and giving it an edge type would be inventing
 #: a relationship the fixtures do not produce.
 NODE_TABLES: dict[str, tuple[str, str]] = {
-    "Envelope": ("envelope", "envelope_id"),
-    "Entity": ("entity", "entity_id"),
-    "RobotConfig": ("robot_config", "config_id"),
-    "Occurrence": ("occurrence", "occurrence_id"),
-    "Declaration": ("declaration", "declaration_id"),
-    "Verdict": ("verdict", "verdict_id"),
+    "Envelope": ("envelope", "envelope_key"),
+    "Entity": ("entity", "entity_key"),
+    "RobotConfig": ("robot_config", "config_key"),
+    "Occurrence": ("occurrence", "occurrence_key"),
+    "Declaration": ("declaration", "declaration_key"),
+    "Verdict": ("verdict", "verdict_key"),
 }
 
 #: The tables `RECORD_SCHEMA` creates, derived from `NODE_TABLES` rather than
@@ -409,13 +484,37 @@ CREATE TABLE meta (
 -- `frame_period_s` in `meta`, which is recorded once and checked uniform at
 -- build time. Issue #29; docs/lossiness.md Discarded #10.
 
+-- NODE IDENTITY, ONCE, FOR EVERY KIND (issue #55). `node_id` is the readable
+-- identifier every report, every doc example and every CLI argument uses;
+-- `node_key` is the INTEGER surrogate every join and every index below carries.
+-- The readable id is stored here and nowhere else, so an edge costs two small
+-- integers rather than two 20-byte strings — and the same two integers again in
+-- each of the three edge indexes, which is where the measurement in issue #55
+-- said the bytes actually were.
+--
+-- IT OUTLIVES THE ROW IT NAMES, ON PURPOSE. Deleting a record from the
+-- `declaration` table leaves this row behind, which is what lets
+-- `reg.chain._dangling_links` say *which* record a FOLLOWS edge has lost. A
+-- surrogate that lived on the record row would go with it and the dangling link
+-- would come back naming nothing.
+--
+-- `node_id` is unique across every kind rather than per table. Two different
+-- things sharing one identifier is the collision `_insert_node` has always
+-- refused inside a table; across two tables it used to be invisible, and an
+-- edge resolving to the wrong one would merge two histories into an answer
+-- about neither.
+CREATE TABLE node (
+    node_key INTEGER PRIMARY KEY,
+    node_id  TEXT NOT NULL UNIQUE
+);
+
 -- Created only when it anchors a retained relationship (docs/lossiness.md
 -- Discarded #1), or when an envelope the artifact retains was computed from it.
 -- The interpolated path between two of these is gone.
 CREATE TABLE robot_config (
-    config_id TEXT PRIMARY KEY,
-    q         TEXT NOT NULL,
-    qd        TEXT NOT NULL
+    config_key INTEGER PRIMARY KEY REFERENCES node (node_key),
+    q          TEXT NOT NULL,
+    qd         TEXT NOT NULL
 );
 
 -- A row per envelope the artifact retains, keyed on `envelope_hash`
@@ -438,10 +537,17 @@ CREATE TABLE robot_config (
 -- invisible, and the artifact records the rule in `meta` so nothing has to
 -- infer it from the pattern of NULLs.
 --
--- `config_id` is what makes that recoverable, so the CHECK requires one or the
+-- `config_key` is what makes that recoverable, so the CHECK requires one or the
 -- other: a row with neither stores no region and names nothing to recompute one
 -- from, and a query hitting it could only answer "no envelope at t", which is
 -- indistinguishable from a frame that genuinely had none.
+--
+-- `envelope_hash` is the 32 raw bytes of the SHA-256 `reg.envelope.envelope_hash`
+-- produces, not its 64 hex characters (issue #55). The digest on the wire is
+-- unchanged — `insert_envelope` takes the hex and `envelope_row` returns it —
+-- and the CHECK is what keeps a half-width digest out: a truncated hash compares
+-- unequal to every other, so every frame would read as a material envelope
+-- change and the retention rule would silently stop retaining anything.
 --
 -- WHY THE HORIZON MAY BE NULL, AND ONLY FOR A CLAMP. A `computed` envelope was
 -- integrated over one, and a `declared` envelope carries the declaration's
@@ -451,15 +557,15 @@ CREATE TABLE robot_config (
 -- states no horizon for it (docs/plan.md Phase 4). NULL is that record's silence
 -- carried through rather than a plausible number invented at the write.
 CREATE TABLE envelope (
-    envelope_id   TEXT PRIMARY KEY,
-    envelope_hash TEXT NOT NULL,
+    envelope_key  INTEGER PRIMARY KEY REFERENCES node (node_key),
+    envelope_hash BLOB NOT NULL CHECK (length(envelope_hash) = {HASH_BYTES}),
     area          REAL NOT NULL,
     geometry_wkb  BLOB,
-    config_id     TEXT REFERENCES robot_config (config_id),
+    config_key    INTEGER REFERENCES robot_config (config_key),
     horizon       REAL,
     source        TEXT NOT NULL CHECK (source IN ({_SQL_ENVELOPE_SOURCES})),
     UNIQUE (envelope_hash, source, horizon),
-    CHECK (geometry_wkb IS NOT NULL OR config_id IS NOT NULL),
+    CHECK (geometry_wkb IS NOT NULL OR config_key IS NOT NULL),
     CHECK ((horizon IS NULL) = (source = 'clamped'))
 );
 
@@ -467,21 +573,26 @@ CREATE TABLE envelope (
 -- when that boundary does not move. See `insert_entity` for why a moving
 -- entity's per-frame position is not stored rather than stored badly.
 CREATE TABLE entity (
-    entity_id    TEXT    PRIMARY KEY,
+    entity_key   INTEGER PRIMARY KEY REFERENCES node (node_key),
     kind         TEXT    NOT NULL,
     is_static    INTEGER NOT NULL CHECK (is_static IN (0, 1)),
     geometry_wkb BLOB,
     CHECK ((is_static = 1) = (geometry_wkb IS NOT NULL))
 );
 
+-- `src_key` and `dst_key` are `node.node_key` (issue #55). The *kind* stays as
+-- text beside each one and is not derived from the key: it says which table the
+-- endpoint's payload is in, `FOLLOWS` genuinely runs between two different
+-- kinds in the two chains, and an endpoint whose kind had to be discovered by
+-- probing six tables would turn a dangling reference into a slow guess.
 CREATE TABLE edge (
     edge_id      INTEGER PRIMARY KEY,
     type         TEXT NOT NULL CHECK (type  IN ({_SQL_EDGE_TYPES})),
     layer        TEXT NOT NULL CHECK (layer IN ('A', 'B')),
     src_kind     TEXT NOT NULL CHECK (src_kind IN ({_SQL_NODE_KINDS})),
-    src_id       TEXT NOT NULL,
+    src_key      INTEGER NOT NULL REFERENCES node (node_key),
     dst_kind     TEXT NOT NULL CHECK (dst_kind IN ({_SQL_NODE_KINDS})),
-    dst_id       TEXT NOT NULL,
+    dst_key      INTEGER NOT NULL REFERENCES node (node_key),
     t_start      REAL NOT NULL,
     t_end        REAL NOT NULL,
     overlap_area REAL,
@@ -523,28 +634,33 @@ CREATE TABLE edge (
 -- to each other, which is the cost being measured; it must not silently lose one
 -- of them, which would be a different and much worse thing.
 CREATE TABLE occurrence (
-    occurrence_id TEXT    PRIMARY KEY,
-    seq           INTEGER NOT NULL UNIQUE,
-    type          TEXT    NOT NULL CHECK (type IN ({_SQL_OCCURRENCE_TYPES})),
-    layer         TEXT    NOT NULL CHECK (layer IN ('A', 'B')),
-    reason        TEXT    NOT NULL,
-    t             REAL    NOT NULL,
-    entity_id     TEXT    REFERENCES entity (entity_id),
-    value         REAL,
-    sw_version    TEXT    NOT NULL,
-    CHECK ((type IN ({_SQL_OCCURRENCE_ENTITY_TYPES})) = (entity_id IS NOT NULL)),
+    occurrence_key INTEGER PRIMARY KEY REFERENCES node (node_key),
+    seq            INTEGER NOT NULL UNIQUE,
+    type           TEXT    NOT NULL CHECK (type IN ({_SQL_OCCURRENCE_TYPES})),
+    layer          TEXT    NOT NULL CHECK (layer IN ('A', 'B')),
+    reason         TEXT    NOT NULL,
+    t              REAL    NOT NULL,
+    entity_key     INTEGER REFERENCES entity (entity_key),
+    value          REAL,
+    sw_version     TEXT    NOT NULL,
+    CHECK ((type IN ({_SQL_OCCURRENCE_ENTITY_TYPES})) = (entity_key IS NOT NULL)),
     CHECK ((type IN ({_SQL_OCCURRENCE_VALUED_TYPES})) = (value IS NOT NULL))
 );
 
--- Claim 3 is `WHERE layer = ?`; queries 1-4 are `WHERE type = ? AND dst_id = ?`
--- over an interval. Index what the supported question set actually asks.
+-- Claim 3 is `WHERE layer = ?`; queries 1-4 are `WHERE type = ? AND dst_key = ?`
+-- over an interval. Index what the supported question set actually asks. The
+-- three edge indexes are the same three they were before issue #55 — none was
+-- dropped, because a smaller artifact that answers slower is a different trade
+-- and would need measuring rather than assuming. What changed is that each one
+-- now carries an integer where it used to carry a 20-byte identifier, three
+-- times over.
 CREATE INDEX edge_by_layer     ON edge (layer);
-CREATE INDEX edge_by_type_dst  ON edge (type, dst_id);
+CREATE INDEX edge_by_type_dst  ON edge (type, dst_key);
 CREATE INDEX edge_by_interval  ON edge (t_start, t_end);
 
 -- The occurrence layer is asked "which events of this type, for this entity",
 -- which is the same shape as `edge_by_type_dst` one layer up.
-CREATE INDEX occurrence_by_type ON occurrence (type, entity_id);
+CREATE INDEX occurrence_by_type ON occurrence (type, entity_key);
 """
 
 #: The two record tables, created **only** when the build was handed a record
@@ -594,7 +710,7 @@ RECORD_SCHEMA = """
 -- record — which means raw SQL, which means tampering — is a loud
 -- could-not-evaluate on the way out and never a quietly accepted row.
 CREATE TABLE declaration (
-    declaration_id        TEXT PRIMARY KEY,
+    declaration_key       INTEGER PRIMARY KEY REFERENCES node (node_key),
     seq                   INTEGER NOT NULL CHECK (seq >= 0),
     t_issued              REAL    NOT NULL,
     horizon               REAL    NOT NULL CHECK (horizon > 0),
@@ -604,14 +720,19 @@ CREATE TABLE declaration (
     mac                   TEXT    NOT NULL
 );
 
--- `declaration_id` is nullable and its absence is a *finding*, not a gap: it is
+-- `declaration_key` is nullable and its absence is a *finding*, not a gap: it is
 -- what `no_declaration` and `watchdog_expiry` look like in the record. A verdict
 -- that does name one names a declaration this artifact holds — `insert_verdict`
 -- refuses a dangling reference, because an `ADJUDICATED` edge pointing at
 -- nothing is an audit answer nobody can check.
+--
+-- It is the declaration's surrogate and not its readable id, and the record read
+-- back is unaffected: `read_verdicts` joins `node` to put the id back, so the
+-- reconstructed `Verdict` carries the same `declaration_id` the MAC was taken
+-- over. The join is the whole difference.
 CREATE TABLE verdict (
-    verdict_id           TEXT    PRIMARY KEY,
-    declaration_id       TEXT    REFERENCES declaration (declaration_id),
+    verdict_key          INTEGER PRIMARY KEY REFERENCES node (node_key),
+    declaration_key      INTEGER REFERENCES declaration (declaration_key),
     seq                  INTEGER NOT NULL CHECK (seq >= 0),
     t                    REAL    NOT NULL,
     outcome              TEXT    NOT NULL,
@@ -899,6 +1020,73 @@ def from_wkb(blob: bytes) -> BaseGeometry:
 
 
 # --------------------------------------------------------------------------
+# Envelope hash codec (issue #55)
+#
+# The digest on the wire is `reg.envelope.envelope_hash`'s lowercase hex and does
+# not change; the column holds its 32 raw bytes. Both directions are checked,
+# because the failure a silent codec produces is not a crash — it is an envelope
+# whose hash matches nothing, which reads as a material change on every frame and
+# quietly turns the retention rule off.
+# --------------------------------------------------------------------------
+
+
+def to_hash(digest: str) -> bytes:
+    """A hex envelope digest as the raw bytes the column stores.
+
+    Refuses anything that is not exactly `HASH_BYTES` bytes of **lowercase** hex.
+    Lowercase because `from_hash` renders lowercase, and a codec whose round trip
+    changes the string would make two spellings of one digest compare unequal —
+    which is the same wrong answer as a truncated hash, arrived at differently.
+    """
+    if not isinstance(digest, str):
+        raise StoreError(
+            f"an envelope hash must be the hex digest str "
+            f"reg.envelope.envelope_hash returns, got "
+            f"{type(digest).__name__}."
+        )
+    try:
+        raw = bytes.fromhex(digest)
+    except ValueError:
+        raise StoreError(
+            f"envelope hash {digest!r} is not hex. It is stored as its raw bytes "
+            "and read back as hex, so a value that is not a digest could not "
+            "survive the round trip."
+        ) from None
+    if len(raw) != HASH_BYTES:
+        raise StoreError(
+            f"envelope hash {digest!r} is {len(raw)} bytes; "
+            f"reg.envelope.envelope_hash is a SHA-256, which is {HASH_BYTES}. A "
+            "narrower digest compares unequal to every full one, so every frame "
+            "would read as a material envelope change."
+        )
+    if raw.hex() != digest:
+        raise StoreError(
+            f"envelope hash {digest!r} is not lowercase hex. It reads back "
+            f"as {raw.hex()!r}, and two spellings of one digest that compare "
+            "unequal is the fault this codec exists to prevent."
+        )
+    return raw
+
+
+def from_hash(blob: bytes) -> str:
+    """Raw digest bytes back to hex. The exact inverse of `to_hash`."""
+    if not isinstance(blob, (bytes, bytearray, memoryview)):
+        raise StoreError(
+            f"from_hash takes the raw digest bytes, got {type(blob).__name__}. A "
+            "NULL envelope_hash is an envelope whose digest was never stored, "
+            "which is a could-not-evaluate and not an empty string."
+        )
+    raw = bytes(blob)
+    if len(raw) != HASH_BYTES:
+        raise StoreError(
+            f"an envelope_hash column holds {len(raw)} bytes, not {HASH_BYTES}. "
+            "The schema CHECKs the width, so this row was not written by this "
+            "module."
+        )
+    return raw.hex()
+
+
+# --------------------------------------------------------------------------
 # meta
 # --------------------------------------------------------------------------
 
@@ -955,15 +1143,87 @@ def all_meta(conn: sqlite3.Connection) -> dict[str, str]:
 # --------------------------------------------------------------------------
 
 
+def node_key(conn: sqlite3.Connection, node_id: str) -> int | None:
+    """The INTEGER surrogate for a readable node id, or `None` if unknown.
+
+    The one place an identifier becomes a key. `None` is "this artifact has never
+    held a node with that id" — it is not zero, and callers must not treat it as
+    one: `0` is a perfectly good `node_key` in SQLite and an id that silently
+    resolved to it would attach an edge to whichever node happened to be first.
+    """
+    row = conn.execute(
+        "SELECT node_key FROM node WHERE node_id = ?", (str(node_id),)
+    ).fetchone()
+    return None if row is None else int(row["node_key"])
+
+
+def node_id_of(conn: sqlite3.Connection, key: int) -> str | None:
+    """The readable id for a surrogate key, or `None` if the artifact has none.
+
+    The inverse of `node_key`, and the reason `node` outlives the rows it names:
+    a record deleted from `declaration` still has an identity here, so the
+    `FOLLOWS` edge left pointing at it can say what is missing.
+    """
+    row = conn.execute(
+        "SELECT node_id FROM node WHERE node_key = ?", (int(key),)
+    ).fetchone()
+    return None if row is None else str(row["node_id"])
+
+
+def _intern(conn: sqlite3.Connection, node_id: str) -> int:
+    """The surrogate for `node_id`, allocating one on first sight.
+
+    Allocation is `rowid` order, so it is a function of the insertion order and
+    of nothing else — the determinism the module header promises survives it.
+    """
+    existing = node_key(conn, node_id)
+    if existing is not None:
+        return existing
+    cursor = conn.execute("INSERT INTO node (node_id) VALUES (?)", (str(node_id),))
+    key = cursor.lastrowid
+    if key is None:  # pragma: no cover - sqlite3 always sets it on INSERT
+        raise StoreError(f"sqlite did not return a node_key for {node_id!r}.")
+    return int(key)
+
+
+def _kind_holding(conn: sqlite3.Connection, key: int) -> str | None:
+    """Which node kind's table holds the payload row for `key`, if any.
+
+    Walked only when an id is already interned and the kind being written has no
+    row for it — which is either a cross-kind id collision or a node whose
+    payload was removed. Both are rare and both need naming, so the six probes
+    buy an error message rather than being paid on the common path.
+    """
+    for kind, (table, key_column) in NODE_TABLES.items():
+        if kind in RECORD_KINDS and not has_record_tables(conn):
+            continue
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE {key_column} = ?",  # noqa: S608
+            (int(key),),
+        ).fetchone()
+        if row is not None:
+            return kind
+    return None
+
+
 def _insert_node(
     conn: sqlite3.Connection,
-    table: str,
-    key_column: str,
+    kind: str,
+    node_id: str,
     row: dict[str, object],
 ) -> str:
-    node_id = str(row[key_column])
+    """Intern `node_id`, write `row` under its surrogate, and return the id.
+
+    Still "insert, or verify what is already there is identical", and still keyed
+    on the readable id — the surrogate is how the row is *found*, not what makes
+    two writes the same node.
+    """
+    table, key_column = NODE_TABLES[kind]
+    node_id = str(node_id)
+    key = _intern(conn, node_id)
+
     existing = conn.execute(
-        f"SELECT * FROM {table} WHERE {key_column} = ?", (node_id,)  # noqa: S608
+        f"SELECT * FROM {table} WHERE {key_column} = ?", (int(key),)  # noqa: S608
     ).fetchone()
     if existing is not None:
         clash = {
@@ -973,21 +1233,56 @@ def _insert_node(
         }
         if clash:
             raise StoreError(
-                f"{table}.{key_column}={node_id!r} already exists with different "
-                f"contents: {clash}. Node ids are content-derived, so this is "
+                f"{table} already holds {node_id!r} with different contents: "
+                f"{clash}. Node ids are content-derived, so this is "
                 "either a hash collision or two different things given one id; "
                 "either way the two histories would merge into an answer about "
                 "neither."
             )
         return node_id
 
-    columns = ", ".join(row)
-    placeholders = ", ".join("?" for _ in row)
+    held_by = _kind_holding(conn, key)
+    if held_by is not None:
+        raise StoreError(
+            f"{node_id!r} is already the id of a {held_by} in this artifact, and "
+            f"a {kind} cannot share it. Node ids are unique across every kind "
+            "(reg.store.SCHEMA, the node table): an edge endpoint resolves an id "
+            "to one key, and two different things behind one key would merge two "
+            "histories into an answer about neither."
+        )
+
+    columns = ", ".join((key_column, *row))
+    placeholders = ", ".join("?" for _ in range(len(row) + 1))
     conn.execute(
         f"INSERT INTO {table} ({columns}) VALUES ({placeholders})",  # noqa: S608
-        tuple(row.values()),
+        (int(key), *row.values()),
     )
     return node_id
+
+
+def drop_nodes(conn: sqlite3.Connection, kind: str) -> None:
+    """Delete every node of `kind`, identity included (issue #55).
+
+    For `reg.bench`, which builds coarser *views* of an artifact by emptying the
+    tables a level does not hold. The identity row has to go with the payload
+    row: a view that kept `node` rows for envelopes it no longer holds would
+    measure as larger than the view actually is, and the whole point of the
+    resolution curve is that each point costs what that level costs.
+
+    This is the one place identity is deliberately removed, and it is not the
+    same operation `reg.chain.tamper --delete` performs: that one removes a
+    record and *leaves* its identity, because a dangling link naming nothing is
+    a tamper nobody can read.
+    """
+    if kind not in NODE_TABLES:
+        raise StoreError(
+            f"{kind!r} is not a node kind. Known kinds: {sorted(NODE_TABLES)}."
+        )
+    table, key_column = NODE_TABLES[kind]
+    conn.execute(
+        f"DELETE FROM node WHERE node_key IN (SELECT {key_column} FROM {table})"  # noqa: S608
+    )
+    conn.execute(f"DELETE FROM {table}")  # noqa: S608
 
 
 def insert_envelope(
@@ -1056,31 +1351,44 @@ def insert_envelope(
         )
 
     envelope_id = str(envelope_id)
+    digest = to_hash(envelope_hash)
+    # Keyed by the *hex*, because `envelope_row` renders the column back to hex
+    # and this dict is compared against a row from it. The raw bytes go in at
+    # the insert below and nowhere else.
     scalars = {
-        "envelope_id": envelope_id,
-        "envelope_hash": str(envelope_hash),
+        "envelope_hash": digest.hex(),
         "area": float(area),
         "horizon": None if horizon is None else float(horizon),
         "source": str(source),
     }
+    # The configuration has to be in the artifact, because what is stored is its
+    # surrogate. That is stricter than the old text column, and in the same
+    # direction as `insert_verdict`: an envelope naming a `robot_config` nobody
+    # holds is a row `reg.graph.envelope_at` can only answer "not in this
+    # artifact" for, and a refusal at the write says so where somebody can fix
+    # it.
+    config_key = (
+        None
+        if config_id is None
+        else _require_node(conn, "RobotConfig", str(config_id))
+    )
 
-    existing = conn.execute(
-        "SELECT * FROM envelope WHERE envelope_id = ?", (envelope_id,)
-    ).fetchone()
+    existing = envelope_row(conn, envelope_id)
     if existing is None:
-        row = {
-            **scalars,
-            "geometry_wkb": None if geometry is None else to_wkb(geometry),
-            "config_id": None if config_id is None else str(config_id),
-        }
-        columns = ", ".join(row)
-        placeholders = ", ".join("?" for _ in row)
-        conn.execute(
-            f"INSERT INTO envelope ({columns}) VALUES ({placeholders})",  # noqa: S608
-            tuple(row.values()),
+        _insert_node(
+            conn,
+            "Envelope",
+            envelope_id,
+            {
+                **scalars,
+                "envelope_hash": digest,
+                "geometry_wkb": None if geometry is None else to_wkb(geometry),
+                "config_key": config_key,
+            },
         )
         return envelope_id
 
+    key = existing["envelope_key"]
     clash = {
         column: (existing[column], value)
         for column, value in scalars.items()
@@ -1088,15 +1396,15 @@ def insert_envelope(
     }
     if clash:
         raise StoreError(
-            f"envelope.envelope_id={envelope_id!r} already exists with different "
+            f"envelope {envelope_id!r} already exists with different "
             f"contents: {clash}. Node ids are content-derived, so this is either "
             "a hash collision or two different things given one id; either way "
             "the two histories would merge into an answer about neither."
         )
-    if config_id is not None and existing["config_id"] is None:
+    if config_key is not None and existing["config_key"] is None:
         conn.execute(
-            "UPDATE envelope SET config_id = ? WHERE envelope_id = ?",
-            (str(config_id), envelope_id),
+            "UPDATE envelope SET config_key = ? WHERE envelope_key = ?",
+            (config_key, key),
         )
     if geometry is not None:
         attach_envelope_geometry(conn, envelope_id, geometry)
@@ -1120,9 +1428,7 @@ def attach_envelope_geometry(
     with nothing to say the other existed.
     """
     envelope_id = str(envelope_id)
-    row = conn.execute(
-        "SELECT geometry_wkb FROM envelope WHERE envelope_id = ?", (envelope_id,)
-    ).fetchone()
+    row = envelope_row(conn, envelope_id)
     if row is None:
         raise StoreError(
             f"no envelope with envelope_id={envelope_id!r} to attach geometry to. "
@@ -1140,9 +1446,30 @@ def attach_envelope_geometry(
             )
         return
     conn.execute(
-        "UPDATE envelope SET geometry_wkb = ? WHERE envelope_id = ?",
-        (blob, envelope_id),
+        "UPDATE envelope SET geometry_wkb = ? WHERE envelope_key = ?",
+        (blob, row["envelope_key"]),
     )
+
+
+#: `envelope`, with the two identifiers a reader speaks put back (issue #55):
+#: `envelope_id` and `config_id` off `node`, and `envelope_hash` rendered back to
+#: the lowercase hex `insert_envelope` was handed. The columns a caller sees are
+#: the columns it saw before the surrogate keys arrived, plus the keys
+#: themselves — the storage narrowed and the reader's view did not.
+_ENVELOPE_SELECT = """
+SELECT e.envelope_key              AS envelope_key,
+       n.node_id                   AS envelope_id,
+       lower(hex(e.envelope_hash)) AS envelope_hash,
+       e.area                      AS area,
+       e.geometry_wkb              AS geometry_wkb,
+       e.config_key                AS config_key,
+       c.node_id                   AS config_id,
+       e.horizon                   AS horizon,
+       e.source                    AS source
+FROM envelope e
+JOIN node n ON n.node_key = e.envelope_key
+LEFT JOIN node c ON c.node_key = e.config_key
+"""
 
 
 def envelope_row(
@@ -1157,7 +1484,7 @@ def envelope_row(
     `reg.graph.envelope_at`, which can recompute.
     """
     return conn.execute(
-        "SELECT * FROM envelope WHERE envelope_id = ?", (str(envelope_id),)
+        f"{_ENVELOPE_SELECT} WHERE n.node_id = ?", (str(envelope_id),)
     ).fetchone()
 
 
@@ -1184,10 +1511,9 @@ def insert_entity(
     """
     return _insert_node(
         conn,
-        "entity",
-        "entity_id",
+        "Entity",
+        entity_id,
         {
-            "entity_id": str(entity_id),
             "kind": str(kind),
             "is_static": 1 if geometry is not None else 0,
             "geometry_wkb": None if geometry is None else to_wkb(geometry),
@@ -1257,6 +1583,7 @@ def insert_occurrence(
             "for."
         )
 
+    entity_key: int | None = None
     if spec.subject == "entity":
         if entity_id is None:
             raise StoreError(
@@ -1264,7 +1591,7 @@ def insert_occurrence(
                 "supplied. It is an event *about* something, and one that names "
                 "nothing says something happened to somebody."
             )
-        _require_node(conn, "Entity", str(entity_id))
+        entity_key = _require_node(conn, "Entity", str(entity_id))
     elif entity_id is not None:
         raise StoreError(
             f"a {occurrence_type} occurrence is about the run and names no "
@@ -1287,20 +1614,33 @@ def insert_occurrence(
 
     return _insert_node(
         conn,
-        "occurrence",
-        "occurrence_id",
+        "Occurrence",
+        occurrence_id,
         {
-            "occurrence_id": str(occurrence_id),
             "seq": int(seq),
             "type": str(occurrence_type),
             "layer": spec.layer,
             "reason": str(reason),
             "t": float(t),
-            "entity_id": None if entity_id is None else str(entity_id),
+            "entity_key": entity_key,
             "value": None if value is None else float(value),
             "sw_version": str(sw_version),
         },
     )
+
+
+#: `occurrence`, with `occurrence_id` and `entity_id` put back off `node`. The
+#: entity join is a LEFT one: an occurrence about the run names no entity, and a
+#: row that vanished because its subject could not be resolved would be an event
+#: this artifact holds and no reader can see.
+_OCCURRENCE_SELECT = """
+SELECT o.*,
+       n.node_id AS occurrence_id,
+       en.node_id AS entity_id
+FROM occurrence o
+JOIN node n ON n.node_key = o.occurrence_key
+LEFT JOIN node en ON en.node_key = o.entity_key
+"""
 
 
 def read_occurrences(
@@ -1322,18 +1662,24 @@ def read_occurrences(
         occurrence_layer(occurrence_type)  # refuses an unknown type, not []
     clauses: list[str] = []
     params: list[object] = []
-    for column, value in (
-        ("type", occurrence_type),
-        ("entity_id", entity_id),
-        ("layer", layer),
-    ):
+    if entity_id is not None:
+        key = node_key(conn, str(entity_id))
+        if key is None:
+            # An id this artifact has never held matches no occurrence, which is
+            # the answer it gave before the surrogate keys arrived. Whether an
+            # empty list is evidence is the caller's question — `reg.query`
+            # refuses an undeclared entity before it ever reaches this.
+            return []
+        clauses.append("o.entity_key = ?")
+        params.append(key)
+    for column, value in (("o.type", occurrence_type), ("o.layer", layer)):
         if value is not None:
             clauses.append(f"{column} = ?")
             params.append(value)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     return list(
         conn.execute(
-            f"SELECT * FROM occurrence{where} ORDER BY t, seq",  # noqa: S608
+            f"{_OCCURRENCE_SELECT}{where} ORDER BY o.t, o.seq",  # noqa: S608
             params,
         ).fetchall()
     )
@@ -1396,10 +1742,9 @@ def insert_declaration(conn: sqlite3.Connection, declaration: object) -> str:
         )
     return _insert_node(
         conn,
-        "declaration",
-        "declaration_id",
+        "Declaration",
+        declaration.declaration_id,
         {
-            "declaration_id": declaration.declaration_id,
             "seq": int(declaration.seq),
             "t_issued": float(declaration.t_issued),
             "horizon": float(declaration.horizon),
@@ -1438,15 +1783,17 @@ def insert_verdict(conn: sqlite3.Connection, verdict: object) -> str:
             f"insert_verdict takes a reg.enforce.Verdict, got "
             f"{type(verdict).__name__}."
         )
-    if verdict.declaration_id is not None:
-        _require_node(conn, "Declaration", verdict.declaration_id)
+    declaration_key = (
+        None
+        if verdict.declaration_id is None
+        else _require_node(conn, "Declaration", verdict.declaration_id)
+    )
     return _insert_node(
         conn,
-        "verdict",
-        "verdict_id",
+        "Verdict",
+        verdict.verdict_id,
         {
-            "verdict_id": verdict.verdict_id,
-            "declaration_id": verdict.declaration_id,
+            "declaration_key": declaration_key,
             "seq": int(verdict.seq),
             "t": float(verdict.t),
             "outcome": verdict.outcome,
@@ -1492,7 +1839,12 @@ def read_declarations(conn: sqlite3.Connection) -> list:
     _require_record_tables(conn, "reading the declarations back")
     declaration_type, _ = _record_types()
     rows = conn.execute(
-        "SELECT * FROM declaration ORDER BY seq, declaration_id"
+        """
+        SELECT d.*, n.node_id AS declaration_id
+        FROM declaration d
+        JOIN node n ON n.node_key = d.declaration_key
+        ORDER BY d.seq, n.node_id
+        """
     ).fetchall()
     out: list = []
     for row in rows:
@@ -1533,7 +1885,21 @@ def read_verdicts(conn: sqlite3.Connection) -> list:
     """
     _require_record_tables(conn, "reading the verdicts back")
     _, verdict_type = _record_types()
-    rows = conn.execute("SELECT * FROM verdict ORDER BY seq, verdict_id").fetchall()
+    # The declaration join is a LEFT one and reaches `node`, not `declaration`:
+    # a verdict naming no declaration is a finding rather than a gap, and a
+    # verdict whose declaration row was *removed* still named it when it was
+    # signed. Reading the id off the record table would silently rewrite the
+    # record to say it named nothing, and its MAC would then fail for a reason
+    # nobody could trace to a deletion.
+    rows = conn.execute(
+        """
+        SELECT v.*, n.node_id AS verdict_id, dn.node_id AS declaration_id
+        FROM verdict v
+        JOIN node n ON n.node_key = v.verdict_key
+        LEFT JOIN node dn ON dn.node_key = v.declaration_key
+        ORDER BY v.seq, n.node_id
+        """
+    ).fetchall()
     out: list = []
     for row in rows:
         record_id = str(row["verdict_id"])
@@ -1586,10 +1952,7 @@ def insert_robot_config(
     the raw stream carried rather than whatever a float column round-trips to.
     """
     return _insert_node(
-        conn,
-        "robot_config",
-        "config_id",
-        {"config_id": str(config_id), "q": str(q), "qd": str(qd)},
+        conn, "RobotConfig", config_id, {"q": str(q), "qd": str(qd)}
     )
 
 
@@ -1598,12 +1961,22 @@ def insert_robot_config(
 # --------------------------------------------------------------------------
 
 
-def _require_node(conn: sqlite3.Connection, kind: str, node_id: str) -> None:
+def _require_node(conn: sqlite3.Connection, kind: str, node_id: str) -> int:
+    """The surrogate key for a node of `kind`, or a `StoreError` naming what is
+    missing.
+
+    One statement, not two: the id is resolved and the payload row is checked in
+    the same join, because "this artifact has never held that id" and "that id is
+    a node of some other kind" are both this refusal and neither is worth a
+    second round trip on a path that runs twice per edge.
+    """
     if kind in RECORD_KINDS:
         _require_record_tables(conn, f"an edge to the {kind} {node_id!r}")
     table, key_column = NODE_TABLES[kind]
     row = conn.execute(
-        f"SELECT 1 FROM {table} WHERE {key_column} = ?", (node_id,)  # noqa: S608
+        f"SELECT n.node_key AS node_key FROM node n "  # noqa: S608
+        f"JOIN {table} t ON t.{key_column} = n.node_key WHERE n.node_id = ?",
+        (str(node_id),),
     ).fetchone()
     if row is None:
         raise StoreError(
@@ -1611,6 +1984,7 @@ def _require_node(conn: sqlite3.Connection, kind: str, node_id: str) -> None:
             "exist is a dangling reference: every join over it returns nothing, "
             "and nothing is indistinguishable from 'the relationship never held'."
         )
+    return int(row["node_key"])
 
 
 def _endpoint_kind(
@@ -1704,8 +2078,8 @@ def open_edge(
                 f"supplied. Its metric is {spec.metric!r}."
             )
 
-    _require_node(conn, resolved_src, str(src_id))
-    _require_node(conn, resolved_dst, str(dst_id))
+    src_key = _require_node(conn, resolved_src, str(src_id))
+    dst_key = _require_node(conn, resolved_dst, str(dst_id))
 
     t_start = float(t_start)
     t_end = t_start if t_end is None else float(t_end)
@@ -1718,7 +2092,7 @@ def open_edge(
 
     cursor = conn.execute(
         """
-        INSERT INTO edge (type, layer, src_kind, src_id, dst_kind, dst_id,
+        INSERT INTO edge (type, layer, src_kind, src_key, dst_kind, dst_key,
                           t_start, t_end, overlap_area, min_distance)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -1726,9 +2100,9 @@ def open_edge(
             edge_type,
             spec.layer,
             resolved_src,
-            str(src_id),
+            src_key,
             resolved_dst,
-            str(dst_id),
+            dst_key,
             t_start,
             t_end,
             overlap_area,
@@ -1767,6 +2141,36 @@ def extend_edge(conn: sqlite3.Connection, edge_id: int, t_end: float) -> None:
     )
 
 
+#: `edge`, with `src_id` and `dst_id` put back off `node` (issue #55). Two
+#: integer-primary-key lookups per row, and the columns a caller reads are the
+#: ones it read before — plus `src_key` and `dst_key`, which `reg.bench` needs to
+#: copy an edge without going back through an identifier.
+#:
+#: **LEFT joins, and it matters.** An edge whose endpoint has no `node` row is a
+#: broken artifact, and it has to come back *visibly* broken — with a NULL id a
+#: reader can refuse on — rather than silently disappear from the result. An
+#: inner join would turn a damaged file into a quiet one, which is the failure
+#: mode every three-state check in this project exists to prevent.
+_EDGE_SELECT = """
+SELECT e.edge_id      AS edge_id,
+       e.type         AS type,
+       e.layer        AS layer,
+       e.src_kind     AS src_kind,
+       e.src_key      AS src_key,
+       sn.node_id     AS src_id,
+       e.dst_kind     AS dst_kind,
+       e.dst_key      AS dst_key,
+       dn.node_id     AS dst_id,
+       e.t_start      AS t_start,
+       e.t_end        AS t_end,
+       e.overlap_area AS overlap_area,
+       e.min_distance AS min_distance
+FROM edge e
+LEFT JOIN node sn ON sn.node_key = e.src_key
+LEFT JOIN node dn ON dn.node_key = e.dst_key
+"""
+
+
 def read_edges(
     conn: sqlite3.Connection,
     *,
@@ -1786,14 +2190,28 @@ def read_edges(
         layer_of(edge_type)  # refuses an unknown type rather than returning []
     clauses: list[str] = []
     params: list[object] = []
-    for column, value in (("type", edge_type), ("layer", layer), ("dst_id", dst_id)):
+    if dst_id is not None:
+        key = node_key(conn, str(dst_id))
+        if key is None:
+            # No node has ever carried that id, so no edge can name it. The same
+            # empty list this returned before the surrogate keys arrived — and,
+            # as then, whether an empty list is evidence is a question for the
+            # caller: `reg.query._require_entity` refuses an undeclared entity
+            # rather than letting one reach here.
+            return []
+        # The filter is on the surrogate, which is what `edge_by_type_dst`
+        # indexes; the readable id is resolved once, here, rather than once per
+        # candidate row.
+        clauses.append("e.dst_key = ?")
+        params.append(key)
+    for column, value in (("e.type", edge_type), ("e.layer", layer)):
         if value is not None:
             clauses.append(f"{column} = ?")
             params.append(value)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     return list(
         conn.execute(
-            f"SELECT * FROM edge{where} ORDER BY t_start, edge_id",  # noqa: S608
+            f"{_EDGE_SELECT}{where} ORDER BY e.t_start, e.edge_id",  # noqa: S608
             params,
         ).fetchall()
     )

@@ -312,10 +312,14 @@ restatement of the claim. But the question it provoked is the durable part and i
 outlived its own premise: *how coarse can the evidence get before it stops
 answering the question?* The resolution levels below are what answer it, and
 they turn out to be **where the compression argument actually lives** — a
-provisional 18.9 GB (issue #59: Layer A is missing from that measurement)
-per robot per six months at occurrence resolution against a projected 182.5 TB of
-sensor log (`docs/plan.md` Claim 1; the sensor rate is an assumption with a
-sourced range and a sensitivity table, [`sensor-baseline.md`](sensor-baseline.md)).
+measured **263 GB** per robot per six months at occurrence resolution against a
+projected 182.5 TB of sensor log, i.e. ~694x (`docs/plan.md` Claim 1; measured
+2026-08-20 at seed 0, and the sensor rate is an assumption with a sourced range
+and a sensitivity table, [`sensor-baseline.md`](sensor-baseline.md)). It lives
+there **less comfortably than the provisional 18.9 GB suggested**: that figure
+was measured before the artifact carried any Layer A record (issue #59), and the
+record layer does not coarsen, so the coarsest level now clears two orders of
+magnitude against the published sensor assumption rather than three.
 
 The coarsest level is not invented here. UN R157's **DSSAD** is the only mandated
 evidence recorder for autonomy that exists, and it stores **occurrences**: an
@@ -377,9 +381,23 @@ run* and *which run*, not *which afternoon*.
 **Cannot answer.** Anything per-frame. The separation timeline, the envelope in
 force at `t`, `frames_at_risk`, and every metric between two events are outside
 this level — and `reg.bench --resolution` reports them as *could-not-evaluate*,
-never as agreement. "When did it happen" is answerable only to the stated
-resolution, which for a short event is two orders of magnitude worse than
-`TIME_TOL_S`.
+never as agreement. The region a declaration claimed and the region a clamp
+applied go with them, which is why `declared_bound` and `verdicts` are
+could-not-evaluate here even though the `declaration` and `verdict` rows
+themselves survive intact: a declaration without the bound it claimed is not a
+bound.
+
+**"When did it happen" is conditional on the event, not refused outright, and
+neither flat reading is right.** The answer is retained to the stated
+resolution, so an event **sustained longer than the quantum** puts the coarse
+timestamp inside the set of instants that qualify, and the level locates it; a
+**brief** one it refuses. Measured on the 2026-08-20 run, occurrence answered
+46.00 s against a true 45.98 s — imprecise by less than its own quantum, hence
+*could-not-evaluate* under [*Unanswerable* #4](#unanswerable) rather than wrong —
+while `tests/test_bench.py::test_a_sustained_minimum_is_locatable_even_at_one_second`
+shows the sustained case coming back `AGREE` at the same 1.0 s. So neither
+"occurrence cannot tell you when" nor "occurrence tells you when" is a true
+sentence about this level.
 
 **One closed-world reading, and it is load-bearing.** The absence of a
 `contact_began` row means no contact occurred, not "unknown" — but *only* because
@@ -469,6 +487,21 @@ plausible interpolated number.
    "the robot could have reached it" — is.
 4. **Metric differences finer than the tolerances.** "Was the human 4 mm closer at
    t₁ than at t₂?" is below `DISTANCE_TOL_M` and unanswerable, not false.
+
+   **The same rule one level down: a level is graded against its own quantum**
+   (added 2026-08-20, issue #60; it lived only in a `reg.bench` docstring until
+   then). A resolution level advertises a timestamp resolution, and an answer
+   that misses the query's tolerance but lands inside that resolution is
+   *unanswerable at that level*, not wrong — the level answered exactly as
+   precisely as it claims to. So `reg.bench --resolution` grades
+   `time_of_closest_approach` three ways: within `TIME_TOL_S` of a qualifying
+   frame is `AGREE`, outside that but within the level's own
+   `timestamp_resolution_s` is `COULD-NOT-EVALUATE`, and outside the quantum too
+   is `DISAGREE`. The third outcome must stay reachable, which is why the rule
+   *refuses* rather than widening the tolerance to
+   `max(TIME_TOL_S, quantum)`: a level that misplaces an event by more than its
+   own resolution is wrong, not imprecise, and a widened tolerance would print
+   that as agreement.
 5. **Ordering of two transitions within the same time quantum.** Two transitions
    that quantize to the same `TIME_TOL_S` bucket have no retained order.
 6. **Why the policy declared what it declared.** The policy is the black channel.

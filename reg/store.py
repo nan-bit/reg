@@ -31,6 +31,14 @@ The caller never supplies the layer. It is derived from the edge type through
 caller in a hurry — which is precisely the mistake that would make Claim 3 read
 better than the truth.
 
+One edge type is the exception and it proves the rule: `HAS_ENVELOPE`'s layer is
+not a property of its type, because an envelope inherits the provenance of the
+`Limits` it was computed from and an ISO/TS 15066 speed cap is perception
+(issue #84). So its spec carries *both* layers, `open_edge` requires the caller
+to state which one — `reg.envelope.envelope_layer(limits)` — and an omission is
+a refusal rather than an `A`. The rule is the same rule: no layer tag is ever
+written by an omission.
+
 WHAT THE SCHEMA REFUSES
 -----------------------
 The `CHECK` constraints are not belt and braces; each one is a wrong answer that
@@ -169,6 +177,7 @@ __all__ = [
     "PAGE_SIZE",
     "ENVELOPE_SOURCES",
     "EDGE_SPECS",
+    "LAYER_FROM_LIMIT_SOURCE",
     "NODE_TABLES",
     "OCCURRENCE_SPECS",
     "RECORD_KINDS",
@@ -181,6 +190,7 @@ __all__ = [
     "node_counts",
     "node_key",
     "layer_of",
+    "possible_layers",
     "occurrence_layer",
     "put_meta",
     "get_meta",
@@ -246,7 +256,20 @@ __all__ = [
 #: still in the file and every function in this module still speaks them; it is
 #: the *columns* a v5 reader would be wrong about, which is precisely what the
 #: version exists to stop.
-SCHEMA_VERSION = 6
+#:
+#: 7: `edge.layer` on a `HAS_ENVELOPE` row stopped being a restatement of the row
+#: type (issue #84). It now carries the provenance of the `Limits` the envelope
+#: was computed from — `A` for a datasheet bound, `B` for one derived from a
+#: perceiver, an ISO/TS 15066 speed cap being the case that matters — and `meta`
+#: gained `limits_source` to record which. No table and no column changed, and
+#: the bump is not for the key: it is for the *meaning*. A v6 reader derives the
+#: layer of a `HAS_ENVELOPE` edge from its type, so on a file built from derived
+#: limits it would answer "certifiable" about an answer this file says is not —
+#: the confident wrong answer, about the one column Claim 3 is a query over. In
+#: the other direction a v7 reader meeting a v6 file cannot tell an artifact
+#: whose limits were proprioceptive from one whose provenance nobody recorded,
+#: and `connect` refusing it is that could-not-evaluate rather than a default.
+SCHEMA_VERSION = 7
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -311,6 +334,20 @@ ENVELOPE_SOURCES = ("computed", "declared", "clamped")
 RECORD_KINDS: frozenset[str] = frozenset({"Declaration", "Verdict"})
 
 
+#: The layers `HAS_ENVELOPE` may carry, and the reason `EdgeSpec.layer` is not
+#: always one value (issue #84).
+#:
+#: An envelope's layer is not a property of its edge type alone. It is decided by
+#: the provenance of the `Limits` it was computed from: proprioceptive bounds
+#: give a Layer A region, bounds derived from something perceived — an ISO/TS
+#: 15066 speed-and-separation cap on `qd_max` — give a Layer B one.
+#: `reg.envelope.envelope_layer` is the single place that mapping lives, and a
+#: caller opening one of these edges has to state what it returned. Stating it is
+#: the enforcement: an omitted layer is a refusal, so a build that never thought
+#: about provenance cannot write a Layer A tag by default.
+LAYER_FROM_LIMIT_SOURCE: frozenset[Layer] = frozenset({"A", "B"})
+
+
 @dataclass(frozen=True)
 class EdgeSpec:
     """What one edge type is: its layer, its endpoints, and its metric column.
@@ -321,11 +358,16 @@ class EdgeSpec:
 
     An endpoint may be a `frozenset` of kinds instead of one kind, for an edge
     type whose endpoints genuinely vary — `FOLLOWS`, and only `FOLLOWS`. The
-    caller then states the kind and `open_edge` refuses anything outside the
-    set; the *layer* still comes from here and is never the caller's to supply.
+    caller then states the kind and `open_edge` refuses anything outside the set.
+
+    The *layer* may be a `frozenset` in the same way, and for one edge type only:
+    `HAS_ENVELOPE`, whose layer follows `Limits.source` rather than its type
+    (`LAYER_FROM_LIMIT_SOURCE`). A fixed layer is still never the caller's to
+    supply, and a varying one has no default to fall back on — those are the same
+    rule, which is that no layer tag is ever written by an omission.
     """
 
-    layer: Layer
+    layer: Layer | frozenset[Layer]
     src_kind: str | frozenset[str]
     dst_kind: str | frozenset[str]
     #: The one metric column this edge type carries, or `None` if it carries
@@ -335,10 +377,14 @@ class EdgeSpec:
 
 #: The edge vocabulary (docs/plan.md Phase 5, issues #14 and #45).
 #:
-#: `HAS_ENVELOPE` is Layer A: an envelope is computed from proprioception and
-#: actuation limits alone (`reg.envelope`). `INTERSECTS`, `SEPARATION` and
-#: `CONTACT` are Layer B without exception, because each one names an entity, and
-#: where an entity is comes from perception in any real system.
+#: `HAS_ENVELOPE` is Layer A **when the limits it was computed from are** — an
+#: envelope is computed from proprioception and actuation limits alone
+#: (`reg.envelope`), and the actuation limits are the half that can be derived
+#: from a perceiver (`LAYER_FROM_LIMIT_SOURCE`, issue #84). Every artifact this
+#: repository builds is Layer A here, because `reg.world.LIMITS` is a datasheet.
+#: `INTERSECTS`, `SEPARATION` and `CONTACT` are Layer B without exception,
+#: because each one names an entity, and where an entity is comes from perception
+#: in any real system.
 #:
 #: **The four attestation edges are Layer A, every one of them, and not one names
 #: an `Entity`.** That is not a coincidence and it is not a convenience: it is
@@ -362,7 +408,9 @@ class EdgeSpec:
 #: representation that does the work — one row per frame, which is exactly what
 #: the incremental principle forbids.
 EDGE_SPECS: dict[str, EdgeSpec] = {
-    "HAS_ENVELOPE": EdgeSpec("A", "RobotConfig", "Envelope", None),
+    "HAS_ENVELOPE": EdgeSpec(
+        LAYER_FROM_LIMIT_SOURCE, "RobotConfig", "Envelope", None
+    ),
     "INTERSECTS": EdgeSpec("B", "Envelope", "Entity", "overlap_area"),
     "SEPARATION": EdgeSpec("B", "RobotConfig", "Entity", "min_distance"),
     "CONTACT": EdgeSpec("B", "RobotConfig", "Entity", None),
@@ -761,13 +809,15 @@ class StoreError(Exception):
     """
 
 
-def layer_of(edge_type: str) -> Layer:
-    """The layer an edge type belongs to. Refuses a type not in the vocabulary.
+def possible_layers(edge_type: str) -> frozenset[Layer]:
+    """Every layer an edge of this type may carry. Refuses an unknown type.
 
-    There is no "unknown layer" and no default. An edge whose layer nobody can
-    state is exactly the unusable edge docs/lossiness.md Retained #9 rules out,
-    so a new edge type is a decision recorded in `EDGE_SPECS`, not something a
-    call site can improvise.
+    One layer for every type whose layer is a property of the type, and both for
+    `HAS_ENVELOPE`, whose layer follows the provenance of the `Limits` the
+    envelope was computed from (`LAYER_FROM_LIMIT_SOURCE`, issue #84). This is
+    the vocabulary-level question — *could an edge of this type ever be Layer
+    B?* — and it is the one a check over a whole artifact wants; `layer_of` is
+    the stricter question and refuses to answer it where the type cannot.
     """
     spec = EDGE_SPECS.get(edge_type)
     if spec is None:
@@ -776,6 +826,37 @@ def layer_of(edge_type: str) -> Layer:
             f"{sorted(EDGE_SPECS)}. Adding one means deciding its layer, its "
             "endpoints and its metric in reg.store.EDGE_SPECS — Claim 3 is a "
             "query over the layer tag, so an edge nobody tagged is unusable."
+        )
+    return frozenset({spec.layer}) if isinstance(spec.layer, str) else spec.layer
+
+
+def layer_of(edge_type: str) -> Layer:
+    """The layer an edge type belongs to. Refuses a type not in the vocabulary.
+
+    There is no "unknown layer" and no default. An edge whose layer nobody can
+    state is exactly the unusable edge docs/lossiness.md Retained #9 rules out,
+    so a new edge type is a decision recorded in `EDGE_SPECS`, not something a
+    call site can improvise.
+
+    It also refuses a type whose layer *is not a property of the type* — which is
+    `HAS_ENVELOPE` and, at present, only `HAS_ENVELOPE`. Answering "A" for it
+    would be the exact mislabelling of issue #84: an envelope computed from an
+    ISO/TS 15066 speed cap is Layer B, and a function that reads the type alone
+    cannot know that. Read the stored `edge.layer` column, which was written from
+    the provenance that build actually had, or ask `possible_layers`.
+    """
+    spec = EDGE_SPECS.get(edge_type)
+    if spec is None:
+        possible_layers(edge_type)  # raises with the full vocabulary
+        raise AssertionError  # pragma: no cover - possible_layers always raises
+    if not isinstance(spec.layer, str):
+        raise StoreError(
+            f"the layer of a {edge_type} edge is not a property of its type: it "
+            f"is {sorted(spec.layer)} depending on Limits.source (issue #84), so "
+            "there is no single answer here and a plausible one would be the "
+            "mislabelling this refusal exists to prevent. Read edge.layer off "
+            "the row, or reg.envelope.envelope_layer(limits) for an edge about "
+            "to be written."
         )
     return spec.layer
 
@@ -2023,6 +2104,45 @@ def _endpoint_kind(
     return given
 
 
+def _edge_layer(
+    spec_layer: Layer | frozenset[Layer], given: Layer | None, edge_type: str
+) -> Layer:
+    """The layer one edge carries. From the spec unless the spec says to ask.
+
+    The same shape as `_endpoint_kind`, and for a stronger reason. A fixed layer
+    is not the caller's to state and disagreeing with it is refused. A layer that
+    varies — `HAS_ENVELOPE`, whose provenance decides it (issue #84) — must be
+    stated, and there is no fallback: falling back to `A` would tag an envelope
+    computed from a perception-derived speed cap as certifiable evidence, which
+    is precisely the failure that has no other detector. Claim 3 is a query over
+    this column, so an omission here is an answer nobody wrote.
+    """
+    if isinstance(spec_layer, str):
+        if given is not None and given != spec_layer:
+            raise StoreError(
+                f"a {edge_type} edge is always layer {spec_layer}, but "
+                f"{given!r} was supplied. The layer comes from EDGE_SPECS, not "
+                "from the call site."
+            )
+        return spec_layer
+    if given is None:
+        raise StoreError(
+            f"a {edge_type} edge may be layer {sorted(spec_layer)} and which one "
+            "it is depends on where its Limits came from, so the layer has to be "
+            "stated and there is no default to fall back on (issue #84). "
+            "reg.envelope.envelope_layer(limits) is the answer: proprioceptive "
+            "bounds give 'A', bounds derived from a perceiver — an ISO/TS 15066 "
+            "speed cap — give 'B'. Defaulting to 'A' here would let a Layer B "
+            "envelope be quoted as certifiable evidence."
+        )
+    if given not in spec_layer:
+        raise StoreError(
+            f"a {edge_type} edge cannot be layer {given!r}; its layers are "
+            f"{sorted(spec_layer)}."
+        )
+    return given
+
+
 def open_edge(
     conn: sqlite3.Connection,
     edge_type: str,
@@ -2035,6 +2155,7 @@ def open_edge(
     min_distance: float | None = None,
     src_kind: str | None = None,
     dst_kind: str | None = None,
+    layer: Layer | None = None,
 ) -> int:
     """Insert an edge and return its `edge_id`. `t_end` defaults to `t_start`.
 
@@ -2044,11 +2165,13 @@ def open_edge(
     invented horizon, and both read as "still true" long after the relationship
     stopped holding.
 
-    The layer comes from `EDGE_SPECS` and never from the caller. So do the
-    endpoint kinds, except for the one edge type whose endpoints genuinely vary:
-    `src_kind` and `dst_kind` are required for `FOLLOWS`, which joins two
-    declarations in one chain and two verdicts in the other, and are refused for
-    every other type.
+    The layer comes from `EDGE_SPECS` and never from the caller — except for the
+    one edge type whose layer is not a property of its type. `layer` is required
+    for `HAS_ENVELOPE`, whose region is Layer A or Layer B according to
+    `reg.envelope.envelope_layer(limits)` (issue #84), and refused for every
+    other type. The endpoint kinds work the same way: `src_kind` and `dst_kind`
+    are required for `FOLLOWS`, which joins two declarations in one chain and two
+    verdicts in the other, and are refused for every other type.
 
     The metric argument for the edge type is required and the other one must be
     absent: an `INTERSECTS` with no `overlap_area` answers "how much" with
@@ -2057,11 +2180,12 @@ def open_edge(
     """
     spec = EDGE_SPECS.get(edge_type)
     if spec is None:
-        layer_of(edge_type)  # raises with the full vocabulary
-        raise AssertionError  # pragma: no cover - layer_of always raises here
+        possible_layers(edge_type)  # raises with the full vocabulary
+        raise AssertionError  # pragma: no cover - possible_layers always raises
 
     resolved_src = _endpoint_kind(spec.src_kind, src_kind, edge_type, "src")
     resolved_dst = _endpoint_kind(spec.dst_kind, dst_kind, edge_type, "dst")
+    resolved_layer = _edge_layer(spec.layer, layer, edge_type)
 
     metrics = {"overlap_area": overlap_area, "min_distance": min_distance}
     for name, value in metrics.items():
@@ -2098,7 +2222,7 @@ def open_edge(
         """,
         (
             edge_type,
-            spec.layer,
+            resolved_layer,
             resolved_src,
             src_key,
             resolved_dst,
@@ -2187,7 +2311,10 @@ def read_edges(
     the tie-break means anything about time.
     """
     if edge_type is not None:
-        layer_of(edge_type)  # refuses an unknown type rather than returning []
+        # The vocabulary check, not the layer: `possible_layers` refuses an
+        # unknown type rather than returning [], and unlike `layer_of` it can
+        # answer for a type whose layer varies with its Limits (issue #84).
+        possible_layers(edge_type)
     clauses: list[str] = []
     params: list[object] = []
     if dst_id is not None:

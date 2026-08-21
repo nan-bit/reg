@@ -152,3 +152,56 @@ and §2's restriction on *could not have reached* would lift together with it.
 Without one, the supportable claim is exactly: **an overclaim is detected iff the
 declared region leaves the workspace disc.** `reg/enforce.py`'s module header is
 the authority on why the loose bound was chosen over an unsound tight one.
+
+---
+
+## 4. A Layer A envelope is Layer A only if its `Limits` are
+
+Stated here because §3 above calls `Limits` "a property of the robot rather than
+of its state", and that is true of its *shape* and not guaranteed of its numbers.
+
+**What.** `compute_envelope` has two inputs. The first, `ProprioState`, is kept
+out of Layer B by structure: it has no field naming an entity and
+`tests/test_layer_boundary.py` fails if one appears. The second is `Limits`, and
+that enforcement does not reach it — not because `Limits` is trusted, but because
+the mechanism inspects **field names** and the problem arrives in a **value**.
+`qd_max` is an innocent name whatever produced the number in it. Under **ISO/TS
+15066 / ISO 10218-2:2025 speed-and-separation monitoring** — the practice
+[`docs/plan.md`](plan.md) cites approvingly, and how collaborative robots actually
+run — the commanded speed bound *is* a function of a measured separation
+distance. Feed one in and the envelope integrated under it depends on a perceiver.
+
+**The cost, and what issue #84 changed about it.** The dependence is real either
+way; what was wrong was that nothing recorded it, so an SSM-derived envelope
+carried a Layer A tag and no query, no `CHECK` constraint and no field-name test
+could tell it from a datasheet one. `Limits` now carries `source: LimitSource`,
+required and with no default, `reg.envelope.envelope_layer` maps it to a layer,
+and the `HAS_ENVELOPE` edge is tagged from that rather than from its type —
+`PROPRIOCEPTIVE` gives `A`, `DERIVED` gives `B`. The provenance is persisted in
+`meta['limits_source']` so a recomputed envelope (§1) inherits it too, and an
+artifact that does not carry the key is a **could-not-evaluate**: nothing reads
+its absence as the clean case, and `reg.graph._limits_from_meta` refuses rather
+than reconstructing a `Limits` nobody vouched for.
+
+Two things this **is not**:
+
+- **It is not a claim that a Layer B envelope is worth less.** The geometry is
+  identical under either provenance — the same polygon, the same hash — and
+  `tests/test_layer_boundary.py::test_the_layer_moved_and_the_geometry_did_not`
+  is the gate on that. What differs is whose failure modes the answer inherits,
+  which is the only thing the layer tag ever meant.
+- **It is not inherited by §3's enforcement bound.** `computed_bound` reads
+  `link_lengths` and `link_radius` and nothing else: link geometry is
+  proprioceptive under SSM as much as anywhere, because the arm does not get
+  shorter when a human walks in. So the independence argument in §3 stands
+  unchanged for a derived-limits run, and the veto is as strong — or as loose —
+  as it is for any other.
+
+**What a claim would need instead.** Nothing further for the *labelling*; that
+part is closed. What remains open is the taxonomy itself: two values is a
+simplification, an IEC 61496 PLd safety scanner is perception with characterized
+failure modes and still lands in `DERIVED`, and modelling that honestly needs a
+tag **plus an integrity attribute** rather than a binary.
+[`docs/sufficiency.md`](sufficiency.md) §7 records why that was considered and
+deferred — it rewrites what the project may claim, which is a decision and not an
+implementation.

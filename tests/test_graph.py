@@ -536,9 +536,12 @@ def test_every_edge_has_a_non_backwards_interval(tmp_path: Path) -> None:
 def test_every_edge_carries_the_layer_its_type_implies(tmp_path: Path) -> None:
     """Claim 3 is a query over this column; an untagged edge is unusable.
 
-    `HAS_ENVELOPE` is Layer A because an envelope comes from proprioception and
-    actuation limits alone. Everything naming an entity is Layer B, because where
-    an entity is comes from perception in any real system.
+    `HAS_ENVELOPE` is Layer A *when its limits are* — an envelope comes from
+    proprioception and actuation limits alone, and the limits are the half whose
+    provenance can be perception (issue #84). `LIMITS` here is a datasheet, so
+    this build's envelopes are Layer A. Everything naming an entity is Layer B
+    without that caveat, because where an entity is comes from perception in any
+    real system.
     """
     frames = [_frame(i, (2.4 - 0.1 * i, 0.0)) for i in range(15)]
     csv = _write_stream(tmp_path / "walk.csv", frames)
@@ -548,7 +551,7 @@ def test_every_edge_carries_the_layer_its_type_implies(tmp_path: Path) -> None:
     assert rows
     for row in rows:
         assert row["layer"] in ("A", "B")
-        assert row["layer"] == store.layer_of(row["type"])
+        assert row["layer"] in store.possible_layers(row["type"])
     assert {r["type"] for r in rows if r["layer"] == "A"} == {"HAS_ENVELOPE"}
     assert {r["type"] for r in rows if r["layer"] == "B"} <= {
         "INTERSECTS",
@@ -559,13 +562,37 @@ def test_every_edge_carries_the_layer_its_type_implies(tmp_path: Path) -> None:
 
 def test_layer_b_is_exactly_the_entity_naming_edges() -> None:
     """The vocabulary itself, independent of any run. A new edge type added
-    without a layer decision fails here rather than in a query months later."""
+    without a layer decision fails here rather than in a query months later.
+
+    Naming an entity is *sufficient* for Layer B and it is no longer necessary
+    (issue #84): `HAS_ENVELOPE` names none and can still be Layer B, because an
+    envelope inherits the provenance of the `Limits` it was integrated under.
+    So the direction that still holds absolutely is the one asserted here — an
+    entity-naming edge is Layer B and can be nothing else — and the type whose
+    layer varies is enumerated rather than derived, so adding a second one is a
+    decision somebody has to make here.
+    """
+    varies_with_provenance = {"HAS_ENVELOPE"}
     for edge_type, spec in store.EDGE_SPECS.items():
-        expected = "B" if "Entity" in (spec.src_kind, spec.dst_kind) else "A"
-        assert spec.layer == expected, (
-            f"{edge_type} touches {spec.src_kind}->{spec.dst_kind} but is tagged "
-            f"layer {spec.layer}. An edge naming an entity depends on perception."
-        )
+        layers = store.possible_layers(edge_type)
+        if "Entity" in (spec.src_kind, spec.dst_kind):
+            assert layers == {"B"}, (
+                f"{edge_type} touches {spec.src_kind}->{spec.dst_kind} but may "
+                f"be layer {sorted(layers)}. An edge naming an entity depends on "
+                "perception, with no case in which it does not."
+            )
+        elif edge_type in varies_with_provenance:
+            assert layers == {"A", "B"}, (
+                f"{edge_type} is the edge type whose layer follows Limits.source "
+                f"rather than its type, but it may only be {sorted(layers)}."
+            )
+        else:
+            assert layers == {"A"}, (
+                f"{edge_type} names no entity and is not in "
+                f"{sorted(varies_with_provenance)}, so it is Layer A and only "
+                f"Layer A — it may be {sorted(layers)}. A type whose layer varies "
+                "needs a reason recorded, not a widened set."
+            )
 
 
 def test_geometry_round_trips_through_wkb(tmp_path: Path) -> None:
@@ -823,7 +850,9 @@ def seeded(tmp_path: Path):
 
 def test_a_backwards_interval_is_refused(seeded) -> None:
     with pytest.raises(store.StoreError, match="backwards"):
-        store.open_edge(seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 1.0, t_end=0.5)
+        store.open_edge(
+            seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 1.0, t_end=0.5, layer="A"
+        )
 
 
 def test_the_schema_itself_refuses_a_backwards_interval(seeded) -> None:
@@ -849,7 +878,7 @@ def test_the_schema_refuses_an_untagged_layer(seeded) -> None:
 
 
 def test_extending_an_edge_backwards_is_refused(seeded) -> None:
-    edge_id = store.open_edge(seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0)
+    edge_id = store.open_edge(seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer="A")
     store.extend_edge(seeded, edge_id, 2.0)
     with pytest.raises(store.StoreError, match="backwards"):
         store.extend_edge(seeded, edge_id, 1.0)

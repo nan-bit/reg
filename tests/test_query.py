@@ -1603,10 +1603,14 @@ def test_the_vocabularies_this_module_names_are_the_ones_that_define_them() -> N
     assert query.PERMITTED_OUTCOME in enforce.OUTCOMES
     assert query.CHAIN_VERIFIED == chain.ChainState.VERIFIED.value
     assert query.LAYER_A == "A" and query.LAYER_B == "B"
-    assert {spec.layer for spec in store.EDGE_SPECS.values()} == {
-        query.LAYER_A,
-        query.LAYER_B,
-    }
+    # Union over `possible_layers`, not over `spec.layer`: `HAS_ENVELOPE`'s layer
+    # is a set rather than one value, because it follows `Limits.source` and not
+    # the edge type (issue #84). The property being pinned is unchanged — the two
+    # strings `reg.query` spells out are exactly the ones `reg.store` writes.
+    written = set().union(
+        *(store.possible_layers(edge_type) for edge_type in store.EDGE_SPECS)
+    )
+    assert written == {query.LAYER_A, query.LAYER_B}
 
 
 # --- the money query -------------------------------------------------------

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import numpy as np
 from shapely.geometry import Point, Polygon, box
 
-from reg.types import Limits, Obstacle
+from reg.types import Limits, LimitSource, Obstacle
 
 # The robot base, in room coordinates. Fixed by reg/kinematics.py, restated here
 # because the room and the obstacle placements are only meaningful relative to it.
@@ -146,12 +146,21 @@ ROOM = Room(x_min=-2.0, y_min=-1.5, x_max=3.0, y_max=2.0)
 #: Two revolute links, 0.5 m and 0.4 m: 0.9 m of reach, 0.95 m of body.
 #: `qdd_max` stands in for a torque limit — there is no dynamics model here and
 #: there should not be one (docs/plan.md, Phase 1).
+#:
+#: `PROPRIOCEPTIVE`, stated rather than assumed (issue #84): these are the
+#: fixture robot's own numbers, hand-authored here and a function of nothing
+#: measured, so every `HAS_ENVELOPE` edge in every artifact this repository
+#: builds is Layer A. A deployment running ISO/TS 15066 speed-and-separation
+#: monitoring would cap `qd_max` by a measured separation distance and write
+#: `DERIVED` instead, and its envelopes would be tagged Layer B — which is what
+#: they would have been all along.
 LIMITS = Limits(
     q_min=np.array([-np.pi, -2.6]),
     q_max=np.array([np.pi, 2.6]),
     qd_max=np.array([2.0, 2.5]),
     qdd_max=np.array([8.0, 10.0]),
     link_lengths=np.array([0.5, 0.4]),
+    source=LimitSource.PROPRIOCEPTIVE,
     link_radius=0.05,
 )
 

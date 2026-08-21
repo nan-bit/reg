@@ -18,6 +18,14 @@ So the envelope computation takes a `ProprioState`, which has no field naming an
 entity, obstacle, or human. If it could reach the world, the sufficiency argument
 in Claim 3 evaporates and what remains is a visualisation.
 
+That enforcement is by *field name*, and the envelope's second input defeats it:
+`Limits` names nothing outside the robot either, and its numbers can still be a
+function of what a perceiver measured (ISO/TS 15066 speed-and-separation caps
+`qd_max` by the measured separation distance). Names cannot catch a taint that
+arrives in a value, so `Limits` carries `source: LimitSource` — required, no
+default — and `reg.envelope.envelope_layer` turns it into the layer the
+`HAS_ENVELOPE` edge is tagged with. Issue #84; docs/sufficiency.md §7.
+
 This mirrors established practice rather than inventing it: reachability-based
 trajectory design (ARMTD, ARMOUR) computes a manipulator's reachable set offline
 and independent of obstacles, then intersects with the scene afterwards. See
@@ -34,6 +42,7 @@ is built.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Literal
 
 import numpy as np
@@ -42,9 +51,53 @@ import numpy as np
 Layer = Literal["A", "B"]
 
 
+class LimitSource(Enum):
+    """Where a `Limits` object's numbers came from (issue #84).
+
+    THE HOLE THIS CLOSES
+    --------------------
+    `ProprioState` keeps the world out of Layer A by *field name*, and that is
+    real enforcement. But the envelope has a second input, and this one was
+    declared Layer A by fiat — "a property of the robot". Under ISO/TS 15066 and
+    ISO 10218-2:2025 **speed-and-separation monitoring**, which docs/plan.md
+    cites approvingly, the commanded speed bound is a function of the *measured
+    separation distance*: `qd_max` is then perception-derived, and an envelope
+    computed from it is Layer B wearing a Layer A tag. The taint arrives in a
+    **value**, and nothing that inspects **names** can catch it.
+
+    So the caller states it. There is no default and there is no inference: the
+    only party that knows whether a speed cap came off a datasheet or out of a
+    safety scanner is whoever assembled the numbers.
+
+    `reg.envelope.envelope_layer` is the one place this maps to a layer, and
+    `reg.graph.build` tags the `HAS_ENVELOPE` edge with what it returns.
+
+    WHAT THIS BINARY SIMPLIFIES, SAID OUT LOUD
+    ------------------------------------------
+    Two values, matching the project's two layers. That is a simplification and
+    docs/sufficiency.md §7 records it as one: an IEC 61496 safety scanner rated
+    PLd is perception *with characterized failure modes* and still lands in
+    `DERIVED`, while an encoder needs ISO 13849 cat-3 dual channel before it
+    carries a safety claim and still lands in `PROPRIOCEPTIVE`. A tag plus an
+    integrity attribute would model how assurance is actually argued; it was
+    considered and rejected for scope (issue #84), because it rewrites what the
+    project may claim rather than recording which case a given artifact is in.
+    """
+
+    #: A property of the robot: a datasheet limit, a joint stop, a link length.
+    PROPRIOCEPTIVE = "proprioceptive"
+    #: Computed from something perceived — an SSM speed cap is the case that
+    #: matters. Whatever is derived from these bounds inherits the perceiver.
+    DERIVED = "derived"
+
+
 @dataclass(frozen=True)
 class Limits:
-    """Kinematic and actuation bounds. Layer A: a property of the robot.
+    """Kinematic and actuation bounds, and where they came from.
+
+    **Not Layer A by fiat.** `source` says which layer the bounds belong to and
+    it is required — see `LimitSource` for why a value can smuggle perception
+    into a structure whose field names are all innocent.
 
     `qdd_max` is an acceleration bound standing in for a torque limit. This is
     deliberate — see docs/plan.md, Phase 1. There is no dynamics model here and
@@ -56,9 +109,23 @@ class Limits:
     qd_max: np.ndarray
     qdd_max: np.ndarray
     link_lengths: np.ndarray
+    #: Required, and deliberately placed ahead of the one field that has a
+    #: default: giving `source` a default of its own would restore exactly the
+    #: fiat this field exists to remove, and the caller who did not think about
+    #: provenance would be indistinguishable from the one who did.
+    source: LimitSource
     link_radius: float = 0.05
 
     def __post_init__(self) -> None:
+        if not isinstance(self.source, LimitSource):
+            raise TypeError(
+                f"Limits.source must be a LimitSource, got {self.source!r}. It is "
+                "the artifact's record of whether these bounds are a property of "
+                "the robot or a function of something perceived, and the layer "
+                "tag on every envelope computed from them follows it. A string "
+                "or None here is not 'unspecified' — it is a provenance nobody "
+                "stated arriving as one somebody did."
+            )
         n = len(self.link_lengths)
         for name in ("q_min", "q_max", "qd_max", "qdd_max"):
             got = len(getattr(self, name))

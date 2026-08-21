@@ -36,6 +36,18 @@ absence *is* the enforcement, and `tests/test_layer_boundary.py` fails if it
 erodes. Widening Layer A changes what this project can claim; it is never a
 refactor.
 
+*Actuation limits are on that list conditionally, and the condition is recorded.*
+Name-based enforcement covers the envelope's state argument, not its bounds:
+`Limits` names nothing outside the robot either, and under ISO/TS 15066
+speed-and-separation monitoring `qd_max` is a function of a *measured* separation
+distance. A taint arriving in a value cannot be caught by inspecting names, so
+`Limits.source` is required with no default, `reg.envelope.envelope_layer` maps
+it to a layer, and the `HAS_ENVELOPE` edge is tagged from that — `PROPRIOCEPTIVE`
+gives `A`, `DERIVED` gives `B`. Do not give `source` a default and do not infer
+it; an artifact with no `meta['limits_source']` is a could-not-evaluate and must
+not read as a clean Layer A one. Issue #84, `docs/sufficiency.md` §7,
+`docs/limitations.md` §4.
+
 **2. Determinism is non-negotiable.** Seed everything; take the seed as an
 argument and record it. Same seed, same bytes. An audit artifact that is not
 reproducible is not an audit artifact, and CI compares two runs.

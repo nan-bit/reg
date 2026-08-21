@@ -82,7 +82,7 @@ from reg.enforce import (
 from reg.envelope import HASH_COORD_PRECISION, compute_envelope, envelope_area
 from reg.kinematics import link_polygons
 from reg.scenarios import SCENARIOS, Scenario
-from reg.types import Limits, Obstacle, ProprioState, StateFrame
+from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 from reg.world import DEMO_WORLD
 
 KEYRING = Keyring.from_material(
@@ -559,6 +559,7 @@ def test_computed_bound_refuses_a_malformed_robot() -> None:
         qd_max=np.array([1.0]),
         qdd_max=np.array([1.0]),
         link_lengths=np.array([0.0]),
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
     )
     with pytest.raises(EnforcementError, match="strictly positive"):

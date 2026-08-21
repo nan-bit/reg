@@ -1,4 +1,4 @@
-"""The proprioception-only forward reachable set. Layer A.
+"""The obstacle-independent forward reachable set. Layer A when its bounds are.
 
 What this computes: given where the arm is (`q`), how fast it is moving (`qd`)
 and what it is capable of (`Limits`), the region of the plane its body can
@@ -6,6 +6,13 @@ occupy within `horizon` seconds. Nothing else goes in. The signature is the
 enforcement — `compute_envelope` takes a `ProprioState`, which has no field
 naming anything outside the robot, and this module imports neither `World` nor
 `Obstacle`. `tests/test_envelope.py` fails if either changes.
+
+That enforcement covers the state and not the bounds, and the bounds are the
+other input. `Limits.source` says whether they are a property of the robot or a
+function of something perceived — an ISO/TS 15066 speed cap is the latter — and
+`envelope_layer` turns it into the layer this region's edge is tagged with. The
+geometry is identical either way; what changes is whose failure modes the answer
+inherits, which is the only thing the layer tag ever meant (issue #84).
 
 THIS IS AN UNDER-APPROXIMATION (INNER APPROXIMATION)
 ----------------------------------------------------
@@ -71,7 +78,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from reg.kinematics import clamp_to_limits, link_polygons
-from reg.types import Limits, ProprioState
+from reg.types import Layer, Limits, LimitSource, ProprioState
 
 __all__ = [
     "SUBSTEP_DT",
@@ -79,6 +86,7 @@ __all__ = [
     "compute_envelope",
     "envelope_area",
     "envelope_hash",
+    "envelope_layer",
 ]
 
 #: Integration and body-sampling grid, seconds. 50 Hz — the frame rate the
@@ -249,7 +257,10 @@ def compute_envelope(
         state: Layer A proprioception. A `StateFrame` is refused rather than
             narrowed: `.proprio()` at the call site is what makes the narrowing
             visible in the caller's code.
-        limits: the robot's kinematic and actuation bounds.
+        limits: the robot's kinematic and actuation bounds. Their provenance
+            decides the layer of the answer, not of the geometry: the polygon is
+            the same either way, and `envelope_layer(limits)` is what a caller
+            storing it must tag it with (issue #84).
         horizon: seconds ahead. Defaults to the 200 ms of docs/plan.md Phase 2.
         n_samples: control sequences, including the `2**n` corners. Defaults to
             the middle of the 500–2000 range docs/plan.md Phase 2 states.
@@ -339,6 +350,54 @@ def compute_envelope(
             "the geometry is wrong, and reporting its area would hide that."
         )
     return region
+
+
+#: The layer an envelope inherits from the provenance of its bounds (issue #84).
+#: Exhaustive over `LimitSource` on purpose and checked to be: a member added
+#: without a layer decision must reach `envelope_layer` as a refusal, because the
+#: alternative — falling through to `A` — is the mislabelling this whole
+#: mechanism exists to stop.
+_LAYER_BY_LIMIT_SOURCE: dict[LimitSource, Layer] = {
+    LimitSource.PROPRIOCEPTIVE: "A",
+    LimitSource.DERIVED: "B",
+}
+
+
+def envelope_layer(limits: Limits) -> Layer:
+    """The layer an envelope computed from `limits` belongs to.
+
+    `A` when the bounds are a property of the robot, `B` when they are derived
+    from something perceived. The state side of the computation is Layer A by
+    construction — `compute_envelope` takes a `ProprioState` and that structure
+    cannot name the world — so the provenance of the bounds is the only thing
+    left that decides this, and `Limits.source` is where it is written down.
+
+    The case that makes it matter is ISO/TS 15066 speed-and-separation
+    monitoring: `qd_max` capped by a measured separation distance is
+    perception-derived, so the envelope integrated under it is Layer B and the
+    `HAS_ENVELOPE` edge in the artifact says so. That is not a downgrade — it is
+    what the edge always was, now visible to the `WHERE layer = 'B'` query Claim
+    3 is (docs/sufficiency.md §7).
+
+    Raises:
+        TypeError: `limits` is not a `Limits`.
+        ValueError: its `source` has no layer decision — a could-not-evaluate,
+            never the permissive answer.
+    """
+    if not isinstance(limits, Limits):
+        raise TypeError(
+            f"envelope_layer takes a Limits, got {type(limits).__name__}."
+        )
+    try:
+        return _LAYER_BY_LIMIT_SOURCE[limits.source]
+    except KeyError:  # pragma: no cover - unreachable while the map is exhaustive
+        raise ValueError(
+            f"no layer is decided for LimitSource {limits.source!r}. Adding a "
+            "limit source means deciding which layer an envelope computed from "
+            "it belongs to, in reg.envelope._LAYER_BY_LIMIT_SOURCE — an "
+            "undecided source must not resolve to 'A', which is the whole point "
+            "of issue #84."
+        ) from None
 
 
 def _checked_region(poly: object, fn: str) -> Polygon:

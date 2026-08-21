@@ -10,6 +10,13 @@ the conclusion come out is the failure this document exists to prevent — so th
 multiplier stayed at 1 TB/day and the *conclusion* moved instead. See
 [Sensitivity](#sensitivity).
 
+**The artifact side gained a second variable on 2026-08-21 (issue #68): the
+robot's own control rate.** Every artifact size in this document was measured at
+50 Hz and every one of them is linear in that rate, because enforcement emits a
+verdict and a chain record per commanded action. A real manipulator loop runs at
+1 kHz. That is measured now too, in [The control rate](#the-control-rate), and
+it moved the conclusion a second time — the multiplier, a second time, did not.
+
 `docs/plan.md` Claim 1 compares the artifact against a raw sensor log at
 **1 TB/day**. `reg` has no sensors. Nothing in this repository measures, or can
 measure, that figure — the simulator emits a nine-float proprioception stream and
@@ -30,6 +37,7 @@ value of the flag that makes the output claim to have measured a robot.
 | **Where 1 TB/day sits in it** | low end — below every cited continuous-logging configuration |
 | **Retention window** | 182.5 days (EU AI Act six-month floor: Art. 19 providers, Art. 26(6) deployers — *not* Art. 12, which sets no period) |
 | **Implied continuous rate** | 11.6 MB/s over 24 h, or 34.7 MB/s over an 8-hour shift |
+| **Robot control rate the artifact sizes assume** | 50 Hz (`reg.scenarios.DEFAULT_DT`). **Measured**, not assumed, at 100/250/1000 Hz too — [The control rate](#the-control-rate) |
 
 ## Sources
 
@@ -84,10 +92,13 @@ the rate and every ratio halves.
 
 The artifact sizes below are **measured**, from one execution of
 `python -m reg.bench --resolution --seed 0` on 2026-08-20 (issue #60):
-`long_run` at 3,000 frames, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
+`long_run` at 3,000 frames **at a 50 Hz control rate**, 16 envelope samples,
+200 ms horizon, 1.0 s occurrence
 resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. Each
 size is that level's measured `bytes/hour` — 60.05, 149.47 and 217.32 MB/h —
-times the 4,380 hours in the retention floor. They are **much larger than the
+times the 4,380 hours in the retention floor. The control rate is not a detail
+of the fixture: every one of those three figures is **linear in it**, and
+[The control rate](#the-control-rate) below is the measurement of that. They are **much larger than the
 provisional figures they replace**, because those measured an artifact holding no
 Layer A record at all (issue #59): occurrence went 18.9 GB → 263 GB, transition
 229.7 → 655 GB, per-frame 589.3 → 952 GB. What the sensitivity establishes is
@@ -152,6 +163,96 @@ the artifact's 3,166 node rows — the level is now dominated by a Layer A cost 
 resolution does not touch. Coarsening the *scene* still works; it just has less
 left to work on.
 
+## The control rate
+
+**Status: measured, on the artifact side, 2026-08-21 (issue #68).** Everything
+above this heading holds the *sensor* rate as the variable and the artifact
+sizes as fixed. They are not fixed. They are **linear in the robot's control
+rate**, which no document in this repository named until this section, and the
+rate this simulator runs at is not the rate a manipulator runs at.
+
+**Why the artifact scales with it at all.** Enforcement adjudicates every
+commanded action, so it emits one verdict and one chain record **per control
+step**, and no resolution level coarsens a record (that is what issue #59
+established, and it is why the occurrence level is 3,120 of 3,166 node rows at
+50 Hz). The policy's declarations do *not* scale — it replans on a wall-clock
+interval — so the verdict layer is the whole of the growth.
+
+**Measured**, from one execution of
+`python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0`: the resolution
+curve at four control rates over **one fixed run duration**, 59.98 s of robot
+time, at one seed, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
+resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. The
+frame count moves with the rate because it must — 3,000 frames at 50 Hz, 59,981
+at 1 kHz — and everything else is held still, so the only thing that differs
+between two rows is how often the robot acted. The 50 Hz row reproduces the
+published curve exactly, which is what makes the other three comparable to it.
+
+| control rate | frames | records retained | occurrence | transition | per-frame |
+|---|---|---|---|---|---|
+| **50 Hz (published above)** | 3,000 | 3,120 | **60.05 MB/h** | 149.47 MB/h | 217.32 MB/h |
+| 100 Hz | 5,999 | 6,119 | 106.14 MB/h | 245.96 MB/h | 409.33 MB/h |
+| 250 Hz | 14,996 | 15,116 | 246.70 MB/h | 527.82 MB/h | 1.04 GB/h |
+| **1 kHz (a real manipulator)** | 59,981 | 60,101 | **950.55 MB/h** | 1.94 GB/h | 4.26 GB/h |
+| *x, 50 Hz → 1 kHz* | *20.0x* | *19.3x* | *15.8x* | *13.0x* | *19.6x* |
+
+Those are measured points. **Nothing between them is interpolated and nothing
+beyond them is extrapolated** — a rate nobody ran is not in the table, however
+obvious it would look on a line through the ones that are.
+
+The growth is **sublinear**: 15.8x at the occurrence level for a 20x rate
+increase, because the scene rows and the fixed schema-and-index cost do not
+scale with the rate. Only the record layer does, and by 1 kHz it is 60,101 of
+that level's 60,572 node rows — 99.2%, against 98.5% at 50 Hz. The level is
+almost entirely a per-action attestation stream, and that is what the rate buys
+and what a cadence change would cut.
+
+### What it does to the claim
+
+The same arithmetic as the sensitivity above — that figure times the 4,380 hours
+in the retention floor, against the **unchanged** 182.5 TB assumption:
+
+| control rate | occurrence, 6 months | vs 182.5 TB | transition | vs | per-frame | vs |
+|---|---|---|---|---|---|---|
+| **50 Hz** | **263 GB** | **~694x** | 655 GB | ~279x | 952 GB | ~192x |
+| 100 Hz | 465 GB | ~393x | 1.08 TB | ~169x | 1.79 TB | ~102x |
+| 250 Hz | 1.08 TB | ~169x | 2.31 TB | ~79x | 4.56 TB | ~40x |
+| **1 kHz** | **4.16 TB** | **~44x** | 8.49 TB | ~22x | 18.65 TB | ~10x |
+
+**At 1 kHz the claim is below two orders of magnitude, and this document says so
+rather than repairing it.** ~44x at occurrence resolution is **one** order, not
+two. The two-order band is still occupied at 250 Hz (~169x) and is gone by
+1 kHz; where between those two it goes was not measured and is therefore not
+quoted. Every finer level is worse: transition is ~22x and per-frame ~10x at
+1 kHz.
+
+**The sensor assumption was not adjusted to compensate.** It is the same
+1 TB/day it has been since this document was written, for the same sourced
+reasons. This is the second time the measurement has moved and the assumption
+has not — the first was issue #60, when Layer A entered the artifact and three
+orders stopped being available — and it is the discipline the document exists
+for: the input has a range and the conclusion is what moves.
+
+**An outside estimate, checked.** Issue #68 arrived with a reviewer's estimate of
+~5.1 TB per robot per six months at 1 kHz, i.e. ~36x, flagged explicitly as
+unverified. The measured figures are 4.16 TB and ~44x. The estimate was
+directionally right and slightly pessimistic, for the reason above: it assumed
+the whole level scales, and 1.5% of it does not.
+
+**What is out of scope here.** Declaring per behaviour segment rather than per
+control step would cut the term that scales, and this measurement shows it is
+the dominant lever — the verdict layer is essentially all of the growth. It is a
+change to the attestation cadence and is held pending its own decision.
+
+**One caveat that is not about cost.** At 250 Hz and 1 kHz the transition and
+per-frame levels return `DISAGREE` on `separation_timeline`. The edge layer's
+endpoints are quantized to `TIME_TOL_S` = 0.01 s, which is coarser than the
+control period above 100 Hz, so a per-frame separation read back out of an
+interval can miss by more than `DISTANCE_TOL_M`. That is a property of the graph
+builder rather than of retention, it is reported rather than tuned away, and it
+means a 1 kHz robot does not get the finer levels' full answer even after paying
+for them.
+
 ## What would retire this document
 
 A measured figure from a fielded humanoid — sensor manifest, sample rates, codec,
@@ -159,9 +260,16 @@ duty cycle, and a logged byte count over a known interval. Until then the honest
 form is the one used throughout: an explicit multiplier, a linear sensitivity, and
 the word *projection* on every number derived from it.
 
+That would retire the *sensor* side. The control rate is the other half and is
+already retired as an assumption: it is measured, and the figure a reader needs
+is the rate their robot's constraint layer actually adjudicates at.
+
 ## See also
 
 - [`plan.md`](plan.md) Claim 1 — where the projection is quoted
 - [`lossiness.md`](lossiness.md) — the three resolution levels being priced
 - [`prior-art.md`](prior-art.md) §8 — why the artifact loses to a float codec, and
   why that is not this comparison
+- `python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0` — the command
+  that produces the control-rate table, and `--resolution` for the curve at one
+  rate. Neither flag has a default rate to fall back on

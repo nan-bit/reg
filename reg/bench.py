@@ -4316,6 +4316,7 @@ def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
         "  per control step would cut the term that scales; issue #68 holds that",
         "  decision open and explicitly does not take it here.",
     ]
+    return lines
 
 
 def _wall_clock_section(

@@ -196,9 +196,9 @@ published curve exactly, which is what makes the other three comparable to it.
 | control rate | frames | records retained | occurrence | transition | per-frame |
 |---|---|---|---|---|---|
 | **50 Hz (published above)** | 3,000 | 3,120 | **60.29 MB/h** | 149.72 MB/h | 217.57 MB/h |
-| 100 Hz | 5,999 | 6,119 | 106.14 MB/h | 245.96 MB/h | 409.33 MB/h |
-| 250 Hz | 14,996 | 15,116 | 246.70 MB/h | 527.82 MB/h | 1.04 GB/h |
-| **1 kHz (a real manipulator)** | 59,981 | 60,101 | **950.55 MB/h** | 1.94 GB/h | 4.26 GB/h |
+| 100 Hz | 5,999 | 6,119 | 106.45 MB/h | 246.33 MB/h | 409.70 MB/h |
+| 250 Hz | 14,996 | 15,116 | 247.13 MB/h | 528.44 MB/h | 1.04 GB/h |
+| **1 kHz (a real manipulator)** | 59,981 | 60,101 | **951.65 MB/h** | 1.94 GB/h | 4.26 GB/h |
 | *x, 50 Hz → 1 kHz* | *20.0x* | *19.3x* | *15.8x* | *13.0x* | *19.6x* |
 
 Those are measured points. **Nothing between them is interpolated and nothing
@@ -220,15 +220,15 @@ in the retention floor, against the **unchanged** 182.5 TB assumption:
 | control rate | occurrence, 6 months | vs 182.5 TB | transition | vs | per-frame | vs |
 |---|---|---|---|---|---|---|
 | **50 Hz** | **264 GB** | **~691x** | 656 GB | ~278x | 953 GB | ~192x |
-| 100 Hz | 465 GB | ~393x | 1.08 TB | ~169x | 1.79 TB | ~102x |
+| 100 Hz | 466 GB | ~391x | 1.08 TB | ~169x | 1.79 TB | ~102x |
 | 250 Hz | 1.08 TB | ~169x | 2.31 TB | ~79x | 4.56 TB | ~40x |
-| **1 kHz** | **4.16 TB** | **~44x** | 8.49 TB | ~22x | 18.65 TB | ~10x |
+| **1 kHz** | **4.17 TB** | **~44x** | 8.50 TB | ~21x | 18.66 TB | ~10x |
 
 **At 1 kHz the claim is below two orders of magnitude, and this document says so
 rather than repairing it.** ~44x at occurrence resolution is **one** order, not
 two. The two-order band is still occupied at 250 Hz (~169x) and is gone by
 1 kHz; where between those two it goes was not measured and is therefore not
-quoted. Every finer level is worse: transition is ~22x and per-frame ~10x at
+quoted. Every finer level is worse: transition is ~21x and per-frame ~10x at
 1 kHz.
 
 **The sensor assumption was not adjusted to compensate.** It is the same
@@ -240,7 +240,7 @@ for: the input has a range and the conclusion is what moves.
 
 **An outside estimate, checked.** Issue #68 arrived with a reviewer's estimate of
 ~5.1 TB per robot per six months at 1 kHz, i.e. ~36x, flagged explicitly as
-unverified. The measured figures are 4.16 TB and ~44x. The estimate was
+unverified. The measured figures are 4.17 TB and ~44x. The estimate was
 directionally right and slightly pessimistic, for the reason above: it assumed
 the whole level scales, and 1.5% of it does not.
 

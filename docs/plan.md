@@ -36,8 +36,8 @@ insurer.
 > because the benchmark showed the graph is ~13x *larger* per frame than a
 > gzipped proprioception stream. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
-> answers no audit question. Against a *sensor* log the artifact is **~694x**
-> smaller over a six-month retention period at occurrence resolution (263 GB vs
+> answers no audit question. Against a *sensor* log the artifact is **~692x**
+> smaller over a six-month retention period at occurrence resolution (264 GB vs
 > 182.5 TB per robot). That is two orders of magnitude and not three: the
 > earlier ~9,900x was measured before the artifact carried any Layer A record
 > (issue #59). The artifact side is measured; the sensor side is sourced and must
@@ -189,13 +189,13 @@ Per robot, from the measured resolution curve:
 
 | retained at | per robot, 6 months | fleet of 100 |
 |---|---|---|
-| **occurrence (±1 s, DSSAD-shaped)** | **263 GB** | 26.3 TB |
+| **occurrence (±1 s, DSSAD-shaped)** | **264 GB** | 26.4 TB |
 | transition (10 ms) | 655 GB | 65.5 TB |
 | per-frame (10 ms) | 952 GB | 95.2 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
-Each is the measured `bytes/hour` for that level — 60.05, 149.47 and
-217.32 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
+Each is the measured `bytes/hour` for that level — 60.23, 149.59 and
+217.45 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
 one of those three figures is a figure at 50 Hz**, which is what
 `reg.scenarios.DEFAULT_DT` runs at, and all three are **linear in that rate**:
 enforcement emits one verdict and one chain record per commanded action and no
@@ -203,7 +203,7 @@ resolution level coarsens them. A real manipulator control loop runs at 1 kHz.
 That is measured, not asserted — see *The control rate* below and
 [`sensor-baseline.md`](sensor-baseline.md).
 
-At occurrence resolution the artifact is **~694x smaller** than the sensor
+At occurrence resolution the artifact is **~692x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
 two-order band, and **short of three**. The artifact side of that comparison is
 measured. The sensor side is an **assumption with a sourced range**, set out in
@@ -213,7 +213,7 @@ always stated rather than assumed.
 
 **State it at two orders, not three, and never four.** The ratio is linear in
 the assumed sensor rate, and the sensitivity analysis is blunt about what that
-buys: the 2-order band is occupied down to 0.144 TB/day — a sevenfold margin
+buys: the 2-order band is occupied down to 0.145 TB/day — a sevenfold margin
 below the assumption, where before Layer A was measured it looked like a
 hundredfold — while three orders needs 1.44 TB/day, which the published
 assumption does **not** reach, and four needs 14.4 TB/day. The robust claim is
@@ -241,7 +241,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.05 MB/h → 263 GB → ~694x** | 149.47 MB/h → 655 GB → ~279x | 217.32 MB/h → 952 GB → ~192x |
+| **50 Hz (this simulator, published above)** | **60.23 MB/h → 264 GB → ~692x** | 149.59 MB/h → 655 GB → ~279x | 217.45 MB/h → 952 GB → ~192x |
 | 100 Hz | 106.14 MB/h → 465 GB → ~393x | 245.96 MB/h → 1.08 TB → ~169x | 409.33 MB/h → 1.79 TB → ~102x |
 | 250 Hz | 246.70 MB/h → 1.08 TB → ~169x | 527.82 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
 | **1 kHz (a real manipulator)** | **950.55 MB/h → 4.16 TB → ~44x** | 1.94 GB/h → 8.49 TB → ~22x | 4.26 GB/h → 18.65 TB → ~10x |
@@ -285,7 +285,7 @@ is reported here and in the benchmark's own table, and repairing it is a
 separate piece of work in `reg.graph`, not something this measurement is
 permitted to tune away.
 
-**This is a purchasing decision, not a slogan.** 263 GB buys *did contact
+**This is a purchasing decision, not a slogan.** 264 GB buys *did contact
 occur*, *how close did it come*, every refused action with its fault code and
 the declaration it was raised against, and both hash chains walked end to end.
 It also buys *when* — **for events sustained longer than its one-second
@@ -490,12 +490,36 @@ different sentences and this document has previously run them together.
 
 **What the chain proves, and what it does not.** It proves the records are
 internally consistent under the keys that signed them. It does not prove no
-record was withheld, and — because the artifact carries no absolute time and no
-external commitment — it does not prove the whole history was not re-issued
-offline by its own author. That is the party a regulator distrusts most. Closing
-it needs a run-start instant recorded as a required input and a commitment of the
-chain heads to something outside the artifact; neither exists yet, and until they
-do this is the **structure** of non-repudiation rather than non-repudiation.
+record was withheld. On re-issuance — the whole history re-run and re-signed
+offline by its own author, which is the party a regulator distrusts most — issue
+#83 closed the two gaps that made the question unaskable, and it is worth being
+exact about how far that goes.
+
+The artifact now carries **absolute time**: `--run-start` is a required
+caller-supplied input with no default, `meta` names the unit and the operator,
+and every occurrence carries DSSAD's `date` derived from that start. Determinism
+is untouched, because the instant is declared rather than read from a clock —
+same seed *and* same declared start, same bytes. That makes the run locatable and
+correlatable with the other logs in the cell. It does not by itself make the date
+*true*: it is a claim by the same author as the records.
+
+What bears on the claim is the **commitment** (`reg/commit.py`): the two chain
+heads signed at artifact close by a second on-site keyholder whose key signed no
+record in the file, refused outright if it is one of the record-signing keys.
+Half of it needs no key at all — the recorded heads are recomputed from the
+records the artifact actually holds, so *anyone* holding the file can see a
+re-issued chain — and the witness signature is what stops the recorded heads
+being rewritten to match. An artifact closed with no supplier records
+`commitment: none` explicitly; silence never reads as commitment.
+
+So this is now the structure of non-repudiation **plus a second party at the same
+site**, and that is the honest ceiling of it. An on-site witness is not a
+third-party timestamp: it does not prove the heads existed by any given instant
+to someone with no relationship to the operator. RFC 3161 and transparency-log
+adapters would, and both are documented and deliberately unimplemented — each
+needs a network call at artifact close, which the air-gap claim rules out. The
+`Committer` interface exists so that dropping that claim makes them adapters
+rather than a rewrite.
 
 **Success:** the demo sentence answered end to end, as one query, with
 `verify_chain` able to say no — demonstrated by `--tamper`, not asserted.
@@ -793,7 +817,12 @@ compression ratio comes almost entirely from this.
 Same discipline as reachability pruning in AIC — not compressing, discarding what's
 provably irrelevant to the supported question set.
 
-**Deliverable:** `python -m reg.graph build runs/contact.csv --out runs/contact.sqlite`
+**Deliverable:** `python -m reg.graph build runs/contact.csv --out runs/contact.sqlite
+--run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift`
+
+The three identity flags are required and have no default (issue #83); the start
+is declared rather than read from a clock, so the deliverable stays
+byte-reproducible.
 
 ---
 

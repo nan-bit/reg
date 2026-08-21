@@ -58,6 +58,7 @@ import pytest
 
 from reg import bench, chain, graph, query, store
 from reg.bench import AGREE, COULD_NOT_EVALUATE, DISAGREE, run_scenario
+from reg.identity import RunIdentity
 from reg.query import ANSWERED, QueryError
 from reg.scenarios import scenario
 from reg.tolerances import DISTANCE_TOL_M, TIME_TOL_S
@@ -76,6 +77,15 @@ _FAST = {
 #: contact is agreement on a negative and proves nothing about whether it can
 #: fail, and `frames_at_risk` needs a run that actually gets close.
 SCENARIO = "contact"
+
+#: The declared run identity every artifact in this file is built with. Stated
+#: once: `graph.build` records it, and a value that varied per call would make
+#: two fixtures here two different runs.
+TEST_IDENTITY = RunIdentity.declare(
+    run_start="2026-08-21T09:00:00Z",
+    unit_id="unit-test-arm-1",
+    operator_id="op-test",
+)
 
 #: A separation the `contact` fixture crosses in both directions, so the at-risk
 #: interval set is neither empty nor the whole run. Stated here rather than
@@ -970,6 +980,7 @@ def _attested_build(tmp: Path, name: str) -> tuple[Path, Path]:
         csv,
         out,
         scn.world.limits,
+        identity=TEST_IDENTITY,
         human_radius=scn.world.human_radius,
         records=records,
         horizon=0.1,
@@ -2095,6 +2106,13 @@ def _build_at(csv_path: Path, out: Path, *, page_size: int, always_create: bool)
             csv_path,
             out,
             scenario(SCENARIO).world.limits,
+            # `bench.BENCH_IDENTITY`, not this file's, because the artifact this
+            # one is compared against row-for-row is a `run_scenario` build.
+            # The declared identity lands in `meta` and on every occurrence row
+            # (issue #83), so two different ones would make these two artifacts
+            # two different runs and the comparison would be about that rather
+            # than about the encoding.
+            identity=bench.BENCH_IDENTITY,
             human_radius=scenario(SCENARIO).world.human_radius,
             horizon=_FAST["horizon"],
             n_samples=_FAST["n_samples"],
@@ -2196,6 +2214,7 @@ def empty_record_stream(built, tmp_path_factory) -> Path:
         csv_path,
         out,
         scenario(SCENARIO).world.limits,
+        identity=TEST_IDENTITY,
         human_radius=scenario(SCENARIO).world.human_radius,
         records=graph.AttestationRecords(declarations=(), verdicts=()),
         horizon=_FAST["horizon"],

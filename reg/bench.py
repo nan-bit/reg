@@ -135,6 +135,7 @@ from shapely.ops import unary_union
 from reg import __version__, graph, store
 from reg.chain import KEY_BYTES, ROLES, Keyring, write_keyring
 from reg.envelope import SUBSTEP_DT
+from reg.identity import RunIdentity
 from reg.kinematics import link_polygons
 
 # The query layer, imported by name rather than as a module (issue #37). Several
@@ -181,6 +182,7 @@ from reg.world import World
 __all__ = [
     "AGREE",
     "BASE_CONTROL_RATE_HZ",
+    "BENCH_IDENTITY",
     "CLAIM_1_SUCCESS_RATIO",
     "COULD_NOT_EVALUATE",
     "DISAGREE",
@@ -303,6 +305,28 @@ WALL_CLOCK_COLUMNS: tuple[str, ...] = ("graph", "raw CSV", "speedup")
 #: answer by rebuilding the whole graph would make the timing comparison a
 #: statement about the build, not about the query.
 QUESTION = "minimum robot-to-human separation over the run"
+
+#: The run identity every benchmark artifact carries (issue #83). `graph.build`
+#: requires one and has no default for it, correctly: an artifact handed to an
+#: assessor has to say which robot and which shift, and nothing recovers those
+#: from the file later.
+#:
+#: **A bench artifact is not that artifact.** It is a measurement of the format,
+#: built into a temporary directory, compared for size and deleted; there is no
+#: robot and no shift, and asking the benchmark's caller to name one would be
+#: asking them to invent the very thing this rule protects. So the identity is a
+#: constant *stated here* rather than a value guessed at a call site, and it is
+#: deliberately an **implausible** one — the Unix epoch and two ids that name a
+#: benchmark rather than a unit — so that a bench artifact which escapes into a
+#: pile of real ones is identifiable on sight. It is recorded in every artifact
+#: it produces, exactly like `reg.sim.DEFAULT_SEED`, so nothing downstream has
+#: to guess what produced a file. A wall-clock start read here would also make
+#: two runs of the same benchmark differ, which is the property CI checks.
+BENCH_IDENTITY = RunIdentity.declare(
+    run_start="1970-01-01T00:00:00Z",
+    unit_id="bench-not-a-unit",
+    operator_id="bench-not-an-operator",
+)
 
 #: Verdict vocabulary. Fixed and small, and the third never resolves to the
 #: first: a graph with no separation rows for the human answers
@@ -1778,6 +1802,7 @@ def _measure(
         csv_path,
         sqlite_path,
         scn.world.limits,
+        identity=BENCH_IDENTITY,
         human_radius=scn.world.human_radius,
         horizon=horizon,
         n_samples=n_samples,

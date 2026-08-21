@@ -312,8 +312,8 @@ restatement of the claim. But the question it provoked is the durable part and i
 outlived its own premise: *how coarse can the evidence get before it stops
 answering the question?* The resolution levels below are what answer it, and
 they turn out to be **where the compression argument actually lives** — a
-measured **263 GB** per robot per six months at occurrence resolution against a
-projected 182.5 TB of sensor log, i.e. ~694x (`docs/plan.md` Claim 1; measured
+measured **264 GB** per robot per six months at occurrence resolution against a
+projected 182.5 TB of sensor log, i.e. ~692x (`docs/plan.md` Claim 1; measured
 2026-08-20 at seed 0, and the sensor rate is an assumption with a sourced range
 and a sensitivity table, [`sensor-baseline.md`](sensor-baseline.md)). It lives
 there **less comfortably than the provisional 18.9 GB suggested**: that figure
@@ -371,12 +371,34 @@ perceiver. What it still cannot answer is which declaration, which bound, or by
 how much — those are `declaration`, `verdict` and the four attestation edges,
 all of them level 2.
 
-**There is no date element, and that is a deviation stated rather than hidden.**
-DSSAD records `yyyy/mm/dd` because a recorder in a car has a clock. This artifact
-must be byte-reproducible from its seeds, and a wall-clock date is exactly the
-ambient value that would break it. What stands in for it is the run's own time
-base plus the source stream's provenance block: an assessor gets *when in this
-run* and *which run*, not *which afternoon*.
+**The date element deviation is closed (issue #83), and the reason it stood for
+as long as it did was wrong.** This document used to say: *"There is no date
+element, and that is a deviation stated rather than hidden. DSSAD records
+`yyyy/mm/dd` because a recorder in a car has a clock. This artifact must be
+byte-reproducible from its seeds, and a wall-clock date is exactly the ambient
+value that would break it."* The premise was sound and the conclusion did not
+follow. The project's own design already handled a value that cannot come from a
+seed: **key material is not derivable from one either**, and the answer there was
+to make it a *required caller-supplied input* rather than to drop it. A run-start
+instant is the same kind of input.
+
+So `--run-start` is now required, has no default, and is *declared* rather than
+read from the building host's clock. Determinism is preserved exactly — same seed
+**and** same declared start, same bytes — and every `occurrence` row carries
+DSSAD's `date` plus an absolute `t_utc` derived from that start and the row's own
+quantized `t`. What this buys is not tidiness: **±1.0 s is an accuracy
+requirement on a wall clock**, and until there was a wall clock behind the float,
+`reg` had copied the number and dropped the datum — an alignment that was
+element-shaped rather than requirement-shaped. An assessor now gets *which
+afternoon* and *which robot* (`meta[unit_id]`, `meta[operator_id]`), which is
+what makes the file correlatable with the other logs in the cell and what lets an
+EU AI Act Art. 73 clock be started from it.
+
+**What the declared start is not.** It is a claim by the party that built the
+artifact, exactly as the records are. It places the run on a wall clock *if that
+party is honest*; on its own it proves nothing about when the file was written.
+That is what `reg/commit.py` is for, and the honest limits of the one shipped
+implementation are in [`limitations.md`](limitations.md) §6.
 
 **Cannot answer.** Anything per-frame. The separation timeline, the envelope in
 force at `t`, `frames_at_risk`, and every metric between two events are outside
@@ -524,6 +546,19 @@ plausible interpolated number.
 8. **Anything about a run whose records are not in the artifact.** The chain proves
    the retained records were not altered. It cannot prove that no record was
    withheld before the artifact was written.
+9. **When the artifact was written, to anyone outside the operator.** The chain
+   proves the records are internally consistent *under keys held by the record's
+   own author*, and `meta[run_start_utc]` is a claim by that same author. Neither
+   rules out the whole history having been re-issued offline — re-run, re-signed,
+   re-dated — which produces a file that verifies perfectly. What bears on it is
+   the commitment in `reg/commit.py`: the two chain heads signed at artifact
+   close by a second on-site keyholder whose key signed no record here. That
+   moves the artifact from *deters editing* to *deters re-issuance*, and it is
+   **not** a third-party timestamp — it proves a second party at the same site
+   saw these heads, not that they existed by any instant to someone with no
+   relationship to the operator. An artifact closed with no witness says
+   `commitment: none` in so many words rather than leaving it to be inferred.
+   See [`limitations.md`](limitations.md) §6.
 
 ---
 

@@ -220,6 +220,7 @@ __all__ = [
     "reachable_entities",
     "render",
     "render_chain_report",
+    "render_commitment_check",
     "render_incident",
     "run_interval",
     "separation_timeline",
@@ -2860,6 +2861,44 @@ def render_chain_report(report: object) -> str:
     return "\n".join(lines).rstrip()
 
 
+def render_commitment_check(check: object) -> str:
+    """A `reg.commit.CommitmentCheck` as text. Reads nothing but the check.
+
+    Printed beside every `--verify-chain`, including — especially — when the
+    answer is that no commitment was made. A chain report on its own reads as
+    the whole integrity story, and it is not: it says the records were not
+    edited, and says nothing about whether the entire history was re-issued
+    offline by the party that signed it.
+
+    When the heads moved, both are printed. "INVALID" without them sends an
+    assessor back to the file to work out *which* chain was re-issued, and the
+    check already knows.
+
+    Annotated `object` rather than `CommitmentCheck` for `render_chain_report`'s
+    reason: naming the type would mean importing `reg.commit` — and through it
+    `reg.chain` — at module level, which the module header says this file does
+    not do.
+    """
+    lines = [f"commitment: {check.state.value}", ""]
+    lines.append(f"  scheme:    {'none' if check.scheme is None else check.scheme}")
+    if check.witness_id is not None:
+        lines.append(f"  witness:   {check.witness_id}")
+    if check.recorded is not None and check.computed is not None:
+        for name, label in (
+            ("declaration_head", "declaration"),
+            ("verdict_head", "verdict"),
+        ):
+            recorded = getattr(check.recorded, name)
+            computed = getattr(check.computed, name)
+            if recorded == computed:
+                lines.append(f"  {label} head: {recorded}")
+            else:
+                lines.append(f"  {label} head: committed {recorded}")
+                lines.append(f"  {' ' * len(label)}       artifact  {computed}")
+    lines.append(f"  reason:    {check.reason}")
+    return "\n".join(lines)
+
+
 def _column_width(header: str, values: object) -> int:
     """Width for a column of record ids. Measured, not guessed.
 
@@ -3201,6 +3240,17 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--witness",
+        metavar="PATH",
+        help=(
+            "the witness file whose key signed this artifact's chain heads "
+            "(reg.commit.write_witness). Only read by --verify-chain. Without "
+            "it the recorded heads are still checked against the artifact's own "
+            "records — which is what catches a re-issued chain — but the "
+            "signature over them is not, and that is a could-not-evaluate"
+        ),
+    )
+    parser.add_argument(
         "--tamper",
         metavar="SPEC",
         help=(
@@ -3285,13 +3335,21 @@ def _verify_chain_cli(args: argparse.Namespace) -> int:
     the module header, and `tests/test_query.py::test_the_chain_import_is_
     deferred`, which fails if it moves to the top of the file.
     """
-    from reg import chain
+    from reg import chain, commit
 
     keyring = None
     if args.keyring is not None:
         try:
             keyring = chain.load_keyring(args.keyring)
         except chain.KeyringError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+
+    witness = None
+    if args.witness is not None:
+        try:
+            witness = commit.load_witness(args.witness)
+        except commit.CommitmentError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return EXIT_USAGE
 
@@ -3339,15 +3397,28 @@ def _verify_chain_cli(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     try:
         report = chain.verify_chain(conn, keyring)
+        commitment_check = commit.verify_commitment(conn, witness)
     finally:
         conn.close()
 
     print(render_chain_report(report))
-    return {
+    print()
+    print(render_commitment_check(commitment_check))
+    exit_code = {
         chain.ChainState.VERIFIED: EXIT_OK,
         chain.ChainState.BROKEN: EXIT_BROKEN,
         chain.ChainState.COULD_NOT_EVALUATE: EXIT_COULD_NOT_EVALUATE,
     }[report.state]
+    # A definite commitment fault outranks a chain that walked cleanly, and it
+    # has to: a chain whose links all hold and whose committed heads do not
+    # match it is precisely a **re-issued** history, which is the fault the
+    # chain alone cannot see. It does not work in the other direction — an
+    # absent or unchecked commitment leaves the chain's own verdict exactly
+    # where it was, because `verify_chain`'s contract is published and an
+    # artifact built before this interface existed did not get worse.
+    if commitment_check.state is commit.CommitmentState.INVALID:
+        return EXIT_BROKEN
+    return exit_code
 
 
 def _incident_cli(args: argparse.Namespace) -> int:
@@ -3370,6 +3441,15 @@ def _incident_cli(args: argparse.Namespace) -> int:
             "had just altered would be a report about a file nobody produced. "
             "Run --verify-chain --tamper to make the copy, then point "
             "--incident at the copy.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.witness is not None:
+        print(
+            "error: --witness belongs to --verify-chain. The incident report's "
+            "integrity clause is the chain walk, and folding a commitment "
+            "verdict into it would change what that clause has meant since "
+            "issue #49. Run --verify-chain --witness for the commitment.",
             file=sys.stderr,
         )
         return EXIT_USAGE
@@ -3438,6 +3518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         flag
         for flag, given in (
             ("--keyring", args.keyring is not None),
+            ("--witness", args.witness is not None),
             ("--tamper", args.tamper is not None),
             ("--tamper-out", args.tamper_out is not None),
             ("--tamper-resign", args.tamper_resign),

@@ -95,22 +95,25 @@ The artifact sizes below are **measured**, from one execution of
 `long_run` at 3,000 frames **at a 50 Hz control rate**, 16 envelope samples,
 200 ms horizon, 1.0 s occurrence
 resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. Each
-size is that level's measured `bytes/hour` — 60.05, 149.47 and 217.32 MB/h —
+size is that level's measured `bytes/hour` — 60.23, 149.59 and 217.45 MB/h —
 times the 4,380 hours in the retention floor. The control rate is not a detail
 of the fixture: every one of those three figures is **linear in it**, and
 [The control rate](#the-control-rate) below is the measurement of that. They are **much larger than the
 provisional figures they replace**, because those measured an artifact holding no
 Layer A record at all (issue #59): occurrence went 18.9 GB → 263 GB, transition
-229.7 → 655 GB, per-frame 589.3 → 952 GB. What the sensitivity establishes is
+229.7 → 655 GB, per-frame 589.3 → 952 GB. (Occurrence is 264 GB today rather
+than the 263 GB #59 produced — issue #83 added wall-clock time and run identity,
+which cost 3 KB. The attribution above is to #59 because that is the change that
+moved the figure by an order of magnitude; #83 moved it by 0.3%.) What the sensitivity establishes is
 *the shape of the dependence*, which did not change when the sizes did — but the
 conclusion drawn from it did, and the two paragraphs after the crossover table
 are where.
 
-| sensor rate | log at 6 months | vs occurrence (263 GB) | vs transition (655 GB) | vs per-frame (952 GB) |
+| sensor rate | log at 6 months | vs occurrence (264 GB) | vs transition (655 GB) | vs per-frame (952 GB) |
 |---|---|---|---|---|
 | 0.1 TB/day | 18.2 TB | 69x | 28x | 19x |
 | 0.5 TB/day | 91.2 TB | 347x | 139x | 96x |
-| **1 TB/day (published)** | **182.5 TB** | **694x** | **279x** | **192x** |
+| **1 TB/day (published)** | **182.5 TB** | **692x** | **279x** | **192x** |
 | 5 TB/day | 912.5 TB | 3,470x | 1,394x | 959x |
 | 21.3 TB/day (cited max) | 3,887 TB | 14,780x | 5,938x | 4,084x |
 
@@ -121,12 +124,12 @@ they are recomputed from the sizes above rather than carried over:
 
 | level | clears 2 orders above | clears 3 orders above |
 |---|---|---|
-| occurrence | 0.144 TB/day | 1.441 TB/day |
-| transition | 0.359 TB/day | 3.587 TB/day |
-| per-frame | 0.522 TB/day | 5.216 TB/day |
+| occurrence | 0.145 TB/day | 1.446 TB/day |
+| transition | 0.359 TB/day | 3.590 TB/day |
+| per-frame | 0.522 TB/day | 5.219 TB/day |
 
 At occurrence resolution the claim clears **two** orders of magnitude at any
-sensor rate above 0.144 TB/day — seven times lower than the published
+sensor rate above 0.145 TB/day — seven times lower than the published
 assumption, and below every cited configuration that carries a camera, including
 HIW-500's compressed ~0.5 TB/day. A motion-only stream at 800 B/s is 0.07 GB/day
 and clears nothing, which was equally true of the provisional figures. So the
@@ -190,7 +193,7 @@ published curve exactly, which is what makes the other three comparable to it.
 
 | control rate | frames | records retained | occurrence | transition | per-frame |
 |---|---|---|---|---|---|
-| **50 Hz (published above)** | 3,000 | 3,120 | **60.05 MB/h** | 149.47 MB/h | 217.32 MB/h |
+| **50 Hz (published above)** | 3,000 | 3,120 | **60.23 MB/h** | 149.59 MB/h | 217.45 MB/h |
 | 100 Hz | 5,999 | 6,119 | 106.14 MB/h | 245.96 MB/h | 409.33 MB/h |
 | 250 Hz | 14,996 | 15,116 | 246.70 MB/h | 527.82 MB/h | 1.04 GB/h |
 | **1 kHz (a real manipulator)** | 59,981 | 60,101 | **950.55 MB/h** | 1.94 GB/h | 4.26 GB/h |
@@ -214,7 +217,7 @@ in the retention floor, against the **unchanged** 182.5 TB assumption:
 
 | control rate | occurrence, 6 months | vs 182.5 TB | transition | vs | per-frame | vs |
 |---|---|---|---|---|---|---|
-| **50 Hz** | **263 GB** | **~694x** | 655 GB | ~279x | 952 GB | ~192x |
+| **50 Hz** | **264 GB** | **~692x** | 655 GB | ~279x | 952 GB | ~192x |
 | 100 Hz | 465 GB | ~393x | 1.08 TB | ~169x | 1.79 TB | ~102x |
 | 250 Hz | 1.08 TB | ~169x | 2.31 TB | ~79x | 4.56 TB | ~40x |
 | **1 kHz** | **4.16 TB** | **~44x** | 8.49 TB | ~22x | 18.65 TB | ~10x |

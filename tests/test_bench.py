@@ -2843,10 +2843,14 @@ def test_cli_control_rate_writes_the_ladder(tmp_path: Path) -> None:
 # reproduced or compared — and both documents did exactly that for three
 # milestones while nothing failed, because prose does not fail.
 #
-# Scope: the two documents this issue publishes in. `docs/sufficiency.md` and
-# `docs/prior-art.md` quote the same figures and are not edited here; extending
-# this check to them is an edit to documents this issue does not own, and it is
-# named in the PR rather than done silently.
+# Scope (issue #78): every document under `docs/`, discovered by glob rather
+# than listed by hand. #68 scoped this to the two documents it owned and said so;
+# `docs/sufficiency.md` and `docs/prior-art.md` then quoted the same figures to
+# the weaker standard for three milestones, which is the defect repeating one
+# level up — a hand-maintained roster drifts exactly the way the prose did. A
+# document that quotes no artifact-side figure comes back COULD-NOT-EVALUATE and
+# is not a pass, and `test_the_documents_that_carry_figures_are_the_ones_expected`
+# is what stops that third verdict from becoming a place to hide.
 # --------------------------------------------------------------------------
 
 REPO = Path(__file__).resolve().parent.parent
@@ -2913,7 +2917,20 @@ def rate_is_stated_with_the_figure(text: str) -> tuple[str, list[str]]:
     return (DISAGREE if missing else AGREE), missing
 
 
-@pytest.mark.parametrize("doc", ["plan.md", "sensor-baseline.md"])
+#: Every document in `docs/`, in a stable order. Globbed, not listed: the
+#: document added next milestone is inside this check on the day it is written,
+#: which is the property #68's hand-written pair of names did not have.
+DOCS = sorted(path.name for path in (REPO / "docs").glob("*.md"))
+
+#: The documents that carry an artifact-side retention figure today. Pinned so
+#: that deleting the figures — the one way a check of this shape is defeated
+#: without anything going red — moves a document out of this set and fails.
+DOCS_WITH_RETENTION_FIGURES = frozenset(
+    {"plan.md", "prior-art.md", "sensor-baseline.md", "sufficiency.md"}
+)
+
+
+@pytest.mark.parametrize("doc", DOCS)
 def test_every_published_retention_figure_names_the_control_rate(doc: str) -> None:
     """**THE DOCUMENT CHECK THIS ISSUE EXISTS FOR.**
 
@@ -2921,16 +2938,49 @@ def test_every_published_retention_figure_names_the_control_rate(doc: str) -> No
     The rate compared against is `reg.bench.BASE_CONTROL_RATE_HZ`, which is
     derived from `reg.scenarios.DEFAULT_DT` — so re-parameterising the fixture
     and leaving the documents alone fails here rather than in six months.
+
+    Every document in `docs/`, since issue #78. One that quotes no artifact-side
+    figure is COULD-NOT-EVALUATE here — permitted, because there is nothing in it
+    to be wrong about, and pinned by the roster test below so that "nothing to
+    check" cannot become the state of a document that used to have figures.
     """
     verdict, missing = rate_is_stated_with_the_figure(
         (REPO / "docs" / doc).read_text(encoding="utf-8")
     )
-    assert verdict == AGREE, (
-        f"docs/{doc} quotes {missing} in a section that never names the control "
+    assert verdict != DISAGREE, (
+        f"docs/{doc} quotes {missing} in a paragraph that never names the control "
         f"rate. Every one of those figures is linear in it "
         f"({bench.BASE_CONTROL_RATE_HZ:g} Hz here, 1 kHz on a real manipulator), "
         "so a reader cannot reproduce or compare them. Name the rate in the same "
-        "section as the figure."
+        "paragraph as the figure."
+    )
+
+
+def test_the_documents_that_carry_figures_are_the_ones_expected() -> None:
+    """**SILENCE IS NOT A PASS, AT THE CORPUS LEVEL.**
+
+    The test above is satisfied by a document with no figures in it, so on its
+    own it would go green if every figure in the repository were deleted — or if
+    the glob matched nothing at all and it ran zero cases. This names which
+    documents are supposed to have something to check. It fails in both
+    directions and both are worth a look: a document that lost its figures, and
+    one that gained them (which is a new publication site for a rate-linear
+    number, not a problem — add it here once its figures name the rate).
+    """
+    carrying = {
+        doc
+        for doc in DOCS
+        if rate_is_stated_with_the_figure(
+            (REPO / "docs" / doc).read_text(encoding="utf-8")
+        )[0]
+        != COULD_NOT_EVALUATE
+    }
+    assert carrying == set(DOCS_WITH_RETENTION_FIGURES), (
+        "the set of documents carrying an artifact-side retention figure has "
+        f"moved: gained {sorted(carrying - DOCS_WITH_RETENTION_FIGURES)}, lost "
+        f"{sorted(DOCS_WITH_RETENTION_FIGURES - carrying)}. A gain needs adding "
+        "to DOCS_WITH_RETENTION_FIGURES; a loss means the figures the check "
+        "above exists to guard are no longer being published there."
     )
 
 
@@ -2978,6 +3028,30 @@ def test_a_rate_beside_the_figure_passes() -> None:
         "## Retention\n\nAt 50 Hz the occurrence level costs 60.05 MB/h.\n"
     )
     assert (verdict, missing) == (AGREE, [])
+
+
+def test_a_rate_in_the_heading_of_the_table_that_carries_the_figures_covers_them() -> None:
+    """The form `docs/sufficiency.md`'s curve now uses, so the shape of that fix
+    is pinned rather than assumed: a markdown table is one paragraph, and a rate
+    in its column heading is a rate a reader of every figure under it sees."""
+    verdict, missing = rate_is_stated_with_the_figure(
+        "### The measured curve\n\n"
+        "| level | bytes/hour @ 50 Hz |\n|---|---|\n"
+        "| `occurrence` | **60.05 MB/h** |\n"
+    )
+    assert (verdict, missing) == (AGREE, [])
+
+
+def test_a_rate_in_a_neighbouring_table_does_not_cover_the_figures() -> None:
+    """And the negative half of the same shape: two tables are two paragraphs,
+    so a parameter block above the curve does not qualify the curve."""
+    verdict, missing = rate_is_stated_with_the_figure(
+        "### The measured curve\n\n"
+        "| parameter | value |\n|---|---|\n| control rate | 50 Hz |\n\n"
+        "| level | bytes/hour |\n|---|---|\n| `occurrence` | **60.05 MB/h** |\n"
+    )
+    assert verdict == DISAGREE
+    assert missing == ["60.05 B/h"]
 
 
 @pytest.mark.parametrize(

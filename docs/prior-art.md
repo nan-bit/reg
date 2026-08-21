@@ -293,9 +293,10 @@ codec, at storing floats.** `reg` does not store floats; it stores relationships
 verdicts and provenance. Losing that comparison is not evidence about the thesis.
 
 **Action taken:** Claim 1 in `plan.md` is restated around an absolute retention
-rate (47.3 MB/hour at transition resolution, re-measured 2026-08-20) plus a
-resolution curve, rather than a ratio against a stream this project was never
-proposing to replace byte-for-byte.
+rate (47.3 MB/hour at transition resolution **at a 50 Hz control rate**, and
+linear in that rate, re-measured 2026-08-20) plus a resolution curve, rather than
+a ratio against a stream this project was never proposing to replace
+byte-for-byte.
 
 **What this does not excuse:** the per-frame cost is real and would be real
 against any baseline. §10 is the response to that.

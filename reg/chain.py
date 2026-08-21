@@ -115,6 +115,7 @@ import math
 import os
 import secrets
 import sqlite3
+from collections.abc import Iterable
 from enum import Enum
 from pathlib import Path
 from typing import Literal, get_args
@@ -154,6 +155,7 @@ __all__ = [
     "TamperSpec",
     "canonical_bytes",
     "chain_hash",
+    "chain_head",
     "generate_keyring",
     "is_hash",
     "load_keyring",
@@ -611,6 +613,34 @@ def chain_hash(record: object, prev_hash: str) -> str:
     return hashlib.sha256(
         _LINK_DOMAIN + bytes.fromhex(prev) + canonical_bytes(record)
     ).hexdigest()
+
+
+def chain_head(records: Iterable[object]) -> str:
+    """The running hash over a whole chain. `GENESIS_HASH` for an empty one.
+
+    **Not** the same thing as `chain_hash(last, last.prev_hash)`, and the
+    difference is the entire reason this function exists (issue #83). Every
+    record carries its own predecessor link, so folding `chain_hash` over the
+    list with each record's *carried* link produces a value that depends only on
+    the final record: alter the first record of a hundred and that value does
+    not move. A head is meant to summarise the chain, so the fold runs the
+    **running** hash into each record instead.
+
+    `canonical_bytes` covers every field including `prev_hash` and `mac`, so an
+    edited link and a swapped signature both move the head too. On an intact
+    chain the result is exactly the last record's `chain_hash`, which is what
+    makes it the natural thing to commit to.
+
+    Raises:
+        CanonicalizationError: a record could not be serialized. There is no
+            head over the records that happened to parse.
+    """
+    head = GENESIS_HASH
+    for record in records:
+        head = hashlib.sha256(
+            _LINK_DOMAIN + bytes.fromhex(head) + canonical_bytes(record)
+        ).hexdigest()
+    return head
 
 
 def _signing_role(record: object) -> Role:

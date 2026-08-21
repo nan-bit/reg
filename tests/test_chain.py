@@ -68,6 +68,7 @@ from reg.chain import (
     TamperSpec,
     canonical_bytes,
     chain_hash,
+    chain_head,
     generate_keyring,
     is_hash,
     load_keyring,
@@ -80,6 +81,7 @@ from reg.chain import (
 )
 from reg.declare import Declaration, envelope_wkb, sign_declaration
 from reg.graph import AttestationRecords
+from reg.identity import RunIdentity
 from reg.scenarios import SCENARIOS
 from reg.sim import provenance
 from reg.stream import FLOAT_PRECISION, write_frames
@@ -379,6 +381,69 @@ def test_chain_hash_refuses_to_disagree_with_the_record() -> None:
 
 
 # --------------------------------------------------------------------------
+# `chain_head` — the value a commitment is made over (issue #83).
+# --------------------------------------------------------------------------
+
+
+def test_an_empty_chain_has_the_genesis_hash_as_its_head() -> None:
+    """A definition of where a chain starts, not a chosen value."""
+    assert chain_head([]) == GENESIS_HASH
+
+
+def test_the_head_of_an_intact_chain_is_its_last_records_chain_hash() -> None:
+    """Which is what makes it the natural thing to commit to: on a chain that
+    holds, the head an assessor computes is the link the next record would
+    carry."""
+    records = chain_of(4)
+    assert links_hold(records) == [True] * 4
+    assert chain_head(records) == chain_hash(records[-1], records[-1].prev_hash)
+
+
+def test_altering_the_first_record_moves_the_head() -> None:
+    """THE REGRESSION. This is what `chain_head` exists for and the reason it is
+    not `chain_hash` folded down the list.
+
+    Every record carries its own predecessor link, so folding each record's
+    *carried* link gives a value that depends only on the last record: rewrite
+    the first of a hundred declarations and it does not move. A head that does
+    not move is a commitment to nothing, and an external witness signing it
+    would be signing a value the whole history could be re-issued underneath.
+    """
+    records = chain_of(4)
+    altered = [dataclasses.replace(records[0], horizon=9.5), *records[1:]]
+
+    naive = chain_hash(altered[-1], altered[-1].prev_hash)
+    assert naive == chain_hash(records[-1], records[-1].prev_hash), (
+        "precondition: the last record's own chain hash is blind to this edit — "
+        "which is exactly why the head is not computed that way"
+    )
+    assert chain_head(altered) != chain_head(records)
+
+
+def test_editing_a_link_or_a_mac_moves_the_head() -> None:
+    """`canonical_bytes` covers every field, so both are inside the head."""
+    records = chain_of(3)
+    relinked = [
+        records[0],
+        dataclasses.replace(records[1], prev_hash="a" * HASH_HEX_LEN),
+        records[2],
+    ]
+    resigned = [
+        records[0],
+        dataclasses.replace(records[1], mac="b" * HASH_HEX_LEN),
+        records[2],
+    ]
+    assert chain_head(relinked) != chain_head(records)
+    assert chain_head(resigned) != chain_head(records)
+
+
+def test_a_head_over_a_record_that_will_not_serialize_is_refused() -> None:
+    """No head over "the records that happened to parse"."""
+    with pytest.raises(CanonicalizationError):
+        chain_head([object()])
+
+
+# --------------------------------------------------------------------------
 # The MACs.
 # --------------------------------------------------------------------------
 
@@ -628,6 +693,15 @@ FIXTURE_HORIZON_S = 0.5
 FIXTURE_WATCHDOG_S = 1.0
 FIXTURE_SEED = 0
 
+#: The fixture's declared run identity. Required by `graph.build` and stated
+#: once here for the same reason the four parameters above are: a value that
+#: varied per call would make two artifacts in this file two different runs.
+TEST_IDENTITY = RunIdentity.declare(
+    run_start="2026-08-21T09:00:00Z",
+    unit_id="unit-test-arm-1",
+    operator_id="op-test",
+)
+
 #: Envelope parameters coarse enough that the build is under a second. Nothing
 #: here is about envelope fidelity — `tests/test_envelope.py` owns that — and
 #: they are passed explicitly so no test here depends on a default staying put.
@@ -670,6 +744,7 @@ def _build(tmp_path: Path, name: str, records) -> Path:
         csv,
         out,
         scn.world.limits,
+        identity=TEST_IDENTITY,
         human_radius=scn.world.human_radius,
         records=records if records is not _PRODUCE else _records(csv, scn, tmp_path),
         **_FAST,

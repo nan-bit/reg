@@ -210,10 +210,28 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from reg import __version__, store
-from reg.chain import GENESIS_HASH, KeyringError, chain_hash
+from reg.chain import GENESIS_HASH, KeyringError, chain_hash, load_keyring
+from reg.commit import (
+    COMMITMENT_NONE,
+    COMMITMENT_STATEMENT,
+    META_COMMITMENT,
+    META_COMMITMENT_DECLARATION_HEAD,
+    META_COMMITMENT_SIGNATURE,
+    META_COMMITMENT_STATEMENT,
+    META_COMMITMENT_VERDICT_HEAD,
+    META_COMMITMENT_WITNESS,
+    ChainHeads,
+    Commitment,
+    CommitmentError,
+    WitnessCommitter,
+    chain_heads,
+    check_witness_is_independent,
+    load_witness,
+)
 from reg.declare import Declaration, DeclarationError
 from reg.enforce import PASSIVATING_FAULTS, EnforcementError, Verdict
 from reg.envelope import SUBSTEP_DT, compute_envelope, envelope_hash, envelope_layer
+from reg.identity import IdentityError, RunIdentity
 from reg.kinematics import link_polygons
 from reg.stream import FLOAT_PRECISION, read_comments, read_frames
 from reg.tolerances import (
@@ -252,9 +270,12 @@ __all__ = [
     "META_OCCURRENCE_RESOLUTION",
     "META_OCCURRENCE_RETENTION",
     "META_OCCURRENCE_SW_VERSION",
+    "META_OPERATOR_ID",
+    "META_RUN_START",
     "META_TIME_BASE_DOMAIN",
     "META_TIME_BASE_INSTANTS",
     "META_TIME_BASE_RESOLVES",
+    "META_UNIT_ID",
     "META_VERDICT_COUNT",
     "OCCURRENCE_MATERIAL_EDGES",
     "OCCURRENCE_RETENTION",
@@ -556,10 +577,16 @@ OCCURRENCE_RETENTION = (
     "vocabulary is fixed (reg.store.OCCURRENCE_SPECS): an occurrence type "
     "outside it is a fault, not a new kind of row, and the absence of a type "
     "from this artifact means the event did not happen rather than that this "
-    "build had no name for it. There is no date element — a wall-clock date is "
-    "not in the source stream and this build writes no clock into an artifact "
-    "that must be byte-reproducible; the run's own time base and "
-    "source_provenance are what an occurrence is anchored to."
+    "build had no name for it. Every row carries DSSAD's date element and an "
+    "absolute t_utc beside the run-relative t, both derived from the "
+    "run_start_utc in this meta table by adding the row's own quantized t — so "
+    "the resolution above is an accuracy on a wall clock, which is what the "
+    "requirement is about, and not on a float with no clock behind it. That "
+    "start is declared by the caller and never read from the building host's "
+    "clock, so the artifact stays byte-reproducible: same seed and same "
+    "declared start, same bytes. It is a claim by whoever built this file, "
+    "exactly as the records are, and it is what makes the run correlatable with "
+    "the other logs in the cell."
 )
 
 #: Where the occurrence-layer facts land in `meta`.
@@ -665,6 +692,18 @@ META_TIME_BASE_RESOLVES = "time_base_resolves_frames"
 #: count of something.
 TIME_BASE_RESOLVED = "yes"
 TIME_BASE_COLLAPSED = "no"
+
+#: Absolute time and identity (issue #83). Three keys, all written on every
+#: build from a `RunIdentity` the caller supplies and none of them defaulted:
+#: the run's declared start as a UTC instant, the unit that ran it, and the
+#: operator responsible for it. Until they existed the artifact could not say
+#: *which robot* or *which shift*, so it could not be correlated with any other
+#: log in the cell — which is how an incident is actually reconstructed — and
+#: DSSAD's ±1.0 s, an accuracy requirement on a wall clock, had been copied onto
+#: a run-relative float with no wall clock behind it.
+META_RUN_START = "run_start_utc"
+META_UNIT_ID = "unit_id"
+META_OPERATOR_ID = "operator_id"
 
 #: The `meta` keys `envelope_at` reads back to recompute a discarded polygon.
 #: Named constants because the writer and the reader are one contract now: a key
@@ -1074,7 +1113,9 @@ class _OccurrenceLog:
     relationship begin here" would be a second answer to it.
     """
 
-    def __init__(self, conn, *, resolution: float, stamp: str) -> None:
+    def __init__(
+        self, conn, *, resolution: float, stamp: str, identity: RunIdentity
+    ) -> None:
         # Validated here rather than at the first emission: a run with no
         # occurrences at all must still refuse a resolution nobody can round to,
         # or the parameter would be checked only on the runs that happen to
@@ -1083,6 +1124,11 @@ class _OccurrenceLog:
         self._conn = conn
         self._resolution = float(resolution)
         self._stamp = stamp
+        #: The run's declared start. Every occurrence's DSSAD `date` and
+        #: absolute timestamp is derived from it, which is what makes the ±1.0 s
+        #: resolution above an accuracy on a wall clock rather than on a float.
+        #: It is *declared*, never read from a clock here — see `reg.identity`.
+        self._identity = identity
         self._seq = 0
         #: entity_id -> (distance bucket, quantized distance, t of the earliest
         #: frame at which that bucket was observed). Keyed on the bucket index
@@ -1133,6 +1179,15 @@ class _OccurrenceLog:
             occurrence_type=occurrence_type,
             reason=reason,
             t=t_q,
+            # Derived from the *quantized* instant, not the raw one, so the
+            # three timestamp columns on a row all name the same moment. Rounding
+            # `t` to ±1.0 s and then placing the row on the wall clock from the
+            # unrounded value would give one occurrence two answers to "when",
+            # differing by up to half a quantum, and a reader comparing the
+            # artifact against another log in the cell would be comparing the
+            # wrong one.
+            date=self._identity.date(t_q),
+            t_utc=self._identity.timestamp_utc(t_q),
             entity_id=entity_id,
             value=value,
             sw_version=self._stamp,
@@ -1558,6 +1613,7 @@ def build(
     out_path: str | os.PathLike[str],
     limits: Limits,
     *,
+    identity: RunIdentity,
     human_radius: float,
     horizon: float = ENVELOPE_HORIZON,
     n_samples: int = ENVELOPE_N_SAMPLES,
@@ -1565,6 +1621,7 @@ def build(
     substep_dt: float = SUBSTEP_DT,
     occurrence_resolution_s: float = OCCURRENCE_TIME_RESOLUTION_S,
     records: AttestationRecords | None = None,
+    commitment: Callable[[ChainHeads], Commitment] | None = None,
 ) -> BuildResult:
     """Turn a raw CSV stream into a SQLite evidence graph. Overwrites `out_path`.
 
@@ -1573,6 +1630,14 @@ def build(
         out_path: the artifact to write. Replaced if it exists.
         limits: the robot's kinematic and actuation bounds — Layer A, and the
             only thing besides `frame.proprio()` that reaches the envelope.
+        identity: **required, and there is no default** (issue #83). The run's
+            declared UTC start, the unit that ran it and the operator
+            responsible — the three facts that make the artifact locatable and
+            correlatable, and none of which is recoverable from the file
+            afterwards. The start is *declared* by the caller and never read
+            from a clock here, so determinism is preserved exactly: same seed
+            **and** same declared start, same bytes. Every occurrence's DSSAD
+            `date` and absolute timestamp is derived from it.
         human_radius: **required, and there is no default.** The raw stream
             carries the human's position and velocity and *not* its extent
             (`reg.stream._HUMAN_COLUMNS`), so every separation and contact
@@ -1599,6 +1664,14 @@ def build(
             a build that was not asked to store anything, and an empty
             `declaration` table on its own does not say which. The record stream
             is stored verbatim — see `_write_attestation` and `_check_link`.
+        commitment: a `reg.commit` supplier — anything callable with the two
+            chain heads that returns a `Commitment` — or `None` for a build
+            given no supplier. **`None` does not silently produce an
+            uncommitted chain**: `meta[commitment]` is written on every build
+            and says `none` in so many words, because silence must not read as
+            commitment. Supplying one without `records` is refused: there is no
+            chain to commit to, and a commitment to two genesis hashes would
+            verify and mean nothing.
 
     Returns:
         A `BuildResult` with the row counts and the artifact's size.
@@ -1626,6 +1699,28 @@ def build(
             f"{type(records).__name__}. `None` means this build was given no "
             "record stream; a run that produced none is AttestationRecords((), "
             "()), and the artifact says which of the two it holds."
+        )
+    if not isinstance(identity, RunIdentity):
+        raise GraphBuildError(
+            f"identity must be a RunIdentity, got {type(identity).__name__}. "
+            "The run's declared start, unit and operator have no defaults: an "
+            "artifact that cannot say which robot it describes, or when, cannot "
+            "be handed to anyone, and neither fact is recoverable from the file "
+            "afterwards."
+        )
+    if commitment is not None and records is None:
+        raise GraphBuildError(
+            "a commitment supplier was given and no record stream was. There is "
+            "no chain in this build to commit to, and committing to two genesis "
+            "hashes would produce a signature that verifies and says nothing."
+        )
+    if commitment is not None and not callable(commitment):
+        raise GraphBuildError(
+            f"commitment must be callable with the chain heads, got "
+            f"{type(commitment).__name__}. The interface is "
+            "`(ChainHeads) -> Commitment` — see reg.commit.WitnessCommitter, "
+            "and the RFC 3161 and transparency-log adapters that interface "
+            "exists to make cheap."
         )
     frames = tuple(read_frames(csv_path))
     period = _frame_period(frames, csv_path)
@@ -1663,6 +1758,7 @@ def build(
             period=period,
             instants=instants,
             limits=limits,
+            identity=identity,
             human_radius=human_radius,
             horizon=horizon,
             n_samples=n_samples,
@@ -1707,7 +1803,10 @@ def build(
         # is two answers to it, and the layers would drift apart on exactly the
         # runs a reader would compare them on.
         occurrences = _OccurrenceLog(
-            conn, resolution=occurrence_resolution_s, stamp=stamp
+            conn,
+            resolution=occurrence_resolution_s,
+            stamp=stamp,
+            identity=identity,
         )
         occurrences.run_began(quantize_time(frames[0].t))
 
@@ -1871,6 +1970,11 @@ def build(
         occurrences.closest_approaches()
         occurrences.run_ended(quantize_time(frames[-1].t))
 
+        # Last, because a commitment is made at artifact *close*: the heads it
+        # signs are recomputed from the records this file actually holds, so
+        # every record has to be in it first.
+        _write_commitment(conn, commitment)
+
         conn.commit()
         result = _summarize(
             conn, Path(out_path), len(frames), instants=instants
@@ -2029,6 +2133,7 @@ def _write_provenance(
     period: float,
     instants: int,
     limits: Limits,
+    identity: RunIdentity,
     human_radius: float,
     horizon: float,
     n_samples: int,
@@ -2050,8 +2155,22 @@ def _write_provenance(
     come from; if the stream carries none, the key is *absent* rather than empty,
     because "the source said nothing" and "the source said nothing useful" are
     both could-not-evaluate and neither is a default.
+
+    The run start is the one absolute time in the file and it is not an
+    exception to that rule (issue #83): it is **declared by the caller**, not
+    read from a clock, so two runs of the same command with the same declared
+    start still produce identical bytes. That is the same treatment key material
+    already gets — a required input rather than an omission — and it is why the
+    "no date element" deviation could be closed without giving anything up.
     """
     store.put_meta(conn, "reg_version", __version__)
+
+    # Absolute time and identity, first, because they are what tells a reader
+    # *which* run everything below belongs to.
+    store.put_meta(conn, META_RUN_START, identity.run_start_text)
+    store.put_meta(conn, META_UNIT_ID, identity.unit_id)
+    store.put_meta(conn, META_OPERATOR_ID, identity.operator_id)
+
     store.put_meta(conn, "frame_count", str(len(frames)))
     store.put_meta(conn, store.META_FRAME_PERIOD, _float_text(period))
     store.put_meta(conn, "t_first", _float_text(quantize_time(frames[0].t)))
@@ -2141,6 +2260,66 @@ def _write_provenance(
     comments = read_comments(csv_path)
     if comments:
         store.put_meta(conn, "source_provenance", "\n".join(comments))
+
+
+def _write_commitment(
+    conn, commitment: Callable[[ChainHeads], Commitment] | None
+) -> None:
+    """Commit the two chain heads at artifact close, or record that nobody did.
+
+    `meta[commitment]` is written on **every** build. That is the whole point of
+    the key: an artifact closed with no supplier says `none` in so many words,
+    so an absent commitment is a fact a reader is told rather than one they
+    infer from a missing key — and `reg.commit.verify_commitment` can then tell
+    "this build had no witness" apart from "this file predates the interface",
+    which are different things to say to an assessor.
+
+    The heads are recomputed from the records the file holds rather than tracked
+    as the build writes them: what a commitment is *for* is being compared
+    against the artifact afterwards, and a head carried forward from the writer
+    would commit to what the build believed it stored.
+
+    Raises:
+        GraphBuildError: the heads could not be computed, or the supplier did
+            not return a `Commitment` over the heads it was given. All three are
+            refusals that unlink the artifact — an artifact carrying a
+            commitment nobody can check is worse than one carrying none, because
+            only the second says so.
+    """
+    if commitment is None:
+        store.put_meta(conn, META_COMMITMENT, COMMITMENT_NONE)
+        return
+
+    try:
+        heads = chain_heads(conn)
+    except CommitmentError as exc:
+        raise GraphBuildError(
+            f"the chain heads could not be computed, so this build has nothing "
+            f"to commit to: {exc}"
+        ) from None
+
+    made = commitment(heads)
+    if not isinstance(made, Commitment):
+        raise GraphBuildError(
+            f"the commitment supplier returned a {type(made).__name__}, not a "
+            "Commitment. The interface is `(ChainHeads) -> Commitment`."
+        )
+    if made.heads != heads:
+        raise GraphBuildError(
+            "the commitment supplier returned a commitment over different heads "
+            "than it was given. Refusing to record it: a commitment to heads "
+            "that are not this artifact's would verify against itself and fail "
+            "against the file it is in."
+        )
+
+    store.put_meta(conn, META_COMMITMENT, made.scheme)
+    store.put_meta(conn, META_COMMITMENT_STATEMENT, COMMITMENT_STATEMENT)
+    store.put_meta(conn, META_COMMITMENT_WITNESS, made.witness_id)
+    store.put_meta(
+        conn, META_COMMITMENT_DECLARATION_HEAD, made.heads.declaration_head
+    )
+    store.put_meta(conn, META_COMMITMENT_VERDICT_HEAD, made.heads.verdict_head)
+    store.put_meta(conn, META_COMMITMENT_SIGNATURE, made.token)
 
 
 def _summarize(conn, path: Path, frames: int, *, instants: int) -> BuildResult:
@@ -2638,6 +2817,39 @@ def _parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="SQLite artifact to write; replaced if it exists. No default.",
     )
+    # Absolute time and identity (issue #83). All three are required and none
+    # has a default, for the reason `--out` has none: there is no correct guess.
+    # A run start read from the host clock would also make two runs of the same
+    # command differ, which is the property CI checks.
+    build_parser.add_argument(
+        "--run-start",
+        metavar="INSTANT",
+        help=(
+            "the UTC instant this run began, RFC 3339 — e.g. "
+            "2026-08-21T09:00:00Z, or with an explicit offset. Required, no "
+            "default: it is what places every occurrence on a wall clock, which "
+            "is what DSSAD's ±1.0 s is an accuracy requirement about. Declared "
+            "rather than read from a clock, so same seed and same declared "
+            "start still gives the same bytes."
+        ),
+    )
+    build_parser.add_argument(
+        "--unit-id",
+        metavar="ID",
+        help=(
+            "which robot this artifact describes. Required, no default: an "
+            "artifact that cannot say which unit it is about cannot be handed "
+            "to anyone, and nothing recovers it from the file later."
+        ),
+    )
+    build_parser.add_argument(
+        "--operator-id",
+        metavar="ID",
+        help=(
+            "the operator responsible for the run. Required, no default — the "
+            "other half of 'which robot, which shift'."
+        ),
+    )
     build_parser.add_argument(
         "--horizon",
         type=_positive_float,
@@ -2734,6 +2946,21 @@ def _parser() -> argparse.ArgumentParser:
             "it decides whether that check ever fires."
         ),
     )
+    build_parser.add_argument(
+        "--witness",
+        metavar="PATH",
+        help=(
+            "a witness file (reg.commit.write_witness): a second on-site "
+            "keyholder who signs both chain heads when the artifact is closed. "
+            "Only meaningful with --keyring — without a record stream there is "
+            "no chain to commit to. Without it the artifact records "
+            f"'{META_COMMITMENT}: {COMMITMENT_NONE}' explicitly, because an "
+            "uncommitted chain must announce itself rather than be inferred "
+            "from a missing key. This is NOT a timestamp: it proves a second "
+            "party at the same site saw these heads, not that they existed by "
+            "any instant to anyone outside the operator."
+        ),
+    )
     return parser
 
 
@@ -2747,6 +2974,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--out is required and has no default: writing an audit artifact to "
             "a path nobody named is how runs get lost."
+        )
+
+    # Named individually rather than as a group, so the error says which of the
+    # three is missing. Not `required=True` for the reason `--out` is not: the
+    # message argparse produces for that says only that a flag is absent, and
+    # what a reader needs to know here is why there is no default for it.
+    identity_args = {
+        "--run-start": args.run_start,
+        "--unit-id": args.unit_id,
+        "--operator-id": args.operator_id,
+    }
+    absent = [name for name, value in identity_args.items() if value is None]
+    if absent:
+        parser.error(
+            f"{', '.join(absent)} {'is' if len(absent) == 1 else 'are'} required, "
+            "with no default. An artifact with no absolute time and nothing "
+            "naming the unit cannot be placed against any other log in "
+            "the cell, and an EU AI Act Art. 73 clock cannot be started from it. "
+            "The start is declared, not read from this host's clock, so passing "
+            "the same one twice still gives byte-identical output."
         )
 
     attestation_args = {
@@ -2773,11 +3020,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "invented here would be indistinguishable downstream from one "
                 "somebody stated."
             )
+    if args.keyring is None and args.witness is not None:
+        parser.error(
+            "--witness only means something with --keyring, which was not given. "
+            "A commitment is over the two chain heads, and a build with no "
+            "record stream has no chain — committing to two genesis hashes "
+            "would produce a signature that verifies and says nothing."
+        )
+
+    try:
+        identity = RunIdentity.declare(
+            run_start=args.run_start,
+            unit_id=args.unit_id,
+            operator_id=args.operator_id,
+        )
+    except IdentityError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
 
     try:
         scenario = _resolve_scenario(args.csv)
         world = scenario.world
         records = None
+        committer = None
         if args.keyring is not None:
             records = attestation_from_stream(
                 args.csv,
@@ -2787,10 +3052,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 declaration_horizon_s=args.declaration_horizon,
                 watchdog_period_s=args.watchdog_period,
             )
+            if args.witness is not None:
+                witness = load_witness(args.witness)
+                # Refused here rather than reported later: a witness holding a
+                # record-signing key produces a signature indistinguishable from
+                # a real one, so nothing downstream can tell the author
+                # witnessing themself from a second party.
+                check_witness_is_independent(witness, load_keyring(args.keyring))
+                committer = WitnessCommitter(witness)
         result = build(
             args.csv,
             args.out,
             world.limits,
+            identity=identity,
             human_radius=world.human_radius,
             horizon=args.horizon,
             n_samples=args.n_samples,
@@ -2798,11 +3072,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             substep_dt=args.substep_dt,
             occurrence_resolution_s=args.occurrence_resolution,
             records=records,
+            commitment=committer,
         )
     except GraphBuildError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    except CommitmentError as exc:
+        # An unreadable witness file, or one whose key is a record-signing key.
+        # Same exit as the rest — a could-not-evaluate that wrote no artifact,
+        # and emphatically not a build that quietly went ahead uncommitted.
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except (KeyringError, DeclarationError, EnforcementError) as exc:

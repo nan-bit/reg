@@ -611,6 +611,15 @@ def test_a_long_run_stream_can_be_rebuilt_from_its_own_provenance(
             str(_FAST["horizon"]),
             "--substep-dt",
             str(_FAST["substep_dt"]),
+            # Required with no default (issue #83). This test is about the
+            # scenario lookup, so it declares the same identity the benchmark's
+            # own builds declare rather than inventing a second one.
+            "--run-start",
+            bench.BENCH_IDENTITY.run_start_text,
+            "--unit-id",
+            bench.BENCH_IDENTITY.unit_id,
+            "--operator-id",
+            bench.BENCH_IDENTITY.operator_id,
         ]
     )
     assert code == graph.EXIT_OK

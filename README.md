@@ -93,6 +93,29 @@ separation, one level down: a signature from a key the signer's counterparty als
 holds has common-cause failure with the thing it is supposed to attest, exactly
 as a constraint layer supplied by the policy vendor does.
 
+**The chain alone deters editing, not re-issuance**, and the two are different
+faults. A chain under keys held by the record's own author cannot notice the
+whole history being re-run and re-signed offline — the resulting artifact
+verifies perfectly. Two things bear on that, both added in issue #83:
+
+- `--run-start` is a **required, no-default** UTC instant, and `meta` names the
+  unit and the operator, so the artifact says which robot and which shift.
+  Determinism is untouched, because the start is *declared* rather than read
+  from a clock: same seed **and** same declared start, same bytes.
+- `--witness` commits both chain heads at artifact close, signed by a second
+  on-site keyholder whose key signed no record in the file. Half of that check
+  needs no key at all — the heads are recomputed from the records the artifact
+  holds, so anyone with the file can see a re-issued chain.
+
+**An on-site witness is not a third-party timestamp.** It proves a second party
+at the same site saw these heads, not that they existed by any instant to someone
+with no relationship to the operator. RFC 3161 and transparency-log adapters
+would; both need a network call at artifact close, which the air-gapped operation
+above rules out, so both are documented and deliberately unimplemented
+([`docs/limitations.md` §4](docs/limitations.md)). An artifact closed without a
+witness records `commitment: none` in so many words — silence never reads as
+commitment.
+
 Two smaller admissions in the same spirit:
 
 - The keyring is a JSON file of two hex keys. There is no PKI, no key rotation
@@ -139,7 +162,7 @@ pip install -e ".[dev]"
 pytest                      # the whole suite; CI runs exactly this
 ```
 
-As of this commit that is `1193 passed`.
+As of this commit that is `1345 passed`.
 
 The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`,
 `python -m reg.query` and `python -m reg.bench`; each takes `--help`. The build
@@ -149,13 +172,16 @@ order is in [`docs/plan.md`](docs/plan.md).
 
 The demo sentence of [`docs/plan.md`](docs/plan.md) Phase 7, answered end to end
 as one query. Reproduce it with a keyring of your own — key material is the one
-thing in this project that is deliberately **not** derivable from a seed:
+thing in this project that is deliberately **not** derivable from a seed. The run
+start is the same kind of input: required, no default, and *declared* rather than
+read from your clock, so the build below is still byte-reproducible.
 
 ```bash
 python -c "from reg.chain import generate_keyring, write_keyring; write_keyring(generate_keyring(), 'keyring.json')"
 python -m reg.sim   --scenario declared_violation --seed 0 --out dv.csv
 python -m reg.graph build dv.csv --out dv.sqlite --keyring keyring.json \
-    --replan-interval 0.5 --declaration-horizon 0.5 --watchdog-period 1.0
+    --replan-interval 0.5 --declaration-horizon 0.5 --watchdog-period 1.0 \
+    --run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift
 python -m reg.query dv.sqlite --incident 3.5 --keyring keyring.json
 ```
 
@@ -206,6 +232,32 @@ python -m reg.query dv.sqlite --verify-chain --keyring keyring.json \
     --tamper declaration:first:horizon=9.5 --tamper-out tampered.sqlite
 python -m reg.query tampered.sqlite --incident 3.5 --keyring keyring.json  # exit 3
 ```
+
+### Committing the chain heads
+
+The chain above deters *editing*. It cannot deter *re-issuance*, because the
+party that signed the records could re-run the whole thing offline and produce an
+artifact that verifies. Commit the two heads at artifact close to a second
+on-site keyholder — a different key from either of the two that sign records, and
+one this project refuses to accept if it is not:
+
+```bash
+python -c "from reg.commit import generate_witness, write_witness; write_witness(generate_witness('witness-safety-officer'), 'witness.json')"
+python -m reg.graph build dv.csv --out dv.sqlite --keyring keyring.json \
+    --witness witness.json \
+    --replan-interval 0.5 --declaration-horizon 0.5 --watchdog-period 1.0 \
+    --run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift
+python -m reg.query dv.sqlite --verify-chain --keyring keyring.json --witness witness.json
+```
+
+which reports `commitment: VALID`. The half worth understanding is that a
+re-issued chain is caught **with no keys at all** — the heads are recomputed from
+the records the file actually holds and compared against the recorded ones, so
+the tampered artifact above reports `commitment: INVALID` and names which head
+moved even with no `--keyring` and no `--witness` on the command line. The
+witness signature is what stops the recorded heads being rewritten to match.
+Again: this is a second party at the same site, **not** a third-party timestamp
+([`docs/limitations.md` §4](docs/limitations.md)).
 
 ## Status
 

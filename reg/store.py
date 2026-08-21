@@ -159,6 +159,7 @@ input stream.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -269,7 +270,16 @@ __all__ = [
 #: the other direction a v7 reader meeting a v6 file cannot tell an artifact
 #: whose limits were proprioceptive from one whose provenance nobody recorded,
 #: and `connect` refusing it is that could-not-evaluate rather than a default.
-SCHEMA_VERSION = 7
+#:
+#: 8: `occurrence.date` and `occurrence.t_utc` arrived, and `meta` gained
+#: `run_start_utc`, `unit_id`, `operator_id` and the `commitment` block (issue
+#: #83). A v6 reader meeting a v7 file would see occurrence timestamps and read
+#: them as run-relative floats with no wall clock behind them — which is what
+#: they were — and would report an artifact as uncommitted because it does not
+#: know the key that says otherwise. Both are the confident wrong answer the
+#: version exists to prevent, and the second is the worse one: "uncommitted" is
+#: a finding about the artifact and "I cannot see the commitment" is not.
+SCHEMA_VERSION = 8
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -517,6 +527,15 @@ _SQL_OCCURRENCE_VALUED_TYPES = ", ".join(
     f"'{name}'" for name, spec in OCCURRENCE_SPECS.items() if spec.metric is not None
 )
 
+#: The shape of DSSAD's date element and of an absolute timestamp, checked at
+#: the store boundary (issue #83). Shape only — this module cannot know which
+#: afternoon a run happened on, and a check that verified the *value* would be a
+#: second source for it. What it can refuse is a column that would end up
+#: holding two formats, which is a column nobody can sort or hand over. The
+#: writers are `reg.identity.RunIdentity.date` and `format_instant`.
+_DATE_RE = re.compile(r"\d{4}/\d{2}/\d{2}")
+_INSTANT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
+
 SCHEMA = f"""
 CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
@@ -661,21 +680,25 @@ CREATE TABLE edge (
 --
 --   `type`        the occurrence flag — which listed event this is
 --   `reason`      DSSAD's "reason for the occurrence, where applicable"
---   `t`           the timestamp, at the resolution recorded in
---                 meta[occurrence_time_resolution_s] (DSSAD states ±1.0 s)
+--   `t`           the run-relative timestamp, at the resolution recorded in
+--                 meta[occurrence_time_resolution_s]
+--   `date`        DSSAD's **date** element, `yyyy/mm/dd` UTC, derived from
+--                 meta[run_start_utc] + `t`
+--   `t_utc`       the same instant absolutely, so DSSAD's ±1.0 s accuracy is a
+--                 statement about a wall clock rather than about a float
 --   `sw_version`  DSSAD's **R157SWIN**, the software version identifier present
 --                 when the event occurred, in this project's terms: the `reg`
 --                 version plus a digest binding the envelope parameters that
 --                 produced the run, both of which are also in `meta` in full.
 --
--- **There is no `date` column, and the omission is deliberate.** DSSAD records
--- `yyyy/mm/dd` because a car's recorder has a clock. This artifact must be
--- byte-reproducible from its seeds (docs/plan.md, determinism), and a wall-clock
--- date is exactly the ambient value that would break that. What replaces it is
--- the run's own time base plus the source stream's provenance block, both in
--- `meta`. An assessor gets "when in this run" and "which run"; they do not get
--- "which afternoon", and this comment is where that is said rather than left to
--- be discovered as a missing column.
+-- **The `date` column arrived in issue #83, and it closes a stated deviation.**
+-- Until then there was none, on the argument that a wall-clock date is the
+-- ambient value that would break byte-reproducibility. That argument did not
+-- hold: key material is likewise not derivable from a seed, and the project
+-- handles it by making it a **required caller-supplied input**. `--run-start`
+-- is the same kind of input, so determinism is preserved exactly — same seed
+-- *and* same declared start, same bytes — and the artifact gains the datum
+-- DSSAD's ±1.0 s is an accuracy requirement *on*. Nothing here reads a clock.
 --
 -- `seq` is emission order, and it is what keeps two events inside one resolution
 -- quantum two rows. Coarsening the timestamp loses *when* they happened relative
@@ -688,6 +711,8 @@ CREATE TABLE occurrence (
     layer          TEXT    NOT NULL CHECK (layer IN ('A', 'B')),
     reason         TEXT    NOT NULL,
     t              REAL    NOT NULL,
+    date           TEXT    NOT NULL,
+    t_utc          TEXT    NOT NULL,
     entity_key     INTEGER REFERENCES entity (entity_key),
     value          REAL,
     sw_version     TEXT    NOT NULL,
@@ -1610,6 +1635,8 @@ def insert_occurrence(
     occurrence_type: str,
     reason: str,
     t: float,
+    date: str,
+    t_utc: str,
     entity_id: str | None,
     value: float | None,
     sw_version: str,
@@ -1634,14 +1661,25 @@ def insert_occurrence(
             does not quantize on anyone's behalf, exactly as it does not round
             `area` — a store that silently coarsens makes the resolution in force
             a property of the writer rather than of the record.
+        date: DSSAD's date element, `yyyy/mm/dd`. **Required, no default.** It
+            is derived by the caller from the run's declared start
+            (`reg.identity.RunIdentity.date`), never read off a clock here: an
+            ambient date would be indistinguishable downstream from a declared
+            one and would make the artifact non-reproducible.
+        t_utc: the same instant absolutely, as `reg.identity.format_instant`
+            writes it. **Required, no default**, and stored beside `t` rather
+            than instead of it — the run-relative float is what every edge and
+            every query in the artifact is expressed in, and dropping it would
+            re-base the whole file on a datum only this column carries.
         sw_version: DSSAD's `R157SWIN` in this project's terms — the software
             version identifier present when the event occurred.
 
     Raises:
-        StoreError: an unknown type, a blank reason or `sw_version`, an entity
-            named by a type that has no subject (or missing from one that does),
-            a value on a type that carries none (or missing from one that does),
-            or an `entity_id` no `entity` row matches.
+        StoreError: an unknown type, a blank reason, `date`, `t_utc` or
+            `sw_version`, an entity named by a type that has no subject (or
+            missing from one that does), a value on a type that carries none (or
+            missing from one that does), or an `entity_id` no `entity` row
+            matches.
     """
     spec = OCCURRENCE_SPECS.get(occurrence_type)
     if spec is None:
@@ -1662,6 +1700,22 @@ def insert_occurrence(
             "occurrence not bound to the software that produced it cannot be "
             "attributed to a build, which is the one thing the element exists "
             "for."
+        )
+    if not isinstance(date, str) or not _DATE_RE.fullmatch(date):
+        raise StoreError(
+            f"a {occurrence_type} occurrence was written with date={date!r}. "
+            "That is DSSAD's date element and it is yyyy/mm/dd. Refusing rather "
+            "than storing what was given: a date column half of whose rows are "
+            "in another format cannot be compared, sorted or handed over, and "
+            "nothing downstream would report it."
+        )
+    if not isinstance(t_utc, str) or not _INSTANT_RE.fullmatch(t_utc):
+        raise StoreError(
+            f"a {occurrence_type} occurrence was written with t_utc={t_utc!r}. "
+            "An absolute timestamp here is UTC with six fractional digits and a "
+            "trailing Z (reg.identity.format_instant) — a local time, or one "
+            "with no offset, is an instant only for a reader who already knows "
+            "which zone the operator was in."
         )
 
     entity_key: int | None = None
@@ -1703,6 +1757,8 @@ def insert_occurrence(
             "layer": spec.layer,
             "reason": str(reason),
             "t": float(t),
+            "date": str(date),
+            "t_utc": str(t_utc),
             "entity_key": entity_key,
             "value": None if value is None else float(value),
             "sw_version": str(sw_version),

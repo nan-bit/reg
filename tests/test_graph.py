@@ -77,6 +77,7 @@ from reg.graph import (
     GraphBuildError,
     build,
 )
+from reg.identity import RunIdentity
 from reg.kinematics import link_polygons
 from reg.scenarios import SCENARIOS
 from reg.sim import provenance, simulate
@@ -95,6 +96,29 @@ from reg.world import DEMO_WORLD
 
 LIMITS = DEMO_WORLD.limits
 HUMAN_RADIUS = DEMO_WORLD.human_radius
+
+#: The run identity every build in this file declares (issue #83). Stated once
+#: for `SIM_SEED`'s reason: `build` records it in the artifact, and a test that
+#: passed a different instant per call would be comparing two runs.
+TEST_IDENTITY = RunIdentity.declare(
+    run_start="2026-08-21T09:00:00Z",
+    unit_id="unit-test-arm-1",
+    operator_id="op-test",
+)
+
+#: The three identity flags as argv. Every CLI test that expects to get past
+#: argument checking passes them: they are required with no default (issue #83),
+#: and a test that omitted them would be exercising that refusal instead of
+#: whatever it says it is exercising. `test_cli_refuses_a_build_with_no_identity`
+#: is the one that omits them on purpose.
+IDENTITY_ARGV = [
+    "--run-start",
+    TEST_IDENTITY.run_start_text,
+    "--unit-id",
+    TEST_IDENTITY.unit_id,
+    "--operator-id",
+    TEST_IDENTITY.operator_id,
+]
 
 #: The seed every scenario stream in this file is generated at. Stated once
 #: rather than passed as a literal: `reg.sim` records it in the provenance block
@@ -161,7 +185,11 @@ def _held_stream(path: Path, n_frames: int, human_xy=(2.0, 0.0)) -> Path:
 
 
 def _build(csv: Path, out: Path, **overrides):
-    params = {**_FAST, **overrides}
+    # `identity` is overridable like every other parameter — the tests that vary
+    # the declared start are the ones that show it reaches the artifact — but it
+    # defaults to the one identity this file declares, so a test that is not
+    # about time does not have to name an instant to say anything.
+    params = {"identity": TEST_IDENTITY, **_FAST, **overrides}
     return build(csv, out, LIMITS, human_radius=HUMAN_RADIUS, **params)
 
 
@@ -334,6 +362,7 @@ def test_node_rows_are_sub_linear_for_every_fixture(tmp_path: Path, name: str) -
         coarse,
         tmp_path / f"{name}_coarse.sqlite",
         scn.world.limits,
+        identity=TEST_IDENTITY,
         human_radius=scn.world.human_radius,
         **_FAST,
     )
@@ -341,6 +370,7 @@ def test_node_rows_are_sub_linear_for_every_fixture(tmp_path: Path, name: str) -
         fine,
         tmp_path / f"{name}_fine.sqlite",
         scn.world.limits,
+        identity=TEST_IDENTITY,
         human_radius=scn.world.human_radius,
         **_FAST,
     )
@@ -810,7 +840,14 @@ def test_a_non_positive_human_radius_is_refused(
     question would answer 'no' for a reason nobody wrote down."""
     csv = _held_stream(tmp_path / "held.csv", 4)
     with pytest.raises(GraphBuildError, match="human_radius"):
-        build(csv, tmp_path / "held.sqlite", LIMITS, human_radius=bad_radius, **_FAST)
+        build(
+            csv,
+            tmp_path / "held.sqlite",
+            LIMITS,
+            identity=TEST_IDENTITY,
+            human_radius=bad_radius,
+            **_FAST,
+        )
 
 
 def test_human_radius_has_no_default() -> None:
@@ -1314,7 +1351,12 @@ def test_geometry_rows_are_far_fewer_than_frames_in_a_moving_scenario(
     out = tmp_path / "sustained_overlap.sqlite"
     world = SCENARIOS["sustained_overlap"].world
     result = build(
-        csv, out, world.limits, human_radius=world.human_radius, **_FAST
+        csv,
+        out,
+        world.limits,
+        identity=TEST_IDENTITY,
+        human_radius=world.human_radius,
+        **_FAST,
     )
 
     rows = _envelope_rows(out)
@@ -1430,7 +1472,14 @@ def test_the_separation_timeline_answers_every_frame_within_tolerance(
     csv = tmp_path / "sustained_overlap.csv"
     simulate(scn.name, SIM_SEED, csv)
     out = tmp_path / "sustained_overlap.sqlite"
-    build(csv, out, scn.world.limits, human_radius=scn.world.human_radius, **_FAST)
+    build(
+        csv,
+        out,
+        scn.world.limits,
+        identity=TEST_IDENTITY,
+        human_radius=scn.world.human_radius,
+        **_FAST,
+    )
 
     intervals = _edges(out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
     assert intervals, "precondition failed: no separation intervals for the human"
@@ -1951,6 +2000,7 @@ def test_cli_builds_end_to_end(tmp_path: Path, capsys) -> None:
             "4",
             "--substep-dt",
             "0.05",
+            *IDENTITY_ARGV,
         ]
     )
     assert code == 0
@@ -2001,7 +2051,9 @@ def test_cli_refuses_a_stream_that_does_not_say_what_produced_it(
     csv = _write_stream(
         tmp_path / "bare.csv", [_frame(i, (2.0, 0.0)) for i in range(4)], scenario=None
     )
-    code = graph.main(["build", str(csv), "--out", str(tmp_path / "bare.sqlite")])
+    code = graph.main(
+        ["build", str(csv), "--out", str(tmp_path / "bare.sqlite"), *IDENTITY_ARGV]
+    )
     assert code == graph.EXIT_USAGE
     assert "provenance" in capsys.readouterr().err
 
@@ -2012,7 +2064,9 @@ def test_cli_refuses_an_unknown_scenario(tmp_path: Path, capsys) -> None:
         [_frame(i, (2.0, 0.0)) for i in range(4)],
         scenario="not_a_scenario",
     )
-    code = graph.main(["build", str(csv), "--out", str(tmp_path / "odd.sqlite")])
+    code = graph.main(
+        ["build", str(csv), "--out", str(tmp_path / "odd.sqlite"), *IDENTITY_ARGV]
+    )
     assert code == graph.EXIT_USAGE
     assert "does not know" in capsys.readouterr().err
 
@@ -2220,11 +2274,16 @@ def test_the_closest_approach_agrees_with_the_edge_layers_minimum(
 def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
     """The data model, per UN R157 and docs/prior-art.md §9.
 
-    The flag, the reason, the timestamp, and the software version present at the
-    event (`R157SWIN`). The date is deliberately absent and the artifact says so
-    — a wall-clock date would be the one ambient value that breaks byte
-    reproducibility — so this asserts the *stated* substitute is there instead of
-    letting a missing column pass unremarked.
+    The flag, the reason, the timestamp, the **date**, and the software version
+    present at the event (`R157SWIN`).
+
+    The date was deliberately absent until issue #83, on the argument that a
+    wall-clock date is the ambient value that would break byte reproducibility.
+    It is here now because that argument did not survive: the start is a
+    *declared* input, like key material, so the artifact gains the datum and
+    keeps the property. This asserts every element is present and that the two
+    time bases agree — a `date` that did not follow `t` would be a wall-clock
+    date the run did not happen on.
     """
     csv = _write_stream(
         tmp_path / "walk.csv", _creep_frames(12, lambda i: (0.95 - 0.03 * i, 0.0))
@@ -2247,6 +2306,11 @@ def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
         assert row["t"] is not None
         assert str(row["sw_version"]) == expected
         assert str(row["layer"]) == store.occurrence_layer(str(row["type"]))
+        # The two time bases name one moment. Derived from the row's own
+        # quantized `t`, so the three timestamp columns cannot disagree by up
+        # to half a quantum — see `_OccurrenceLog.emit`.
+        assert str(row["date"]) == TEST_IDENTITY.date(float(row["t"]))
+        assert str(row["t_utc"]) == TEST_IDENTITY.timestamp_utc(float(row["t"]))
 
     # The stamp is checkable against the parameters it binds, both of which the
     # artifact carries: an occurrence whose digest its own meta cannot reproduce
@@ -2256,8 +2320,13 @@ def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
         float(graph.OCCURRENCE_TIME_RESOLUTION_S)
     )
     assert meta[graph.META_OCCURRENCE_RETENTION] == graph.OCCURRENCE_RETENTION
-    # The date, named as absent rather than silently missing.
-    assert "no date element" in meta[graph.META_OCCURRENCE_RETENTION]
+    # The rule the artifact carries has to describe the artifact. It advertised
+    # "there is no date element" until issue #83, and a row now carries one —
+    # a retention rule that still denied it would be the file lying about
+    # itself to the only reader who has nothing else to go on.
+    assert "no date element" not in meta[graph.META_OCCURRENCE_RETENTION]
+    assert "date element" in meta[graph.META_OCCURRENCE_RETENTION]
+    assert meta[graph.META_RUN_START] == TEST_IDENTITY.run_start_text
 
 
 def test_the_software_stamp_changes_when_the_envelope_parameters_do() -> None:
@@ -2412,7 +2481,9 @@ class _SilentOccurrenceLog:
     not optional in the product, it is only optional in this one comparison.
     """
 
-    def __init__(self, conn, *, resolution: float, stamp: str) -> None:
+    def __init__(
+        self, conn, *, resolution: float, stamp: str, identity: RunIdentity
+    ) -> None:
         graph.quantize_occurrence_time(0.0, resolution)
 
     def run_began(self, t: float) -> None: ...
@@ -2450,6 +2521,8 @@ def _occurrence_kwargs(**overrides):
         "occurrence_type": "closest_approach",
         "reason": "the smallest separation observed",
         "t": 1.0,
+        "date": TEST_IDENTITY.date(1.0),
+        "t_utc": TEST_IDENTITY.timestamp_utc(1.0),
         "entity_id": "obs_a",
         "value": 0.4,
         "sw_version": "reg-test",
@@ -2478,7 +2551,8 @@ def test_the_schema_itself_refuses_an_unknown_occurrence_type(seeded) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
             "INSERT INTO occurrence (occurrence_key, seq, type, layer, reason, "
-            "t, sw_version) VALUES (99, 0, 'veto', 'A', 'because', 1.0, 'v')"
+            "t, date, t_utc, sw_version) VALUES (99, 0, 'veto', 'A', 'because', "
+            "1.0, '2026/08/21', '2026-08-21T09:00:01.000000Z', 'v')"
         )
 
 
@@ -2546,6 +2620,183 @@ def test_read_occurrences_refuses_an_unknown_type_rather_than_returning_nothing(
     """An empty list for a mistyped type reads as "no such event in this run"."""
     with pytest.raises(store.StoreError, match="not an occurrence type"):
         store.read_occurrences(seeded, occurrence_type="contact_begun")
+
+
+@pytest.mark.parametrize("bad_date", ["", "2026-08-21", "21/08/2026", "  ", None])
+def test_an_occurrence_date_that_is_not_dssads_is_refused(seeded, bad_date) -> None:
+    """THE NEGATIVE for the date column (issue #83).
+
+    The store checks shape and not value — it cannot know which afternoon the
+    run happened on, and a check that knew would be a second source for it. What
+    it can refuse is a column that ends up holding two formats, which is a column
+    nobody can sort, compare or hand to an assessor. Includes the ISO spelling
+    `2026-08-21`, because that is the one a contributor would reach for by habit
+    and it is not the element UN R157 names.
+    """
+    with pytest.raises(store.StoreError, match="yyyy/mm/dd"):
+        store.insert_occurrence(seeded, "occ_0", **_occurrence_kwargs(date=bad_date))
+
+
+@pytest.mark.parametrize(
+    "bad_instant",
+    [
+        "",
+        "2026-08-21T09:00:01Z",  # no fractional digits
+        "2026-08-21T09:00:01.000000",  # no offset at all
+        "2026-08-21T09:00:01.000000+02:00",  # an offset, but not normalised
+        "2026/08/21",
+        None,
+    ],
+)
+def test_an_occurrence_timestamp_that_is_not_a_utc_instant_is_refused(
+    seeded, bad_instant
+) -> None:
+    """THE NEGATIVE for `t_utc`, and the interesting cases are the near misses.
+
+    A timestamp with no offset is an instant only for a reader who already knows
+    which zone the operator was in, and one carrying `+02:00` is a real instant
+    written the way this artifact does not write them — two spellings in one
+    column defeat the byte-comparison the whole project rests on. Both are
+    refused rather than normalised here: `reg.identity.format_instant` is the
+    one place that decides the rendering, and a store that also decided it would
+    be a second answer to the same question.
+    """
+    with pytest.raises(store.StoreError, match="t_utc"):
+        store.insert_occurrence(
+            seeded, "occ_0", **_occurrence_kwargs(t_utc=bad_instant)
+        )
+
+
+# --------------------------------------------------------------------------
+# Absolute time and identity (issue #83).
+#
+# WHAT THESE TESTS ARE ABOUT. Not that three strings reach `meta` — that is the
+# easy half. They are about the two properties the issue turns on: that the
+# identity is **required with no default**, because a plausible invented run
+# start is indistinguishable downstream from a declared one; and that supplying
+# it **preserved determinism exactly**, because the reason it was omitted for so
+# long was the belief that it could not.
+#
+# The second needs both directions to mean anything. Same declared start giving
+# the same bytes, on its own, is what a build that ignored the parameter
+# entirely would also do.
+# --------------------------------------------------------------------------
+
+
+def test_the_artifact_says_which_robot_and_which_shift(tmp_path: Path) -> None:
+    """"Hand it to an assessor" requires both, and neither is recoverable later.
+
+    Before issue #83 every key in `meta` was an envelope parameter or a retention
+    rule, so an artifact could not be correlated with any other log in the cell —
+    which is how an incident is actually reconstructed — and an EU AI Act Art. 73
+    clock could not be started from it.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    meta = _meta(out)
+    assert meta[graph.META_RUN_START] == TEST_IDENTITY.run_start_text
+    assert meta[graph.META_UNIT_ID] == TEST_IDENTITY.unit_id
+    assert meta[graph.META_OPERATOR_ID] == TEST_IDENTITY.operator_id
+
+
+def test_the_same_seed_and_the_same_declared_start_give_the_same_bytes(
+    tmp_path: Path,
+) -> None:
+    """CLAUDE.md rule 2, over the input that was supposed to make it impossible.
+
+    This is the property the issue's whole argument rests on: absolute time was
+    left out because a wall clock is "exactly the ambient value that would break
+    determinism", and it does not break it when it is *declared* rather than
+    read. Nothing in `reg.identity` reads a clock and
+    `test_identity.py::test_this_module_never_reads_a_clock` asserts that against
+    the source; this asserts the consequence at the artifact.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    a = tmp_path / "a.sqlite"
+    b = tmp_path / "b.sqlite"
+    _build(csv, a)
+    _build(csv, b)
+    assert a.read_bytes() == b.read_bytes()
+
+
+def test_a_different_declared_start_gives_different_bytes(tmp_path: Path) -> None:
+    """THE OTHER HALF, and without it the test above proves nothing.
+
+    A build that accepted `identity` and dropped it on the floor would produce
+    identical bytes for identical inputs too — perfectly deterministic, and
+    carrying no absolute time at all. So the parameter has to be shown to reach
+    the artifact: two runs of one stream, differing in nothing but the declared
+    instant, must not be the same file.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    morning = tmp_path / "morning.sqlite"
+    afternoon = tmp_path / "afternoon.sqlite"
+    _build(csv, morning)
+    _build(
+        csv,
+        afternoon,
+        identity=RunIdentity.declare(
+            run_start="2026-08-21T15:30:00Z",
+            unit_id=TEST_IDENTITY.unit_id,
+            operator_id=TEST_IDENTITY.operator_id,
+        ),
+    )
+
+    assert morning.read_bytes() != afternoon.read_bytes()
+    assert _meta(morning)[graph.META_RUN_START] != _meta(afternoon)[graph.META_RUN_START]
+    # And it reached the rows, not only `meta`. An identity recorded in the
+    # header while every occurrence still carried an unanchored float would be
+    # the element-shaped alignment issue #83 is about.
+    assert {str(r["t_utc"]) for r in _occurrences(morning)}.isdisjoint(
+        {str(r["t_utc"]) for r in _occurrences(afternoon)}
+    )
+
+
+def test_the_declared_start_is_not_the_hosts_clock(tmp_path: Path) -> None:
+    """The artifact records what it was told, not when it was built.
+
+    Stated as a test rather than left to the module-level source check, because
+    this is the property an assessor depends on: a `run_start_utc` quietly
+    replaced by build time would be a wall-clock instant in the record that the
+    run did not happen at, and it would look exactly as plausible.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    declared = RunIdentity.declare(
+        run_start="1999-12-31T23:59:59Z",
+        unit_id="unit-7",
+        operator_id="op-night",
+    )
+    _build(csv, out, identity=declared)
+
+    assert _meta(out)[graph.META_RUN_START] == "1999-12-31T23:59:59.000000Z"
+    assert all(str(r["date"]).startswith("1999/12/31") for r in _occurrences(out))
+
+
+def test_a_build_with_no_identity_is_refused(tmp_path: Path) -> None:
+    """No default, and the refusal names what is missing.
+
+    `identity` is keyword-only and has no default, so omitting it is a
+    `TypeError` from Python itself; passing something that is not a
+    `RunIdentity` is the case the builder has to catch, and it refuses rather
+    than coercing three strings out of whatever it was handed.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    with pytest.raises(TypeError, match="identity"):
+        build(csv, tmp_path / "a.sqlite", LIMITS, human_radius=HUMAN_RADIUS, **_FAST)
+
+    for wrong in (None, "2026-08-21T09:00:00Z", ("unit", "op")):
+        with pytest.raises(GraphBuildError, match="RunIdentity"):
+            build(
+                csv,
+                tmp_path / "b.sqlite",
+                LIMITS,
+                identity=wrong,
+                human_radius=HUMAN_RADIUS,
+                **_FAST,
+            )
 
 
 # --------------------------------------------------------------------------
@@ -2628,6 +2879,7 @@ def attested(tmp_path_factory) -> tuple[Path, AttestationRecords]:
         csv,
         out,
         scn.world.limits,
+        identity=TEST_IDENTITY,
         human_radius=scn.world.human_radius,
         records=records,
         **_FAST,
@@ -3260,6 +3512,7 @@ def test_cli_builds_the_attestation_layer(tmp_path: Path, capsys) -> None:
             str(FIXTURE_HORIZON_S),
             "--watchdog-period",
             str(FIXTURE_WATCHDOG_S),
+            *IDENTITY_ARGV,
         ]
     )
     assert code == 0
@@ -3300,6 +3553,7 @@ def test_cli_refuses_a_keyring_without_the_parameters_it_needs(
         "0.5",
         "--watchdog-period",
         "1.0",
+        *IDENTITY_ARGV,
     ]
     at = argv.index(omit)
     del argv[at : at + 2]
@@ -3322,9 +3576,98 @@ def test_cli_refuses_the_parameters_without_a_keyring(tmp_path: Path) -> None:
                 str(tmp_path / "held.sqlite"),
                 "--replan-interval",
                 "0.5",
+                *IDENTITY_ARGV,
             ]
         )
     assert excinfo.value.code == graph.EXIT_USAGE
+
+
+@pytest.mark.parametrize(
+    "omit", ["--run-start", "--unit-id", "--operator-id"]
+)
+def test_cli_refuses_a_build_with_no_identity(
+    tmp_path: Path, capsys, omit: str
+) -> None:
+    """THE NEGATIVE for "required, no default" (issue #83).
+
+    One case per flag, and each asserts the message **names the flag it is
+    missing**. That is the part worth testing: the whole reason the three are
+    checked by hand rather than with `required=True` is that argparse's message
+    says a flag is absent without saying why there is no default for it, and a
+    reader who does not know why will supply a plausible instant.
+
+    No artifact is written either. A build that refused and left a partial file
+    would leave behind an artifact with no absolute time — the exact object this
+    issue exists to stop.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    argv = ["build", str(csv), "--out", str(out), *IDENTITY_ARGV]
+    at = argv.index(omit)
+    del argv[at : at + 2]
+
+    with pytest.raises(SystemExit) as excinfo:
+        graph.main(argv)
+    assert excinfo.value.code == graph.EXIT_USAGE
+    assert omit in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_cli_refuses_a_run_start_that_is_not_an_instant(
+    tmp_path: Path, capsys
+) -> None:
+    """Supplied but unusable is its own outcome, and it is not a pass.
+
+    `2026-08-21T09:00:00` is the case that matters: it looks like a run start,
+    and it names an instant only for a reader who already knows which zone the
+    operator was in. Refused rather than assumed to be UTC — an assumed offset
+    is indistinguishable downstream from a stated one and is wrong by up to
+    fourteen hours.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    code = graph.main(
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(out),
+            "--run-start",
+            "2026-08-21T09:00:00",
+            "--unit-id",
+            "unit-7",
+            "--operator-id",
+            "op-day",
+        ]
+    )
+    assert code == graph.EXIT_USAGE
+    assert "offset" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_cli_refuses_a_blank_identifier(tmp_path: Path, capsys) -> None:
+    """A blank id reads as an absent one in every `meta` dump, having been
+    supplied. That is worse than the flag being missing, because nothing
+    downstream can tell the two apart."""
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    code = graph.main(
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(out),
+            "--run-start",
+            "2026-08-21T09:00:00Z",
+            "--unit-id",
+            "   ",
+            "--operator-id",
+            "op-day",
+        ]
+    )
+    assert code == graph.EXIT_USAGE
+    assert "unit_id" in capsys.readouterr().err
+    assert not out.exists()
 
 
 def test_cli_refuses_a_keyring_it_cannot_read(tmp_path: Path, capsys) -> None:
@@ -3346,6 +3689,7 @@ def test_cli_refuses_a_keyring_it_cannot_read(tmp_path: Path, capsys) -> None:
             "0.5",
             "--watchdog-period",
             "1.0",
+            *IDENTITY_ARGV,
         ]
     )
     assert code == graph.EXIT_USAGE

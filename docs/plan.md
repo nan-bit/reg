@@ -490,12 +490,36 @@ different sentences and this document has previously run them together.
 
 **What the chain proves, and what it does not.** It proves the records are
 internally consistent under the keys that signed them. It does not prove no
-record was withheld, and — because the artifact carries no absolute time and no
-external commitment — it does not prove the whole history was not re-issued
-offline by its own author. That is the party a regulator distrusts most. Closing
-it needs a run-start instant recorded as a required input and a commitment of the
-chain heads to something outside the artifact; neither exists yet, and until they
-do this is the **structure** of non-repudiation rather than non-repudiation.
+record was withheld. On re-issuance — the whole history re-run and re-signed
+offline by its own author, which is the party a regulator distrusts most — issue
+#83 closed the two gaps that made the question unaskable, and it is worth being
+exact about how far that goes.
+
+The artifact now carries **absolute time**: `--run-start` is a required
+caller-supplied input with no default, `meta` names the unit and the operator,
+and every occurrence carries DSSAD's `date` derived from that start. Determinism
+is untouched, because the instant is declared rather than read from a clock —
+same seed *and* same declared start, same bytes. That makes the run locatable and
+correlatable with the other logs in the cell. It does not by itself make the date
+*true*: it is a claim by the same author as the records.
+
+What bears on the claim is the **commitment** (`reg/commit.py`): the two chain
+heads signed at artifact close by a second on-site keyholder whose key signed no
+record in the file, refused outright if it is one of the record-signing keys.
+Half of it needs no key at all — the recorded heads are recomputed from the
+records the artifact actually holds, so *anyone* holding the file can see a
+re-issued chain — and the witness signature is what stops the recorded heads
+being rewritten to match. An artifact closed with no supplier records
+`commitment: none` explicitly; silence never reads as commitment.
+
+So this is now the structure of non-repudiation **plus a second party at the same
+site**, and that is the honest ceiling of it. An on-site witness is not a
+third-party timestamp: it does not prove the heads existed by any given instant
+to someone with no relationship to the operator. RFC 3161 and transparency-log
+adapters would, and both are documented and deliberately unimplemented — each
+needs a network call at artifact close, which the air-gap claim rules out. The
+`Committer` interface exists so that dropping that claim makes them adapters
+rather than a rewrite.
 
 **Success:** the demo sentence answered end to end, as one query, with
 `verify_chain` able to say no — demonstrated by `--tamper`, not asserted.
@@ -793,7 +817,12 @@ compression ratio comes almost entirely from this.
 Same discipline as reachability pruning in AIC — not compressing, discarding what's
 provably irrelevant to the supported question set.
 
-**Deliverable:** `python -m reg.graph build runs/contact.csv --out runs/contact.sqlite`
+**Deliverable:** `python -m reg.graph build runs/contact.csv --out runs/contact.sqlite
+--run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift`
+
+The three identity flags are required and have no default (issue #83); the start
+is declared rather than read from a clock, so the deliverable stays
+byte-reproducible.
 
 ---
 

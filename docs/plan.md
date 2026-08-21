@@ -446,10 +446,15 @@ depends on. *May I act* versus *what may be concluded afterwards*.
 rather than by reviewer discipline — `ProprioState` names no entity, and
 `tests/test_layer_boundary.py` fails if that erodes — and by the schema, where
 `layer` is a column on every edge and every occurrence rather than a caveat in a
-README. The known gap is `Limits`: it is declared Layer A as a property of the
+README. `Limits` was the known gap — it was declared Layer A as a property of the
 robot, and under ISO/TS 15066 speed-and-separation monitoring a commanded speed
-bound is a function of measured separation, which would make it perception-derived
-and nothing currently catches that. See [`docs/sufficiency.md`](sufficiency.md) §7.
+bound is a function of measured separation, which makes it perception-derived
+while nothing caught it. **Closed by issue #84**: `Limits.source` is required with
+no default, and the `HAS_ENVELOPE` edge is tagged from it rather than from its
+type, so an SSM-derived envelope is a Layer B edge. The dependence is unchanged;
+what changed is that the artifact records it. See
+[`docs/sufficiency.md`](sufficiency.md) §7 for what that still does not claim —
+starting with the fact that a two-value provenance is a simplification.
 
 **Success:** a taxonomy with worked examples of each, normative for what this
 project may claim.

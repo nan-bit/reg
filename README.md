@@ -216,7 +216,11 @@ chain; Layer B (uncertifiable) is where anything else in the world is. The
 envelope computation takes a `ProprioState`, which has no field naming any entity
 — that absence *is* the enforcement, and
 [`tests/test_layer_boundary.py`](tests/test_layer_boundary.py) fails if it
-erodes. Also built: the simulator and its scenario fixtures, the
+erodes. Actuation limits are Layer A **when they are a property of the robot**:
+under ISO/TS 15066 speed-and-separation monitoring the speed bound is a function
+of a measured separation distance, so `Limits` carries a required `source` and an
+envelope computed from derived bounds is tagged Layer B
+([`docs/sufficiency.md`](docs/sufficiency.md) §7). Also built: the simulator and its scenario fixtures, the
 proprioception-only envelope, the evidence graph and its SQLite store, the
 benchmarks, the viz, the hash chain with its two keyed MACs (`reg/chain.py`), the
 `Declaration` record and the scripted policy that emits it (`reg/declare.py`),

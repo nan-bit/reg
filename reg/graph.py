@@ -159,6 +159,13 @@ then intersected with the scene. That order is not stylistic: it mirrors ARMTD
 (docs/prior-art.md §4) and it is what lets `HAS_ENVELOPE` be tagged Layer A while
 every edge naming an entity is tagged Layer B.
 
+The order settles the *state* side and it does not settle the bounds side, which
+is issue #84: `limits` reaches the envelope untouched by the scene, but its
+numbers can still be a function of what a perceiver measured. So this module does
+not decide `HAS_ENVELOPE`'s layer either — `reg.envelope.envelope_layer(limits)`
+does, once per build, and the answer goes on the edge and into
+`meta['limits_source']`.
+
 DETERMINISM
 -----------
 Same stream and same envelope parameters in, byte-identical SQLite file out. Node
@@ -186,7 +193,7 @@ from reg import __version__, store
 from reg.chain import GENESIS_HASH, KeyringError, chain_hash
 from reg.declare import Declaration, DeclarationError
 from reg.enforce import PASSIVATING_FAULTS, EnforcementError, Verdict
-from reg.envelope import SUBSTEP_DT, compute_envelope, envelope_hash
+from reg.envelope import SUBSTEP_DT, compute_envelope, envelope_hash, envelope_layer
 from reg.kinematics import link_polygons
 from reg.stream import FLOAT_PRECISION, read_comments, read_frames
 from reg.tolerances import (
@@ -200,7 +207,7 @@ from reg.tolerances import (
     quantize_time,
     simplify_geometry,
 )
-from reg.types import Limits, Obstacle, ProprioState, StateFrame
+from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 
 __all__ = [
     "ATTESTATION_RETENTION",
@@ -600,6 +607,15 @@ META_LIMITS_Q_MIN = "limits_q_min"
 META_LIMITS_Q_MAX = "limits_q_max"
 META_LIMITS_QD_MAX = "limits_qd_max"
 META_LIMITS_QDD_MAX = "limits_qdd_max"
+
+#: Where those limits came from (issue #84). The same contract as the six above
+#: and one more thing besides: it is what the `HAS_ENVELOPE` edges in this file
+#: were tagged from, so an artifact that does not carry it cannot say whether its
+#: Layer A envelopes are Layer A. `_limits_from_meta` refuses a file with no such
+#: key rather than reading it as `PROPRIOCEPTIVE` — an unrecorded provenance is a
+#: could-not-evaluate, and resolving it to the clean case is exactly the
+#: mislabelling this key exists to make visible.
+META_LIMITS_SOURCE = "limits_source"
 
 
 class GraphBuildError(Exception):
@@ -1569,6 +1585,14 @@ def build(
             static_geoms[obstacle.entity_id] = geometry
         store.insert_entity(conn, HUMAN_ENTITY_ID, HUMAN_KIND, geometry=None)
 
+        # The layer every HAS_ENVELOPE edge in this build carries, decided once
+        # from the provenance of the limits (issue #84). `Limits` is frozen and
+        # one object drives the whole run, so this is a property of the build and
+        # not of a frame — an envelope does not become certifiable halfway
+        # through. Computed here rather than at the call site so that a build
+        # whose limits have no layer decision fails before it writes a row.
+        envelope_edge_layer = envelope_layer(limits)
+
         active: dict[tuple[str, str], _Active] = {}
         has_envelope: _Active | None = None
         previous: _FrameNodes | None = None
@@ -1623,6 +1647,7 @@ def build(
                 nodes.config(),
                 nodes.envelope_node(),
                 nodes.t,
+                layer=envelope_edge_layer,
             )
             has_envelope = _Active(edge_id, nodes.digest, "HAS_ENVELOPE")
 
@@ -1982,6 +2007,12 @@ def _write_provenance(
     store.put_meta(conn, META_LIMITS_Q_MAX, _array_text(limits.q_max))
     store.put_meta(conn, META_LIMITS_QD_MAX, _array_text(limits.qd_max))
     store.put_meta(conn, META_LIMITS_QDD_MAX, _array_text(limits.qdd_max))
+    # ...and where they came from, which is what every HAS_ENVELOPE edge in this
+    # file was tagged from (issue #84). One short string: a reader can tell a run
+    # whose speed bound came off a datasheet from one whose speed bound came off
+    # a safety scanner, and the layer column already says which without them
+    # having to know the difference.
+    store.put_meta(conn, META_LIMITS_SOURCE, limits.source.value)
 
     store.put_meta(conn, "human_entity_id", HUMAN_ENTITY_ID)
     store.put_meta(conn, "human_radius_m", _float_text(human_radius))
@@ -2075,12 +2106,50 @@ def _meta_array(conn, key: str) -> np.ndarray:
     return _floats(_meta_required(conn, key), f"meta[{key!r}]")
 
 
+def _meta_limit_source(conn) -> LimitSource:
+    """Where this artifact's limits came from. A refusal if it does not say.
+
+    **A missing key is could-not-evaluate, not `PROPRIOCEPTIVE`** (issue #84).
+    An artifact written before provenance was recorded, or one somebody removed
+    the key from, does not know whether its bounds were a datasheet limit or an
+    ISO/TS 15066 speed cap derived from a perceiver — and a `Limits` reconstructed
+    with the clean value would recompute geometry that reads as certifiable
+    evidence on the strength of a value nobody wrote. That is the one failure
+    this key exists to make visible, so it may not be the failure's own default.
+    """
+    raw = store.get_meta(conn, META_LIMITS_SOURCE)
+    if raw is None:
+        raise GraphQueryError(
+            f"the artifact has no meta[{META_LIMITS_SOURCE!r}], so it does not "
+            "say where the limits its envelopes were computed from came from. "
+            "That is a could-not-evaluate and it does not resolve to "
+            f"{LimitSource.PROPRIOCEPTIVE.value!r}: bounds derived from a "
+            "perceiver (an ISO/TS 15066 speed-and-separation cap on qd_max) "
+            "make every envelope here Layer B, and an artifact whose provenance "
+            "is unknown must not read as a clean Layer A one (issue #84). The "
+            "layer column on the HAS_ENVELOPE edges records what this build "
+            "decided; nothing recomputes it."
+        )
+    try:
+        return LimitSource(raw)
+    except ValueError as exc:
+        raise GraphQueryError(
+            f"meta[{META_LIMITS_SOURCE!r}] is {raw!r}, which is not a limit "
+            f"source. Known: {[s.value for s in LimitSource]}."
+        ) from exc
+
+
 def _limits_from_meta(conn) -> Limits:
     """The robot the artifact was built for, from its own provenance block.
 
     docs/lossiness.md Retained #10 records the limits precisely so this is
     possible: "without them the geometry cannot be recomputed, and a separation
     nobody can recompute is not evidence".
+
+    Provenance travels with them (issue #84): `Limits.source` is required, so a
+    file that does not record it cannot produce a `Limits` at all — which is
+    what stops a recomputed envelope from being quoted as Layer A evidence on an
+    artifact that never said its bounds were proprioceptive.
     """
     try:
         return Limits(
@@ -2089,6 +2158,7 @@ def _limits_from_meta(conn) -> Limits:
             qd_max=_meta_array(conn, META_LIMITS_QD_MAX),
             qdd_max=_meta_array(conn, META_LIMITS_QDD_MAX),
             link_lengths=_meta_array(conn, META_LIMITS_LINK_LENGTHS),
+            source=_meta_limit_source(conn),
             link_radius=_meta_float(conn, META_LIMITS_LINK_RADIUS),
         )
     except ValueError as exc:  # Limits itself refuses a per-joint mismatch

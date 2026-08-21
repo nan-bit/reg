@@ -41,7 +41,7 @@ from reg.envelope import (
     envelope_hash,
 )
 from reg.kinematics import link_polygons
-from reg.types import Limits, Obstacle, ProprioState, StateFrame
+from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 
 # A two-link arm, stated here rather than imported from reg.world: these tests
 # are about the envelope, and coupling them to a Layer B fixture would make a
@@ -52,6 +52,7 @@ LIMITS = Limits(
     qd_max=np.array([2.0, 2.5]),
     qdd_max=np.array([8.0, 10.0]),
     link_lengths=np.array([0.5, 0.4]),
+    source=LimitSource.PROPRIOCEPTIVE,
     link_radius=0.05,
 )
 N_CORNERS = 2 ** len(LIMITS.link_lengths)
@@ -260,7 +261,7 @@ def test_hash_is_stable_in_a_fresh_process() -> None:
         """
         import numpy as np
         from reg.envelope import compute_envelope, envelope_hash
-        from reg.types import Limits, ProprioState
+        from reg.types import Limits, LimitSource, ProprioState
 
         limits = Limits(
             q_min=np.array([-np.pi, -2.6]),
@@ -268,6 +269,7 @@ def test_hash_is_stable_in_a_fresh_process() -> None:
             qd_max=np.array([2.0, 2.5]),
             qdd_max=np.array([8.0, 10.0]),
             link_lengths=np.array([0.5, 0.4]),
+            source=LimitSource.PROPRIOCEPTIVE,
             link_radius=0.05,
         )
         state = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.5, -0.3]))
@@ -356,6 +358,7 @@ def test_an_unusable_acceleration_bound_is_refused(qdd_max: np.ndarray) -> None:
         qd_max=LIMITS.qd_max,
         qdd_max=qdd_max,
         link_lengths=LIMITS.link_lengths,
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=LIMITS.link_radius,
     )
     with pytest.raises(ValueError, match="qdd_max"):

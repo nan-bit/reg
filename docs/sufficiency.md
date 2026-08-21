@@ -363,9 +363,17 @@ This is not a convention that a careful reviewer enforces. `store.layer_of` read
 the layer off `EDGE_SPECS` and refuses a type that is not in it — there is no
 "unknown layer" and no default — `store.open_edge` never takes a layer from its
 caller, the schema carries `CHECK (layer IN ('A', 'B'))`, and
-`test_layer_b_is_exactly_the_entity_naming_edges` re-derives every expected value
-from `"Entity" in (spec.src_kind, spec.dst_kind)`. Retagging `SEPARATION` as A to
-make a claim read better requires editing a test whose docstring says why not.
+`test_layer_b_is_exactly_the_entity_naming_edges` asserts that an entity-naming
+edge is Layer B and can be nothing else. Retagging `SEPARATION` as A to make a
+claim read better requires editing a test whose docstring says why not.
+
+One qualification, and it does not touch `SEPARATION`. Naming an entity is
+*sufficient* for Layer B; since issue #84 it is no longer *necessary*, because
+`HAS_ENVELOPE` names no entity and is still Layer B when the `Limits` it was
+computed from were perception-derived (§7). So that one edge type is the
+exception to "the layer never comes from the caller" — `open_edge` requires it to
+be stated and `layer_of` refuses to answer for it — and the exception runs in the
+conservative direction: an omission is a refusal, never an `A`.
 
 ---
 
@@ -452,6 +460,37 @@ document's asymmetry lives.
   enforcement key in hardware the policy vendor cannot reach. **Still holds, in
   the present tense.** "Certifiable" here means *its failure modes are
   characterizable from proprioception*, not *they have been characterized*.
+- **Not that a Layer A envelope is Layer A whatever its `Limits` are.** The
+  envelope has two inputs and only one of them is kept out of the world by
+  structure. `ProprioState` names no entity and cannot, but `Limits` names none
+  either and its *values* can still be perception-derived: under **ISO/TS 15066 /
+  ISO 10218-2:2025 speed-and-separation monitoring** — which
+  [`docs/plan.md`](plan.md) §67 cites approvingly — the commanded speed bound is
+  a function of the measured separation distance, so `qd_max` comes from a
+  perceiver and everything integrated under it inherits that perceiver. A
+  field-name test cannot catch a taint that arrives in a number. **The artifact
+  now records which case it is in**: `Limits.source` is required with no default,
+  `reg.envelope.envelope_layer` maps it to a layer, and the `HAS_ENVELOPE` edge
+  is tagged from that — proprioceptive bounds give a Layer A edge, derived bounds
+  give a Layer B one, and `meta['limits_source']` carries the provenance so a
+  recomputed envelope inherits it too. An artifact that does not carry the key is
+  a **could-not-evaluate**, not a proprioceptive one: nothing reads its absence as
+  the clean case. What this closes is the *mislabelling*; an SSM deployment's
+  envelopes are as dependent on perception as they always were, and the change is
+  that the dependence is now in the column Claim 3 queries instead of nowhere.
+  *Recorded 2026-08-21, issue #84.*
+- **Not that a two-value provenance is how assurance is actually argued.** The
+  binary above matches this project's two layers and it is a simplification, said
+  out loud here because the alternative was considered rather than unseen. An
+  external regulatory review argued the binary is wrong in **both** directions: an
+  IEC 61496 safety scanner rated PLd is perception *with characterized failure
+  modes* and still lands in `DERIVED`, while Layer A's encoders need ISO 13849
+  cat-3 dual channel before they carry a safety claim at all and still land in
+  `PROPRIOCEPTIVE`. The better model is a tag **plus an integrity attribute** —
+  one more column, and the taxonomy becomes legible to people who already work
+  this way. It was rejected for **scope, not for correctness**: it rewrites this
+  document, and this document is normative for what the project may claim, so it
+  is a decision and not an implementation. *Issue #84.*
 - **Not that the layer tag makes a Layer B answer safe to quote.** It makes it
   legibly conditional. Quoting a Layer B answer without its condition is the
   failure this document exists to prevent, which is why the strength column says
@@ -503,8 +542,14 @@ pip install -e ".[dev]"
 # The resolution verdicts in §3 and in rows 2, 3, 4, 5, 6, 10 and 11.
 python -m reg.bench --resolution --out bench/results.md
 
-# The layer values in every row. Derived from the type, never from a caller.
+# The layer values in every row. Derived from the type, never from a caller —
+# except HAS_ENVELOPE, whose layer follows Limits.source (issue #84) and so
+# prints as both. Not a default either way: `open_edge` refuses to write that
+# edge with no layer stated, and `layer_of` refuses to answer for its type.
 python -c "from reg import store; print(store.EDGE_SPECS); print(store.OCCURRENCE_SPECS)"
+
+# Where this artifact's limits came from. A missing key is could-not-evaluate.
+python -c "from reg import store, graph; c = store.connect('runs/long_run.sqlite'); print(store.get_meta(c, graph.META_LIMITS_SOURCE))"
 
 # The tags as invariants, including the one that fails on an untagged edge type.
 pytest tests/test_graph.py -k layer tests/test_layer_boundary.py

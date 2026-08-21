@@ -14,7 +14,7 @@ import pytest
 from shapely.geometry import LineString
 
 from reg.kinematics import clamp_to_limits, forward_kinematics, link_polygons
-from reg.types import Limits, Obstacle, ProprioState, StateFrame
+from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 
 
 def two_link(link_radius: float = 0.05) -> Limits:
@@ -25,6 +25,7 @@ def two_link(link_radius: float = 0.05) -> Limits:
         qd_max=np.array([2.0, 1.5]),
         qdd_max=np.array([10.0, 8.0]),
         link_lengths=np.array([1.0, 1.0]),
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=link_radius,
     )
 
@@ -67,6 +68,7 @@ def test_base_is_fixed_at_the_origin_and_links_are_connected() -> None:
         qd_max=np.array([1.0, 1.0, 1.0]),
         qdd_max=np.array([5.0, 5.0, 5.0]),
         link_lengths=np.array([0.5, 0.4, 0.3]),
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
     )
     segments = forward_kinematics(np.array([0.3, -1.1, 2.0]), limits)
@@ -166,6 +168,7 @@ def test_kinematics_reject_a_zero_length_link() -> None:
         qd_max=np.array([1.0, 1.0]),
         qdd_max=np.array([1.0, 1.0]),
         link_lengths=np.array([1.0, 0.0]),
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
     )
     with pytest.raises(ValueError, match="strictly positive"):
@@ -263,6 +266,7 @@ def test_clamp_clips_position_and_velocity_to_the_stated_bounds() -> None:
         qd_max=np.array([2.0, 1.0]),
         qdd_max=np.array([10.0, 10.0]),
         link_lengths=np.array([1.0, 1.0]),
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
     )
     q, qd = clamp_to_limits(np.array([5.0, -3.0]), np.array([-9.0, 0.25]), limits)
@@ -326,6 +330,7 @@ def test_clamp_rejects_inverted_position_bounds() -> None:
         qd_max=np.array([1.0, 1.0]),
         qdd_max=np.array([1.0, 1.0]),
         link_lengths=np.array([1.0, 1.0]),
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
     )
     with pytest.raises(ValueError, match="q_min exceeds"):
@@ -339,6 +344,7 @@ def test_clamp_rejects_a_negative_velocity_bound() -> None:
         qd_max=np.array([1.0, -0.5]),  # no clipped value satisfies this
         qdd_max=np.array([1.0, 1.0]),
         link_lengths=np.array([1.0, 1.0]),
+        source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
     )
     with pytest.raises(ValueError, match="non-negative magnitude"):

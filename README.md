@@ -13,7 +13,11 @@ run to terabytes per day — an assumption with a sourced range, not something t
 project measures — and on an air-gapped site they cannot leave the building at
 all. A scene graph is smaller by about two orders of magnitude: **~694x** at
 occurrence resolution over the six-month retention floor, 263 GB per robot
-against 182.5 TB of sensor log ([`docs/plan.md`](docs/plan.md) Claim 1). The
+against 182.5 TB of sensor log ([`docs/plan.md`](docs/plan.md) Claim 1) — **at a
+50 Hz control rate.** That figure is linear in the rate, because a verdict and a
+chain record are emitted per commanded action: measured at a 1 kHz manipulator
+loop it is 4.16 TB and **~44x**, which is one order of magnitude rather than
+two. The
 artifact side of that is measured; the sensor side is a **projection** from an
 assumed 1 TB/day, sourced and never measured here — the citations and the
 sensitivity analysis are in
@@ -55,7 +59,7 @@ repository as it stands, not the plan.
 
 | | Claim | Status |
 |---|---|---|
-| **1** | **Compression** — evidence graph vs. raw logged state, one size ratio per scenario | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **263 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~694x** below an assumed 182.5 TB sensor log — measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: roughly 13x *larger* per frame than a gzipped copy of the nine-float stream, published beside it because that is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve |
+| **1** | **Compression** — evidence graph vs. raw logged state, one size ratio per scenario | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **263 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~694x** below an assumed 182.5 TB sensor log **at a 50 Hz control rate** — and **4.16 TB**, **~44x**, at a 1 kHz one, because a verdict and a chain record are emitted per commanded action. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: roughly 13x *larger* per frame than a gzipped copy of the nine-float stream, published beside it because that is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
 | **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim: which audit questions the artifact answers on its own authority and which are only as strong as whatever supplied the entity positions |
 | **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no |

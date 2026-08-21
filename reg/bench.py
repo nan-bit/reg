@@ -71,6 +71,21 @@ enforcer and two hash chains — the four Layer A questions beside the four Laye
 ones. An excluded question renders as `EXCLUDED` and never as a pass: five
 silently-omitted questions under a row reading `AGREE` reads as full coverage.
 
+**8. A figure linear in an unstated parameter is not a measured figure** (issue
+#68). Enforcement emits one verdict and one chain record **per commanded
+action**, so the record layer — 3,120 of the occurrence level's 3,166 node rows —
+scales with the **control rate**, and this simulator runs at
+`reg.scenarios.DEFAULT_DT`, 50 Hz, while a real manipulator loop runs at 1 kHz.
+No document said which rate the retention figures assumed. Two things follow, and
+both are in this file: the resolution table's parameter block **states the control
+rate every one of its numbers was produced at**, and `--control-rate-hz` measures
+the curve at a ladder of rates over a **fixed run duration**, so the only thing
+that differs between two rows is how often the robot acted. The duration is held
+still deliberately — varying it too would fold the fixed schema cost's
+amortisation into a table about rate, which is the confound `--scaling` exists to
+measure separately. **Measured points only**: the table quotes the ratio between
+two measured rates and never a fitted slope, and a rate nobody ran is not in it.
+
 WHAT THIS BENCHMARK DOES NOT CLAIM
 ----------------------------------
 * The raw stream is a *simulator state stream*, not a sensor log. It is the
@@ -147,7 +162,7 @@ from reg.query import (
 # *vocabulary* this module already owns (`AGREE`/`DISAGREE`/...). Two different
 # meanings of one word inside one file is how the wrong one gets read.
 from reg.query import verdicts as verdicts_of_declaration
-from reg.scenarios import SCENARIOS, Scenario, long_run, scenario
+from reg.scenarios import DEFAULT_DT, SCENARIOS, Scenario, long_run, scenario
 from reg.sim import DEFAULT_SEED, provenance
 from reg.stream import FLOAT_PRECISION, read_frames, write_frames
 from reg.tolerances import (
@@ -161,6 +176,7 @@ from reg.world import World
 
 __all__ = [
     "AGREE",
+    "BASE_CONTROL_RATE_HZ",
     "CLAIM_1_SUCCESS_RATIO",
     "COULD_NOT_EVALUATE",
     "DISAGREE",
@@ -188,6 +204,7 @@ __all__ = [
     "AttestationAnswers",
     "AttestationTruth",
     "BenchError",
+    "ControlRatePoint",
     "Crossover",
     "GroundTruth",
     "LevelAnswers",
@@ -209,7 +226,9 @@ __all__ = [
     "measurement_keyring",
     "claim_verdict",
     "compression_ratio",
+    "control_rate_run_seconds",
     "crossover",
+    "frames_at_rate",
     "ground_truth_from_csv",
     "gzip_bytes",
     "main",
@@ -217,6 +236,7 @@ __all__ = [
     "min_separation_from_csv",
     "min_separation_from_graph",
     "render",
+    "run_control_rate_study",
     "run_resolution_curve",
     "run_scaling_point",
     "run_scenario",
@@ -362,6 +382,30 @@ RESOLUTION_FRAME_COUNT = 3_000
 #: quotes for retention and a literal 3600 in the middle of an arithmetic
 #: expression is the kind of number nobody checks.
 SECONDS_PER_HOUR = 3_600.0
+
+# --------------------------------------------------------------------------
+# THE CONTROL RATE (issue #68).
+#
+# Every retention figure this project publishes was measured on a fixture that
+# runs at `reg.scenarios.DEFAULT_DT`, and until this issue no document said so.
+# That mattered because the artifact is not rate-independent: enforcement emits
+# one verdict and one chain record per commanded action, so the record layer —
+# the majority of the occurrence level's rows since issue #59 — is **linear in
+# the control rate**, and a real manipulator loop runs at 1 kHz rather than at
+# this simulator's 50 Hz.
+#
+# So the rate is derived from the fixture rather than restated (a `50.0` here
+# would be a second definition of the frame period, and the two would drift), it
+# is printed in the report beside the numbers it produced, and `--control-rate-hz`
+# measures the curve at a ladder of rates.
+# --------------------------------------------------------------------------
+
+#: The control rate every published `reg` retention figure assumes, in Hz.
+#: `1 / reg.scenarios.DEFAULT_DT` — 50 Hz, from docs/plan.md Phase 1. Change
+#: `DEFAULT_DT` and this moves with it, which is the point: `tests/test_bench.py`
+#: asserts the documents quote this rate beside their retention figures, so a
+#: fixture that changed rate cannot leave the published figures behind.
+BASE_CONTROL_RATE_HZ = 1.0 / DEFAULT_DT
 
 # --------------------------------------------------------------------------
 # LAYER A IN THE CURVE (issue #59).
@@ -2844,6 +2888,7 @@ def run_resolution_curve(
     replan_interval_s: float = RESOLUTION_REPLAN_INTERVAL_S,
     declaration_horizon_s: float = RESOLUTION_DECLARATION_HORIZON_S,
     watchdog_period_s: float = RESOLUTION_WATCHDOG_PERIOD_S,
+    dt: float = DEFAULT_DT,
 ) -> ResolutionCurve:
     """Build the long-run fixture once and measure all three views of it.
 
@@ -2868,11 +2913,19 @@ def run_resolution_curve(
             stream's parameterization. Each decides how much of the fault
             taxonomy can fire at all, so each is a stated value printed with the
             table rather than a number invented at the call below.
+        dt: the fixture's frame period, i.e. **one over the control rate**
+            (issue #68). It is `reg.scenarios.DEFAULT_DT` unless a caller says
+            otherwise — `run_control_rate_study` is the caller that does — and
+            the curve carries it as `frame_period_s`, so the report can state
+            the rate every number in it was produced at. It is not a free
+            parameter of the *measurement*: enforcement emits one verdict and
+            one chain record per commanded action, so the record layer is linear
+            in it.
 
     Returns:
         A `ResolutionCurve`, coarsest point first.
     """
-    scn = long_run(frames)
+    scn = long_run(frames, dt=dt)
     work_dir = Path(work_dir)
     csv_path, sqlite_path = _work_paths(scn, work_dir)
 
@@ -2960,6 +3013,242 @@ def run_resolution_curve(
         declaration_horizon_s=float(declaration_horizon_s),
         watchdog_period_s=float(watchdog_period_s),
     )
+
+
+# --------------------------------------------------------------------------
+# The control-rate study (issue #68). The resolution curve, re-measured at a
+# ladder of control rates over **one fixed run duration**.
+#
+# WHAT IS HELD STILL, AND WHY IT HAS TO BE THE DURATION. Two rates cannot share
+# both a frame count and a run length; one of the two has to move. It is the
+# frame count that moves here, because the question is what a *robot-hour* of
+# evidence costs at each rate — and holding the frame count still instead would
+# measure 60 s of robot time against 3 s of it, folding the fixed
+# schema-and-index cost's amortisation (which `--scaling` measures separately,
+# and which is large at short lengths) into a table whose only variable is
+# supposed to be the rate.
+#
+# WHAT IS NOT DONE HERE. Nothing is fitted and nothing is extrapolated
+# (docs/plan.md Phase 8). The report quotes the ratio between two **measured**
+# rates and says which two; a rate nobody ran does not appear, however obvious
+# its value would look on a straight line through the ones that did.
+# --------------------------------------------------------------------------
+
+
+def control_rate_run_seconds(resolution_frames: int) -> float:
+    """The robot time the study holds constant, from `--resolution-frames`.
+
+    **Derived, not chosen.** It is the length of the ordinary resolution curve at
+    the base rate — `(resolution_frames - 1) * reg.scenarios.DEFAULT_DT` — so the
+    study's `BASE_CONTROL_RATE_HZ` row *is* the published measurement, run again
+    under the same seed and parameters. That anchoring is worth more than a free
+    duration flag: without it the ladder would be internally comparable and
+    comparable with nothing else, and the question this study exists to answer is
+    what the **published** figures do at 1 kHz.
+
+    Raises:
+        BenchError: fewer than two frames, which is not a run.
+    """
+    resolution_frames = int(resolution_frames)
+    if resolution_frames < 2:
+        raise BenchError(
+            f"resolution_frames={resolution_frames}: a run needs at least two "
+            "frames for a frame period to exist, so there is no duration to hold "
+            "constant across rates."
+        )
+    return (resolution_frames - 1) * float(DEFAULT_DT)
+
+
+def frames_at_rate(rate_hz: float, run_seconds: float) -> int:
+    """How many frames `run_seconds` of robot time is at `rate_hz`.
+
+    `run_seconds * rate_hz + 1`, and it **refuses a rate that does not divide the
+    duration into whole control steps** rather than rounding to the nearest one.
+    Rounding would silently give one row of the table a different run length from
+    the others, which is the one thing this study holds still — and the
+    difference would be invisible in a column of frame counts nobody cross-checks
+    against a duration.
+
+    Raises:
+        BenchError: a non-positive or non-finite rate or duration, or a rate that
+            does not land a whole number of steps in the duration.
+    """
+    rate_hz = float(rate_hz)
+    run_seconds = float(run_seconds)
+    for label, value in (("rate", rate_hz), ("run duration", run_seconds)):
+        if not math.isfinite(value) or value <= 0.0:
+            raise BenchError(
+                f"{label} is {value}; a control-rate point needs a finite, "
+                "positive rate and a finite, positive duration to be a "
+                "measurement of anything."
+            )
+    steps = run_seconds * rate_hz
+    if abs(steps - round(steps)) > 1e-6:
+        raise BenchError(
+            f"{rate_hz} Hz over {run_seconds} s is {steps} control steps, which "
+            "is not a whole number. Rounding it would measure this rate over a "
+            "different run length from every other row in the table, and the "
+            "study holds the run length still so that the rate is the only "
+            "thing that differs."
+        )
+    return int(round(steps)) + 1
+
+
+@dataclass(frozen=True)
+class ControlRatePoint:
+    """One control rate, measured: the whole resolution curve at that rate.
+
+    The curve rather than a byte count, because "what does 1 kHz cost" is not a
+    question with one number in it — it has one per resolution level, and each
+    comes with the verdicts saying whether that level still answers anything.
+    A rate that halved the artifact by ceasing to record the faults would show up
+    here as a `DISAGREE`, and a table of sizes alone would have called it a win.
+    """
+
+    rate_hz: float
+    curve: ResolutionCurve
+
+    @property
+    def dt(self) -> float:
+        """The frame period actually used, read off the curve's own fixture."""
+        return self.curve.frame_period_s
+
+    @property
+    def frames(self) -> int:
+        return self.curve.frames
+
+    @property
+    def run_seconds(self) -> float:
+        return self.curve.run_seconds
+
+    def level(self, level: str) -> ResolutionPoint:
+        """This rate's measurement of one resolution level."""
+        for point in self.curve.points:
+            if point.level == level:
+                return point
+        raise BenchError(
+            f"{self.rate_hz} Hz: no point for level {level!r}. A missing level is "
+            "a measurement that did not happen, not a level that cost nothing."
+        )
+
+
+def rate_multiple(
+    points: Sequence[ControlRatePoint], level: str
+) -> tuple[float, float, float]:
+    """`(bytes/hour at the lowest rate, at the highest, the ratio between them)`.
+
+    **Two measured points and the arithmetic between them**, exactly as the
+    scaling table's marginal columns are: no slope is fitted and no third rate is
+    inferred from the two. The ratio is what a reader wants — "what does going to
+    1 kHz do to the retention figure" — and stating the two rates it was computed
+    from is what stops it being read as a law.
+    """
+    if len(points) < 2:
+        raise BenchError(
+            f"a rate multiple needs two measured rates and there "
+            f"{'is 1' if len(points) == 1 else 'are 0'}. One point is a "
+            "measurement; the change between two is what this column reports."
+        )
+    ordered = sorted(points, key=lambda p: p.rate_hz)
+    low = ordered[0].level(level).bytes_per_hour
+    high = ordered[-1].level(level).bytes_per_hour
+    if low <= 0.0:  # pragma: no cover - a level of zero bytes is a build failure
+        raise BenchError(
+            f"{level}: the lowest measured rate reports {low} bytes/hour, so a "
+            "multiple against it is a division by zero."
+        )
+    return low, high, high / low
+
+
+def run_control_rate_study(
+    rates_hz: Sequence[float],
+    work_dir: str | Path,
+    *,
+    run_seconds: float,
+    seed: int,
+    horizon: float,
+    n_samples: int,
+    envelope_seed: int,
+    substep_dt: float,
+    occurrence_resolution_s: float,
+    timing_repeats: int = TIMING_REPEATS,
+    replan_interval_s: float = RESOLUTION_REPLAN_INTERVAL_S,
+    declaration_horizon_s: float = RESOLUTION_DECLARATION_HORIZON_S,
+    watchdog_period_s: float = RESOLUTION_WATCHDOG_PERIOD_S,
+    progress: Callable[[str], None] | None = None,
+) -> tuple[ControlRatePoint, ...]:
+    """Measure the resolution curve once per rate, over one fixed duration.
+
+    Every argument other than `rates_hz` is held identical across the ladder —
+    same seed, same envelope parameters, same record parameterization, same
+    robot time — so the difference between two rows is the control rate and the
+    frame count it implies, and nothing else.
+
+    Args:
+        rates_hz: the rates to measure, in Hz. **No default anywhere up this call
+            chain**: the rate is precisely the parameter issue #68 found
+            unstated, and a study that picked its own would restate the problem
+            one level down. At least two, or there is no curve.
+        run_seconds: robot time per point, from `control_rate_run_seconds`.
+        progress: called with a line per point, for a CLI that would otherwise
+            sit silent through an hour of envelopes. It receives no measurement
+            and returns none.
+
+    Returns:
+        One `ControlRatePoint` per rate, lowest rate first.
+
+    Raises:
+        BenchError: fewer than two rates, a repeated rate, or a rate that does
+            not divide `run_seconds` into whole control steps.
+    """
+    rates = [float(r) for r in rates_hz]
+    if len(rates) < 2:
+        raise BenchError(
+            f"the control-rate study was given {len(rates)} rate(s). A single "
+            "point is the ordinary resolution curve; this study exists to "
+            "measure how the figure *moves* with rate, which needs two."
+        )
+    if len(set(rates)) != len(rates):
+        raise BenchError(
+            f"the control-rate ladder {rates} repeats a rate. The same rate "
+            "measured twice is one row printed twice, not two points."
+        )
+
+    points: list[ControlRatePoint] = []
+    for rate in sorted(rates):
+        frames = frames_at_rate(rate, run_seconds)
+        if progress is not None:
+            progress(
+                f"control rate {rate:g} Hz: long_run at {frames} frames "
+                f"(dt={1.0 / rate:g} s, {run_seconds:g} s of robot time)"
+            )
+        points.append(
+            ControlRatePoint(
+                rate_hz=rate,
+                curve=run_resolution_curve(
+                    frames,
+                    # One directory per rate. Two rates cannot collide on a
+                    # fixture name here — the frame counts differ by
+                    # construction — but a shared directory would leave the
+                    # views of one rate sitting beside those of another, and the
+                    # first person to look at `--work-dir` afterwards would have
+                    # to know that to read it.
+                    Path(work_dir) / f"rate-{rate:g}hz",
+                    seed=seed,
+                    horizon=horizon,
+                    n_samples=n_samples,
+                    envelope_seed=envelope_seed,
+                    substep_dt=substep_dt,
+                    occurrence_resolution_s=occurrence_resolution_s,
+                    timing_repeats=timing_repeats,
+                    replan_interval_s=replan_interval_s,
+                    declaration_horizon_s=declaration_horizon_s,
+                    watchdog_period_s=watchdog_period_s,
+                    dt=1.0 / rate,
+                ),
+            )
+        )
+    return tuple(points)
 
 
 # --------------------------------------------------------------------------
@@ -3354,6 +3643,17 @@ def _scaling_section(
     return lines
 
 
+def _rate_text(value: float) -> str:
+    """A control rate in the units a control engineer states one in.
+
+    kHz above a thousand, because "1,000.0 Hz" and "1 kHz" are the same number
+    and only one of them is what the reader of a servo datasheet is holding.
+    """
+    if value >= 1_000.0:
+        return f"{value / 1_000.0:g} kHz"
+    return f"{value:g} Hz"
+
+
 def _bytes_per_hour_text(value: float) -> str:
     """Bytes/hour at the magnitude a retention policy is written in."""
     if value >= 1e9:
@@ -3617,6 +3917,16 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
                 "variable; here it is held still so resolution can be",
             ),
             (
+                "**control rate**",
+                f"**{_rate_text(1.0 / curve.frame_period_s)}** "
+                f"(dt = {curve.frame_period_s:g} s)",
+                "**every byte count below is linear in this** (issue #68): "
+                "enforcement emits one verdict and one chain record per "
+                "commanded action, and no resolution level coarsens them. A real "
+                "manipulator loop runs at 1 kHz; `--control-rate-hz` measures the "
+                "ladder",
+            ),
+            (
                 "envelope samples",
                 _int_text(curve.n_samples),
                 "compute cost and which frames count as overlapping; since issue "
@@ -3796,6 +4106,200 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
     return lines
 
 
+def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
+    """How the three retention figures move with the control rate (issue #68).
+
+    The finding this section exists to make impossible to miss: the headline
+    retention figure is **linear in a parameter no document named**, and the
+    value this simulator runs at is not the value a manipulator runs at. So the
+    table is the same three levels at every measured rate, in bytes/hour, with
+    the multiple between the lowest and highest **measured** rates beside them.
+
+    Nothing is fitted. The multiple is arithmetic between two rows that were both
+    run; the rates in between that were also run are printed as themselves, and a
+    rate nobody ran does not appear.
+    """
+    if len(points) < 2:
+        raise BenchError(
+            f"the control-rate study has {len(points)} point(s). A section with "
+            "one rate in it would print the ordinary curve under a heading "
+            "promising a comparison, and a reader would take the promise."
+        )
+    ordered = sorted(points, key=lambda p: p.rate_hz)
+    lowest, highest = ordered[0], ordered[-1]
+
+    lines = [
+        "",
+        "## What the control rate costs",
+        "",
+        "**The retention figure is linear in a parameter that went unstated for",
+        "three milestones** (issue #68). Enforcement emits one verdict and one",
+        "chain record **per commanded action**, no resolution level coarsens",
+        "either, and since issue #59 those records are the *majority* of the",
+        "occurrence level's rows. So every bytes/hour figure this project",
+        f"publishes is a figure at **{_rate_text(BASE_CONTROL_RATE_HZ)}**, which",
+        "is what `reg.scenarios.DEFAULT_DT` runs at. A real manipulator control",
+        "loop runs at 1 kHz.",
+        "",
+        "**What is held still.** One fixed run duration —",
+        f"{lowest.run_seconds:,.2f} s of robot time — one seed, one set of",
+        "envelope parameters, one record parameterization. The frame count moves,",
+        "because it has to: two rates cannot share both a duration and a frame",
+        "count, and holding the frame count still instead would compare a minute",
+        "of robot time against seconds of it, which measures how the fixed schema",
+        "cost amortises (that is `--scaling`) rather than what the rate costs.",
+        "",
+        "**Measured points only.** No slope is fitted and no rate is inferred.",
+        "The `x` column is arithmetic between the two measured endpoints and says",
+        "which two they are.",
+        "",
+    ]
+    lines += _table(
+        ("held constant", "value"),
+        [
+            ("fixture", f"`reg.scenarios.long_run`, {lowest.curve.scenario} at the base rate"),
+            ("robot time per point", f"{lowest.run_seconds:,.2f} s"),
+            ("envelope samples", _int_text(lowest.curve.n_samples)),
+            ("occurrence resolution", f"{lowest.curve.occurrence_resolution_s} s"),
+            ("replan interval", f"{lowest.curve.replan_interval_s} s"),
+            ("declaration horizon", f"{lowest.curve.declaration_horizon_s} s"),
+            ("watchdog period", f"{lowest.curve.watchdog_period_s} s"),
+        ],
+    )
+    lines += [
+        "",
+        "### The retention figure at each measured rate",
+        "",
+    ]
+
+    lines += _table(
+        (
+            "level",
+            *[_rate_text(p.rate_hz) for p in ordered],
+            f"x, {_rate_text(lowest.rate_hz)} -> {_rate_text(highest.rate_hz)}",
+        ),
+        [
+            (
+                f"`{level}`",
+                *[
+                    _bytes_per_hour_text(p.level(level).bytes_per_hour)
+                    for p in ordered
+                ],
+                f"**{_ratio_text(rate_multiple(ordered, level)[2])}**",
+            )
+            for level in RESOLUTION_LEVELS
+        ],
+    )
+
+    lines += [
+        "",
+        "### What each rate actually ran, and whether it still answered",
+        "",
+        "A cheaper artifact that stopped answering is not a cheaper artifact. The",
+        "verdict column is the whole curve's verdict at that rate, the column",
+        "beside it names the questions that level no longer answers, and",
+        "`COULD-NOT-EVALUATE` never resolves to `AGREE` here either.",
+        "",
+        "**Watch the finer levels as the rate rises.** The edge layer's endpoints",
+        f"are quantized to `TIME_TOL_S` = {TIME_TOL_S} s, which is a **coarser**",
+        "period than the control loop at any rate above",
+        f"{_rate_text(1.0 / TIME_TOL_S)}. That is not a parameter this study is",
+        "allowed to move — widening or narrowing a tolerance changes what the",
+        "artifact claims rather than what it costs — so where a level stops",
+        "agreeing at a high rate, that is the measurement.",
+        "",
+    ]
+    rows = []
+    for p in ordered:
+        for level in RESOLUTION_LEVELS:
+            point = p.level(level)
+            rows.append(
+                (
+                    _rate_text(p.rate_hz),
+                    f"{p.dt:g} s",
+                    _int_text(p.frames),
+                    f"`{level}`",
+                    _int_text(point.size_bytes),
+                    _bytes_per_hour_text(point.bytes_per_hour),
+                    _int_text(point.nodes),
+                    _int_text(point.records),
+                    _int_text(point.edges),
+                    point.verdict,
+                    _lost_text(point),
+                )
+            )
+    lines += _table(
+        (
+            "rate",
+            "dt",
+            "frames",
+            "level",
+            "SQLite B",
+            "bytes/hour",
+            "nodes",
+            "records",
+            "edges",
+            "all queries",
+            "what you lose",
+        ),
+        rows,
+    )
+
+    lines += [
+        "",
+        "### Why it moves",
+        "",
+        "The record layer, measured at each rate — this is the term that scales:",
+        "",
+    ]
+    lines += _table(
+        ("rate", "frames", "declarations", "verdicts", "faults", "chain records"),
+        [
+            (
+                _rate_text(p.rate_hz),
+                _int_text(p.frames),
+                *[
+                    _int_text(p.curve.attestation_counts[name])
+                    for name in ("declarations", "verdicts", "faults", "chain_records")
+                ],
+            )
+            for p in ordered
+        ],
+    )
+
+    occurrence_multiple = rate_multiple(ordered, OCCURRENCE_LEVEL)[2]
+    lines += [
+        "",
+        "**One verdict per commanded action.** The verdict count tracks the frame",
+        "count exactly, and the declaration count tracks the replan interval, which",
+        "is a wall-clock period and therefore does *not* move with the rate. That",
+        "asymmetry is the mechanism: the declarations are the same records at every",
+        "rate and the verdicts are not.",
+        "",
+        f"**Between {_rate_text(lowest.rate_hz)} and "
+        f"{_rate_text(highest.rate_hz)} the occurrence level — the one",
+        "`docs/plan.md` Claim 1 leads with — costs",
+        f"{_ratio_text(occurrence_multiple)} as much per hour of robot time.**",
+        "Whether that leaves the claim inside its stated band is a question about",
+        "the *sensor* side of the comparison, which nothing in this simulator",
+        "measures: `docs/sensor-baseline.md` carries the assumption, its sourced",
+        "range and the arithmetic, and this table is the artifact side of it.",
+        "",
+        "### What this table is not",
+        "",
+        "* **Not a claim that 1 kHz is the right rate**, or that 50 Hz is. Both",
+        "  are measured here; which one a fielded robot runs at is a fact about",
+        "  that robot, and the report states the rate rather than choosing one.",
+        "* **Not a fitted curve.** Two measured endpoints and the ratio between",
+        "  them. `docs/plan.md` Phase 8 forbids presenting an extrapolation as a",
+        "  measurement, and a straight line through these points would be one.",
+        "* **Not a design change.** Declaring per behaviour segment rather than",
+        "  per control step would cut the term that scales; issue #68 holds that",
+        "  decision open and explicitly does not take it here.",
+    ]
+    return lines
+
+
 def render(
     results: Sequence[ScenarioResult],
     *,
@@ -3809,6 +4313,7 @@ def render(
     scaling: Sequence[ScalingPoint] = (),
     scaling_control: ScalingPoint | None = None,
     resolution: ResolutionCurve | None = None,
+    control_rates: Sequence[ControlRatePoint] = (),
 ) -> str:
     """The whole report as markdown. Pure — same results in, same string out.
 
@@ -3817,9 +4322,10 @@ def render(
     one. `scaling_control` is the shortest ladder length re-measured at a
     different `n_samples`; it is reported beside the ladder and never mixed into
     it. `resolution` is the curve over resolution levels (issue #35) and is
-    likewise absent rather than empty when it was not run.
+    likewise absent rather than empty when it was not run. `control_rates` is the
+    ladder of control rates (issue #68) and is absent on the same terms.
     """
-    if not results and not scaling and resolution is None:
+    if not results and not scaling and resolution is None and not control_rates:
         raise BenchError(
             "no scenarios were benchmarked, so there is no table to write. An "
             "empty report reads as 'the graph compresses nothing measured', "
@@ -3831,6 +4337,7 @@ def render(
         timed.append(scaling_control.result)
     if resolution is not None:
         timed.append(resolution.source)
+    timed += [p.curve.source for p in control_rates]
 
     lines: list[str] = [
         "# Compression benchmark — Claim 1",
@@ -3899,6 +4406,9 @@ def render(
 
     if resolution is not None:
         lines += _resolution_section(resolution)
+
+    if control_rates:
+        lines += _control_rate_section(control_rates)
 
     if scaling:
         lines += _scaling_section(scaling, scaling_control, n_samples=n_samples)
@@ -4244,6 +4754,46 @@ def _frame_counts(raw: str) -> tuple[int, ...]:
     return tuple(counts)
 
 
+def _rates(raw: str) -> tuple[float, ...]:
+    """A comma-separated ladder of control rates in Hz, checked for being one.
+
+    Strictly increasing and at least two, for the reasons `_frame_counts` gives
+    and one more: the report quotes the multiple between the lowest and the
+    highest measured rate, and a list nobody ordered would make "lowest" a
+    statement about typing order.
+    """
+    rates: list[float] = []
+    for part in str(raw).split(","):
+        text = part.strip()
+        if not text:
+            raise argparse.ArgumentTypeError(
+                f"{raw!r} has an empty entry; the ladder is a comma-separated "
+                "list of control rates in Hz, e.g. 50,250,1000"
+            )
+        try:
+            value = float(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+        if not math.isfinite(value) or value <= 0.0:
+            raise argparse.ArgumentTypeError(
+                f"{value}: a control rate must be finite and positive"
+            )
+        if rates and value <= rates[-1]:
+            raise argparse.ArgumentTypeError(
+                f"{value} does not come after {rates[-1]}: the rates must be "
+                "strictly increasing, or the multiple the report quotes between "
+                "the lowest and the highest becomes a claim about typing order"
+            )
+        rates.append(value)
+    if len(rates) < 2:
+        raise argparse.ArgumentTypeError(
+            f"{raw!r} is {len(rates)} rate(s). One rate is the ordinary "
+            "resolution curve (`--resolution`); this study measures how the "
+            "figure moves with rate, which needs at least two."
+        )
+    return tuple(rates)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m reg.bench",
@@ -4279,6 +4829,23 @@ def _parser() -> argparse.ArgumentParser:
             "views of one build, with bytes/hour and whether every supported "
             "query still AGREEs. Can be given on its own. This is Claim 1 as it "
             "stands after issue #30."
+        ),
+    )
+    parser.add_argument(
+        "--control-rate-hz",
+        type=_rates,
+        default=None,
+        metavar="HZ,HZ,...",
+        help=(
+            "measure the resolution curve at each of these control rates, over "
+            "one fixed run duration, and report how the three retention figures "
+            "move (issue #68). **No default**, and there must not be one: the "
+            "control rate is exactly the parameter that went unstated under every "
+            "published retention figure, and a ladder this flag picked for itself "
+            "would restate the problem one level down. Two rates minimum, "
+            "strictly increasing, e.g. `--control-rate-hz 50,250,1000`. Can be "
+            "given on its own. Expect the cost to scale with the rates: at 1 kHz "
+            "one point is 20x the frames of the 50 Hz point."
         ),
     )
     parser.add_argument(
@@ -4380,7 +4947,10 @@ def _parser() -> argparse.ArgumentParser:
             f"run length for --resolution (default: {RESOLUTION_FRAME_COUNT}, "
             "the middle rung of issue #30's ladder — one moderate length is "
             "enough to establish a curve whose variable is resolution, not "
-            "length)."
+            "length). It also fixes the robot time --control-rate-hz holds "
+            f"constant: this many frames at {BASE_CONTROL_RATE_HZ:g} Hz, so that "
+            "study's base-rate row is the published curve rather than a second "
+            "measurement of something near it."
         ),
     )
     parser.add_argument(
@@ -4461,11 +5031,12 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list
     if args.all:
         return list(SCENARIOS)
     if not args.scenario:
-        if args.scaling or args.resolution:
+        if args.scaling or args.resolution or args.control_rate_hz:
             return []
         parser.error(
             "nothing to benchmark: pass --all, --scenario NAME (repeatable), "
-            f"--scaling or --resolution. Known scenarios: {', '.join(SCENARIOS)}."
+            "--scaling, --resolution or --control-rate-hz. Known scenarios: "
+            f"{', '.join(SCENARIOS)}."
         )
     unknown = [name for name in args.scenario if name not in SCENARIOS]
     if unknown:
@@ -4492,6 +5063,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     scaling: list[ScalingPoint] = []
     control: ScalingPoint | None = None
     resolution: ResolutionCurve | None = None
+    control_rates: tuple[ControlRatePoint, ...] = ()
     try:
         for name in names:
             print(f"benchmarking {name}...", file=sys.stderr, flush=True)
@@ -4528,6 +5100,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 replan_interval_s=args.resolution_replan_interval,
                 declaration_horizon_s=args.resolution_declaration_horizon,
                 watchdog_period_s=args.resolution_watchdog_period,
+            )
+        if args.control_rate_hz:
+            run_seconds = control_rate_run_seconds(args.resolution_frames)
+            print(
+                "measuring the control-rate ladder "
+                f"{','.join(f'{r:g}' for r in args.control_rate_hz)} Hz over "
+                f"{run_seconds:g} s of robot time each "
+                f"(n_samples={args.resolution_n_samples})...",
+                file=sys.stderr,
+                flush=True,
+            )
+            control_rates = run_control_rate_study(
+                args.control_rate_hz,
+                work_dir / "control-rate",
+                run_seconds=run_seconds,
+                seed=args.seed,
+                horizon=args.horizon,
+                n_samples=args.resolution_n_samples,
+                envelope_seed=args.envelope_seed,
+                substep_dt=args.substep_dt,
+                occurrence_resolution_s=args.occurrence_resolution,
+                replan_interval_s=args.resolution_replan_interval,
+                declaration_horizon_s=args.resolution_declaration_horizon,
+                watchdog_period_s=args.resolution_watchdog_period,
+                progress=lambda line: print(line + "...", file=sys.stderr, flush=True),
             )
         if args.scaling:
             for frames in args.scaling_frames:
@@ -4584,6 +5181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scaling=scaling,
             scaling_control=control,
             resolution=resolution,
+            control_rates=control_rates,
         )
     except (BenchError, graph.GraphBuildError, store.StoreError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -4608,6 +5206,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         measured.append(control.result)
     if resolution is not None:
         measured.append(resolution.source)
+    measured += [p.curve.source for p in control_rates]
     failed = [r for r in measured if r.check.verdict != AGREE]
     for r in failed:
         print(
@@ -4636,9 +5235,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{point.verdict}; loses {_lost_text(point)}",
                 file=sys.stderr,
             )
+    for rate_point in control_rates:
+        for point in rate_point.curve.points:
+            print(
+                f"control rate {rate_point.rate_hz:g} Hz "
+                f"({rate_point.frames} frames): {point.level}: "
+                f"{point.size_bytes} B "
+                f"({_bytes_per_hour_text(point.bytes_per_hour)}) -> "
+                f"{point.verdict}",
+                file=sys.stderr,
+            )
+    if control_rates:
+        for level in RESOLUTION_LEVELS:
+            low, high, multiple = rate_multiple(control_rates, level)
+            ordered = sorted(control_rates, key=lambda p: p.rate_hz)
+            print(
+                f"control rate: {level}: "
+                f"{_bytes_per_hour_text(low)} at {ordered[0].rate_hz:g} Hz -> "
+                f"{_bytes_per_hour_text(high)} at {ordered[-1].rate_hz:g} Hz "
+                f"= {_ratio_text(multiple)}",
+                file=sys.stderr,
+            )
     print(
         f"wrote {out}: scenarios={len(results)} scaling_points={len(scaling)} "
         f"resolution_levels={0 if resolution is None else len(resolution.points)} "
+        f"control_rates={len(control_rates)} "
         f"seed={args.seed}"
     )
     return EXIT_CHECK_FAILED if failed else EXIT_OK

@@ -37,14 +37,16 @@ call so no test depends on a default staying put.
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
+import re
 import shutil
 from pathlib import Path
 
 import pytest
 from shapely.ops import unary_union
 
-from reg import bench, graph, query, store
+from reg import bench, graph, query, scenarios, store
 from reg.bench import (
     AGREE,
     COULD_NOT_EVALUATE,
@@ -2524,3 +2526,506 @@ def test_the_report_prints_the_record_parameterisation(attested) -> None:
     assert "attest to nothing" in report
     for name, count in curve.attestation_counts.items():
         assert f"{count:,}" in report, name
+
+
+# --------------------------------------------------------------------------
+# THE CONTROL RATE (issue #68).
+#
+# THE TESTS THIS SECTION EXISTS FOR: `test_the_verdict_count_is_one_per_commanded
+# _action_and_the_declarations_are_not` and the two document checks under
+# "Drift". The finding this section was written against is a headline retention
+# figure that is **linear in a parameter no document named**: enforcement emits
+# one verdict and one chain record per commanded action, so the level that
+# carries Claim 1 scales with the control rate, and this simulator runs at 50 Hz
+# while a real manipulator loop runs at 1 kHz.
+#
+# So there are three kinds of test here. The arithmetic of a rate ladder, worked
+# by hand and refused where it would have to round. The mechanism, asserted as an
+# invariant rather than as a byte count — verdicts track the frame count, and the
+# declarations, whose interval is wall-clock, do not. And a check that the
+# published figures and the rate they were measured at cannot drift apart, fed
+# the condition it guards against.
+# --------------------------------------------------------------------------
+
+
+def test_the_base_rate_is_the_fixture_rate_and_is_not_restated() -> None:
+    """50 Hz, derived from `reg.scenarios.DEFAULT_DT` rather than typed here.
+
+    A literal `50.0` in `reg.bench` would be a second definition of the frame
+    period, and the two would drift the first time either moved — which is the
+    shape of the bug this whole section is about.
+    """
+    assert bench.BASE_CONTROL_RATE_HZ == 1.0 / scenarios.DEFAULT_DT
+
+
+def test_frames_at_rate_is_the_duration_in_control_steps() -> None:
+    """Hand-worked. 59.98 s is 2,999 steps at 50 Hz and 59,980 at 1 kHz, and a
+    run is one frame longer than it has steps."""
+    assert bench.frames_at_rate(50.0, 59.98) == 3_000
+    assert bench.frames_at_rate(1_000.0, 59.98) == 59_981
+    assert bench.frames_at_rate(100.0, 1.0) == 101
+
+
+def test_a_rate_that_does_not_divide_the_run_is_refused() -> None:
+    """**The negative test.** Rounding would give one row of the table a
+    different run length from the others, and the study holds the run length
+    still so that the rate is the only thing that differs."""
+    with pytest.raises(BenchError, match="not a whole number"):
+        bench.frames_at_rate(3.0, 0.58)
+
+
+@pytest.mark.parametrize(
+    ("rate", "run_seconds"),
+    [(0.0, 60.0), (-50.0, 60.0), (50.0, 0.0), (50.0, -1.0), (float("inf"), 60.0)],
+)
+def test_a_rate_or_duration_that_is_not_a_measurement_is_refused(
+    rate: float, run_seconds: float
+) -> None:
+    with pytest.raises(BenchError, match="finite, positive"):
+        bench.frames_at_rate(rate, run_seconds)
+
+
+def test_the_base_rate_row_is_the_published_curve_and_not_something_near_it() -> None:
+    """**The anchoring invariant.** The duration the study holds constant is the
+    published curve's own length, so its base-rate row is that curve re-run under
+    the same seed and parameters rather than a second measurement of something
+    nearby. Without this the ladder would be internally comparable and comparable
+    with nothing else — and what the study exists to answer is what the
+    *published* figures do at 1 kHz."""
+    run_seconds = bench.control_rate_run_seconds(bench.RESOLUTION_FRAME_COUNT)
+    assert run_seconds == (bench.RESOLUTION_FRAME_COUNT - 1) * scenarios.DEFAULT_DT
+    assert (
+        bench.frames_at_rate(bench.BASE_CONTROL_RATE_HZ, run_seconds)
+        == bench.RESOLUTION_FRAME_COUNT
+    )
+
+
+def test_a_run_with_no_frame_period_has_no_duration_to_hold_constant() -> None:
+    with pytest.raises(BenchError, match="at least two frames"):
+        bench.control_rate_run_seconds(1)
+
+
+@pytest.mark.parametrize("raw", ["50", "1000", ""])
+def test_one_rate_is_not_a_ladder_at_the_cli(raw: str) -> None:
+    """A single rate is the ordinary resolution curve. A section headed with a
+    comparison and holding one row would be read as the comparison."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        bench._rates(raw)
+
+
+@pytest.mark.parametrize("raw", ["1000,50", "50,50", "50,abc", "50,-1", "50,0"])
+def test_a_ladder_that_is_not_a_ladder_is_refused_at_the_cli(raw: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        bench._rates(raw)
+
+
+def test_the_cli_has_no_default_control_rate() -> None:
+    """**No default, and there must not be one** (CLAUDE.md, and the whole point
+    of issue #68). The rate is exactly the parameter that went unstated under
+    every published retention figure; a ladder this flag picked for itself would
+    restate the problem one level down."""
+    assert bench._parser().get_default("control_rate_hz") is None
+
+
+#: Two rates an order apart, over a run short enough to build twice inside a
+#: test. Not golden: every assertion below is about how the two points differ,
+#: never about what either one measures.
+_LADDER_FRAMES = 30
+_LADDER_RATES = (50.0, 250.0)
+
+
+@pytest.fixture(scope="module")
+def rate_ladder(tmp_path_factory) -> tuple[bench.ControlRatePoint, ...]:
+    """One real control-rate study at two rates. Built once."""
+    work = tmp_path_factory.mktemp("control-rate")
+    return bench.run_control_rate_study(
+        _LADDER_RATES,
+        work,
+        run_seconds=bench.control_rate_run_seconds(_LADDER_FRAMES),
+        seed=0,
+        timing_repeats=1,
+        **_FAST,
+    )
+
+
+def test_the_study_holds_the_run_duration_still_and_moves_the_frame_count(
+    rate_ladder,
+) -> None:
+    """The design of the experiment, asserted rather than described.
+
+    Two rates cannot share both a duration and a frame count. It is the frame
+    count that moves, because holding *it* still instead would compare a minute
+    of robot time against seconds of it — measuring how the fixed schema cost
+    amortises, which is what `--scaling` is for, inside a table whose only
+    variable is supposed to be the rate.
+    """
+    durations = {round(p.run_seconds, 9) for p in rate_ladder}
+    assert len(durations) == 1, f"the run length moved between rates: {durations}"
+    assert [p.rate_hz for p in rate_ladder] == sorted(_LADDER_RATES)
+    assert [p.frames for p in rate_ladder] == sorted(p.frames for p in rate_ladder)
+    for point in rate_ladder:
+        assert point.dt == pytest.approx(1.0 / point.rate_hz)
+        assert point.curve.frame_period_s == pytest.approx(1.0 / point.rate_hz)
+
+
+def test_the_verdict_count_is_one_per_commanded_action_and_the_declarations_are_not(
+    rate_ladder,
+) -> None:
+    """**THE TEST THIS ISSUE EXISTS FOR.** The mechanism, as an invariant.
+
+    Enforcement adjudicates every commanded action, so the verdict count *is* the
+    frame count and scales with the rate. The policy replans on a wall-clock
+    interval, so its declaration count does not move at all when the rate does.
+    That asymmetry is why the retention figure is linear in the control rate, and
+    it is asserted here rather than left to be read off a table of byte counts —
+    a byte count that stopped scaling would look like an improvement.
+    """
+    declarations = {p.curve.attestation_counts["declarations"] for p in rate_ladder}
+    assert len(declarations) == 1, (
+        f"the declaration count moved with the control rate: {declarations}. The "
+        "replan interval is a wall-clock period; if this moved, the fixture's "
+        "policy is being driven by the frame clock and the study's explanation "
+        "of its own finding is wrong."
+    )
+    for point in rate_ladder:
+        counts = point.curve.attestation_counts
+        assert counts["verdicts"] == point.frames, (
+            f"{point.rate_hz} Hz: {counts['verdicts']} verdicts for "
+            f"{point.frames} frames. One verdict per commanded action is the "
+            "premise of the whole finding."
+        )
+        assert counts["chain_records"] == counts["verdicts"] + counts["declarations"]
+
+
+def test_the_records_retained_grow_with_the_rate_at_every_level(rate_ladder) -> None:
+    """The record layer is not coarsened by any resolution level, so the row
+    count rises with the rate at all three — including the coarsest, which is the
+    one docs/plan.md Claim 1 leads with."""
+    low, high = rate_ladder[0], rate_ladder[-1]
+    for level in bench.RESOLUTION_LEVELS:
+        assert high.level(level).records > low.level(level).records, level
+
+
+def test_rate_multiple_is_arithmetic_between_two_measured_points(rate_ladder) -> None:
+    """Two measured endpoints and the ratio between them — nothing fitted."""
+    for level in bench.RESOLUTION_LEVELS:
+        low, high, multiple = bench.rate_multiple(rate_ladder, level)
+        assert low == rate_ladder[0].level(level).bytes_per_hour
+        assert high == rate_ladder[-1].level(level).bytes_per_hour
+        assert multiple == high / low
+
+
+def test_one_point_is_not_a_multiple(rate_ladder) -> None:
+    """The negative: a ratio needs two measurements, and one that quietly
+    returned 1.0x would read as 'the rate costs nothing'."""
+    with pytest.raises(BenchError, match="two measured rates"):
+        bench.rate_multiple(rate_ladder[:1], bench.OCCURRENCE_LEVEL)
+    with pytest.raises(BenchError, match="measure how the figure"):
+        bench.run_control_rate_study(
+            [50.0],
+            "unused",
+            run_seconds=1.0,
+            seed=0,
+            timing_repeats=1,
+            **_FAST,
+        )
+
+
+def test_a_repeated_rate_is_one_row_printed_twice(tmp_path: Path) -> None:
+    with pytest.raises(BenchError, match="repeats a rate"):
+        bench.run_control_rate_study(
+            [50.0, 50.0],
+            tmp_path,
+            run_seconds=1.0,
+            seed=0,
+            timing_repeats=1,
+            **_FAST,
+        )
+
+
+def test_a_level_that_stopped_answering_at_a_high_rate_is_not_hidden(rate_ladder) -> None:
+    """A cheaper artifact that stopped answering is not a cheaper artifact.
+
+    Every level at every rate carries a verdict and the questions it lost, and
+    `COULD-NOT-EVALUATE` never resolves to `AGREE`. This asserts the *shape* —
+    that the report cannot show a byte count without the verdict beside it —
+    rather than which verdict this fixture happens to produce.
+    """
+    report = render([], sensor_multiplier=None, control_rates=rate_ladder, **_RENDER_ARGS)
+    assert "## What the control rate costs" in report
+    assert "what you lose" in report
+    for point in rate_ladder:
+        for level in bench.RESOLUTION_LEVELS:
+            assert point.level(level).verdict in (
+                AGREE,
+                DISAGREE,
+                COULD_NOT_EVALUATE,
+            )
+    assert "Not a fitted curve" in report
+
+
+def test_the_report_states_the_rate_every_number_in_it_was_measured_at(
+    rate_ladder,
+) -> None:
+    """The fix for the finding, in the report itself: no byte count appears
+    without the control rate that produced it stated in the same section."""
+    report = render([], sensor_multiplier=None, control_rates=rate_ladder, **_RENDER_ARGS)
+    for point in rate_ladder:
+        assert bench._rate_text(point.rate_hz) in report
+    assert "1 kHz" in report
+
+
+def test_a_report_with_no_control_rate_ladder_carries_no_such_section(
+    attested,
+) -> None:
+    """Absent, not empty — the same rule the scaling and resolution sections
+    follow."""
+    curve, _, _ = attested
+    report = render([], sensor_multiplier=None, resolution=curve, **_RENDER_ARGS)
+    assert "## What the control rate costs" not in report
+
+
+def test_the_resolution_table_states_the_control_rate_it_was_measured_at(
+    attested,
+) -> None:
+    """**The single-curve half of the fix.** `--resolution` on its own now says
+    which rate its figures assume; before issue #68 nothing did, in this report
+    or in any document."""
+    curve, _, _ = attested
+    report = render([], sensor_multiplier=None, resolution=curve, **_RENDER_ARGS)
+    assert "control rate" in report
+    assert bench._rate_text(1.0 / curve.frame_period_s) in report
+    assert "linear in this" in report
+
+
+def test_a_ladder_with_one_point_is_not_a_section(rate_ladder) -> None:
+    with pytest.raises(BenchError, match="promising a comparison"):
+        render([], sensor_multiplier=None, control_rates=rate_ladder[:1], **_RENDER_ARGS)
+
+
+def test_cli_control_rate_writes_the_ladder(tmp_path: Path) -> None:
+    """The issue's verification command, at a length a test can afford."""
+    out = tmp_path / "control-rate.md"
+    code = bench.main(
+        [
+            "--control-rate-hz",
+            "50,100",
+            "--resolution-frames",
+            str(_LADDER_FRAMES),
+            "--resolution-n-samples",
+            str(_FAST["n_samples"]),
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+            "--seed",
+            "0",
+            "--out",
+            str(out),
+            "--work-dir",
+            str(tmp_path / "work"),
+        ]
+    )
+    assert code == bench.EXIT_OK
+    report = out.read_text(encoding="utf-8")
+    assert "## What the control rate costs" in report
+    assert "| `occurrence` |" in report
+    # Nothing that varies between two runs of the same command may reach it.
+    assert str(tmp_path) not in report
+
+
+# --------------------------------------------------------------------------
+# DRIFT: a retention figure and the rate it was measured at (issue #68).
+#
+# The check is cheap and it is the one that would have caught this issue. Every
+# published bytes/hour figure is linear in the control rate, so a document that
+# quotes one without naming the rate is quoting a number that cannot be
+# reproduced or compared — and both documents did exactly that for three
+# milestones while nothing failed, because prose does not fail.
+#
+# Scope: the two documents this issue publishes in. `docs/sufficiency.md` and
+# `docs/prior-art.md` quote the same figures and are not edited here; extending
+# this check to them is an edit to documents this issue does not own, and it is
+# named in the PR rather than done silently.
+# --------------------------------------------------------------------------
+
+REPO = Path(__file__).resolve().parent.parent
+
+#: A retention figure: `60.05 MB/h`, `3.8 MB/hour`, `1.14 GB/h`.
+PER_HOUR = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(?:[kMGT]?B)/h(?:our)?\b")
+
+#: A control rate: `50 Hz`, `1 kHz`, `1,000 Hz`.
+RATE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(k?)Hz\b")
+
+
+def _sections(text: str) -> list[str]:
+    """The document split at its markdown headings, heading kept with its body."""
+    return [p for p in re.split(r"\n(?=#{1,6} )", text) if p.strip()]
+
+
+def _paragraphs(section: str) -> list[str]:
+    return [p for p in re.split(r"\n\s*\n", section) if p.strip()]
+
+
+def _rates_hz(text: str) -> set[float]:
+    """Every control rate named in `text`, normalised to Hz."""
+    return {
+        float(number.replace(",", "")) * (1_000.0 if kilo else 1.0)
+        for number, kilo in RATE.findall(text)
+    }
+
+
+def rate_is_stated_with_the_figure(text: str) -> tuple[str, list[str]]:
+    """Verdict on whether every retention figure names the rate it assumes.
+
+    **What it checks.** A section naming one of `reg.bench.RESOLUTION_LEVELS` is
+    a section about this artifact's retention cost. Every paragraph of one that
+    quotes a per-hour figure has to name the base control rate *in that
+    paragraph* — a rate three paragraphs away is not a rate a reader of the
+    figure sees.
+
+    **What it deliberately does not check.** A per-hour figure in a section that
+    names no resolution level is a figure about something else — the sensor-log
+    rates in `docs/sensor-baseline.md`'s sources are not linear in this
+    simulator's control rate, and demanding one there would be noise. And it
+    cannot check that the prose around a figure is honest; a reviewer still has
+    to do that.
+
+    Three-valued, and the third does not resolve to the first: a document with no
+    artifact-side retention figure is `COULD-NOT-EVALUATE`, because deleting the
+    figures is how a check of this shape would otherwise be defeated. Returns the
+    verdict and the offending figures.
+    """
+    checked = 0
+    missing: list[str] = []
+    for section in _sections(text):
+        if not any(level in section for level in bench.RESOLUTION_LEVELS):
+            continue
+        for paragraph in _paragraphs(section):
+            figures = PER_HOUR.findall(paragraph)
+            if not figures:
+                continue
+            checked += 1
+            if bench.BASE_CONTROL_RATE_HZ not in _rates_hz(paragraph):
+                missing += [f"{n} B/h" for n in figures]
+    if not checked:
+        return COULD_NOT_EVALUATE, []
+    return (DISAGREE if missing else AGREE), missing
+
+
+@pytest.mark.parametrize("doc", ["plan.md", "sensor-baseline.md"])
+def test_every_published_retention_figure_names_the_control_rate(doc: str) -> None:
+    """**THE DOCUMENT CHECK THIS ISSUE EXISTS FOR.**
+
+    A figure that is linear in an unstated parameter is not a measured figure.
+    The rate compared against is `reg.bench.BASE_CONTROL_RATE_HZ`, which is
+    derived from `reg.scenarios.DEFAULT_DT` — so re-parameterising the fixture
+    and leaving the documents alone fails here rather than in six months.
+    """
+    verdict, missing = rate_is_stated_with_the_figure(
+        (REPO / "docs" / doc).read_text(encoding="utf-8")
+    )
+    assert verdict == AGREE, (
+        f"docs/{doc} quotes {missing} in a section that never names the control "
+        f"rate. Every one of those figures is linear in it "
+        f"({bench.BASE_CONTROL_RATE_HZ:g} Hz here, 1 kHz on a real manipulator), "
+        "so a reader cannot reproduce or compare them. Name the rate in the same "
+        "section as the figure."
+    )
+
+
+def test_a_retention_figure_with_no_rate_beside_it_is_caught() -> None:
+    """**The negative test.** This is the exact shape issue #68 was filed about:
+    a measured figure, published, with nothing saying what it is linear in."""
+    verdict, missing = rate_is_stated_with_the_figure(
+        "## Sensitivity\n\nThe occurrence level costs 60.05 MB/h.\n"
+    )
+    assert verdict == DISAGREE
+    assert missing == ["60.05 B/h"]
+
+
+def test_a_rate_stated_in_another_paragraph_does_not_cover_this_one() -> None:
+    """Proximity is the point. A rate named at the top of a long section is not
+    a rate a reader of the figure five paragraphs down ever sees."""
+    verdict, _ = rate_is_stated_with_the_figure(
+        "## Retention\n\nThe fixture runs at 50 Hz.\n\n"
+        "The occurrence level costs 60.05 MB/h.\n"
+    )
+    assert verdict == DISAGREE
+
+
+def test_a_rate_stated_in_another_section_does_not_cover_this_one() -> None:
+    verdict, _ = rate_is_stated_with_the_figure(
+        "## Parameters\n\nThe occurrence level runs at 50 Hz.\n\n"
+        "## Retention\n\nThe occurrence level costs 60.05 MB/h.\n"
+    )
+    assert verdict == DISAGREE
+
+
+def test_the_wrong_rate_beside_the_figure_is_caught() -> None:
+    """A paragraph that names 1 kHz and quotes a figure measured at 50 Hz is
+    worse than one that names no rate at all."""
+    verdict, missing = rate_is_stated_with_the_figure(
+        "## Retention\n\nAt 1 kHz the occurrence level costs 60.05 MB/h.\n"
+    )
+    assert verdict == DISAGREE
+    assert missing == ["60.05 B/h"]
+
+
+def test_a_rate_beside_the_figure_passes() -> None:
+    """The positive control: the check is not one that can only say no."""
+    verdict, missing = rate_is_stated_with_the_figure(
+        "## Retention\n\nAt 50 Hz the occurrence level costs 60.05 MB/h.\n"
+    )
+    assert (verdict, missing) == (AGREE, [])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "## Retention\n\nThe occurrence level was measured at 50 Hz.\n",
+        "## Sources\n\nOne teleoperation setup reports about 20 GB/hour.\n",
+    ],
+)
+def test_nothing_to_check_is_not_a_pass(text: str) -> None:
+    """Silence is could-not-evaluate, and so is a per-hour figure that is not
+    about this artifact at all — a sensor rate is not linear in this
+    simulator's control rate, and counting it as a pass would let the artifact
+    figures be deleted while the check stayed green."""
+    verdict, _ = rate_is_stated_with_the_figure(text)
+    assert verdict == COULD_NOT_EVALUATE
+
+
+def test_the_control_rate_report_is_deterministic(tmp_path: Path) -> None:
+    """Same seed, same ladder, same report (rule 2). CI compares two runs.
+
+    The rate is the one thing this study varies, and it varies it by handing
+    `reg.scenarios.long_run` a different `dt` — so the two runs below differ in
+    nothing at all and the whole report, tables and verdicts, has to come back
+    byte for byte. Rendered rather than compared as byte counts, for the reason
+    `test_the_curve_is_deterministic` gives: identical sizes are not identical
+    artifacts.
+    """
+    args = [
+        "--control-rate-hz",
+        "50,100",
+        "--resolution-frames",
+        str(_LADDER_FRAMES),
+        "--resolution-n-samples",
+        str(_FAST["n_samples"]),
+        "--horizon",
+        str(_FAST["horizon"]),
+        "--substep-dt",
+        str(_FAST["substep_dt"]),
+        "--seed",
+        "0",
+    ]
+    reports = []
+    for run in ("a", "b"):
+        out = tmp_path / f"{run}.md"
+        assert (
+            bench.main([*args, "--out", str(out), "--work-dir", str(tmp_path / run)])
+            == bench.EXIT_OK
+        )
+        reports.append(out.read_text(encoding="utf-8"))
+    assert reports[0] == reports[1]

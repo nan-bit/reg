@@ -167,7 +167,13 @@ Per robot, from the measured resolution curve:
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
 Each is the measured `bytes/hour` for that level — 60.05, 149.47 and
-217.32 MB/h — times the 4,380 hours in the 182.5-day retention floor.
+217.32 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
+one of those three figures is a figure at 50 Hz**, which is what
+`reg.scenarios.DEFAULT_DT` runs at, and all three are **linear in that rate**:
+enforcement emits one verdict and one chain record per commanded action and no
+resolution level coarsens them. A real manipulator control loop runs at 1 kHz.
+That is measured, not asserted — see *The control rate* below and
+[`sensor-baseline.md`](sensor-baseline.md).
 
 At occurrence resolution the artifact is **~694x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
@@ -187,6 +193,69 @@ the one to make, and it is now a narrower one. It is also, conveniently, the
 resolution the only mandated evidence recorder in existence operates at (UN R157
 DSSAD, ±1.0 s). The finer levels are weaker again: transition clears two orders
 only above ~0.36 TB/day and per-frame only above ~0.52 TB/day.
+
+#### The control rate — and it is not two orders at 1 kHz
+
+> **Measured 2026-08-21 (issue #68).** `python -m reg.bench --control-rate-hz
+> 50,100,250,1000 --seed 0`: the resolution curve at four control rates over one
+> fixed run duration (59.98 s of robot time), same seed, same envelope
+> parameters, same record parameterization. The 50 Hz row is the published curve
+> above, reproduced byte for byte, which is what makes the other three
+> comparable to it. Measured points only — nothing here is fitted or
+> extrapolated.
+
+Every retention figure in this section is a figure **at 50 Hz**, and it is
+**linear in that rate**, because enforcement emits one verdict and one chain
+record per commanded action and no resolution level coarsens them. The
+declaration count does not move with the rate at all — the policy replans on a
+wall-clock interval — so the verdicts are the whole of the growth. A real
+manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
+
+| control rate | occurrence | transition | per-frame |
+|---|---|---|---|
+| **50 Hz (this simulator, published above)** | **60.05 MB/h → 263 GB → ~694x** | 149.47 MB/h → 655 GB → ~279x | 217.32 MB/h → 952 GB → ~192x |
+| 100 Hz | 106.14 MB/h → 465 GB → ~393x | 245.96 MB/h → 1.08 TB → ~169x | 409.33 MB/h → 1.79 TB → ~102x |
+| 250 Hz | 246.70 MB/h → 1.08 TB → ~169x | 527.82 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
+| **1 kHz (a real manipulator)** | **950.55 MB/h → 4.16 TB → ~44x** | 1.94 GB/h → 8.49 TB → ~22x | 4.26 GB/h → 18.65 TB → ~10x |
+
+The `MB/h` column is measured. The six-month size is that figure times the 4,380
+hours in the retention floor, and the ratio is against the **assumed** 182.5 TB
+sensor log — an assumption, unchanged, at 1 TB/day
+([`sensor-baseline.md`](sensor-baseline.md)).
+
+**So the two-order claim is a claim about the control rate as well as about the
+sensor rate, and at 1 kHz it does not hold.** At occurrence resolution a 1 kHz
+robot retains **4.16 TB** for the mandated six months and the artifact is
+**~44x** below the assumed sensor log — **one order of magnitude, not two**. The
+band survives at 250 Hz (~169x) and is gone by 1 kHz; where between those two it
+goes is not measured and is therefore not quoted. **The assumption was not
+touched to fix this** — the sensor multiplier is the same 1 TB/day it was, for
+the same sourced reasons, and moving it to keep a conclusion is the exact
+failure `sensor-baseline.md` exists to prevent.
+
+**How to state Claim 1 now.** *At occurrence resolution, two orders of magnitude
+at a 50 Hz control rate and one at 1 kHz.* Both are measured; which one applies
+is a property of the robot, not of this argument. The growth is **sublinear** —
+15.8x for a 20x rate increase — because the scene rows and the fixed
+schema-and-index cost do not scale with the rate; only the record layer does,
+and at 1 kHz it is 60,101 of the occurrence level's 60,572 node rows.
+
+**What is not done here.** Declaring per behaviour segment rather than per
+control step would cut the term that scales, and it is the dominant lever: the
+verdict layer is essentially all of the growth. It is a design change to the
+attestation cadence, held pending its own decision, and issue #68 explicitly
+does not take it.
+
+**And the finer levels stop answering before they stop being affordable.** At
+250 Hz and 1 kHz the transition and per-frame levels return `DISAGREE` on
+`separation_timeline`: the edge layer's endpoints are quantized to `TIME_TOL_S`
+= 0.01 s, which is coarser than the control period above 100 Hz, so a per-frame
+separation read back out of an interval can miss by more than `DISTANCE_TOL_M`.
+That is a measurement, not a tolerance to widen (`docs/lossiness.md`), and it is
+a finding about the **graph builder** rather than about retention cost — so it
+is reported here and in the benchmark's own table, and repairing it is a
+separate piece of work in `reg.graph`, not something this measurement is
+permitted to tune away.
 
 **This is a purchasing decision, not a slogan.** 263 GB buys *did contact
 occur*, *how close did it come*, every refused action with its fault code and
@@ -272,7 +341,8 @@ float compressor doing what float compressors are for. It was unwinnable, and
 losing it says nothing about the thesis.
 
 **2. The number that is actually about retention is absolute, and we have it.**
-At 30,000 frames / 600 s the artifact is 7.89 MB, i.e. **47.3 MB/hour, 1.14
+At 30,000 frames / 600 s **at 50 Hz** the artifact is 7.89 MB, i.e. **47.3
+MB/hour, 1.14
 GB/day** (355 MB/day gzipped) — re-measured 2026-08-20, and still an artifact
 at transition resolution with no Layer A in it, which is what makes it
 comparable to the 8.59 MB this line used to quote. That is a measured property

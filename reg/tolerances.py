@@ -50,6 +50,7 @@ rather than an artefact of the implementation.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 import shapely
 from shapely.geometry.base import BaseGeometry
@@ -59,12 +60,15 @@ __all__ = [
     "AREA_QUANT_SIGFIGS",
     "TIME_TOL_S",
     "GEOM_SIMPLIFY_TOL_M",
+    "TIME_BASE_MAX_RATE_HZ",
+    "addressable_instants",
     "distance_bucket",
     "quantize_distance",
     "time_bucket",
     "quantize_time",
     "quantize_area",
     "simplify_geometry",
+    "time_base_resolves_frames",
 ]
 
 #: Separation and all distance-valued edges. 1 cm.
@@ -78,10 +82,14 @@ AREA_QUANT_SIGFIGS: int = 2
 
 #: Transition timestamps and interval endpoints. 10 ms.
 #:
-#: This is a *quantum, not a promise of resolution*. If the stream runs below
-#: 100 Hz, transitions are only locatable to the frame period; the graph records
-#: the frame period in its provenance (`reg.store.META_FRAME_PERIOD`) and nothing
-#: downstream may report finer than it.
+#: This is a *quantum, not a promise of resolution*, and it cuts both ways.
+#: **Below 100 Hz** transitions are only locatable to the frame period; the graph
+#: records the frame period in its provenance (`reg.store.META_FRAME_PERIOD`) and
+#: nothing downstream may report finer than it. **Above 100 Hz** the quantum is
+#: coarser than the frame period, several frames quantize onto one instant, and
+#: the artifact can no longer address them separately — see
+#: `TIME_BASE_MAX_RATE_HZ` and docs/limitations.md §5. That half went unsaid until
+#: issue #77 measured it.
 TIME_TOL_S: float = 0.010
 
 #: `shapely.simplify()` on stored geometry. 5 mm, and it is half of
@@ -97,6 +105,30 @@ TIME_TOL_S: float = 0.010
 #: boundary per distance, which is why `reg.graph` simplifies entity geometry and
 #: leaves the robot body exact.
 GEOM_SIMPLIFY_TOL_M: float = 0.005
+
+#: **The domain of validity of the four above, in Hz. Derived, not chosen** —
+#: `1 / TIME_TOL_S`, which is 100 Hz. It is not a fifth tolerance and there is
+#: nothing to tune here: change `TIME_TOL_S` and this moves with it, which is the
+#: whole reason it is written as an expression rather than as `100.0`.
+#:
+#: What it bounds. Every interval endpoint in the artifact is `quantize_time`d, so
+#: the artifact's time base has exactly `1 / TIME_TOL_S` addressable instants per
+#: second **whatever rate the control loop ran at**. At or below this rate the
+#: quantized frame times are distinct and every frame has its own address; above
+#: it they are not, several frames collapse onto one instant, and a per-frame
+#: value read back out of the artifact is the value of whichever of them opened
+#: the covering interval. Measured on `near_miss` at seed 0 (docs/lossiness.md,
+#: "The rate range these hold in"): 1 kHz puts 11 frames on one instant and the
+#: per-frame `separation_timeline` predicate misses its own 1 cm budget by up to
+#: 0.0140 m.
+#:
+#: **This is not permission to widen `TIME_TOL_S`.** Widening it would move the
+#: line rather than the behaviour, which is the one move docs/lossiness.md exists
+#: to forbid; it would also make this rate *lower*. The honest response is the one
+#: taken: state the range, record in every artifact whether that artifact is
+#: inside it (`reg.graph.TIME_BASE_DOMAIN`), and say in docs/limitations.md §5
+#: that a 1 kHz run is outside it.
+TIME_BASE_MAX_RATE_HZ: float = 1.0 / TIME_TOL_S
 
 
 class ToleranceError(ValueError):
@@ -165,6 +197,55 @@ def time_bucket(t: float) -> int:
 def quantize_time(t: float) -> float:
     """An instant rounded to the nearest `TIME_TOL_S`. What `t_start`/`t_end` hold."""
     return time_bucket(t) * TIME_TOL_S
+
+
+def addressable_instants(times: Sequence[float]) -> int:
+    """How many **distinct** instants `quantize_time` can place `times` at.
+
+    The size of the artifact's time base for a run sampled at `times`. Every
+    interval endpoint is quantized, so two frames sharing a bucket share an
+    address: nothing downstream can ask for one of them and not the other, and a
+    per-frame read-back returns one value for both.
+
+    Counted over the *actual* frame times rather than derived from the frame
+    period, and the difference is not pedantry. `quantize_time` rounds to the
+    nearest multiple with a banker's tie-break, so whether a period of exactly
+    `TIME_TOL_S` separates every frame depends on the stream's phase — frames at
+    0.015 s and 0.025 s are one quantum apart and both round to 0.02. A predicate
+    on the period alone would report a run as resolved that is not. This measures
+    the run in hand.
+
+    Raises:
+        ToleranceError: `times` is empty, or holds a value with no bucket. An
+            empty run would make the count and the frame count both zero and the
+            comparison in `time_base_resolves_frames` vacuously true — silence
+            resolving to a pass, which is the failure mode this project is about.
+    """
+    if len(times) == 0:
+        raise ToleranceError(
+            "addressable_instants was given no frame times. A run of no frames "
+            "has no time base to size, and reporting zero instants for zero "
+            "frames would read as 'every frame is addressable'."
+        )
+    return len({time_bucket(t) for t in times})
+
+
+def time_base_resolves_frames(times: Sequence[float]) -> bool:
+    """Whether every frame of a run sampled at `times` has its own address.
+
+    `True` iff `addressable_instants(times) == len(times)`. That is the condition
+    under which docs/lossiness.md's per-frame agreement predicates hold — a value
+    stored against an instant is a value about one frame — and it fails for every
+    run sampled faster than `TIME_BASE_MAX_RATE_HZ`.
+
+    `False` is **not** a build failure and this function does not raise on it.
+    The artifact is still built, still holds every interval it would otherwise
+    hold, and still answers every question in the supported set; what it cannot do
+    is meet the per-frame budget on a run it cannot address frame by frame.
+    `reg.graph` records the answer in every artifact's `meta` table so that a
+    reader holding only the file can tell which case they have.
+    """
+    return addressable_instants(times) == len(times)
 
 
 def quantize_area(area: float) -> float:

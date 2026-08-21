@@ -205,3 +205,89 @@ tag **plus an integrity attribute** rather than a binary.
 [`docs/sufficiency.md`](sufficiency.md) §7 records why that was considered and
 deferred — it rewrites what the project may claim, which is a decision and not an
 implementation.
+
+---
+
+## 5. Above 100 Hz the artifact cannot address every frame of the run
+
+Added 2026-08-21 (issue #77). Stated here because
+[`docs/lossiness.md`](lossiness.md) advertises per-frame agreement predicates and
+a reader will assume they hold at whatever rate their robot runs at. `reg` runs at
+50 Hz, so nothing this project has published is wrong; **a real manipulator runs
+at 1 kHz, and there the sentence below is what applies.**
+
+This one arrived as a bug report rather than as a choice, which the preamble above
+does not quite cover. The *defect* was the silence — a contract that advertised a
+per-frame budget and never said what range it held in — and stating the range is
+what closed it. The limit itself was always implied by a 10 ms quantum and is a
+choice; nobody had noticed it was one.
+
+**What.** Every interval endpoint in an artifact is rounded to
+`TIME_TOL_S` = 10 ms, so the artifact's time base has `1 / TIME_TOL_S` = 100
+addressable instants per second — **however fast the control loop ran**. At or
+below 100 Hz each frame quantizes to its own instant and each retained value is a
+value about one frame. Above it several frames share an instant, and a per-frame
+value read back out of an interval is the value of whichever of those frames
+opened it. At 1 kHz eleven frames share each instant.
+
+**The cost, measured.** On `reg.scenarios.near_miss` at seed 0, resampled at each
+rate: `separation_timeline` — query 1 of the supported set — misses its own
+`DISTANCE_TOL_M` = 0.01 m predicate at rates above 100 Hz, by up to **0.0140 m**
+at 1 kHz. Which rate it *first* misses at is a property of how fast the fixture
+moves, not of the artifact, and is the reason the bound above is the structural
+100 Hz rather than a measured number. The full ladder, its parameters, and the
+four things it shows are in
+[`docs/lossiness.md`](lossiness.md),
+[The rate range these hold in](lossiness.md#the-rate-range-these-hold-in); this
+section is what a *claim* inherits, not a second copy of the measurement.
+
+**It is a quantization limit, not a sampling one**, and the distinction decides
+what a fix would be. Two measurements separate them. The artifact stores **269
+`SEPARATION` intervals at 1 kHz and 269 at 100 Hz** — it is not retaining less at
+the higher rate, because there is nothing more it *could* retain; the time base has
+no more addresses. And every value it reports is within `DISTANCE_TOL_M` of a true
+separation of the run at some frame within `TIME_TOL_S` of the instant it is
+reported at. Nothing was sampled away and no value is wrong. What is missing is
+the ability to say which frame inside a 10 ms window a value belongs to.
+`tests/test_graph.py::test_the_time_base_miss_is_quantization_and_not_sampling`
+is that second measurement as an assertion.
+
+**The honest sentence, since issue #77 asked for it if it was true.** *At 1 kHz
+this edge layer cannot place a per-frame value at a frame within its published
+tolerances.* It can still place it within 10 ms of one, which is what the artifact
+now says about itself and what a reader is entitled to rely on. Everything else in
+the supported question set is unaffected: they are interval and record queries, and
+an interval whose endpoints are good to 10 ms is exactly what this contract always
+promised.
+
+**What this limitation is not.**
+
+- **It is not a reason to widen `TIME_TOL_S`.** That moves the line rather than
+  the behaviour — the failure mode this project exists to warn about — and it
+  would make the rate *lower*, since the rate is the quantum's reciprocal.
+  [`docs/plan.md`](plan.md) already calls the `DISAGREE` that surfaced this "a
+  measurement, not a tolerance to widen", and issue #77 held the constant
+  deliberately rather than tuning the finding away.
+- **It is not a refusal to build.** A stream above 100 Hz is built normally and
+  holds everything it otherwise would; refusing would delete evidence in order to
+  avoid stating a limit, and would tell a 1 kHz robot it may not have an artifact
+  at all. What the build does instead is record the fact: `meta[time_base_domain]`
+  states the rule, `meta[time_base_addressable_instants]` counts this run's
+  instants, `meta[time_base_resolves_frames]` is `yes` exactly when that equals
+  `frame_count`, and `python -m reg.graph build` prints a note on stderr for the
+  `no` case.
+- **It does not touch Layer A.** Declaration and verdict timestamps are stored as
+  the record carries them and are *not* quantized to `TIME_TOL_S` — the MAC covers
+  them ([`docs/lossiness.md`](lossiness.md) *Retained* #5). `verify_chain`,
+  `declared_bound`, `violations` and `verdicts` answer identically at 1 kHz.
+
+**What a claim would need instead.** A time base whose resolution is at least the
+control period — either `TIME_TOL_S` reduced to match the fastest rate the artifact
+is meant to serve (which costs edge rows, since more values become distinguishable
+and the incremental rule collapses fewer of them, and would have to be measured
+rather than assumed), or endpoints stored as an integer frame index against the
+`frame_period_s` already in `meta`, which addresses every frame exactly and makes
+the quantum a display concern rather than a storage one. The second is the smaller
+change and neither was taken here: both alter what the artifact claims, and issue
+#77's scope was to characterise the limit and state it, not to move the line while
+nobody was looking.

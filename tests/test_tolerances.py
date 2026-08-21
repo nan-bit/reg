@@ -25,13 +25,16 @@ from reg.tolerances import (
     AREA_QUANT_SIGFIGS,
     DISTANCE_TOL_M,
     GEOM_SIMPLIFY_TOL_M,
+    TIME_BASE_MAX_RATE_HZ,
     TIME_TOL_S,
     ToleranceError,
+    addressable_instants,
     distance_bucket,
     quantize_area,
     quantize_distance,
     quantize_time,
     simplify_geometry,
+    time_base_resolves_frames,
 )
 
 LOSSINESS = Path(__file__).resolve().parents[1] / "docs" / "lossiness.md"
@@ -93,6 +96,101 @@ def test_the_simplification_budget_derivation_still_closes() -> None:
     written to prevent, and it would not otherwise show up as a red test.
     """
     assert GEOM_SIMPLIFY_TOL_M + DISTANCE_TOL_M / 2 <= DISTANCE_TOL_M
+
+
+# --------------------------------------------------------------------------
+# The domain of validity (issue #77). The tolerances above are numbers; this is
+# the range of control rates in which they mean what the document says they
+# mean, and it went unstated until a benchmark ran at 1 kHz.
+# --------------------------------------------------------------------------
+
+#: `**`1 / TIME_TOL_S` = 100 Hz**` — how the document states the bound, in the
+#: section that states it. Parsed rather than restated for the same reason the
+#: tolerance table is: a test that hardcoded `100` would go green after somebody
+#: changed the quantum and the prose together but not the code.
+_RATE = re.compile(r"`1 / TIME_TOL_S`\s*=\s*(?P<rate>[0-9.]+)\s*Hz")
+
+_RANGE_HEADING = "### The rate range these hold in"
+
+
+def test_the_document_states_the_rate_range_the_tolerances_hold_in() -> None:
+    """The defect issue #77 found was the *silence*, so the section is the fix.
+
+    A contract that is silent about its own domain of validity cannot be checked
+    against a deployment, and this asserts the section exists and states a rate.
+    An empty parse is a could-not-evaluate and fails rather than passing.
+    """
+    text = LOSSINESS.read_text(encoding="utf-8")
+    section = text.split(_RANGE_HEADING, 1)
+    assert len(section) == 2, (
+        f"{LOSSINESS} has no '{_RANGE_HEADING}' section. The four tolerances hold "
+        "only at or below 1/TIME_TOL_S and a document that does not say so is the "
+        "defect issue #77 reported — not the number."
+    )
+    found = _RATE.search(section[1])
+    assert found is not None, (
+        f"{LOSSINESS}: the '{_RANGE_HEADING}' section states no rate. A section "
+        "with a heading and no bound is silence with a title on it."
+    )
+    assert float(found["rate"]) == TIME_BASE_MAX_RATE_HZ, (
+        f"docs/lossiness.md says the tolerances hold to {found['rate']} Hz and "
+        f"reg.tolerances.TIME_BASE_MAX_RATE_HZ is {TIME_BASE_MAX_RATE_HZ}. Both "
+        "are meant to be 1/TIME_TOL_S; change the quantum and both move."
+    )
+
+
+def test_the_max_rate_is_the_reciprocal_of_the_time_quantum() -> None:
+    """Derived, not chosen. Widening `TIME_TOL_S` *lowers* this rate.
+
+    Written as an assertion rather than left to the expression in the module,
+    because the number that matters downstream is the rate and somebody replacing
+    it with a literal `100.0` would break nothing else.
+    """
+    assert TIME_BASE_MAX_RATE_HZ == 1.0 / TIME_TOL_S
+    assert TIME_BASE_MAX_RATE_HZ * TIME_TOL_S == pytest.approx(1.0)
+
+
+def test_a_run_sampled_at_the_max_rate_has_an_address_for_every_frame() -> None:
+    """The positive: at 1/TIME_TOL_S every frame quantizes to its own instant."""
+    times = [i / TIME_BASE_MAX_RATE_HZ for i in range(200)]
+    assert addressable_instants(times) == len(times)
+    assert time_base_resolves_frames(times)
+
+
+@pytest.mark.parametrize("rate_hz", [101.0, 125.0, 250.0, 1000.0])
+def test_a_run_sampled_above_the_max_rate_loses_addresses(rate_hz: float) -> None:
+    """**THE NEGATIVE.** Faster than the quantum and frames start sharing an
+    instant — which is what a per-frame answer then cannot distinguish.
+
+    The count is asserted against the run's *duration*, not against a magic
+    number: however many frames a second holds, the artifact can address
+    `TIME_BASE_MAX_RATE_HZ` of them.
+    """
+    seconds = 2.0
+    times = [i / rate_hz for i in range(int(seconds * rate_hz) + 1)]
+    assert not time_base_resolves_frames(times)
+    assert addressable_instants(times) < len(times)
+    assert addressable_instants(times) == int(seconds * TIME_BASE_MAX_RATE_HZ) + 1
+
+
+def test_addressable_instants_is_measured_on_the_times_not_on_the_period() -> None:
+    """Two frames exactly one quantum apart can still share an instant.
+
+    `quantize_time` rounds to the nearest multiple and breaks ties to even, so
+    0.015 s and 0.025 s — a period of exactly `TIME_TOL_S` — both land on 0.02 s.
+    A predicate on the frame period alone would call this run resolved. This is
+    why `reg.graph` measures the frames it was handed rather than dividing.
+    """
+    times = [0.015, 0.025]
+    assert quantize_time(times[0]) == quantize_time(times[1])
+    assert not time_base_resolves_frames(times)
+
+
+def test_addressable_instants_refuses_a_run_with_no_frames() -> None:
+    """Silence must not resolve to a pass: zero instants for zero frames would
+    compare equal and report the empty run as fully addressable."""
+    with pytest.raises(ToleranceError, match="no frame times"):
+        addressable_instants([])
 
 
 # --------------------------------------------------------------------------

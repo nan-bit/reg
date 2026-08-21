@@ -2,7 +2,8 @@
 
 **Status:** normative for what this project may claim · written 2026-08-19 ·
 [`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable · written for
-Milestone 2, re-measured 2026-08-20 after Milestone 3 · keep current
+Milestone 2, re-measured 2026-08-20 after Milestone 3, §7 reconciled against the
+measured tables 2026-08-21 · keep current
 
 The mechanism this document argues from already exists. Every edge in the
 artifact carries a `layer` column, `A` or `B`, and so does every occurrence; the
@@ -197,8 +198,11 @@ not omitted, and it is not softened into a claim.
 Rows 1 and 5–11 were the questions **Milestone 2** could be asked, and of those
 exactly one was Layer A — the one saying what the machine could have done rather
 than what happened to anyone. That imbalance is what Milestone 3 corrected: rows
-2–4 are answerable and measured now, so four of the eleven are Layer A and three
-of those four are answerable at the coarsest level in the project.
+2–4 are answerable and measured now, so four of the eleven are Layer A — and
+**two** of those four are answerable at the coarsest level in the project. Rows 2
+and 4 are; row 3 is COULD-NOT-EVALUATE there, and row 1 has no substrate there at
+all. The certifiable layer survives coarsening better than the scene layer does,
+which is §5.4's finding, but "better" is not "entirely".
 
 ---
 
@@ -225,14 +229,19 @@ supported; "**could not have**" is not, at any resolution and by any query
 for the outer-approximation machinery a real claim in the negative direction would
 need). A certifiable claim in the wrong direction is not a safety claim.
 
-**And it dies first under coarsening.** The occurrence view holds 0 edges: the
-only Layer A rows available to it at all are `run_began` and `run_ended`, i.e.
-*this run happened, between these two instants, under this software version*. The
-DSSAD-aligned level records that the run existed and what happened to the human in
-it; it records nothing whatever about what the machine could have done. That is
-worth saying to anyone who reads "occurrence-level evidence is enough" as a
-general conclusion — it is enough for two of the questions measured here, and it
-is the level at which the certifiable question stops being answerable.
+**And it dies first under coarsening.** The occurrence view holds 0 edges, and
+this question's substrate is edges. The Layer A rows that view *does* hold are
+`run_began` and `run_ended` — *this run happened, between these two instants,
+under this software version* — plus, since Milestone 3, the 3,120 declaration and
+verdict records no level coarsens (§3, §5.4). Those are the attestation half: they
+say what the policy claimed and what enforcement did about it. Not one of them
+says what the machine could have reached, and the geometry that would is in the
+`edge` and `envelope` tables this view empties. That is worth saying to anyone who
+reads "occurrence-level evidence is enough" as a general conclusion — it is enough
+for four of the eight questions the curve prices as columns (contact and closest
+distance from the scene half; `violations` and `verify_chain` from the attestation
+half), and it is the level at which the certifiable *reachability* question stops
+being answerable.
 
 ### 5.2 Layer B, and occurrence resolution is enough: contact, and how close
 
@@ -402,25 +411,54 @@ of Claim 3, and it is why the layered structure earns its complexity.
   inherits: the envelope is an inner approximation
   ([`docs/limitations.md`](limitations.md) §2), envelope geometry on non-evidence
   frames is recomputed rather than stored and that recomputation assumes the same
-  code and the same shapely ([`docs/limitations.md`](limitations.md) §1), and in
-  Milestone 3 both chain keys will live in one process — *the structure of
-  non-repudiation, not non-repudiation* ([`docs/plan.md`](plan.md) Phase 6).
-  "Certifiable" here means *its failure modes are characterizable from
-  proprioception*, not *they have been characterized*.
+  code and the same shapely ([`docs/limitations.md`](limitations.md) §1), and both
+  chain keys live in one process — *the structure of non-repudiation, not
+  non-repudiation* ([`docs/plan.md`](plan.md) Phase 6). Milestone 3 landed and did
+  not change that last one: `reg.chain.Keyring` holds both roles, `reg.chain`'s
+  own honesty note says so, and the independence the pattern needs is an
+  enforcement key in hardware the policy vendor cannot reach. **Still holds, in
+  the present tense.** "Certifiable" here means *its failure modes are
+  characterizable from proprioception*, not *they have been characterized*.
 - **Not that the layer tag makes a Layer B answer safe to quote.** It makes it
   legibly conditional. Quoting a Layer B answer without its condition is the
   failure this document exists to prevent, which is why the strength column says
   *only as strong as perception* and not *subject to perception error*.
-- **Not that the occurrence level is sufficient.** It is sufficient for rows 5 and
-  6, refuses row 10, answers row 11 outside tolerance, and holds no substrate at
-  all for rows 1, 7 and 8. "How coarse can evidence get" has a measured answer and
-  the answer is *it depends on the question* — which is the taxonomy, not a
-  disappointment.
+- **Not that the occurrence level is sufficient.** Row by row against the curve in
+  §3: it answers rows 2, 4, 5 and 6; it **refuses** rows 3, 10 and 11 with a stated
+  COULD-NOT-EVALUATE; it holds no substrate at all for rows 1, 7 and 8, whose
+  answers live in the `edge` and `envelope` tables it empties; and row 9 is
+  `EXCLUDED` from the curve entirely, because a threshold test needs a threshold
+  and nothing supplies one. *Amended 2026-08-21: this bullet used to read "It is
+  sufficient for rows 5 and 6, refuses row 10, answers row 11 outside tolerance,
+  and holds no substrate at all for rows 1, 7 and 8." Two things had moved under
+  it. Row 11 is a refusal now, not an answer outside tolerance — issue #61 stopped
+  grading a level against a precision twenty times finer than it advertises
+  (§5.3). And rows 2, 3 and 4 were absent because nothing had measured them; two
+  of the three are now the coarsest level's strongest answers.* "How coarse can
+  evidence get" has a measured answer and the answer is *it depends on the
+  question* — which is the taxonomy, not a disappointment.
 - **Not a novelty claim about obstacle-independent reachability.** See
   [`docs/prior-art.md` §4](prior-art.md): that is standard practice, and this
   document borrows it rather than announcing it.
-- **Not a completed Claim 3 for the attestation half.** Rows 2–4 are structure
-  awaiting measurement, and they say so.
+- **~~Not a completed Claim 3 for the attestation half.~~ Retired by measurement
+  on 2026-08-20 (issue #63); recorded here 2026-08-21.**
+  This bullet read: *"Rows 2–4 are structure awaiting measurement, and they say
+  so."* They no longer say so, and the sentence is kept rather than deleted
+  because what this document used to claim is part of what it is for. Milestone 3
+  landed the records and issue #63 measured them: §4 marks rows 2–4 *certifiable,
+  and measured*, §5.4 prices four attestation questions against the record stream
+  the run emitted, and the curve in §3 puts `violations` and `verify_chain` at
+  AGREE on every level. What replaces the bullet is narrower and lives above it:
+  the measured chain was walked under `reg.bench.measurement_keyring`, which is
+  derived from the run seed and **attests to nothing** — it shows `verify_chain`
+  survives coarsening, not that anything was attested — and both keys are still in
+  one process.
+- **Not that every row's agreement has been measured.** Four rows carry
+  **unmeasured** as an agreement verdict in §4, and for two distinct reasons. Rows
+  1, 7 and 8 are unmeasured *deliberately*: their only available ground truth is
+  `reg.envelope` itself, and a check whose ground truth reruns the code under test
+  cannot fail. Row 9 is unmeasured because it takes a threshold and this project
+  will not invent one. Neither reason is a measurement that came back clean.
 
 ---
 
@@ -429,7 +467,7 @@ of Claim 3, and it is why the layered structure earns its complexity.
 ```bash
 pip install -e ".[dev]"
 
-# The resolution verdicts in §3 and in rows 5, 6, 10 and 11.
+# The resolution verdicts in §3 and in rows 2, 3, 4, 5, 6, 10 and 11.
 python -m reg.bench --resolution --out bench/results.md
 
 # The layer values in every row. Derived from the type, never from a caller.
@@ -462,4 +500,4 @@ occurrence resolution 1.0 s.
   data elements, which the occurrence level is shaped from.
 - [`docs/plan.md`](plan.md) — **Phase 9**, the single-axis taxonomy this document
   supersedes with two; **Claim 1, "What replaces it"**, the resolution question;
-  **Phases 3, 4 and 6**, the attestation records rows 2–4 are waiting on.
+  **Phases 3, 4 and 6**, which built the attestation records rows 2–4 rest on.

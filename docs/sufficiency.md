@@ -126,9 +126,9 @@ with `python -m reg.bench --resolution`:
 
 | level | ts res | SQLite B | bytes/hour @ 50 Hz | nodes | edges | occ | records |
 |---|---|---|---|---|---|---|---|
-| `occurrence` | 1.0 s | 1,000,448 | **60.23 MB/h** | 3,166 | 0 | 42 | 3,120 |
-| `transition` | 0.01 s | 2,490,368 | **149.59 MB/h** | 5,869 | 9,723 | 0 | 3,120 |
-| `per-frame` | 0.01 s | 3,620,864 | **217.45 MB/h** | 5,869 | 18,430 | 0 | 3,120 |
+| `occurrence` | 1.0 s | 1,003,520 | **60.23 MB/h** | 3,166 | 0 | 42 | 3,120 |
+| `transition` | 0.01 s | 2,492,416 | **149.59 MB/h** | 5,869 | 9,723 | 0 | 3,120 |
+| `per-frame` | 0.01 s | 3,622,912 | **217.45 MB/h** | 5,869 | 18,430 | 0 | 3,120 |
 
 The rate is in the column heading because the column is **linear in it**:
 enforcement emits one verdict and one chain record per commanded action and no
@@ -253,7 +253,7 @@ being answerable.
 ### 5.2 Layer B, and occurrence resolution is enough: contact, and how close
 
 *Did the robot contact the human?* is answered at the coarsest level in the
-project — one occurrence flag, timestamped to ±1.0 s, in a 1,000,448-byte artifact —
+project — one occurrence flag, timestamped to ±1.0 s, in a 1,003,520-byte artifact —
 and it AGREEs with ground truth recomputed from the raw stream by forward
 kinematics. *How close did it get?* likewise, to within 0.0007 m of a 0.01 m
 budget, carried on the `closest_approach` occurrence's `min_distance_m`.

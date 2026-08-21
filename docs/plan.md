@@ -481,11 +481,38 @@ part of the compression story).
 **Goal:** independently verify each declaration and each commanded action, emit a
 signed verdict.
 
-**Independence is the mechanism.** The enforcement layer computes its own envelope
-from proprioception and never trusts the declared one. In the code, enforcement
-must not import from `declare/` beyond the dataclass. This mirrors the argument
+**Independence is the mechanism.** The enforcement layer computes its own bound
+and never trusts the declared one. In the code, enforcement must not import from
+`declare/` beyond the dataclass, and it may not see Layer B at all — both are
+asserted against the source in `tests/test_enforce.py`. This mirrors the argument
 that a constraint layer supplied by the same party as the policy has common-cause
 failure with it.
+
+**What that bound actually is, and what Phase 4 therefore delivers.** The bound
+is *not* `compute_envelope` from Phase 2 — that is an under-approximation, and
+vetoing against something that under-covers the reachable set would produce false
+VETOs on truthful policies. It is `reg.enforce.computed_bound(limits)`: the radius
+of the **workspace disc**, `sum(link_lengths) + link_radius`, base at the origin.
+It takes `Limits`, which is a property of the robot rather than of its state — so
+it reads no `q`, no `qd`, no horizon, and returns the same scalar at every frame
+of every scenario.
+
+That makes Phase 4 an independent monitor whose bound is a static workspace disc:
+**sound in the conservative direction and weak.** It over-covers, so nothing
+inside it is ever falsely accused, and every VETO it does emit is real. The cost
+is that the overclaim check is **incomplete** — a declaration claiming more than
+the robot could reach *within the horizon*, but still fitting inside the workspace
+disc, is not detected, and the `envelope_overclaim` fixture has to declare past
+the entire workspace to trip it. The fault a Simplex / ASTM F3269 runtime monitor
+exists to catch is, at this bound, only partly caught. Tightening it soundly needs
+an outer-approximative reachable set — the zonotope machinery of ARMTD and ARMOUR
+([`docs/prior-art.md` §4](prior-art.md)) — which this plan de-scopes deliberately.
+Recorded as [`docs/limitations.md`](limitations.md) §3; `reg/enforce.py`'s module
+header is the authority on the reasoning.
+
+The other eight faults in the taxonomy below are unaffected by this: staleness,
+replay, MAC, vocabulary, watchdog and the declaration/action mismatch are each
+decided exactly, against the record rather than against a reachability bound.
 
 ### The fault taxonomy — the core contribution
 
@@ -496,7 +523,7 @@ The 61784-3 pattern applied to semantics rather than transport.
 | **No declaration** | Actuation with no open valid declaration | VETO |
 | **Stale declaration** | `t_now > t_issued + horizon` | VETO, require re-declaration |
 | **Declaration/action mismatch** | Commanded action outside the declared envelope | CLAMP to declared bound |
-| **Envelope overclaim** | Declared envelope exceeds the independently computed physical bound | VETO the declaration itself |
+| **Envelope overclaim** | Declared envelope exceeds the independently computed physical bound — the static workspace disc, so an overclaim that fits inside the workspace is **not** detected | VETO the declaration itself |
 | **Out-of-vocabulary action** | `action_class` not in schema | VETO |
 | **Unattributed** | MAC verification fails | VETO |
 | **Replay / reorder** | `seq` reuse or regression | VETO |

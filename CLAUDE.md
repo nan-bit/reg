@@ -40,10 +40,25 @@ refactor.
 argument and record it. Same seed, same bytes. An audit artifact that is not
 reproducible is not an audit artifact, and CI compares two runs.
 
-**3. Enforcement must not trust the policy.** When `enforce/` arrives it computes
-its own envelope and imports from `declare/` no further than the dataclass. A
-constraint layer supplied by the same party as the policy has common-cause failure
-with it — that independence is the mechanism, not a style preference.
+**3. Enforcement must not trust the policy.** `reg/enforce.py` computes its own
+bound and imports from `declare/` no further than the dataclass. A constraint
+layer supplied by the same party as the policy has common-cause failure with it —
+that independence is the mechanism, not a style preference, and
+`tests/test_enforce.py::test_enforce_imports_from_declare_no_further_than_the_dataclass`
+asserts it against the source. Widening that import is never a refactor.
+
+*What the bound is, so nobody reads more into "its own" than is there.*
+`computed_bound(limits)` is the radius of the **workspace disc** —
+`sum(link_lengths) + link_radius`, base at the origin. It takes `Limits`, not a
+`ProprioState`: no `q`, no `qd`, no horizon, the same scalar at every frame of
+every run. It is sound in the conservative direction — it over-covers, so nothing
+inside it is ever falsely accused — and it is **incomplete**: a declaration that
+overclaims what the robot could reach within the horizon, but still fits inside
+the workspace disc, is not detected. `envelope_overclaim` therefore fires only on
+a declaration exceeding the entire workspace. Tightening it soundly needs an
+outer-approximative reachable set (ARMTD / ARMOUR, `docs/prior-art.md` §4), which
+`docs/plan.md` de-scopes; see `docs/limitations.md` §3. The independence is real
+and full-strength; the *capability* is the part that is limited.
 
 ## Scope
 

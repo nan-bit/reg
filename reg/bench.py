@@ -37,7 +37,11 @@ row count and answer here is a deterministic function of (scenario, seed,
 envelope parameters) — `tests/test_bench.py` runs a scenario twice and compares.
 Wall-clock timings are *not*, they are measurements of a machine, and the report
 says so on the table that carries them rather than letting a reader assume the
-whole file is reproducible bit for bit.
+whole file is reproducible bit for bit. `--no-timings` (issue #75) omits those
+three columns and nothing else, so that two runs at one seed can be compared with
+`cmp` rather than with a filter that might quietly swallow a real difference —
+the measurement is unchanged, only the rendering is. `scripts/check_bench_determinism.py`
+is what runs that comparison.
 
 **5. A ratio at one run length is not a claim about scaling** (issue #30). Claim
 1 is a claim about retaining evidence from runs that produce terabytes a day, and
@@ -201,6 +205,7 @@ __all__ = [
     "SUPPORTED_QUESTIONS",
     "TIMING_REPEATS",
     "TRANSITION_LEVEL",
+    "WALL_CLOCK_COLUMNS",
     "AttestationAnswers",
     "AttestationTruth",
     "BenchError",
@@ -275,6 +280,20 @@ GZIP_MTIME = 0
 #: figure. This is a measurement protocol, not a physical parameter — it changes
 #: the precision of the timing columns and nothing else in the report.
 TIMING_REPEATS = 3
+
+#: The columns of the query table that are wall-clock, and — since `GZIP_MTIME`
+#: is pinned — the *only* fields anywhere in the report that two runs at one seed
+#: may legitimately differ in. `--no-timings` omits exactly these three and
+#: nothing else, which is what makes a byte comparison of two reports possible
+#: (issue #75, `scripts/check_bench_determinism.py`).
+#:
+#: Enumerated as data rather than described in prose because the exclusion is the
+#: part that can go wrong: a determinism check that excludes a set nobody can
+#: name is one where the set quietly grows until a real difference falls inside
+#: it. `tests/test_bench_determinism.py` asserts the omission is exactly this
+#: set — the other columns of the same table, and the robot-time seconds in the
+#: scaling section, are deterministic and stay.
+WALL_CLOCK_COLUMNS: tuple[str, ...] = ("graph", "raw CSV", "speedup")
 
 #: The fixed audit question both paths answer. `separation_timeline` of
 #: docs/lossiness.md's supported question set, reduced to the scalar an
@@ -4297,6 +4316,92 @@ def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
         "  per control step would cut the term that scales; issue #68 holds that",
         "  decision open and explicitly does not take it here.",
     ]
+
+
+def _wall_clock_section(
+    results: Sequence[ScenarioResult], *, timings: bool
+) -> list[str]:
+    """The query table: the two answers and the verdict, and the timings or not.
+
+    With `timings=False` the three `WALL_CLOCK_COLUMNS` are omitted and every
+    other column stays. Nothing else in the report changes, and — this is the
+    point — nothing about the *measurement* changes either: the query is still
+    run `TIMING_REPEATS` times through both paths, because the answers and the
+    verdict come out of those runs. A flag that also skipped the repeats would
+    make the determinism check exercise a path the published figures do not come
+    from, which is the one thing it must not do.
+    """
+    lines = [
+        "",
+        "## Query wall-clock",
+        "",
+        f"One fixed question — **{QUESTION}** (`separation_timeline` of",
+        "`docs/lossiness.md`'s supported set, reduced to a scalar) — answered",
+        "from the graph alone and",
+        "recomputed from the raw CSV as ground truth. Median of",
+        f"{_repeats_text(results)} runs each.",
+        "",
+    ]
+    if timings:
+        lines += [
+            "**The two timing columns are wall-clock and are not reproducible bit "
+            "for bit.** Everything else in this report is a deterministic function "
+            "of the seeds and parameters above; these two are measurements of a "
+            "machine.",
+            "",
+        ]
+    else:
+        lines += [
+            "**Timings omitted: `--no-timings` was given.** The "
+            f"{len(WALL_CLOCK_COLUMNS)} wall-clock columns — "
+            + ", ".join(f"`{c}`" for c in WALL_CLOCK_COLUMNS)
+            + " — are medians of real elapsed time and a ratio over them, so two "
+            "runs at one seed differ in them and should. They are dropped here, "
+            "and nothing else is, which makes this report byte-comparable across "
+            "runs (issue #75). It is therefore **not the report to quote a "
+            "speedup from**; run without the flag for that.",
+            "",
+        ]
+    lines += [
+        "The verdict is the check that this compression kept the answer:",
+        f"`AGREE` means the two paths differ by no more than "
+        f"{SEPARATION_TOLERANCE_M} m,",
+        "the budget `docs/lossiness.md` allocates for query 1. `DISAGREE` is a bug",
+        "in the graph, not a tolerance to widen. `COULD-NOT-EVALUATE` means a path",
+        "returned no answer at all, and it never resolves to `AGREE`.",
+        "",
+    ]
+
+    def timing_cells(r: ScenarioResult) -> tuple[str, ...]:
+        if not timings:
+            return ()
+        return (
+            _seconds_text(r.check.graph_timing.seconds),
+            _seconds_text(r.check.csv_timing.seconds),
+            "n/a" if r.check.speedup is None else _ratio_text(r.check.speedup),
+        )
+
+    lines += _table(
+        (
+            "scenario",
+            *(WALL_CLOCK_COLUMNS if timings else ()),
+            "graph answer",
+            "CSV answer",
+            "difference",
+            "verdict",
+        ),
+        [
+            (
+                f"`{r.scenario}`",
+                *timing_cells(r),
+                _metres_text(r.check.graph_answer),
+                _metres_text(r.check.csv_answer),
+                _metres_text(r.check.difference),
+                r.check.verdict,
+            )
+            for r in results
+        ],
+    )
     return lines
 
 
@@ -4314,6 +4419,7 @@ def render(
     scaling_control: ScalingPoint | None = None,
     resolution: ResolutionCurve | None = None,
     control_rates: Sequence[ControlRatePoint] = (),
+    timings: bool = True,
 ) -> str:
     """The whole report as markdown. Pure — same results in, same string out.
 
@@ -4324,6 +4430,13 @@ def render(
     it. `resolution` is the curve over resolution levels (issue #35) and is
     likewise absent rather than empty when it was not run. `control_rates` is the
     ladder of control rates (issue #68) and is absent on the same terms.
+
+    `timings` is the only thing here that is not a function of the measurement:
+    with it false the `WALL_CLOCK_COLUMNS` are omitted and the report becomes a
+    deterministic function of the seeds and parameters alone, which is what lets
+    two runs be compared with `cmp` (issue #75). It defaults to true because the
+    flag is the opt-out — a report that silently dropped its timings would be a
+    report whose missing columns nobody asked for.
     """
     if not results and not scaling and resolution is None and not control_rates:
         raise BenchError(
@@ -4399,7 +4512,10 @@ def render(
             (
                 "timing repeats",
                 _repeats_text(timed),
-                "precision of the wall-clock table only",
+                "precision of the wall-clock table only"
+                if timings
+                else "nothing here — the wall-clock columns are omitted "
+                "(`--no-timings`), though the repeats still ran",
             ),
         ],
     )
@@ -4577,55 +4693,7 @@ def render(
             ],
         )
 
-    lines += [
-        "",
-        "## Query wall-clock",
-        "",
-        f"One fixed question — **{QUESTION}** (`separation_timeline` of",
-        "`docs/lossiness.md`'s supported set, reduced to a scalar) — answered",
-        "from the graph alone and",
-        "recomputed from the raw CSV as ground truth. Median of",
-        f"{_repeats_text(results)} runs each.",
-        "",
-        "**The two timing columns are wall-clock and are not reproducible bit for "
-        "bit.** Everything else in this report is a deterministic function of the "
-        "seeds and parameters above; these two are measurements of a machine.",
-        "",
-        "The verdict is the check that this compression kept the answer:",
-        f"`AGREE` means the two paths differ by no more than "
-        f"{SEPARATION_TOLERANCE_M} m,",
-        "the budget `docs/lossiness.md` allocates for query 1. `DISAGREE` is a bug",
-        "in the graph, not a tolerance to widen. `COULD-NOT-EVALUATE` means a path",
-        "returned no answer at all, and it never resolves to `AGREE`.",
-        "",
-    ]
-    lines += _table(
-        (
-            "scenario",
-            "graph",
-            "raw CSV",
-            "speedup",
-            "graph answer",
-            "CSV answer",
-            "difference",
-            "verdict",
-        ),
-        [
-            (
-                f"`{r.scenario}`",
-                _seconds_text(r.check.graph_timing.seconds),
-                _seconds_text(r.check.csv_timing.seconds),
-                "n/a"
-                if r.check.speedup is None
-                else _ratio_text(r.check.speedup),
-                _metres_text(r.check.graph_answer),
-                _metres_text(r.check.csv_answer),
-                _metres_text(r.check.difference),
-                r.check.verdict,
-            )
-            for r in results
-        ],
-    )
+    lines += _wall_clock_section(results, timings=timings)
 
     lines += ["", "## Realistic-sensor projection", ""]
     if sensor_multiplier is None:
@@ -5011,6 +5079,18 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-timings",
+        action="store_true",
+        help=(
+            "omit the wall-clock columns of the query table "
+            f"({', '.join(WALL_CLOCK_COLUMNS)}) and nothing else, making the "
+            "report a deterministic function of the seeds and parameters — two "
+            "runs at one seed are then comparable with `cmp` (issue #75). The "
+            "query is still timed; only the columns go. Off unless given: the "
+            "flag is the opt-out, and a report quoting a speedup needs them."
+        ),
+    )
+    parser.add_argument(
         "--work-dir",
         metavar="PATH",
         help=(
@@ -5182,6 +5262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scaling_control=control,
             resolution=resolution,
             control_rates=control_rates,
+            timings=not args.no_timings,
         )
     except (BenchError, graph.GraphBuildError, store.StoreError) as exc:
         print(f"error: {exc}", file=sys.stderr)

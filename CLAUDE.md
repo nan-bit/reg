@@ -60,17 +60,29 @@ that independence is the mechanism, not a style preference, and
 asserts it against the source. Widening that import is never a refactor.
 
 *What the bound is, so nobody reads more into "its own" than is there.*
-`computed_bound(limits)` is the radius of the **workspace disc** —
-`sum(link_lengths) + link_radius`, base at the origin. It takes `Limits`, not a
-`ProprioState`: no `q`, no `qd`, no horizon, the same scalar at every frame of
-every run. It is sound in the conservative direction — it over-covers, so nothing
-inside it is ever falsely accused — and it is **incomplete**: a declaration that
-overclaims what the robot could reach within the horizon, but still fits inside
-the workspace disc, is not detected. `envelope_overclaim` therefore fires only on
-a declaration exceeding the entire workspace. Tightening it soundly needs an
-outer-approximative reachable set (ARMTD / ARMOUR, `docs/prior-art.md` §4), which
-`docs/plan.md` de-scopes; see `docs/limitations.md` §3. The independence is real
-and full-strength; the *capability* is the part that is limited.
+`horizon_bound(state, limits, window)` is the radius a declared region is tested
+against: the **smaller** of `computed_bound(limits)` — the workspace disc,
+`sum(link_lengths) + link_radius`, base at the origin, no `q`, no `qd`, no horizon
+— and the radial projection of `reg.envelope.outer_envelope`, a horizon-limited
+**outer** reachable set (issue #82). Both over-cover, and the minimum of two sound
+bounds is sound, so nothing inside is ever falsely accused. It is still
+**incomplete, radially now rather than entirely**: it detects a declaration
+reaching further than the robot can get in the window, and not one pointing where
+the robot cannot turn in time. The polygon that would catch the second is computed
+and retained as `outer_area_m2` / `outer_radius_m` per envelope; using it for
+containment re-labels three of the five fault fixtures, which changes what a fault
+in the taxonomy means, so it is an open decision and not a tightening anyone
+should take unilaterally. See `docs/limitations.md` §2 and §3. The independence is
+real and full-strength; the *capability* is the part that is limited.
+
+*`Enforcer.offer` takes the state, and it is required.* The tighter bound is a
+function of where the arm is and how fast it is moving, so `offer(declaration,
+state)` has no default for its second argument. An invented state would produce a
+plausible bound for a robot that was somewhere else — the one failure mode a bound
+that VETOes must not have. `reg.envelope.outer_envelope` is where the soundness
+argument lives, in four steps, and
+`tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+is what keeps it true. Weakening either is never a refactor.
 
 ## Scope
 

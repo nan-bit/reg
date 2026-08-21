@@ -39,6 +39,9 @@ from reg.envelope import (
     compute_envelope,
     envelope_area,
     envelope_hash,
+    outer_envelope,
+    outer_radius,
+    reachable_joint_box,
 )
 from reg.kinematics import link_polygons
 from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
@@ -393,3 +396,309 @@ def test_area_and_hash_refuse_something_that_is_not_a_geometry() -> None:
 def test_area_of_a_known_region_is_its_area() -> None:
     """One anchor against the unit, so a metres/millimetres slip would show."""
     assert envelope_area(Polygon([(0, 0), (2, 0), (2, 3), (0, 3)])) == pytest.approx(6.0)
+
+
+# ==========================================================================
+# The OUTER approximation (issue #82). A different set for a different job.
+#
+# `compute_envelope` above is an inner approximation and every test before this
+# point is about that. The tests here are about the opposite direction, and the
+# one that matters is the first: a bound that is not actually conservative is
+# worse than no bound at all, because the fault it exists to catch then fails
+# silently. So it is fed the extremal case — bang-bang controls, the ones that
+# reach furthest — and it ships with the negative that proves the test can fail.
+# ==========================================================================
+
+QD_MAX = np.asarray(LIMITS.qd_max, dtype=float)
+QDD_MAX = np.asarray(LIMITS.qdd_max, dtype=float)
+
+#: Starting states the soundness sweep runs from. Extended and folded, at rest
+#: and at the velocity bound, and one already pressed against a joint stop —
+#: the clamp is part of the model the outer set claims to bound, so a state that
+#: exercises it has to be in here.
+SOUNDNESS_STATES = (
+    ProprioState(t=0.0, q=np.array([0.0, 0.0]), qd=np.array([0.0, 0.0])),
+    ProprioState(t=0.0, q=np.array([0.0, 2.6]), qd=np.array([0.0, 0.0])),
+    ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([2.0, -2.5])),
+    ProprioState(t=0.0, q=np.array([-2.5, 1.0]), qd=np.array([-2.0, 2.5])),
+    ProprioState(t=0.0, q=np.array([1.5, -1.5]), qd=np.array([1.0, 1.2])),
+)
+
+
+def _swept_body(state: ProprioState, control, horizon: float) -> Polygon:
+    """The body swept by one control law, integrated exactly as the model is.
+
+    The integrator is `compute_envelope`'s, restated here on purpose: the outer
+    set is a claim about the trajectories this project's model can produce, and a
+    test that generated them some other way would be checking a different claim.
+    `control(t)` returns the acceleration in force at `t`, so a control that
+    switches sign inside the horizon — which no constant acceleration is — is
+    expressible.
+    """
+    q = np.asarray(state.q, dtype=float).copy()
+    qd = np.asarray(state.qd, dtype=float).copy()
+    polygons = list(link_polygons(q, LIMITS))
+    t = 0.0
+    dt = SUBSTEP_DT
+    while t < horizon - 1e-12:
+        step = min(dt, horizon - t)
+        u = control(t)
+        q = q + np.clip(qd + 0.5 * u * step, -QD_MAX, QD_MAX) * step
+        qd = np.clip(qd + u * step, -QD_MAX, QD_MAX)
+        q = np.clip(q, LIMITS.q_min, LIMITS.q_max)
+        polygons.extend(link_polygons(q, LIMITS))
+        t += step
+    return unary_union(polygons)
+
+
+def _bang_bang_controls(horizon: float, seed: int, n: int):
+    """Controls saturated at `±qdd_max` throughout, with switching times drawn.
+
+    Bang-bang is the extremal case for a double integrator: the configurations
+    furthest from the start are reached by controls that are always saturated,
+    and the ones that get *around* an obstacle in configuration space are the
+    ones that switch. Both are here; the zero-switch members are the corner
+    controls `compute_envelope` samples.
+    """
+    rng = np.random.default_rng(seed)
+    for _ in range(n):
+        n_switch = int(rng.integers(0, 4))
+        times = np.sort(rng.uniform(0.0, horizon, size=n_switch))
+        signs = rng.choice((-1.0, 1.0), size=(n_switch + 1, QDD_MAX.shape[0]))
+
+        def control(t: float, times=times, signs=signs) -> np.ndarray:
+            return signs[int(np.searchsorted(times, t, side="right"))] * QDD_MAX
+
+        yield control
+
+
+@pytest.mark.parametrize("horizon", (0.05, 0.2, 0.5))
+def test_no_bang_bang_trajectory_escapes_the_outer_envelope(horizon: float) -> None:
+    """**The criterion that matters.** Everything else in this section is plumbing.
+
+    If a reachable body can lie outside this region then the region is not an
+    outer bound, `envelope_overclaim` can VETO a declaration the robot could have
+    honoured, and the whole point of computing it is gone. Asserted as *exact*
+    containment rather than within a tolerance: the construction is
+    circumscribed at every step precisely so that no tolerance is needed here.
+    """
+    for seed, state in enumerate(SOUNDNESS_STATES):
+        outer = outer_envelope(state, LIMITS, horizon)
+        for control in _bang_bang_controls(horizon, seed=seed, n=12):
+            escape = _swept_body(state, control, horizon).difference(outer)
+            assert escape.is_empty, (
+                f"q={state.q}, qd={state.qd}, horizon={horizon}: a bang-bang "
+                f"trajectory left {escape.area:.3e} m^2 of body outside the "
+                "outer envelope. The bound is not conservative, so every "
+                "overclaim verdict built on it is an accusation about a "
+                "declaration the robot could have kept."
+            )
+
+
+def test_a_shrunk_outer_bound_does_not_survive_the_soundness_test() -> None:
+    """The negative. A test that only ever passes proves nothing about the bound.
+
+    Erodes the outer envelope by a millimetre — far less than the slack the
+    construction carries — and asserts that some bang-bang trajectory then
+    escapes it. If this fails, the test above is not measuring containment and
+    would go on passing for a bound with a hole in it.
+    """
+    horizon = 0.2
+    state = SOUNDNESS_STATES[2]
+    shrunk = outer_envelope(state, LIMITS, horizon).buffer(-0.001)
+    escaped = any(
+        not _swept_body(state, control, horizon).difference(shrunk).is_empty
+        for control in _bang_bang_controls(horizon, seed=0, n=12)
+    )
+    assert escaped, (
+        "no trajectory escaped a bound that had been eroded by a millimetre, so "
+        "the soundness test above cannot distinguish an outer bound from a "
+        "region that merely looks like one."
+    )
+
+
+def test_the_sampled_envelope_is_inside_the_outer_one() -> None:
+    """The two-sided bracket: inner ⊆ true reachable set ⊆ outer.
+
+    The inner set is what the evidence graph records and the outer one is what
+    enforcement checks against, so this is the relationship that makes reporting
+    both of them an *answer* — "how good is the sampled envelope" — rather than
+    two unrelated numbers.
+    """
+    for state in SOUNDNESS_STATES:
+        inner = compute_envelope(state, LIMITS, horizon=0.2, n_samples=N, seed=0)
+        outer = outer_envelope(state, LIMITS, 0.2)
+        assert inner.difference(outer).is_empty, (
+            f"q={state.q}: the sampled envelope reaches outside the outer bound, "
+            "so one of the two is wrong about the same robot."
+        )
+        assert envelope_area(inner) <= envelope_area(outer)
+
+
+def test_the_outer_envelope_never_exceeds_the_workspace_disc() -> None:
+    """It is floored by the bound it tightens, so it can never be the worse one.
+
+    Up to the rendering: the region is intersected with a *polygon* that
+    circumscribes the disc, and a circumscribed polygon exceeds its circle by
+    `1 / cos(pi / (4 * quad_segs)) - 1`, well under a tenth of a millimetre at
+    the resolution used. `reg.enforce.horizon_bound` takes the exact minimum
+    with `computed_bound` on top of this, so no check ever sees even that much.
+    """
+    disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
+    for state in SOUNDNESS_STATES:
+        for horizon in (0.05, 0.5, 5.0):
+            radius = outer_radius(outer_envelope(state, LIMITS, horizon))
+            assert radius <= disc * 1.001, (
+                f"q={state.q}, horizon={horizon}: the outer envelope reaches "
+                f"{radius} m, past the {disc} m workspace disc. Tightening a "
+                "bound must not be able to loosen it."
+            )
+
+
+def test_a_folded_arm_is_bounded_well_inside_the_workspace_disc() -> None:
+    """The whole point: the bound has the state and the horizon in it.
+
+    A workspace disc is the same scalar at every frame of every run, which is
+    why `envelope_overclaim` could only ever fire on a declaration exceeding the
+    entire workspace (issue #82). This asserts the gap is genuinely closed for a
+    pose the arm cannot straighten out of in time — not merely that the number
+    is different.
+    """
+    disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
+    folded = ProprioState(t=0.0, q=np.array([0.0, 2.6]), qd=np.array([0.0, 0.0]))
+    radius = outer_radius(outer_envelope(folded, LIMITS, 0.5))
+    assert radius < 0.8 * disc, (
+        f"a folded arm at rest is bounded at {radius} m against a {disc} m "
+        "workspace disc; if these are close the tightening buys nothing."
+    )
+
+
+def test_the_outer_envelope_is_monotone_in_the_horizon() -> None:
+    """More time cannot mean less reach. A shrinking bound is losing geometry.
+
+    Asserted on area and radius rather than as set containment, and the
+    difference is worth stating: the ancestor grid's resolution is derived from
+    the *width of the joint box*, so two horizons are covered at two
+    resolutions and their polygons are not nested even though the reachable sets
+    they bound are. Each is separately sound — that is what the bang-bang test
+    above establishes — and a bound that got *smaller* with more time would mean
+    the construction was losing geometry, which is what this catches.
+    """
+    for state in SOUNDNESS_STATES:
+        regions = [
+            outer_envelope(state, LIMITS, h) for h in (0.05, 0.1, 0.2, 0.4, 0.5)
+        ]
+        areas = [envelope_area(region) for region in regions]
+        radii = [outer_radius(region) for region in regions]
+        assert areas == sorted(areas), f"q={state.q}: areas {areas} are not monotone"
+        assert radii == sorted(radii), f"q={state.q}: radii {radii} are not monotone"
+
+
+def test_the_outer_envelope_is_deterministic_and_unseeded() -> None:
+    """No sampling, so nothing to seed — and the same inputs give the same bytes."""
+    state = SOUNDNESS_STATES[0]
+    first = outer_envelope(state, LIMITS, 0.2)
+    second = outer_envelope(state, LIMITS, 0.2)
+    assert envelope_hash(first) == envelope_hash(second)
+
+
+def test_the_reachable_joint_box_contains_every_trajectory_it_bounds() -> None:
+    """Step 1 of the construction, checked on its own.
+
+    Everything the outer set claims rests on this box, so it is asserted
+    directly rather than only through the geometry it produces — a box that was
+    too small would still yield a plausible-looking polygon.
+    """
+    horizon = 0.2
+    for state in SOUNDNESS_STATES:
+        lo, hi = reachable_joint_box(state, LIMITS, horizon)
+        for control in _bang_bang_controls(horizon, seed=0, n=8):
+            q = np.asarray(state.q, dtype=float).copy()
+            qd = np.asarray(state.qd, dtype=float).copy()
+            t = 0.0
+            while t < horizon - 1e-12:
+                step = min(SUBSTEP_DT, horizon - t)
+                u = control(t)
+                q = q + np.clip(qd + 0.5 * u * step, -QD_MAX, QD_MAX) * step
+                qd = np.clip(qd + u * step, -QD_MAX, QD_MAX)
+                q = np.clip(q, LIMITS.q_min, LIMITS.q_max)
+                assert np.all(q >= lo - 1e-12) and np.all(q <= hi + 1e-12), (
+                    f"q={q} left the reachable joint box [{lo}, {hi}] at t={t}."
+                )
+                t += step
+
+
+def test_outer_envelope_refuses_a_stateframe() -> None:
+    """The Layer A boundary holds for the outer set exactly as for the inner one."""
+    frame = StateFrame(
+        t=0.0,
+        q=np.array([0.2, 0.4]),
+        qd=np.array([0.0, 0.0]),
+        human_pos=np.array([1.0, 1.0]),
+        human_vel=np.array([0.0, 0.0]),
+        objects=(Obstacle(entity_id="e", kind="crate", cx=1.0, cy=1.0, radius=0.2),),
+    )
+    with pytest.raises(TypeError, match="ProprioState"):
+        outer_envelope(frame, LIMITS, 0.2)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("horizon", (0.0, -0.1, float("nan"), float("inf")))
+def test_an_outer_horizon_that_is_not_a_duration_is_refused(horizon: float) -> None:
+    with pytest.raises(ValueError):
+        outer_envelope(STATIONARY, LIMITS, horizon)
+
+
+def test_an_outer_horizon_that_is_none_is_refused() -> None:
+    """No default, and `None` is not one either: the bound is a function of it."""
+    with pytest.raises(TypeError):
+        outer_envelope(STATIONARY, LIMITS, None)  # type: ignore[arg-type]
+
+
+def test_a_state_outside_its_own_limits_is_refused_by_the_outer_set() -> None:
+    """The displacement bound assumes `|qd| <= qd_max`; without it, it is too small.
+
+    This is the one refusal in this section that is about soundness rather than
+    hygiene. Integrating `min(|qd0| + qdd*s, qd_max)` from a state that already
+    exceeds `qd_max` under-counts the displacement, so the box — and every
+    polygon built on it — would come out too small, in the direction that clears
+    declarations it should refuse.
+    """
+    too_fast = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([9.0, 0.0]))
+    with pytest.raises(ValueError, match="qd_max"):
+        outer_envelope(too_fast, LIMITS, 0.2)
+    with pytest.raises(ValueError, match="qd_max"):
+        reachable_joint_box(too_fast, LIMITS, 0.2)
+
+
+def test_an_ancestor_grid_too_large_to_evaluate_is_refused() -> None:
+    """A resource guard that refuses rather than silently sampling coarser.
+
+    A coarser grid under a dilation sized for a finer one is an unsound bound
+    wearing a sound one's shape, so the guard must not degrade into one.
+    """
+    many = 8
+    long_arm = Limits(
+        q_min=np.full(many, -np.pi),
+        q_max=np.full(many, np.pi),
+        qd_max=np.full(many, 3.0),
+        qdd_max=np.full(many, 10.0),
+        link_lengths=np.full(many, 0.5),
+        source=LimitSource.PROPRIOCEPTIVE,
+        link_radius=0.05,
+    )
+    state = ProprioState(t=0.0, q=np.zeros(many), qd=np.zeros(many))
+    with pytest.raises(ValueError, match=str(reg.envelope.MAX_OUTER_GRID_CONFIGS)):
+        outer_envelope(state, long_arm, 0.5)
+
+
+def test_outer_radius_refuses_what_it_cannot_measure() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        outer_radius(Polygon())
+    with pytest.raises(TypeError):
+        outer_radius(0.95)  # type: ignore[arg-type]
+
+
+def test_outer_radius_is_the_furthest_vertex() -> None:
+    """Exact for a polygon: the maximum of a convex function is at a vertex."""
+    square = Polygon([(0, 0), (3, 0), (3, 4), (0, 4)])
+    assert outer_radius(square) == pytest.approx(5.0)

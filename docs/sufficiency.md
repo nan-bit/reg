@@ -228,13 +228,18 @@ every edge naming an entity is tagged `B`.
 So the answer inherits nothing from perception. A perception stack that was wrong
 about every entity in the room changes no bit of this answer.
 
-**What it does not license, and this is not a footnote.** The envelope is a
-sampling-based *under*-approximation. "The robot **could have** reached (x, y)" is
-supported; "**could not have**" is not, at any resolution and by any query
-([`docs/lossiness.md`](lossiness.md) *Unanswerable* #3,
-[`docs/limitations.md`](limitations.md) §2, [`docs/prior-art.md` §4](prior-art.md)
-for the outer-approximation machinery a real claim in the negative direction would
-need). A certifiable claim in the wrong direction is not a safety claim.
+**What it does not license, and this is not a footnote.** The envelope whose
+geometry this answer is read off is a sampling-based *under*-approximation. "The
+robot **could have** reached (x, y)" is supported at any resolution;
+"**could not have**" is supported only *radially*, and only since issue #82: every
+`computed` envelope row carries `outer_radius`, the radius of a horizon-limited
+**outer** reachable set, and a point beyond it is one the robot could not have
+reached. Between that radius and the sampled boundary the artifact says nothing,
+and no query may be read as though it did ([`docs/lossiness.md`](lossiness.md)
+*Unanswerable* #3, [`docs/limitations.md`](limitations.md) §2 and §3,
+[`docs/prior-art.md` §4](prior-art.md) for the zonotope machinery a *tight* claim
+in the negative direction would need). A certifiable claim in the wrong direction
+is not a safety claim, and a bracket is not a boundary.
 
 **And it dies first under coarsening.** The occurrence view holds 0 edges, and
 this question's substrate is edges. The Layer A rows that view *does* hold are

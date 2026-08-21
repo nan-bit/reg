@@ -36,7 +36,11 @@ not been: the polygon is a deterministic function of `(q, qd, horizon,
 n_samples, seed, substep_dt)`, every one of which the artifact already stores, so
 storing it per frame was storing the same information twice — once cheaply and
 once expensively. What stays per frame is what queries actually read and what
-costs almost nothing: `envelope_hash`, `area`, `horizon`, `source`.
+costs almost nothing: `envelope_hash`, `area`, `horizon`, `source`, and — since
+issue #82 — `outer_area` and `outer_radius`, the same two projections of the
+*outer* reachable set for that frame, which bracket the sampled area from the
+side it cannot bound itself. The outer region's geometry is discarded under this
+same rule and for this same reason.
 
 The precondition is real and belongs beside the mechanism: recomputation
 reproduces the polygon **exactly for the same code and the same shapely
@@ -230,7 +234,14 @@ from reg.commit import (
 )
 from reg.declare import Declaration, DeclarationError
 from reg.enforce import PASSIVATING_FAULTS, EnforcementError, Verdict
-from reg.envelope import SUBSTEP_DT, compute_envelope, envelope_hash, envelope_layer
+from reg.envelope import (
+    SUBSTEP_DT,
+    compute_envelope,
+    envelope_hash,
+    envelope_layer,
+    outer_envelope,
+    outer_radius,
+)
 from reg.identity import IdentityError, RunIdentity
 from reg.kinematics import link_polygons
 from reg.stream import FLOAT_PRECISION, read_comments, read_frames
@@ -946,6 +957,8 @@ class _FrameNodes:
         envelope: BaseGeometry,
         envelope_digest: str,
         horizon: float,
+        outer_area: float,
+        outer_radius: float,
         q_text: str,
         qd_text: str,
     ) -> None:
@@ -954,6 +967,13 @@ class _FrameNodes:
         self._envelope = envelope
         self._envelope_digest = envelope_digest
         self._horizon = horizon
+        #: The other side of the bracket (issue #82): the horizon-limited outer
+        #: reachable set for this frame, as its area and its radius. The region
+        #: itself is not carried — it is recomputable from the config and the
+        #: horizon this frame already names, and a polygon a frame would undo the
+        #: retention work the incremental rule exists for.
+        self._outer_area = outer_area
+        self._outer_radius = outer_radius
         self._q_text = q_text
         self._qd_text = qd_text
         self._envelope_id = "env_" + _digest(
@@ -1008,6 +1028,8 @@ class _FrameNodes:
             config_id=config_id,
             horizon=self._horizon,
             source=ENVELOPE_SOURCE,
+            outer_area=self._outer_area,
+            outer_radius=self._outer_radius,
         )
 
     def config(self) -> str:
@@ -1394,6 +1416,11 @@ def _attestation_envelope(
         config_id=None,
         horizon=horizon,
         source=source,
+        # A declared region and a clamped bound are not reachable sets, so
+        # neither has an outer approximation. `insert_envelope` refuses a number
+        # here rather than accepting an invented one.
+        outer_area=None,
+        outer_radius=None,
     )
 
 
@@ -2038,6 +2065,16 @@ def _observe(
     )
     digest = envelope_hash(envelope)
 
+    # ...and the outer approximation of the same instant, Layer A on the same
+    # terms (issue #82). Two sets for two jobs: `compute_envelope` above is the
+    # region the robot demonstrably swept and is what the graph records as its
+    # geometry; this one is the region it provably cannot leave, and only its
+    # area and radius are retained. Not simplified — simplification may move a
+    # boundary either way, and an outer bound that moved inward would stop being
+    # one — and computed on the same `substep_dt` grid the inner one was
+    # integrated on, because that is the grid its soundness argument covers.
+    outer = outer_envelope(proprio, limits, horizon, substep_dt)
+
     # The robot body is deliberately *not* simplified. The error budget in
     # docs/lossiness.md allows one simplified boundary per distance
     # (GEOM_SIMPLIFY_TOL_M + DISTANCE_TOL_M/2 <= DISTANCE_TOL_M), and the entity
@@ -2051,6 +2088,8 @@ def _observe(
         envelope=envelope,
         envelope_digest=digest,
         horizon=horizon,
+        outer_area=quantize_area(outer.area),
+        outer_radius=quantize_distance(outer_radius(outer)),
         q_text=_joint_text(frame.q),
         qd_text=_joint_text(frame.qd),
     )
@@ -2750,7 +2789,11 @@ def attestation_from_stream(
     for state in states:
         due = pending.pop(round(state.t, 9), None)
         if due is not None:
-            refusal = enforcer.offer(due)
+            # The frame at `t_issued` goes with the declaration: the overclaim
+            # bound is integrated forward from the pose the policy was in when
+            # it made the claim (issue #82). The key this was popped from is
+            # that instant, so the two are the same frame by construction.
+            refusal = enforcer.offer(due, state)
             # `offer` returns a verdict only when it refuses. An acceptance
             # adjudicates no action, so there is nothing to record for it.
             if refusal is not None:

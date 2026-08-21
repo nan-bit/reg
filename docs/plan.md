@@ -479,14 +479,27 @@ constraint layer supplied by the same party as the policy has common-cause
 failure with it; widening that import is never a refactor.
 
 **What the independent check actually checks, stated plainly.**
-`computed_bound(limits)` is the radius of the workspace disc —
-`sum(link_lengths) + link_radius`. It takes `Limits`, not a `ProprioState`: no
-`q`, no `q̇`, no horizon, the same scalar at every frame of every run. It is
-sound in the conservative direction, so nothing inside it is ever falsely
-accused, and it is **incomplete**: a declaration that overclaims what the robot
-could reach *within the horizon*, but still fits inside the workspace disc, is
-not detected. The independence is real; the capability is limited. Those are
-different sentences and this document has previously run them together.
+`horizon_bound(state, limits, window)` is the radius a declared region is tested
+against, and it is the smaller of two sound bounds: the workspace disc
+`sum(link_lengths) + link_radius`, which reads no `q`, no `q̇` and no horizon; and
+the radial projection of `reg.envelope.outer_envelope`, a horizon-limited **outer**
+reachable set — the joint box pushed through the forward kinematics as an interval
+— which reads all three. Both over-cover, so nothing inside is ever falsely
+accused.
+
+It is **still incomplete, and in a way that is now sayable in one line**: the bound
+is a radius, so it detects an overclaim that reaches *further than the robot can*
+and not one that points *where the robot cannot turn in time*. Until issue #82 the
+first was undetected too, and the fault a Simplex / ASTM F3269 runtime monitor
+exists to catch — the policy declared more than it could occupy within the horizon
+— could not fire at all unless the declaration left the entire workspace. The
+polygon that would close the angular half is computed and its area and radius are
+retained beside every envelope in the artifact; wiring it to the *containment* test
+re-labels three of the five fault fixtures as overclaims, which changes what a
+fault in the §5 taxonomy means, so it is left as a decision rather than taken as a
+step ([`docs/limitations.md`](limitations.md) §3). The independence is real; the
+capability is bounded and the bound is stated. Those are different sentences and
+this document has previously run them together.
 
 **What the chain proves, and what it does not.** It proves the records are
 internally consistent under the keys that signed them. It does not prove no
@@ -685,24 +698,34 @@ failure with it.
 **What that bound actually is, and what Phase 4 therefore delivers.** The bound
 is *not* `compute_envelope` from Phase 2 — that is an under-approximation, and
 vetoing against something that under-covers the reachable set would produce false
-VETOs on truthful policies. It is `reg.enforce.computed_bound(limits)`: the radius
-of the **workspace disc**, `sum(link_lengths) + link_radius`, base at the origin.
-It takes `Limits`, which is a property of the robot rather than of its state — so
-it reads no `q`, no `qd`, no horizon, and returns the same scalar at every frame
-of every scenario.
+VETOs on truthful policies. It is `reg.enforce.horizon_bound(state, limits,
+window)`, the smaller of two bounds that each over-cover:
 
-That makes Phase 4 an independent monitor whose bound is a static workspace disc:
-**sound in the conservative direction and weak.** It over-covers, so nothing
-inside it is ever falsely accused, and every VETO it does emit is real. The cost
-is that the overclaim check is **incomplete** — a declaration claiming more than
-the robot could reach *within the horizon*, but still fitting inside the workspace
-disc, is not detected, and the `envelope_overclaim` fixture has to declare past
-the entire workspace to trip it. The fault a Simplex / ASTM F3269 runtime monitor
-exists to catch is, at this bound, only partly caught. Tightening it soundly needs
-an outer-approximative reachable set — the zonotope machinery of ARMTD and ARMOUR
-([`docs/prior-art.md` §4](prior-art.md)) — which this plan de-scopes deliberately.
-Recorded as [`docs/limitations.md`](limitations.md) §3; `reg/enforce.py`'s module
-header is the authority on the reasoning.
+- `computed_bound(limits)`, the radius of the **workspace disc**,
+  `sum(link_lengths) + link_radius`, base at the origin. It takes `Limits`, a
+  property of the robot rather than of its state, so it reads no `q`, no `qd` and
+  no horizon and is the same scalar at every frame of every scenario.
+- the radial projection of `reg.envelope.outer_envelope(state, limits, window)` —
+  a horizon-limited **outer** reachable set, the joint box pushed through the
+  forward kinematics as an interval (issue #82). This one reads all three.
+
+That makes Phase 4 an independent monitor whose bound is **sound in the
+conservative direction and radial.** It over-covers, so nothing inside it is ever
+falsely accused, and every VETO it does emit is real. Until issue #82 the second
+term did not exist and the check was weak enough that the `envelope_overclaim`
+fixture had to declare past the *entire workspace* to trip it; it now fires on a
+declaration reaching further than the robot can get in the window it declared,
+which is the fault a Simplex / ASTM F3269 runtime monitor exists to catch. What
+remains uncaught is the **angular** half — a region of a reachable radius in a
+direction the robot cannot turn to in time. The polygon that would catch those is
+computed, and its area and radius are retained beside every envelope in the
+artifact as the other side of the bracket; using it for containment rather than
+for its radius re-labels three of the five fault fixtures as overclaims, so it is
+a decision about the taxonomy rather than a tightening. A tighter *construction*
+again is the zonotope machinery of ARMTD and ARMOUR ([`docs/prior-art.md`
+§4](prior-art.md)), which this plan still de-scopes. Recorded as
+[`docs/limitations.md`](limitations.md) §3; `reg/enforce.py`'s module header is
+the authority on the reasoning.
 
 The other eight faults in the taxonomy below are unaffected by this: staleness,
 replay, MAC, vocabulary, watchdog and the declaration/action mismatch are each

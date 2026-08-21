@@ -74,6 +74,8 @@ from reg.enforce import (
     declared_bound,
     envelope_excess,
     escape_region,
+    horizon_bound,
+    horizon_excess,
     sign_acknowledgment,
     sign_verdict,
     verify_acknowledgment,
@@ -126,6 +128,20 @@ Q_FAR = (1.5, -1.5)
 #: the enforcement bound against the sampled envelope.
 Q_IN_BOX = (0.0, 1.0)
 
+#: The arm straight out along `+x`, at rest. Every test in this file that is
+#: *not* about the horizon-limited bound offers its declarations against this
+#: pose, and the choice is load-bearing rather than arbitrary: the arm is already
+#: at full extension here, so `horizon_bound` equals `computed_bound` exactly —
+#: 0.95 m — for any window whatsoever (issue #82). Those tests therefore exercise
+#: the check they are named for and not the tightening, and the tightening gets
+#: its own tests, which pick a folded pose on purpose.
+Q_EXTENDED = (0.0, 0.0)
+
+#: Folded hard at the elbow and at rest: the pose the tightened bound is visible
+#: at. From here the elbow cannot reach 0 rad within a declaration horizon, so
+#: the arm cannot straighten, and the bound is well inside the workspace disc.
+Q_FOLDED = (0.0, 2.6)
+
 
 def proprio(q: tuple[float, float], t: float, qd: tuple[float, float] = (0.0, 0.0)):
     return ProprioState(t=t, q=np.asarray(q, dtype=float), qd=np.asarray(qd, dtype=float))
@@ -143,6 +159,11 @@ def declared_around(q: tuple[float, float]) -> bytes:
 
 
 HOME_WKB = declared_around(Q_HOME)
+
+#: The state offered alongside every declaration in this file except where the
+#: test is about the pose. See `Q_EXTENDED`: at this one the horizon-limited
+#: bound and the workspace disc coincide.
+AT_EXTENDED = proprio(Q_EXTENDED, 0.0)
 
 #: A declared bound reaching far outside anything the robot can occupy: 10 m
 #: square against a 0.95 m workspace disc.
@@ -467,7 +488,7 @@ def test_offer_refuses_anything_that_is_not_a_declaration() -> None:
         mac = UNSIGNED_MAC
 
     with pytest.raises(EnforcementError, match="Declaration"):
-        enforcer().offer(LooksLikeOne())  # type: ignore[arg-type]
+        enforcer().offer(LooksLikeOne(), AT_EXTENDED)  # type: ignore[arg-type]
 
 
 # ==========================================================================
@@ -536,7 +557,7 @@ def test_the_mismatch_resolution_is_the_artifacts_own_and_is_not_a_tolerance() -
     assert not escape_region(body, declared_bound(tight)).is_empty
 
     e = enforcer()
-    assert e.offer(tight) is None
+    assert e.offer(tight, AT_EXTENDED) is None
     v = e.adjudicate(proprio(Q_HOME, 0.1))
     assert (v.outcome, v.fault) == ("CLAMP", "declaration_action_mismatch")
 
@@ -586,7 +607,7 @@ def test_the_bound_is_not_the_sampled_envelope_so_honest_declarations_survive() 
     )
 
     e = enforcer()
-    assert e.offer(declaration(envelope=envelope_wkb(region))) is None
+    assert e.offer(declaration(envelope=envelope_wkb(region)), AT_EXTENDED) is None
     assert not e.is_passivated
     assert e.adjudicate(proprio(Q_IN_BOX, 0.0)).outcome == "PERMIT"
 
@@ -607,7 +628,7 @@ def test_no_declaration_is_a_veto() -> None:
 def test_an_action_before_its_declaration_was_issued_is_no_declaration() -> None:
     """The open declaration does not cover this instant, and is not yet stale."""
     e = enforcer()
-    assert e.offer(declaration(t_issued=0.5)) is None
+    assert e.offer(declaration(t_issued=0.5), AT_EXTENDED) is None
     v = e.adjudicate(proprio(Q_HOME, 0.25))
     assert (v.outcome, v.fault) == ("VETO", "no_declaration")
 
@@ -615,7 +636,7 @@ def test_an_action_before_its_declaration_was_issued_is_no_declaration() -> None
 def test_a_declaration_permits_the_action_it_covers() -> None:
     """The positive control for `no_declaration`."""
     e = enforcer()
-    assert e.offer(declaration()) is None
+    assert e.offer(declaration(), AT_EXTENDED) is None
     v = e.adjudicate(proprio(Q_HOME, 0.1))
     assert (v.outcome, v.fault, v.clamped_envelope) == ("PERMIT", None, None)
     assert v.declaration_id == "fixture-decl-00000"
@@ -624,7 +645,7 @@ def test_a_declaration_permits_the_action_it_covers() -> None:
 
 def test_stale_declaration_is_a_veto() -> None:
     e = enforcer()
-    e.offer(declaration(t_issued=0.0, horizon=0.5))
+    e.offer(declaration(t_issued=0.0, horizon=0.5), AT_EXTENDED)
     assert e.adjudicate(proprio(Q_HOME, 0.5)).outcome == "PERMIT"  # boundary is covered
     v = e.adjudicate(proprio(Q_HOME, 0.51))
     assert (v.outcome, v.fault) == ("VETO", "stale_declaration")
@@ -635,7 +656,7 @@ def test_stale_declaration_is_a_veto() -> None:
 def test_declaration_action_mismatch_clamps_to_the_declared_bound() -> None:
     e = enforcer()
     d = declaration()
-    e.offer(d)
+    e.offer(d, AT_EXTENDED)
     v = e.adjudicate(proprio(Q_FAR, 0.1))
     assert (v.outcome, v.fault) == ("CLAMP", "declaration_action_mismatch")
     assert v.clamped_envelope == d.declared_envelope, (
@@ -652,13 +673,173 @@ def test_declaration_action_mismatch_clamps_to_the_declared_bound() -> None:
 def test_envelope_overclaim_vetoes_the_declaration_itself() -> None:
     """The negative the whole 'never trust the declaration' rule is about."""
     e = enforcer()
-    v = e.offer(declaration(envelope=HUGE_WKB))
+    v = e.offer(declaration(envelope=HUGE_WKB), AT_EXTENDED)
     assert v is not None
     assert (v.outcome, v.fault) == ("VETO", "envelope_overclaim")
     assert v.declaration_id == "fixture-decl-00000"
     assert e.open_declaration is None
     assert e.is_passivated
     assert f"{computed_bound(LIMITS):.4f}" in (e.reason(v.verdict_id) or "")
+
+
+# --------------------------------------------------------------------------
+# The horizon-limited half of the overclaim check (issue #82).
+#
+# Before it, `computed_bound` was the same scalar at every frame of every run —
+# no `q`, no `qd`, no horizon — so `envelope_overclaim` could only fire on a
+# declaration exceeding the *entire workspace*, and the fault a Simplex / ASTM
+# F3269 monitor exists to catch was undetectable. These tests are about the case
+# that was undetectable, and the first one is the fixture the issue asks for: a
+# declared region that fits comfortably inside the workspace disc and still
+# claims more than the robot can occupy in the window it declared.
+# --------------------------------------------------------------------------
+
+
+def reachable_looking_declaration() -> bytes:
+    """A declared region entirely inside the workspace disc, and a lie anyway.
+
+    The policy claims it will sweep its elbow from 0.5 rad out to 2.6 rad. Every
+    configuration in that claim is one the arm can hold, and the union of their
+    bodies reaches 0.887 m against a 0.95 m workspace disc — so the static check
+    passes it, correctly, because nothing about it exceeds the workspace. What
+    it *cannot* do is get the elbow anywhere near 0.5 rad within half a second
+    from a standing fold, which is the claim `horizon_bound` is against.
+    """
+    box = ((-0.2, 0.2), (0.5, 2.6))
+    return envelope_wkb(declared_region(box_grid(box, LIMITS), LIMITS))
+
+
+def test_envelope_overclaim_fires_on_a_region_inside_the_workspace_disc() -> None:
+    """**The fault that was undetectable.** Issue #82's acceptance criterion.
+
+    Both halves are asserted, because either alone would be misleading: the
+    static bound accepts this declaration (so the region genuinely is inside the
+    workspace), and the horizon-limited one refuses it (so the tightening is
+    what caught it, not a bound that got looser somewhere else).
+    """
+    region = shapely.from_wkb(reachable_looking_declaration())
+    assert envelope_excess(region, LIMITS) < 0.0, (
+        "the fixture is supposed to fit inside the workspace disc; if it does "
+        "not, the old check catches it and this test proves nothing new."
+    )
+
+    folded = proprio(Q_FOLDED, 0.0)
+    e = enforcer()
+    v = e.offer(declaration(envelope=reachable_looking_declaration()), folded)
+    assert v is not None
+    assert (v.outcome, v.fault) == ("VETO", "envelope_overclaim")
+    assert e.is_passivated
+    reason = e.reason(v.verdict_id) or ""
+    assert f"{HORIZON_S:.4f} s window" in reason, reason
+    assert f"{computed_bound(LIMITS):.4f}" in reason, (
+        "the reason has to name both bounds; an operator reading a VETO has to "
+        f"be able to see which one refused it. Got: {reason}"
+    )
+
+
+def test_the_same_declaration_is_accepted_from_a_pose_that_can_honour_it() -> None:
+    """POSITIVE CONTROL. The check must not be refusing the *region*.
+
+    Same declaration, same bound, an arm already extended — from which the
+    claimed region is reachable within the window. A check that refused this too
+    would be the workspace disc with extra steps, refusing on geometry rather
+    than on what the robot can do with it.
+    """
+    e = enforcer()
+    assert e.offer(declaration(envelope=reachable_looking_declaration()), AT_EXTENDED) is None
+    assert e.open_declaration is not None
+    assert not e.is_passivated
+
+
+def test_the_horizon_bound_is_never_worse_than_the_workspace_disc() -> None:
+    """The floor. Tightening a bound must not be able to loosen it anywhere."""
+    disc = computed_bound(LIMITS)
+    for q in (Q_EXTENDED, Q_FOLDED, Q_HOME, Q_FAR, Q_IN_BOX):
+        for qd in ((0.0, 0.0), (2.0, 2.5), (-2.0, -2.5)):
+            for window in (0.05, 0.5, 5.0):
+                state = proprio(q, 0.0, qd)
+                assert horizon_bound(state, LIMITS, window) <= disc + 1e-12
+
+
+def test_horizon_excess_is_never_less_than_envelope_excess() -> None:
+    """So the fault only ever gains cases; nothing the static check caught is lost."""
+    region = shapely.from_wkb(reachable_looking_declaration())
+    for q in (Q_EXTENDED, Q_FOLDED, Q_HOME):
+        state = proprio(q, 0.0)
+        assert horizon_excess(region, state, LIMITS, HORIZON_S) >= envelope_excess(
+            region, LIMITS
+        ) - 1e-12
+
+
+def test_an_extended_arm_leaves_the_static_bound_exactly_where_it_was() -> None:
+    """The tightening is additive: at full extension the two bounds coincide.
+
+    Load-bearing for every other test in this file — they all offer against
+    `AT_EXTENDED` precisely so that the tightening cannot silently change what
+    they are measuring.
+    """
+    for window in (0.02, 0.5, 5.0):
+        assert horizon_bound(AT_EXTENDED, LIMITS, window) == pytest.approx(
+            computed_bound(LIMITS), abs=1e-9
+        )
+
+
+def test_offer_refuses_a_state_that_is_not_proprioception() -> None:
+    """The Layer A boundary, on the argument the bound is computed from."""
+    frame = StateFrame(
+        t=0.0,
+        q=np.asarray(Q_EXTENDED, dtype=float),
+        qd=np.zeros(2),
+        human_pos=np.array([1.0, 1.0]),
+        human_vel=np.zeros(2),
+        objects=(),
+    )
+    with pytest.raises(EnforcementError, match="ProprioState"):
+        enforcer().offer(declaration(), frame)  # type: ignore[arg-type]
+    with pytest.raises(EnforcementError, match="ProprioState"):
+        enforcer().offer(declaration(), None)  # type: ignore[arg-type]
+
+
+def test_offer_refuses_a_state_from_after_the_declaration_was_issued() -> None:
+    """NEGATIVE. A bound integrated from a pose the claimed window has left.
+
+    It would not cover the start of the interval being claimed, so it would be
+    an unsound bound with a sound one's shape — the one failure mode this whole
+    construction exists to avoid. A state from *before* `t_issued` is fine and
+    the window stretches to cover the gap, which the next test asserts.
+    """
+    with pytest.raises(EnforcementError, match="after the declaration"):
+        enforcer().offer(declaration(t_issued=0.0), proprio(Q_EXTENDED, 0.1))
+
+
+def test_an_older_state_widens_the_window_rather_than_narrowing_it() -> None:
+    """A bound reaching further back covers more, so it can only accept more."""
+    folded_now = proprio(Q_FOLDED, 0.5)
+    folded_earlier = proprio(Q_FOLDED, 0.0)
+    d = declaration(t_issued=0.5, envelope=reachable_looking_declaration())
+
+    assert enforcer().offer(d, folded_now) is not None, (
+        "from the pose at t_issued this declaration overclaims; if it does not, "
+        "the comparison below is between two accepting bounds and says nothing."
+    )
+    # Same claim, judged from a pose half a second older: the window the bound
+    # covers is 1.0 s rather than 0.5 s, which is enough for the arm to unfold.
+    assert enforcer().offer(d, folded_earlier) is None
+
+
+def test_a_declaration_the_arm_can_reach_by_moving_is_accepted() -> None:
+    """POSITIVE CONTROL for the velocity term: the bound is not just about pose.
+
+    The same folded arm, but already turning at its velocity bound. It sweeps a
+    region a standing fold cannot, and a declaration covering the sweep it is
+    actually making has to be accepted — a bound that ignored `qd` would refuse
+    it and cry wolf on an honest policy.
+    """
+    turning = proprio(Q_FOLDED, 0.0, qd=(2.0, 0.0))
+    swept = declared_region(
+        box_grid(((-0.2, 1.0), (2.2, 2.6)), LIMITS), LIMITS
+    )
+    assert enforcer().offer(declaration(envelope=envelope_wkb(swept)), turning) is None
 
 
 def test_an_enormous_declaration_does_not_widen_what_is_permitted() -> None:
@@ -672,7 +853,7 @@ def test_an_enormous_declaration_does_not_widen_what_is_permitted() -> None:
     assert huge.covers(body_at(Q_HOME)), "the action is inside the declared claim"
 
     e = enforcer()
-    e.offer(declaration(envelope=HUGE_WKB))
+    e.offer(declaration(envelope=HUGE_WKB), AT_EXTENDED)
     outcomes = {e.adjudicate(proprio(Q_HOME, t)).outcome for t in (0.1, 0.2, 0.3)}
     assert outcomes == {"SAFE_STATE"}
     assert "PERMIT" not in {v.outcome for v in e.verdicts}
@@ -692,7 +873,7 @@ def test_out_of_vocabulary_action_is_a_veto() -> None:
     assert "levitate" not in ACTION_CLASSES
 
     e = enforcer()
-    v = e.offer(d)
+    v = e.offer(d, AT_EXTENDED)
     assert v is not None
     assert (v.outcome, v.fault) == ("VETO", "out_of_vocabulary_action")
     assert e.is_passivated
@@ -702,13 +883,13 @@ def test_every_action_class_in_the_vocabulary_is_accepted() -> None:
     """The positive control for `out_of_vocabulary_action`."""
     for i, action_class in enumerate(ACTION_CLASSES):
         e = enforcer()
-        assert e.offer(declaration(seq=i, action_class=action_class)) is None
+        assert e.offer(declaration(seq=i, action_class=action_class), AT_EXTENDED) is None
         assert e.open_declaration is not None
 
 
 def test_unattributed_when_the_mac_does_not_match() -> None:
     e = enforcer()
-    v = e.offer(declaration(key=OTHER_KEYRING.key("policy")))
+    v = e.offer(declaration(key=OTHER_KEYRING.key("policy")), AT_EXTENDED)
     assert v is not None
     assert (v.outcome, v.fault) == ("VETO", "unattributed")
     assert e.is_passivated
@@ -716,7 +897,7 @@ def test_unattributed_when_the_mac_does_not_match() -> None:
 
 def test_unattributed_when_the_declaration_is_not_signed_at_all() -> None:
     e = enforcer()
-    v = e.offer(declaration(signed=False))
+    v = e.offer(declaration(signed=False), AT_EXTENDED)
     assert v is not None
     assert (v.outcome, v.fault) == ("VETO", "unattributed")
 
@@ -730,7 +911,7 @@ def test_could_not_evaluate_is_not_permit() -> None:
     branch being handled.
     """
     e = enforcer(policy_key=None)
-    v = e.offer(declaration())
+    v = e.offer(declaration(), AT_EXTENDED)
     assert v is not None
     assert (v.outcome, v.fault) == ("VETO", "unattributed")
     assert "no key" in (e.reason(v.verdict_id) or "")
@@ -743,8 +924,8 @@ def test_could_not_evaluate_is_not_permit() -> None:
 def test_replay_and_reorder_are_vetoed() -> None:
     for bad_seq in (3, 2):  # reuse, then regression
         e = enforcer()
-        assert e.offer(declaration(seq=3, t_issued=0.0)) is None
-        v = e.offer(declaration(seq=bad_seq, t_issued=0.1))
+        assert e.offer(declaration(seq=3, t_issued=0.0), AT_EXTENDED) is None
+        v = e.offer(declaration(seq=bad_seq, t_issued=0.1), AT_EXTENDED)
         assert v is not None, f"seq={bad_seq} was accepted after seq=3"
         assert (v.outcome, v.fault) == ("VETO", "replay_or_reorder")
         assert e.is_passivated
@@ -753,8 +934,8 @@ def test_replay_and_reorder_are_vetoed() -> None:
 def test_an_advancing_seq_is_accepted() -> None:
     """The positive control for `replay_or_reorder`. Gaps are not reordering."""
     e = enforcer()
-    assert e.offer(declaration(seq=0, t_issued=0.0)) is None
-    assert e.offer(declaration(seq=4, t_issued=0.1)) is None
+    assert e.offer(declaration(seq=0, t_issued=0.0), AT_EXTENDED) is None
+    assert e.offer(declaration(seq=4, t_issued=0.1), AT_EXTENDED) is None
     assert e.open_declaration is not None
     assert e.open_declaration.seq == 4
 
@@ -762,7 +943,7 @@ def test_an_advancing_seq_is_accepted() -> None:
 def test_watchdog_expiry_drives_to_a_safe_state() -> None:
     """The liveness check: the declaration channel has gone quiet."""
     e = enforcer(watchdog_period_s=0.25)
-    e.offer(declaration(t_issued=0.0, horizon=10.0))
+    e.offer(declaration(t_issued=0.0, horizon=10.0), AT_EXTENDED)
     assert e.adjudicate(proprio(Q_HOME, 0.25)).outcome == "PERMIT"
     v = e.adjudicate(proprio(Q_HOME, 0.26))
     assert (v.outcome, v.fault) == ("SAFE_STATE", "watchdog_expiry")
@@ -785,9 +966,9 @@ def test_the_watchdog_is_liveness_not_validity() -> None:
     leave the watchdog ticking from before it arrived.
     """
     e = enforcer(watchdog_period_s=0.25)
-    e.offer(declaration(seq=0, t_issued=0.0, envelope=HUGE_WKB))  # refused, but heard
+    e.offer(declaration(seq=0, t_issued=0.0, envelope=HUGE_WKB), AT_EXTENDED)  # refused, but heard
     e.acknowledge(t=0.05, reason="operator cleared the overclaim")
-    assert e.offer(declaration(seq=1, t_issued=0.1)) is None
+    assert e.offer(declaration(seq=1, t_issued=0.1), AT_EXTENDED) is None
     v = e.adjudicate(proprio(Q_HOME, 0.3))
     assert v.outcome == "PERMIT", "the channel was heard from at t=0.1"
 
@@ -798,7 +979,7 @@ def test_escalation_failure_when_the_policy_replans_instead_of_escalating() -> N
     e.adjudicate(proprio(Q_HOME, 0.1))  # VETO no_declaration -> passivated
     assert e.is_passivated
 
-    v = e.offer(declaration(seq=1, t_issued=0.2, action_class="reach"))
+    v = e.offer(declaration(seq=1, t_issued=0.2, action_class="reach"), AT_EXTENDED)
     assert v is not None
     assert (v.outcome, v.fault) == ("SAFE_STATE", "escalation_failure")
     assert e.is_passivated
@@ -809,7 +990,7 @@ def test_an_escalate_declaration_is_not_an_escalation_failure() -> None:
     """The positive control — and it still does not resume anything."""
     e = enforcer()
     e.adjudicate(proprio(Q_HOME, 0.1))
-    assert e.offer(declaration(seq=1, t_issued=0.2, action_class="escalate")) is None
+    assert e.offer(declaration(seq=1, t_issued=0.2, action_class="escalate"), AT_EXTENDED) is None
     assert e.escalated
     assert e.is_passivated
     assert "escalation_failure" not in {v.fault for v in e.verdicts}
@@ -823,7 +1004,7 @@ def test_an_escalate_declaration_is_not_an_escalation_failure() -> None:
 
 def test_after_a_veto_every_action_is_a_safe_state_carrying_the_fault() -> None:
     e = enforcer()
-    e.offer(declaration(t_issued=0.0, horizon=0.5))
+    e.offer(declaration(t_issued=0.0, horizon=0.5), AT_EXTENDED)
     assert e.adjudicate(proprio(Q_HOME, 0.51)).fault == "stale_declaration"
     for t in (0.6, 0.7, 0.8):
         v = e.adjudicate(proprio(Q_HOME, t))
@@ -834,10 +1015,10 @@ def test_after_a_veto_every_action_is_a_safe_state_carrying_the_fault() -> None:
 def test_a_fresh_declaration_alone_does_not_resume() -> None:
     """NEGATIVE — reintegration is gated. This is the half people omit."""
     e = enforcer()
-    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5))
+    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5), AT_EXTENDED)
     e.adjudicate(proprio(Q_HOME, 0.51))  # VETO stale -> passivated
 
-    refusal = e.offer(declaration(seq=1, t_issued=0.6))
+    refusal = e.offer(declaration(seq=1, t_issued=0.6), AT_EXTENDED)
     assert refusal is not None, "a fresh declaration alone resumed the run"
     assert e.is_passivated
     assert e.open_declaration is None
@@ -847,7 +1028,7 @@ def test_a_fresh_declaration_alone_does_not_resume() -> None:
 def test_an_acknowledgment_alone_does_not_resume() -> None:
     """The other half: the acknowledgment needs a fresh declaration behind it."""
     e = enforcer()
-    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5))
+    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5), AT_EXTENDED)
     e.adjudicate(proprio(Q_HOME, 0.51))
 
     ack = e.acknowledge(t=0.6, reason="operator inspected the cell")
@@ -859,7 +1040,7 @@ def test_an_acknowledgment_alone_does_not_resume() -> None:
 
 def test_acknowledgment_then_a_fresh_declaration_resumes() -> None:
     e = enforcer()
-    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5))
+    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5), AT_EXTENDED)
     passivating = e.adjudicate(proprio(Q_HOME, 0.51))
 
     ack = e.acknowledge(t=0.6, reason="operator inspected the cell")
@@ -867,7 +1048,7 @@ def test_acknowledgment_then_a_fresh_declaration_resumes() -> None:
         "the acknowledgment names the verdict it clears, so acknowledging one "
         "fault cannot clear a different one later"
     )
-    assert e.offer(declaration(seq=1, t_issued=0.7)) is None
+    assert e.offer(declaration(seq=1, t_issued=0.7), AT_EXTENDED) is None
     assert not e.is_passivated
     assert e.adjudicate(proprio(Q_HOME, 0.8)).outcome == "PERMIT"
 
@@ -875,16 +1056,16 @@ def test_acknowledgment_then_a_fresh_declaration_resumes() -> None:
 def test_a_new_passivation_invalidates_an_earlier_acknowledgment() -> None:
     """Acknowledging a stale declaration did not clear a forged one."""
     e = enforcer()
-    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5))
+    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5), AT_EXTENDED)
     e.adjudicate(proprio(Q_HOME, 0.51))
     e.acknowledge(t=0.6, reason="operator inspected the cell")
 
     # A forged declaration arrives before the reintegrating one.
-    forged = e.offer(declaration(seq=1, t_issued=0.7, key=OTHER_KEYRING.key("policy")))
+    forged = e.offer(declaration(seq=1, t_issued=0.7, key=OTHER_KEYRING.key("policy")), AT_EXTENDED)
     assert forged is not None and forged.fault == "unattributed"
     assert e.passivation_fault == "unattributed"
 
-    resumed = e.offer(declaration(seq=2, t_issued=0.8))
+    resumed = e.offer(declaration(seq=2, t_issued=0.8), AT_EXTENDED)
     assert resumed is not None, "the stale-declaration acknowledgment cleared a forgery"
     assert e.is_passivated
 
@@ -911,11 +1092,11 @@ def test_acknowledge_twice_is_refused() -> None:
 
 def test_verdicts_and_acknowledgments_share_one_chain() -> None:
     e = enforcer()
-    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5))
+    e.offer(declaration(seq=0, t_issued=0.0, horizon=0.5), AT_EXTENDED)
     e.adjudicate(proprio(Q_HOME, 0.1))
     e.adjudicate(proprio(Q_HOME, 0.51))
     ack = e.acknowledge(t=0.6, reason="cleared")
-    e.offer(declaration(seq=1, t_issued=0.7))
+    e.offer(declaration(seq=1, t_issued=0.7), AT_EXTENDED)
     e.adjudicate(proprio(Q_HOME, 0.8))
 
     # PERMIT, VETO(stale), then the acknowledgment, then PERMIT again: the two
@@ -940,7 +1121,7 @@ def test_verdicts_and_acknowledgments_share_one_chain() -> None:
 def test_verdict_seq_is_the_verdicts_own_counter() -> None:
     """Not the declaration's: two verdicts against one declaration is normal."""
     e = enforcer()
-    e.offer(declaration(seq=17, t_issued=0.0))
+    e.offer(declaration(seq=17, t_issued=0.0), AT_EXTENDED)
     verdicts = e.adjudicate_all(proprio(Q_HOME, t) for t in (0.1, 0.2, 0.3))
     assert [v.seq for v in verdicts] == [0, 1, 2]
     assert {v.declaration_id for v in verdicts} == {"fixture-decl-00017"}
@@ -948,7 +1129,7 @@ def test_verdict_seq_is_the_verdicts_own_counter() -> None:
 
 def test_ids_are_deterministic_and_prefixed() -> None:
     e = enforcer(id_prefix="contact")
-    e.offer(declaration())
+    e.offer(declaration(), AT_EXTENDED)
     v = e.adjudicate(proprio(Q_HOME, 0.1))
     assert v.verdict_id == "contact-verdict-00000"
 
@@ -956,7 +1137,7 @@ def test_ids_are_deterministic_and_prefixed() -> None:
 def test_an_action_that_runs_backwards_is_a_caller_error_not_a_fault() -> None:
     """Absorbing it would silently reset the watchdog."""
     e = enforcer()
-    e.offer(declaration())
+    e.offer(declaration(), AT_EXTENDED)
     e.adjudicate(proprio(Q_HOME, 0.3))
     with pytest.raises(EnforcementError, match="precedes the previous action"):
         e.adjudicate(proprio(Q_HOME, 0.2))
@@ -1138,7 +1319,7 @@ def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
     for state in states:
         due = pending.pop(round(state.t, 9), None)
         if due is not None:
-            refused = e.offer(due)
+            refused = e.offer(due, state)
             if refused is not None:
                 refusals.append(refused)
         actions.append(e.adjudicate(state))
@@ -1597,7 +1778,7 @@ def test_an_acknowledged_passivation_makes_the_same_declaration_lawful() -> None
             acknowledged = True
         due = pending.pop(round(state.t, 9), None)
         if due is not None:
-            refused = e.offer(due)
+            refused = e.offer(due, state)
             if refused is not None:
                 faults.append(refused.fault or "")
         v = e.adjudicate(state)

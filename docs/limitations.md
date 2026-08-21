@@ -95,3 +95,60 @@ is a demonstration of the *evidence structure*, and every claim built on the
 envelope inherits this limitation. `reg.envelope`'s module docstring lists three
 further sources of under-coverage (substep sampling, flat link caps,
 constant-accelerations only) and is the authority on them.
+
+---
+
+## 3. The bound enforcement checks declarations against is the whole workspace
+
+Stated here because a reader meets the phrase "the independently computed physical
+bound" in [`docs/plan.md`](plan.md) Phase 4 and in `reg.enforce`'s fault taxonomy,
+and will reasonably read it as *what this robot could reach from here* — a
+reachable set. It is not one.
+
+**What.** `reg.enforce.computed_bound(limits)` is the radius of the **workspace
+disc**: `sum(link_lengths) + link_radius`, centred on the base, which
+`reg.kinematics` fixes at the origin. Its argument is `Limits`, a property of the
+robot rather than of its state, so the bound reads no `q`, no `qd` and no horizon,
+and is the same scalar at every frame of every scenario.
+`reg.enforce.envelope_excess` tests a declared region against that disc, exactly —
+a disc is convex, so a polygon lies inside it iff every vertex does.
+
+**The cost.** The `envelope_overclaim` fault fires only on a declaration that
+exceeds the **entire workspace**. A policy that declares a region it could never
+occupy within the declaration's horizon — the fault a Simplex / ASTM F3269 runtime
+monitor exists to catch — passes the check as long as the region fits inside the
+disc, and enforcement emits PERMIT. The fixture is built accordingly: a 0.88 m
+body padded to 1.13 m against a 0.95 m disc
+(`reg/scenarios.py`, `envelope_overclaim`). What the check demonstrates is the
+*structure* — an independent bound, computed from Layer A alone, that can veto a
+declaration and leave signed evidence of the refusal — not a tight one.
+
+Two things this limitation is **not**:
+
+- **It is not a weakness in the independence.** Enforcement computes this bound
+  itself from `Limits` and the origin, imports from `reg.declare` no further than
+  `Declaration` and `ACTION_CLASSES`, and imports nothing from Layer B at all;
+  both restrictions are asserted against the module's own AST in
+  `tests/test_enforce.py`. It is the *capability* that is limited, not the
+  separation. Softening the import rule to buy a tighter bound would trade the
+  mechanism for the measurement.
+- **It is not unsound.** The disc over-covers the true reachable set, so no
+  truthful declaration is ever vetoed by this check — the error is entirely in the
+  permissive direction, which is the correct direction for something whose
+  response is VETO. Comparing against `reg.envelope.compute_envelope` instead
+  would be the tempting move and the wrong one: §2 above is an
+  *under*-approximation, and a declaration larger than a sampled envelope is the
+  expected result for an honest policy, so vetoing on it would cry wolf.
+  The other eight faults in the taxonomy — staleness, replay, MAC, vocabulary,
+  watchdog, no-declaration, escalation failure and the declaration/action mismatch
+  — are decided against the record, not against a reachability bound, and none of
+  them inherits this.
+
+**What a claim would need instead.** A horizon-limited **outer** approximation of
+the reachable set: the zonotope and polynomial-zonotope machinery of ARMTD and
+ARMOUR ([`docs/prior-art.md` §4](prior-art.md)), the same thing §2 needs and for
+the same reason. With one, `envelope_overclaim` would become a meaningful check
+and §2's restriction on *could not have reached* would lift together with it.
+Without one, the supportable claim is exactly: **an overclaim is detected iff the
+declared region leaves the workspace disc.** `reg/enforce.py`'s module header is
+the authority on why the loose bound was chosen over an unsound tight one.

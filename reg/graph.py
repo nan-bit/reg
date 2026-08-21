@@ -648,26 +648,10 @@ META_VERDICT_COUNT = "verdict_count"
 
 #: The rule, in one sentence, as it is recorded in the artifact's meta table.
 TIME_BASE_DOMAIN = (
-    "every interval endpoint in this artifact is rounded to the nearest "
-    f"tolerance_time_tol_s, so the time base has {TIME_BASE_MAX_RATE_HZ:g} "
-    "addressable instants per second whatever rate the stream was sampled at. "
-    "time_base_addressable_instants counts how many distinct instants this run's "
-    "frames actually landed on and time_base_resolves_frames is yes exactly when "
-    "that equals frame_count. When it is yes, every frame has its own address and "
-    "the per-frame agreement predicates of docs/lossiness.md hold as written. "
-    "When it is no, the stream was sampled faster than the timestamp quantum, "
-    "two or more frames share an address, and a per-frame value read back out of "
-    "an interval is the value of whichever of those frames opened it: measured on "
-    "near_miss at seed 0, separation_timeline then misses its own DISTANCE_TOL_M "
-    "budget by up to 0.0140 m at 1 kHz. The values themselves are not wrong and "
-    "nothing was sampled away — the same intervals are stored at 1 kHz as at 100 "
-    "Hz — what is lost is the ability to say which frame inside a quantum a value "
-    "belongs to, so the miss is a quantization limit and not a sampling one "
-    "(docs/limitations.md section 4). A no here does not make any answer in this "
-    "file invalid; it says that per-frame answers are good to the timestamp "
-    "quantum rather than to the frame, and that a question about one frame of a "
-    "shared instant is could-not-evaluate. This artifact does not widen a "
-    "tolerance to make that go away."
+    f"{TIME_BASE_MAX_RATE_HZ:g} addressable instants per second, whatever rate "
+    "the stream was sampled at. The per-frame predicates of docs/lossiness.md "
+    "hold exactly when time_base_addressable_instants == frame_count; "
+    "docs/limitations.md \u00a75 is what a claim inherits when it does not."
 )
 
 #: Where the three time-base facts land in `meta`.

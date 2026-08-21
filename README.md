@@ -9,8 +9,15 @@ reconstruction: someone asking, months later and with the robot long since
 stopped, what the system knew, what it intended, and what constrained it.
 
 That question has a retention problem attached. Full sensor logs from a humanoid
-run to terabytes per day, and on an air-gapped site they cannot leave the
-building at all. A scene graph is orders of magnitude smaller. For a regulated
+run to terabytes per day — an assumption with a sourced range, not something this
+project measures — and on an air-gapped site they cannot leave the building at
+all. A scene graph is smaller by about two orders of magnitude: **~694x** at
+occurrence resolution over the six-month retention floor, 263 GB per robot
+against 182.5 TB of sensor log ([`docs/plan.md`](docs/plan.md) Claim 1). The
+artifact side of that is measured; the sensor side is a **projection** from an
+assumed 1 TB/day, sourced and never measured here — the citations and the
+sensitivity analysis are in
+[`docs/sensor-baseline.md`](docs/sensor-baseline.md). For a regulated
 buyer it may be the only representation of an incident you can actually retain,
 export, and hand to an assessor or an insurer — which makes the interesting
 question not how to record everything, but what the smallest record is that still
@@ -48,9 +55,9 @@ repository as it stands, not the plan.
 
 | | Claim | Status |
 |---|---|---|
-| **1** | **Compression** — evidence graph vs. raw logged state, one size ratio per scenario | `not started` — the headline figure is **not yet measured** |
+| **1** | **Compression** — evidence graph vs. raw logged state, one size ratio per scenario | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **263 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~694x** below an assumed 182.5 TB sensor log — measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: roughly 13x *larger* per frame than a gzipped copy of the nine-float stream, published beside it because that is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
-| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `in progress` — the Layer A/B type boundary and the test that fails when it erodes have landed (`reg/types.py`, `tests/test_layer_boundary.py`); the taxonomy has not |
+| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim: which audit questions the artifact answers on its own authority and which are only as strong as whatever supplied the entity positions |
 | **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no |
 
 ## The honesty note: this is the structure of non-repudiation, not non-repudiation
@@ -111,7 +118,7 @@ pip install -e ".[dev]"
 pytest                      # the whole suite; CI runs exactly this
 ```
 
-As of this commit that is `1144 passed`.
+As of this commit that is `1193 passed`.
 
 The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`,
 `python -m reg.query` and `python -m reg.bench`; each takes `--help`. The build
@@ -197,14 +204,20 @@ verification with the `--tamper` demonstration that it can fail, and — new in
 this change — the query API in full (`reg/query.py`): the four scene questions,
 the four attestation questions, and `incident_report()` above them.
 
-Not built: the headline compression figure of [`docs/plan.md`](docs/plan.md)
-Phase 8 — the harness exists (`reg/bench.py`), the per-scenario number has not
-been published here — the GIF, and the write-up.
+Not built: the GIF and the write-up of [`docs/plan.md`](docs/plan.md) Phase 10.
+Phase 8 has landed — `reg/bench.py` publishes the per-scenario table for all
+eleven scenarios (`python -m reg.bench --all`) and the resolution curve
+(`--resolution`), and the retention figures those produce are in
+[`docs/plan.md`](docs/plan.md) Claim 1.
 
-No compression number and no GIF appear on this page because neither has been
-produced yet. A plausible placeholder would be indistinguishable from a measured
-result to every later reader, and this project's whole argument is about the
-difference. The incident report above **is** real output, reproduced by the four
+The compression figures on this page are quoted from
+[`docs/plan.md`](docs/plan.md) rather than re-derived, and no GIF appears because
+none has been produced yet. A plausible placeholder would be indistinguishable
+from a measured result to every later reader, and this project's whole argument
+is about the difference — which is why the sensor-log comparison above is
+labelled a projection and why `reg.bench --sensor-multiplier` has no default:
+there is no value of that flag that makes the output claim to have measured a
+robot. The incident report above **is** real output, reproduced by the four
 commands beside it.
 
 Read [`docs/plan.md`](docs/plan.md) for the argument and the full build order, and

@@ -38,9 +38,13 @@ call so no test depends on a default staying put.
 from __future__ import annotations
 
 import argparse
+import ast
+import concurrent.futures
 import dataclasses
+import functools
 import re
 import shutil
+import threading
 from pathlib import Path
 
 import pytest
@@ -3112,3 +3116,276 @@ def test_the_control_rate_report_is_deterministic(tmp_path: Path) -> None:
         )
         reports.append(out.read_text(encoding="utf-8"))
     assert reports[0] == reports[1]
+
+
+# --------------------------------------------------------------------------
+# RUNNING SCENARIOS CONCURRENTLY (issue #74).
+#
+# The benchmark used one of six cores and numpy's five OpenBLAS worker threads
+# slept through the run; `--jobs N` measures the per-scenario table N processes
+# at a time. Everything below exists because the risk in that change is not that
+# it is slow — it is that it is quietly non-reproducible, in a project whose
+# whole argument is reproducibility.
+#
+# Three properties, and each is tested against the condition it guards against:
+#
+# 1. Results are assembled in submission order. The test forces the *opposite*
+#    completion order and asserts it made no difference — and asserts the
+#    completion order really was reversed, so it cannot pass by the tasks having
+#    happened to finish in order.
+# 2. A parallel report is byte-identical to the serial one at the same seed, and
+#    to a second parallel run. That is the acceptance criterion, and the third
+#    comparison is the one that would catch a seed reaching somewhere it should
+#    not.
+# 3. The flag refuses the two combinations where it would mislead: with the
+#    wall-clock columns on (contended timings are not the published serial
+#    ones), and with nothing selected for it to apply to.
+# --------------------------------------------------------------------------
+
+_PARALLEL_SCENARIOS = ("near_miss", "contact")
+
+
+def _thread_pool(jobs: int) -> concurrent.futures.Executor:
+    """An executor a test can drive. Threads, so the tasks share the closures
+    and events the test uses to control what finishes when."""
+    return concurrent.futures.ThreadPoolExecutor(max_workers=jobs)
+
+
+def test_results_come_back_in_submission_order_not_completion_order() -> None:
+    """The determinism property of `--jobs`, tested by violating its premise.
+
+    The four tasks are wired to finish in exactly reverse order — task i waits
+    on its own event and releases task i-1 — so a `_in_submission_order` that
+    had been rewritten around `concurrent.futures.as_completed` would return
+    [3, 2, 1, 0] and this test would fail. `completed` is asserted first: if the
+    tasks had finished in submission order after all, the second assertion would
+    hold for a reason that says nothing.
+
+    No sleeps, so the ordering is forced rather than raced for.
+    """
+    n = 4
+    events = [threading.Event() for _ in range(n)]
+    completed: list[int] = []
+    lock = threading.Lock()
+
+    def call(i: int) -> int:
+        assert events[i].wait(timeout=30), f"task {i} was never released"
+        with lock:
+            completed.append(i)
+        if i > 0:
+            events[i - 1].set()
+        return i
+
+    events[n - 1].set()
+    out = bench._in_submission_order(
+        [functools.partial(call, i) for i in range(n)],
+        jobs=n,
+        executor_factory=_thread_pool,
+    )
+
+    assert completed == list(reversed(range(n))), (
+        "the tasks did not finish in reverse order, so this run does not "
+        "distinguish submission order from completion order at all"
+    )
+    assert out == list(range(n))
+
+
+def test_a_worker_that_raised_is_not_a_result() -> None:
+    """A scenario that failed is not a scenario that measured something.
+
+    The exception comes back out of the parallel path the way it would out of
+    the serial loop, rather than becoming a `None` row that the report would
+    render as a measurement.
+    """
+
+    def boom() -> int:
+        raise BenchError("the third scenario could not be built")
+
+    with pytest.raises(BenchError, match="third scenario"):
+        bench._in_submission_order(
+            [lambda: 1, lambda: 2, boom],
+            jobs=3,
+            executor_factory=_thread_pool,
+        )
+
+
+def test_no_worker_is_not_a_pool() -> None:
+    """`jobs=0` is not the serial path — omitting the flag is."""
+    with pytest.raises(BenchError, match="jobs=0"):
+        bench._in_submission_order([lambda: 1], jobs=0, executor_factory=_thread_pool)
+
+
+def test_the_serial_and_parallel_paths_pass_the_same_arguments(tmp_path: Path) -> None:
+    """`run_scenarios` measures the same thing either way, in the same order.
+
+    Compared as `ScenarioResult`s rather than as a rendered report, so a
+    difference in any byte count, row count or answer shows up as itself. The
+    scenario names are asserted in order too: two results that agree on every
+    number but arrived transposed would still be a report with the wrong rows.
+    """
+    common = dict(
+        seed=0,
+        horizon=_FAST["horizon"],
+        n_samples=_FAST["n_samples"],
+        envelope_seed=_FAST["envelope_seed"],
+        substep_dt=_FAST["substep_dt"],
+        occurrence_resolution_s=_FAST["occurrence_resolution_s"],
+    )
+    serial = bench.run_scenarios(
+        _PARALLEL_SCENARIOS, tmp_path / "serial", jobs=None, **common
+    )
+    parallel = bench.run_scenarios(
+        _PARALLEL_SCENARIOS,
+        tmp_path / "parallel",
+        jobs=2,
+        executor_factory=_thread_pool,
+        **common,
+    )
+
+    assert [r.scenario for r in serial] == list(_PARALLEL_SCENARIOS)
+    assert [r.scenario for r in parallel] == list(_PARALLEL_SCENARIOS)
+    for a, b in zip(serial, parallel):
+        assert (a.sizes, a.frames, a.nodes, a.edges, a.tables) == (
+            b.sizes,
+            b.frames,
+            b.nodes,
+            b.edges,
+            b.tables,
+        )
+        assert a.check.graph_answer == b.check.graph_answer
+        assert a.check.csv_answer == b.check.csv_answer
+        assert a.check.verdict == b.check.verdict
+
+
+def test_a_parallel_report_is_byte_identical_to_the_serial_one(tmp_path: Path) -> None:
+    """The issue's acceptance criterion, at a size a test can afford.
+
+    Three reports through the real CLI and the real process pool: one serial,
+    two parallel. All three must be the same bytes. The third comparison is the
+    one the issue says is load-bearing — two parallel runs agreeing with each
+    other but not with the serial run would mean concurrency had reached a
+    figure, and only this comparison would say so.
+    """
+    args = [
+        *[a for name in _PARALLEL_SCENARIOS for a in ("--scenario", name)],
+        "--horizon",
+        str(_FAST["horizon"]),
+        "--n-samples",
+        str(_FAST["n_samples"]),
+        "--envelope-seed",
+        str(_FAST["envelope_seed"]),
+        "--substep-dt",
+        str(_FAST["substep_dt"]),
+        "--seed",
+        "0",
+        # Required with --jobs, and the reason the comparison can be exact:
+        # the wall-clock columns are the only fields two runs may differ in.
+        "--no-timings",
+    ]
+    reports = []
+    passes = (
+        ("serial", []),
+        ("parallel-a", ["--jobs", "2"]),
+        ("parallel-b", ["--jobs", "2"]),
+    )
+    for run, jobs in passes:
+        out = tmp_path / f"{run}.md"
+        assert (
+            bench.main(
+                [*args, *jobs, "--out", str(out), "--work-dir", str(tmp_path / run)]
+            )
+            == bench.EXIT_OK
+        )
+        reports.append(out.read_bytes())
+
+    assert reports[0] == reports[1] == reports[2]
+    assert reports[0], "an empty report compares equal to another empty one"
+
+
+def test_the_cli_has_no_default_job_count() -> None:
+    """CLAUDE.md: never invent a default. The worker count is a property of the
+    machine, so a benchmark that picked one would print a wall-clock figure
+    nobody could reproduce elsewhere — and the serial path has to stay reachable
+    for the comparison the wall-clock table is made of."""
+    args = bench._parser().parse_args(["--all", "--out", "x.md"])
+    assert args.jobs is None
+
+
+@pytest.mark.parametrize("raw", ["0", "-2", "two", "1.5"])
+def test_a_job_count_that_is_not_a_worker_count_is_refused(raw: str) -> None:
+    with pytest.raises(SystemExit) as exc:
+        bench._parser().parse_args(
+            ["--all", "--no-timings", "--jobs", raw, "--out", "x.md"]
+        )
+    assert exc.value.code == 2
+
+
+def test_parallel_timings_are_refused_rather_than_quietly_contended(
+    tmp_path: Path, capsys
+) -> None:
+    """The negative test for the flag's one real hazard.
+
+    `graph`, `raw CSV` and `speedup` are medians of real elapsed time. Measured
+    while N scenarios share the machine they are not comparable with the
+    published serial figures, and a speedup whose two halves were measured under
+    different contention is not a ratio of anything. The issue's instruction is
+    "do not mix" — so the combination is refused, by name, rather than producing
+    a table that looks like the published one and is not.
+    """
+    with pytest.raises(SystemExit) as exc:
+        bench.main(
+            ["--all", "--jobs", "2", "--out", str(tmp_path / "out.md")]
+        )
+    assert exc.value.code == 2
+    message = capsys.readouterr().err
+    assert "--no-timings" in message
+    for column in bench.WALL_CLOCK_COLUMNS:
+        assert column in message
+    assert not (tmp_path / "out.md").exists(), "a refused run wrote a report"
+
+
+def test_jobs_with_nothing_to_apply_it_to_is_refused(tmp_path: Path) -> None:
+    """`--scaling` and `--control-rate-hz` are not parallelised — their longest
+    rung is most of their work, so six cores buy ~1.4x and a new determinism
+    surface. A `--jobs` on such a run would do nothing at all, and silently
+    doing nothing is what the flag must not do."""
+    with pytest.raises(SystemExit) as exc:
+        bench.main(
+            [
+                "--scaling",
+                "--jobs",
+                "2",
+                "--no-timings",
+                "--out",
+                str(tmp_path / "out.md"),
+            ]
+        )
+    assert exc.value.code == 2
+
+
+def test_nothing_in_the_benchmark_reads_results_in_completion_order() -> None:
+    """The claim `_in_submission_order` makes about the rest of the file, checked.
+
+    `concurrent.futures.as_completed` is the one-line way to make this report
+    order-dependent, and it is the natural thing to reach for when adding a
+    second parallel section later — the ordering test above only covers the
+    function that exists today. Read out of the AST rather than grepped, so this
+    file's own prose about `as_completed` is not what it finds.
+
+    If a future caller genuinely needs completion order for something that is
+    not assembled into the report, this assertion is the place to record why.
+    """
+    tree = ast.parse(Path(bench.__file__).read_text(encoding="utf-8"))
+    used = [
+        node
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Attribute) and node.attr == "as_completed")
+        or (isinstance(node, ast.Name) and node.id == "as_completed")
+    ]
+    assert not used, (
+        "reg.bench uses concurrent.futures.as_completed at line(s) "
+        f"{[n.lineno for n in used]}. Completion order is a property of the "
+        "machine; a report assembled in it is not reproducible (docs/plan.md "
+        "rule 2). Results go back to their submission index before anything "
+        "renders them."
+    )

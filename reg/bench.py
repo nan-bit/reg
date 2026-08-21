@@ -43,6 +43,23 @@ three columns and nothing else, so that two runs at one seed can be compared wit
 the measurement is unchanged, only the rendering is. `scripts/check_bench_determinism.py`
 is what runs that comparison.
 
+*What follows from that when scenarios run concurrently* (issue #74). `--jobs N`
+runs the per-scenario table's scenarios in N processes at once, and it is
+constrained by this rule twice over. Results are assembled by **submission
+index** and never by completion order, because a report whose rows are ordered by
+whichever worker finished first is fast, correct-looking and not reproducible.
+And `--jobs` **requires `--no-timings`**: the three wall-clock columns are the
+only fields that were ever allowed to move between two runs, they are the only
+thing concurrency can reach, and timings measured while N scenarios share a
+machine are not comparable with the published serial ones. Refusing that
+combination is what keeps the wall-clock table a product of the serial path
+rather than a mixture. Nothing else in the report is at risk: each scenario is
+run at the same fixed `seed` and `envelope_seed` it is run at serially, so every
+byte count, row count and verdict is a function of `(scenario, seed, params)`
+alone, which concurrency does not enter. `--scaling` and `--control-rate-hz` are
+deliberately **not** parallelised — their largest rung is most of their work, so
+Amdahl caps them near 1.4x, which is not worth the extra determinism surface.
+
 **5. A ratio at one run length is not a claim about scaling** (issue #30). Claim
 1 is a claim about retaining evidence from runs that produce terabytes a day, and
 the six scenarios are six seconds each — the one regime where the answer cannot
@@ -116,9 +133,11 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import concurrent.futures
 import gzip
 import hashlib
 import math
+import multiprocessing
 import shutil
 import sqlite3
 import statistics
@@ -127,8 +146,9 @@ import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 from shapely.ops import unary_union
 
@@ -247,6 +267,7 @@ __all__ = [
     "run_resolution_curve",
     "run_scaling_point",
     "run_scenario",
+    "run_scenarios",
     "sensor_projection_bytes",
     "table_bytes",
 ]
@@ -1045,6 +1066,160 @@ def run_scenario(
         # same thing in `meta[attestation_records]`.
         records=None,
     )
+
+
+# --------------------------------------------------------------------------
+# Running several scenarios at once (issue #74)
+#
+# The observation this exists for: on a six-core host the benchmark used one
+# core and numpy's five OpenBLAS worker threads slept through the entire run.
+# The arrays here are tiny — a 2-DOF arm, a handful of envelope samples — so BLAS
+# never reaches its parallel threshold, and the real work is GEOS polygon union
+# and a Python loop over frames, both single-threaded. The benchmark was serial
+# by accident rather than by design.
+#
+# WHY ONLY THE SCENARIO TABLE. The three runs that have independent units are
+# `--all` (11 similarly-sized scenarios), `--scaling` (300 … 30,000 frames) and
+# `--control-rate-hz` (3,000 … 60,000 frames). Amdahl decides which is worth
+# parallelising and only the first is: the 30,000-frame rung is most of the
+# ladder's work and the 1 kHz point is ~71% of the rate study's, so on six cores
+# those two cap out near 1.4x. `--all`'s units are the same size as each other,
+# which is the case where the speedup is roughly the core count. A 1.4x that
+# costs a new way for the report to become order-dependent is a bad trade, so
+# neither is offered one — see the flag's help.
+#
+# WHAT IS NOT PARALLELISED INSIDE A SCENARIO. Per-frame envelope computation is
+# embarrassingly parallel — each frame's reachable set is a function of that
+# frame's `ProprioState` and nothing else, which is the Layer A boundary paying
+# off somewhere unexpected. It is also where the remaining time is, and it is a
+# larger change: `ENVELOPE_N_SAMPLES` draws from a seeded generator, and
+# splitting that draw across workers changes the bytes unless every unit's seed
+# is derived from its index rather than from draw order. Out of scope here; this
+# change adds no seed derivation at all, which is why it cannot move a figure.
+# --------------------------------------------------------------------------
+
+_T = TypeVar("_T")
+
+
+def _process_pool(jobs: int) -> concurrent.futures.Executor:
+    """A pool of `jobs` **spawned** worker processes.
+
+    Processes rather than threads: the work is a Python loop calling GEOS, so
+    the GIL is held for most of it and threads would buy nothing.
+
+    Spawn rather than fork, even though fork is the Linux default and cheaper:
+    numpy has already started its OpenBLAS worker threads by the time this is
+    called — that is the observation the issue opens with — and forking a
+    process that holds threads is the classic way to inherit a lock nobody will
+    ever release. Spawn costs a fresh interpreter and a re-import of `reg` per
+    worker, a fixed sub-second cost against scenarios that take minutes, and it
+    is what macOS does anyway, so the path CI takes is the path a developer
+    takes.
+    """
+    return concurrent.futures.ProcessPoolExecutor(
+        max_workers=jobs, mp_context=multiprocessing.get_context("spawn")
+    )
+
+
+def _in_submission_order(
+    calls: Sequence[Callable[[], _T]],
+    *,
+    jobs: int,
+    executor_factory: Callable[[int], concurrent.futures.Executor] | None = None,
+) -> list[_T]:
+    """Run `calls` concurrently, `jobs` at a time, results in **submission order**.
+
+    This function is the whole determinism argument for `--jobs`, so it is one
+    function and it is short. The results are read back by *index* — the list
+    comprehension below blocks on future 0 until future 0 is done, whatever
+    finished first — and `concurrent.futures.as_completed` is deliberately not
+    used anywhere in this file. Completion order is a property of the machine
+    and the scheduler; a report ordered by it would be fast, correct-looking and
+    different on every run, which is a worse artifact than a slow one in a
+    project whose argument is reproducibility (docs/plan.md rule 2).
+
+    `executor_factory` exists so a test can supply an executor whose completion
+    order it controls, and assert the returned order is unmoved by it — see
+    `test_results_come_back_in_submission_order_not_completion_order` in
+    `tests/test_bench.py`. Defaults to `_process_pool`.
+
+    An exception in any call propagates out of `.result()` into the caller, the
+    same way a failure in the serial loop would. Nothing is turned into a
+    placeholder: a scenario that raised is not a scenario that measured zero.
+    """
+    jobs = int(jobs)
+    if jobs < 1:
+        raise BenchError(f"jobs={jobs}: no worker would run anything.")
+    factory = _process_pool if executor_factory is None else executor_factory
+    pool = factory(jobs)
+    try:
+        futures = [pool.submit(call) for call in calls]
+        return [future.result() for future in futures]
+    finally:
+        # `cancel_futures` matters only on the exception path, where the futures
+        # after the one that raised have not been read: without it, a scenario
+        # that failed in the first minute would still wait out every scenario
+        # queued behind it before the error reached the user.
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+def run_scenarios(
+    names: Sequence[str],
+    work_dir: str | Path,
+    *,
+    jobs: int | None,
+    seed: int,
+    horizon: float,
+    n_samples: int,
+    envelope_seed: int,
+    substep_dt: float,
+    occurrence_resolution_s: float,
+    progress: Callable[[str], None] | None = None,
+    executor_factory: Callable[[int], concurrent.futures.Executor] | None = None,
+) -> list[ScenarioResult]:
+    """Measure each of `names`, in `names` order, serially or `jobs` at a time.
+
+    `jobs=None` is the serial path and is what the CLI does unless `--jobs` is
+    given; there is no default worker count anywhere in this file, because a
+    benchmark that silently picked a concurrency for itself would be reporting a
+    wall-clock number nobody could reproduce on another machine.
+
+    The one call to `run_scenario` is built once and dispatched two ways, so the
+    serial and parallel paths cannot drift apart in the arguments they pass —
+    which is the property the byte-for-byte comparison of a serial and a parallel
+    report rests on. Each scenario writes files named after itself
+    (`_work_paths`), so they share `work_dir` without colliding.
+    """
+    names = list(names)
+    calls = [
+        partial(
+            run_scenario,
+            name,
+            work_dir,
+            seed=seed,
+            horizon=horizon,
+            n_samples=n_samples,
+            envelope_seed=envelope_seed,
+            substep_dt=substep_dt,
+            occurrence_resolution_s=occurrence_resolution_s,
+        )
+        for name in names
+    ]
+
+    if jobs is None:
+        results: list[ScenarioResult] = []
+        for name, call in zip(names, calls):
+            if progress is not None:
+                progress(f"benchmarking {name}")
+            results.append(call())
+        return results
+
+    if progress is not None:
+        progress(
+            f"benchmarking {len(names)} scenario(s) {jobs} at a time "
+            f"({', '.join(names)})"
+        )
+    return _in_submission_order(calls, jobs=jobs, executor_factory=executor_factory)
 
 
 def run_scaling_point(
@@ -4801,6 +4976,19 @@ def _positive_float(raw: str) -> float:
     return value
 
 
+def _positive_int(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not an integer") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"{value}: must be >= 1. `--jobs 0` is not the serial path — omitting "
+            "--jobs is; a pool with no workers would run nothing."
+        )
+    return value
+
+
 def _non_negative_int(raw: str) -> int:
     try:
         value = int(raw)
@@ -5117,6 +5305,27 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--jobs",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=(
+            "run the selected scenarios N at a time in separate processes "
+            "(issue #74). **No default, and the serial path is what you get "
+            "without it**: N is a property of the machine, so a benchmark that "
+            "chose one for itself would print a wall-clock figure nobody could "
+            "reproduce elsewhere. Requires --no-timings — the wall-clock columns "
+            "are the only fields concurrency can reach, and timings measured "
+            "under N-way contention are not comparable with the serial ones. "
+            "Applies to the per-scenario table only: --scaling and "
+            "--control-rate-hz are dominated by their longest rung (the "
+            "30,000-frame one, the 1 kHz one), so parallelising them buys ~1.4x "
+            "on six cores and costs a new way to become order-dependent. Every "
+            "other figure in the report is a function of (scenario, seed, "
+            "params) and is unchanged by this flag; the reports are byte-equal."
+        ),
+    )
+    parser.add_argument(
         "--work-dir",
         metavar="PATH",
         help=(
@@ -5153,11 +5362,44 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list
     return list(args.scenario)
 
 
+def _jobs(
+    args: argparse.Namespace, parser: argparse.ArgumentParser, names: Sequence[str]
+) -> int | None:
+    """`--jobs`, checked against what it would actually apply to. `None` = serial.
+
+    Both refusals below are the flag doing nothing useful or doing something
+    misleading, and neither is a thing to warn about and continue past.
+    """
+    if args.jobs is None:
+        return None
+    if not names:
+        parser.error(
+            "--jobs applies to the per-scenario table and no scenario was "
+            "selected. --scaling, --resolution and --control-rate-hz run "
+            "serially by design (their longest rung is most of their work, so "
+            "concurrency buys ~1.4x there), so this run would be unaffected by "
+            "the flag. Add --all or --scenario NAME, or drop --jobs."
+        )
+    if not args.no_timings:
+        parser.error(
+            "--jobs requires --no-timings. The wall-clock columns "
+            f"({', '.join(WALL_CLOCK_COLUMNS)}) are medians of real elapsed "
+            "time; measured while several scenarios share the machine they are "
+            "not comparable with the published serial figures, and a speedup "
+            "whose numerator and denominator were measured under different "
+            "contention is not a ratio of anything. Measure the timings "
+            "serially (drop --jobs) or measure the artifact in parallel (add "
+            "--no-timings). Do not mix the two in one table."
+        )
+    return int(args.jobs)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
 
     names = _selected(args, parser)
+    jobs = _jobs(args, parser, names)
     if args.out is None:
         parser.error(
             "--out is required and has no default: a benchmark whose report went "
@@ -5171,20 +5413,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolution: ResolutionCurve | None = None
     control_rates: tuple[ControlRatePoint, ...] = ()
     try:
-        for name in names:
-            print(f"benchmarking {name}...", file=sys.stderr, flush=True)
-            results.append(
-                run_scenario(
-                    name,
-                    work_dir,
-                    seed=args.seed,
-                    horizon=args.horizon,
-                    n_samples=args.n_samples,
-                    envelope_seed=args.envelope_seed,
-                    substep_dt=args.substep_dt,
-                    occurrence_resolution_s=args.occurrence_resolution,
-                )
-            )
+        results = run_scenarios(
+            names,
+            work_dir,
+            jobs=jobs,
+            seed=args.seed,
+            horizon=args.horizon,
+            n_samples=args.n_samples,
+            envelope_seed=args.envelope_seed,
+            substep_dt=args.substep_dt,
+            occurrence_resolution_s=args.occurrence_resolution,
+            progress=lambda line: print(line + "...", file=sys.stderr, flush=True),
+        )
         if args.resolution:
             print(
                 f"measuring the resolution curve on long_run at "

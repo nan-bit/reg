@@ -136,6 +136,26 @@ Record timestamps are stored as the record carries them, **not** quantized to
 frame period; a record's `t_issued` is a value the MAC covers, and reporting a
 rounded version of it would be reporting an instant nobody signed.
 
+AND ONE AXIS NONE OF THEM COVERS — ISSUE #77
+---------------------------------------------
+All three rules above are about *what is kept*. None of them says what the kept
+timestamps can **address**, and that turned out to be the binding constraint at a
+real control rate. Every endpoint written here is `quantize_time`d, so this
+artifact has `1/TIME_TOL_S` = 100 addressable instants per second however fast
+the stream was sampled. At 1 kHz eleven frames land on one instant, a per-frame
+read-back returns the value of whichever of them opened the covering interval,
+and `separation_timeline` misses its own `DISTANCE_TOL_M` budget by up to 0.0140
+m (`near_miss`, seed 0).
+
+It is a **quantization** limit and not a sampling one, and the two have different
+fixes so the distinction is measured rather than asserted: the builder still sees
+every frame, still emits the same 269 SEPARATION intervals at 1 kHz as at 100 Hz,
+and every value it reports is within budget of a true frame *within `TIME_TOL_S`*
+of the instant it is reported at. Nothing was sampled away; what is missing is
+the address. `TIME_BASE_DOMAIN` states it in every artifact,
+`tests/test_graph.py::test_the_time_base_miss_is_quantization_and_not_sampling`
+is the evidence, and docs/limitations.md §5 is what a claim has to inherit.
+
 WHAT IS NOT HERE
 ----------------
 `verify_chain()` and `--tamper`. The `FOLLOWS` edges are written here from the
@@ -200,7 +220,9 @@ from reg.tolerances import (
     AREA_QUANT_SIGFIGS,
     DISTANCE_TOL_M,
     GEOM_SIMPLIFY_TOL_M,
+    TIME_BASE_MAX_RATE_HZ,
     TIME_TOL_S,
+    addressable_instants,
     distance_bucket,
     quantize_area,
     quantize_distance,
@@ -230,11 +252,17 @@ __all__ = [
     "META_OCCURRENCE_RESOLUTION",
     "META_OCCURRENCE_RETENTION",
     "META_OCCURRENCE_SW_VERSION",
+    "META_TIME_BASE_DOMAIN",
+    "META_TIME_BASE_INSTANTS",
+    "META_TIME_BASE_RESOLVES",
     "META_VERDICT_COUNT",
     "OCCURRENCE_MATERIAL_EDGES",
     "OCCURRENCE_RETENTION",
     "OCCURRENCE_TIME_RESOLUTION_S",
     "OCCURRENCE_VERDICT_EVENTS",
+    "TIME_BASE_COLLAPSED",
+    "TIME_BASE_DOMAIN",
+    "TIME_BASE_RESOLVED",
     "AttestationRecords",
     "BuildResult",
     "GraphBuildError",
@@ -594,6 +622,66 @@ META_ATTESTATION_RECORDS = "attestation_records"
 META_DECLARATION_COUNT = "declaration_count"
 META_VERDICT_COUNT = "verdict_count"
 
+# --------------------------------------------------------------------------
+# The time base, and the rate range in which this artifact's own tolerances
+# hold (issue #77).
+#
+# The three rules above say what this build *kept*. This one says what its
+# timestamps can *address*, which is a different question and had never been
+# answered in the file. Every interval endpoint here is quantized to
+# `TIME_TOL_S`, so the artifact has exactly `TIME_BASE_MAX_RATE_HZ` = 100
+# addressable instants per second however fast the control loop ran. Above that
+# rate several frames land on one instant, and a per-frame value read back is the
+# value of whichever of them opened the covering interval — which is how
+# docs/lossiness.md's `separation_timeline` predicate came to miss its own 1 cm
+# budget at 250 Hz and 1 kHz.
+#
+# WHY THIS IS RECORDED AND NOT REFUSED. A build above 100 Hz is not wrong, it is
+# out of the range its own contract was written for, and those are different
+# facts. Refusing would delete the measurement that found this (`reg.bench
+# --control-rate-hz` builds at 1 kHz on purpose) and would tell a real
+# manipulator, which runs at 1 kHz, that it may not have an evidence artifact at
+# all. So the artifact carries the answer and a reader holding only the file can
+# tell which case they have — the same discipline as the two retention rules,
+# applied to the axis nobody had written down.
+# --------------------------------------------------------------------------
+
+#: The rule, in one sentence, as it is recorded in the artifact's meta table.
+TIME_BASE_DOMAIN = (
+    "every interval endpoint in this artifact is rounded to the nearest "
+    f"tolerance_time_tol_s, so the time base has {TIME_BASE_MAX_RATE_HZ:g} "
+    "addressable instants per second whatever rate the stream was sampled at. "
+    "time_base_addressable_instants counts how many distinct instants this run's "
+    "frames actually landed on and time_base_resolves_frames is yes exactly when "
+    "that equals frame_count. When it is yes, every frame has its own address and "
+    "the per-frame agreement predicates of docs/lossiness.md hold as written. "
+    "When it is no, the stream was sampled faster than the timestamp quantum, "
+    "two or more frames share an address, and a per-frame value read back out of "
+    "an interval is the value of whichever of those frames opened it: measured on "
+    "near_miss at seed 0, separation_timeline then misses its own DISTANCE_TOL_M "
+    "budget by up to 0.0140 m at 1 kHz. The values themselves are not wrong and "
+    "nothing was sampled away — the same intervals are stored at 1 kHz as at 100 "
+    "Hz — what is lost is the ability to say which frame inside a quantum a value "
+    "belongs to, so the miss is a quantization limit and not a sampling one "
+    "(docs/limitations.md section 4). A no here does not make any answer in this "
+    "file invalid; it says that per-frame answers are good to the timestamp "
+    "quantum rather than to the frame, and that a question about one frame of a "
+    "shared instant is could-not-evaluate. This artifact does not widen a "
+    "tolerance to make that go away."
+)
+
+#: Where the three time-base facts land in `meta`.
+META_TIME_BASE_DOMAIN = "time_base_domain"
+META_TIME_BASE_INSTANTS = "time_base_addressable_instants"
+META_TIME_BASE_RESOLVES = "time_base_resolves_frames"
+
+#: The two values `meta[time_base_resolves_frames]` may take. Words rather than
+#: `1`/`0` for the reason `attestation_records` holds `present`/`absent`: the
+#: file is read by a person, and a bare `0` in a column of counts reads as a
+#: count of something.
+TIME_BASE_RESOLVED = "yes"
+TIME_BASE_COLLAPSED = "no"
+
 #: The `meta` keys `envelope_at` reads back to recompute a discarded polygon.
 #: Named constants because the writer and the reader are one contract now: a key
 #: spelled differently on one side turns every recomputable envelope into a
@@ -706,10 +794,29 @@ class BuildResult:
     #: schema: an empty table counts zero too.
     nodes: dict[str, int]
     size_bytes: int
+    #: How many distinct instants this run's frames quantized onto — the size of
+    #: the artifact's time base (issue #77). Equal to `frames` when every frame
+    #: has its own address and smaller when the stream was sampled faster than
+    #: `TIME_BASE_MAX_RATE_HZ`. Returned rather than left in `meta` alone so the
+    #: CLI can say so without reopening the file it just wrote.
+    addressable_instants: int
 
     @property
     def total_edges(self) -> int:
         return sum(self.edges.values())
+
+    @property
+    def time_base_resolves_frames(self) -> bool:
+        """Whether every frame of this run has its own address in the artifact.
+
+        `False` means the build is outside the rate range docs/lossiness.md's
+        per-frame predicates are written for (`TIME_BASE_DOMAIN`). It is not a
+        failed build and nothing here treats it as one — the artifact holds the
+        same intervals either way — but a caller that reports per-frame numbers
+        off such a file is reporting them to the timestamp quantum and not to the
+        frame.
+        """
+        return self.addressable_instants == self.frames
 
 
 @dataclass
@@ -1517,6 +1624,11 @@ def build(
         so it is not a count of stored geometries either.
         `nodes["Occurrence"]` counts the event layer (`OCCURRENCE_RETENTION`),
         which is additive: no edge row exists or fails to exist because of it.
+        `addressable_instants` is how many distinct instants the run's frames
+        quantized onto (`TIME_BASE_DOMAIN`); it equals `frames` for a stream
+        sampled at or below `TIME_BASE_MAX_RATE_HZ` and is smaller above it. A
+        stream sampled faster is built, not refused — see `TIME_BASE_DOMAIN` —
+        and the artifact says which case it is.
 
     Raises:
         GraphBuildError: the stream could not be understood — too short, a
@@ -1533,6 +1645,12 @@ def build(
         )
     frames = tuple(read_frames(csv_path))
     period = _frame_period(frames, csv_path)
+    # How many distinct instants this run's frames can be addressed at, which is
+    # `len(frames)` at or below `TIME_BASE_MAX_RATE_HZ` and fewer above it. Not a
+    # refusal — see `TIME_BASE_DOMAIN` for why a fast stream is recorded rather
+    # than rejected — but it is written into the artifact and returned to the
+    # caller, so nothing downstream has to infer it from the frame period.
+    instants = addressable_instants([f.t for f in frames])
     obstacles = _entity_set(frames, csv_path)
 
     human_radius = float(human_radius)
@@ -1559,6 +1677,7 @@ def build(
             csv_path=csv_path,
             frames=frames,
             period=period,
+            instants=instants,
             limits=limits,
             human_radius=human_radius,
             horizon=horizon,
@@ -1769,7 +1888,9 @@ def build(
         occurrences.run_ended(quantize_time(frames[-1].t))
 
         conn.commit()
-        result = _summarize(conn, Path(out_path), len(frames))
+        result = _summarize(
+            conn, Path(out_path), len(frames), instants=instants
+        )
     except BaseException:
         # A half-written artifact is the worst outcome available here: it opens,
         # it queries, and every interval after the failure is simply missing —
@@ -1922,6 +2043,7 @@ def _write_provenance(
     csv_path: object,
     frames: Sequence[StateFrame],
     period: float,
+    instants: int,
     limits: Limits,
     human_radius: float,
     horizon: float,
@@ -1950,6 +2072,21 @@ def _write_provenance(
     store.put_meta(conn, store.META_FRAME_PERIOD, _float_text(period))
     store.put_meta(conn, "t_first", _float_text(quantize_time(frames[0].t)))
     store.put_meta(conn, "t_last", _float_text(quantize_time(frames[-1].t)))
+
+    # The time base and its domain of validity (issue #77). `instants` is
+    # measured off this run's own frame times rather than derived from `period`,
+    # because `quantize_time` breaks ties to even and whether a period of exactly
+    # `TIME_TOL_S` separates every frame depends on the stream's phase — see
+    # `reg.tolerances.addressable_instants`. It is computed once, in `build`, and
+    # threaded here and into `BuildResult`: two computations would be two answers
+    # to whether the file a caller is holding is inside its own contract.
+    store.put_meta(conn, META_TIME_BASE_DOMAIN, TIME_BASE_DOMAIN)
+    store.put_meta(conn, META_TIME_BASE_INSTANTS, str(instants))
+    store.put_meta(
+        conn,
+        META_TIME_BASE_RESOLVES,
+        TIME_BASE_RESOLVED if instants == len(frames) else TIME_BASE_COLLAPSED,
+    )
 
     store.put_meta(conn, "envelope_source", ENVELOPE_SOURCE)
     store.put_meta(conn, "envelope_horizon_s", _float_text(horizon))
@@ -2022,7 +2159,7 @@ def _write_provenance(
         store.put_meta(conn, "source_provenance", "\n".join(comments))
 
 
-def _summarize(conn, path: Path, frames: int) -> BuildResult:
+def _summarize(conn, path: Path, frames: int, *, instants: int) -> BuildResult:
     edges = {
         edge_type: int(
             conn.execute(
@@ -2041,6 +2178,7 @@ def _summarize(conn, path: Path, frames: int) -> BuildResult:
         edges=edges,
         nodes=nodes,
         size_bytes=path.stat().st_size,
+        addressable_instants=instants,
     )
 
 
@@ -2697,6 +2835,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"edges={result.total_edges} ({counts}) nodes ({nodes}) "
         f"bytes={result.size_bytes}"
     )
+    if not result.time_base_resolves_frames:
+        # Not an error and not a non-zero exit: the artifact is complete and
+        # every question in the supported set still answers off it. It is said on
+        # stderr because a person who builds a 1 kHz run and then reads per-frame
+        # numbers out of the result needs to know they are good to the timestamp
+        # quantum, and `meta[time_base_domain]` is not somewhere anyone looks
+        # unprompted. See docs/limitations.md section 4.
+        print(
+            f"note: {result.frames} frames landed on "
+            f"{result.addressable_instants} addressable instants. This stream was "
+            f"sampled faster than {TIME_BASE_MAX_RATE_HZ:g} Hz, which is "
+            "1/TIME_TOL_S and the rate above which the artifact's timestamps "
+            "stop separating frames. Per-frame answers off this file are good to "
+            f"TIME_TOL_S={TIME_TOL_S} s and not to the frame — see "
+            f"meta[{META_TIME_BASE_DOMAIN}] and docs/limitations.md section 4. "
+            "No tolerance was widened and nothing was dropped.",
+            file=sys.stderr,
+        )
     return EXIT_OK
 
 

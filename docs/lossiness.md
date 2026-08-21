@@ -504,6 +504,17 @@ plausible interpolated number.
    that as agreement.
 5. **Ordering of two transitions within the same time quantum.** Two transitions
    that quantize to the same `TIME_TOL_S` bucket have no retained order.
+
+   **And, above 100 Hz, anything that distinguishes two *frames* within one
+   quantum** (added 2026-08-21, issue #77). This item was written for two
+   transitions that happened to land close together; at a control rate above
+   `1 / TIME_TOL_S` it applies to every consecutive pair of frames in the run,
+   because the artifact's time base has no address for the second one. A question
+   about one frame of a shared instant is *could-not-evaluate*, and the per-frame
+   agreement predicates below are stated for the rate range in
+   [The rate range these hold in](#the-rate-range-these-hold-in). This is a limit
+   on *addressing*, not on retention: the values are all there, and the
+   measurement showing so is in that section.
 6. **Why the policy declared what it declared.** The policy is the black channel.
    The graph records what it declared and whether it honoured it, never its
    reasoning.
@@ -557,12 +568,129 @@ Half the quantum to each. Raising the simplification tolerance to 1 cm would mea
 reported distances are good to 1.5 cm while the artifact claims 1 cm — the failure
 mode this contract is written to prevent.
 
+**And the budget is fully spent.** `0.005 + 0.005 = 0.010` is an equality, not an
+inequality with room in it. There is no headroom in `DISTANCE_TOL_M` for a third
+error term, which is why the next section's failure appears the instant a third
+one exists rather than growing gradually into it.
+
+### The rate range these hold in
+
+**Added 2026-08-21 (issue #77), and the section is the fix.** Everything above was
+written as though the tolerances held at any control rate. They do not, the range
+had never been stated, and *a contract silent about its own domain of validity is
+the defect* — the number was never the problem.
+
+**The range.** The four tolerances above hold as written for a stream sampled at
+or below **`1 / TIME_TOL_S` = 100 Hz** (`reg.tolerances.TIME_BASE_MAX_RATE_HZ`,
+which is written as that expression and not as `100.0`, so it moves if the quantum
+ever does). Above it, the *per-frame* predicates in
+[How to tell if this contract is being violated](#how-to-tell-if-this-contract-is-being-violated)
+do not hold, and the artifact says so about itself. That is row 1,
+`separation_timeline` — the only predicate in the table whose text says "per
+sampled frame", and the one measured below — and, by the same structure and
+untested here, the `overlap_area` row at the bottom, whose ground truth is also
+computed per frame. Every other row is an interval or a record predicate: an
+endpoint stated to `TIME_TOL_S` is exactly what a `TIME_TOL_S` time base can
+deliver at any rate, so none of them inherits this.
+
+**Why 100 Hz and not some other number.** Every interval endpoint the graph writes
+is rounded to `TIME_TOL_S`, so the artifact's time base has exactly `1 / TIME_TOL_S`
+addressable instants per second **however fast the loop ran**. At or below that rate
+each frame quantizes to its own instant. Above it several frames share one, and a
+per-frame value read back out of an interval is the value of whichever of those
+frames opened it. The frames were all observed; they cannot all be *asked about*.
+
+**Measured, not argued.** `reg.scenarios.near_miss`, seed 0, resampled at each rate
+with the same waypoints and the same human walk — `reg.envelope` parameters
+`horizon=0.1`, `n_samples=4`, `envelope_seed=0`, `substep_dt=0.05`, none of which
+touch a separation. The last two columns are the whole finding. Measured points
+only; nothing is fitted and no rate that was not run appears.
+
+| rate | frames | addressable instants | max frames per instant | `SEPARATION` rows | worst per-frame Δ | worst Δ allowing ±`TIME_TOL_S` |
+|---|---|---|---|---|---|---|
+| 50 Hz | 251 | 251 | 1 | 249 | **0.0090 m** | 0.0090 m |
+| 100 Hz | 501 | 501 | 1 | 269 | **0.0092 m** | 0.0039 m |
+| 101 Hz | 506 | 501 | 2 | 269 | **0.0110 m** | 0.0084 m |
+| 102 Hz | 511 | 501 | 2 | 269 | **0.0091 m** | 0.0091 m |
+| 125 Hz | 626 | 501 | 2 | 269 | **0.0120 m** | 0.0077 m |
+| 200 Hz | 1,001 | 501 | 3 | 269 | **0.0134 m** | 0.0053 m |
+| 250 Hz | 1,251 | 501 | 3 | 269 | **0.0120 m** | 0.0056 m |
+| 500 Hz | 2,501 | 501 | 5 | 269 | **0.0134 m** | 0.0060 m |
+| 1000 Hz | 5,001 | 501 | 11 | 269 | **0.0140 m** | 0.0060 m |
+
+Four things the table says and the argument did not:
+
+1. **The break is at the structural rate, not at a measured one.** The addressable
+   instants stop tracking the frame count at 101 Hz — the first rate above
+   `1 / TIME_TOL_S` — and never recover. Where the *error* first exceeds
+   `DISTANCE_TOL_M` is a different and softer question: 101 Hz here, but 102 Hz
+   comes back inside the budget, and on `long_run` at seed 0 over 4 s the order is
+   reversed (101 Hz measures 0.0097 m and stays inside; 102 Hz measures 0.0121 m
+   and does not). Whether a given collapse costs more than a centimetre depends on
+   how fast the arm and the human are moving, so the honest bound is the
+   structural one. Quoting a first-exceedance rate would be quoting a property of
+   a fixture.
+2. **The error does not grow with the rate; it saturates.** 101 Hz → 1 kHz is a
+   tenfold rate increase and a 27% error increase, and the sequence is not even
+   monotone. The bound is the true separation's variation *within one 10 ms
+   quantum*, which is set by `TIME_TOL_S` and by how fast things move — not by how
+   often they are looked at. So "the artifact is ten times wronger at 1 kHz" is
+   false, and so is any extrapolation off these points.
+3. **It is quantization, not sampling** — see the last column, which never leaves
+   the budget. Every value the artifact reports *is* a true separation of the run,
+   within `DISTANCE_TOL_M`, at some frame within `TIME_TOL_S` of the instant it is
+   reported for. The value is right; the time it is attached to is ambiguous. The
+   `SEPARATION` column says the same thing from the other side: **269 intervals at
+   1 kHz and 269 at 100 Hz**. The builder is not retaining less at the higher rate,
+   because there is nothing more to retain — the time base has no more addresses.
+   The two diagnoses have different fixes (a finer time base versus retaining more
+   frames) and only one of them is this project's.
+4. **It fails immediately rather than gradually** because the 1 cm budget is
+   already exactly spent on geometry simplification and distance quantization (the
+   derivation above). Any third error term breaks it, however small.
+
+**Corroborated on a second fixture, by the ladder that found it.**
+`python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0 --out runs/tol.md
+--resolution-frames 251 --resolution-n-samples 4` runs `reg.scenarios.long_run`
+rather than `near_miss` and grades whole resolution levels rather than a worst
+frame. It puts the break in the same place: `transition` and `per-frame` are
+`AGREE` at 50 Hz and at 100 Hz and `DISAGREE` on `separation_timeline` at 250 Hz
+and at 1 kHz, with every other question in the table unaffected at every rate. Two
+fixtures, two harnesses, one boundary — which is what makes it a property of the
+time base rather than of a run.
+
+**What this does not license.** Widening `TIME_TOL_S`. It would move the line
+instead of the behaviour, which is the one move this document exists to forbid —
+and it would make this rate *lower*, since the rate is its reciprocal.
+[`docs/plan.md`](plan.md) already calls the `DISAGREE` that found this "a
+measurement, not a tolerance to widen", and `reg.bench`'s control-rate section
+calls `TIME_TOL_S` "not a parameter this study is allowed to move". Both stand;
+issue #77 held the constant and characterised the limit instead.
+A build above 100 Hz is also not refused: the artifact holds the same intervals it
+always did and every question in the supported set still answers off it, so
+refusing would delete evidence to avoid stating a limit. What `reg.graph` does
+instead is record the answer in every artifact — `meta[time_base_domain]` states the
+rule, `meta[time_base_addressable_instants]` counts this run's instants, and
+`meta[time_base_resolves_frames]` is `yes` exactly when that equals `frame_count` —
+so a reader holding only the file can tell which side of the range they are on.
+`reg.graph.build`'s CLI prints a note on stderr for the `no` case.
+
+**What a claim would need instead** is in [`docs/limitations.md`](limitations.md) §5,
+along with the honest sentence: at 1 kHz, which is what a real manipulator runs at,
+this edge layer cannot place a per-frame value at a frame.
+
 ### What the tolerances do *not* license
 
 - **`TIME_TOL_S` is a quantum, not a promise of resolution.** If the simulator runs
   below 100 Hz, transitions are only locatable to the frame period, and the graph
   must record the frame period in its provenance and never report finer. Claiming
   10 ms resolution over 20 ms frames is a fabricated digit.
+
+  **And the other direction, which went unwritten until issue #77.** Above 100 Hz
+  the quantum is *coarser* than the frame period and the artifact cannot address
+  every frame at all — see [The rate range these hold in](#the-rate-range-these-hold-in).
+  The bullet above was the only half of this sentence anyone had written down, and
+  a reader could fairly have taken its silence for a guarantee.
 - **`AREA_QUANT_SIGFIGS` is relative.** Two significant figures is worst-case ~5%
   near the bottom of a decade (1.0 vs 1.05 m²) and ~0.5% near the top. Say the
   relative figure in the writeup; do not quote an absolute area tolerance that
@@ -586,6 +714,17 @@ If a check fails, the permitted responses are: fix the graph, or change this
 document *and say why* — which means changing what the project claims. Editing a
 constant to make a red test go green is the one move this contract exists to
 forbid.
+
+**The per-frame predicates below hold at or below 100 Hz.** Row 1
+(`separation_timeline`, "per sampled frame") and the `overlap_area` row at the
+bottom are conditional on the artifact being able to address each frame, which it
+can only do for a stream sampled at or below `1 / TIME_TOL_S`. Above that they are
+*could-not-evaluate* rather than failing, and `meta[time_base_resolves_frames]` in
+the artifact under test says which. The range, the measurement behind it, and why
+it is not a tolerance to widen are
+[The rate range these hold in](#the-rate-range-these-hold-in). Every other row is
+an interval or a record predicate — an endpoint stated to `TIME_TOL_S` is what a
+`TIME_TOL_S` time base can deliver at any rate — and inherits nothing from this.
 
 | Query | Ground truth from the CSV | Agreement predicate |
 |---|---|---|

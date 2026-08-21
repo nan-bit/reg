@@ -83,6 +83,7 @@ from reg.sim import provenance, simulate
 from reg.stream import read_frames, write_frames
 from reg.tolerances import (
     DISTANCE_TOL_M,
+    TIME_BASE_MAX_RATE_HZ,
     TIME_TOL_S,
     distance_bucket,
     quantize_area,
@@ -1451,6 +1452,206 @@ def test_the_separation_timeline_answers_every_frame_within_tolerance(
         )
 
 
+# --- the time base, and the rate range the test above holds in (issue #77) --
+#
+# The gate above builds at 50 Hz, which is what this simulator runs at and is
+# inside the range docs/lossiness.md's per-frame predicates hold in. A real
+# manipulator runs at 1 kHz, and there the same gate fails — not because the
+# graph drops anything, but because every interval endpoint is quantized to
+# `TIME_TOL_S` and above `1/TIME_TOL_S` several frames share one address. These
+# three tests are the positive at the documented bound, the negative above it,
+# and the evidence that the miss is quantization rather than sampling.
+#
+# Deliberately *not* a test that the build refuses a fast stream: it does not,
+# and it must not — see `reg.graph.TIME_BASE_DOMAIN`. What is asserted is that
+# the artifact states which side of the range it is on, and that the statement
+# can come out `no`.
+
+
+#: 100 Hz — `TIME_BASE_MAX_RATE_HZ`, the documented bound itself and therefore
+#: the interesting side of it: a test at 50 Hz would pass with a bound anywhere
+#: from 51 Hz upward.
+_RESOLVED_DT = 1.0 / TIME_BASE_MAX_RATE_HZ
+
+#: 200 Hz. Twice the bound, which is the cheapest rate that is unambiguously
+#: outside it; the finding is not rate-proportional (docs/lossiness.md, "The rate
+#: range these hold in") so 1 kHz would cost five times the build and show the
+#: same thing.
+_COLLAPSED_DT = 1.0 / (2.0 * TIME_BASE_MAX_RATE_HZ)
+
+
+def _rate_build(tmp_path_factory, dt: float) -> tuple[Path, Path, object]:
+    """`near_miss` resampled at `dt`, built. Same waypoints, same human walk.
+
+    `near_miss` because the effect is bounded by how far things move inside one
+    `TIME_TOL_S` window: on a fixture where the separation barely changes there
+    is nothing for a shared address to lose, and a test built on one would pass
+    for a reason that has nothing to do with the time base.
+    """
+    scn = replace(SCENARIOS["near_miss"], dt=dt)
+    tmp = tmp_path_factory.mktemp(f"rate-{1.0 / dt:g}hz")
+    csv = _scenario_stream(scn, dt, tmp / "near_miss.csv")
+    out = tmp / "near_miss.sqlite"
+    build(csv, out, scn.world.limits, human_radius=scn.world.human_radius, **_FAST)
+    return csv, out, scn
+
+
+@pytest.fixture(scope="module")
+def resolved_rate(tmp_path_factory):
+    """The run at `TIME_BASE_MAX_RATE_HZ`. Module-scoped: it is a full scenario."""
+    return _rate_build(tmp_path_factory, _RESOLVED_DT)
+
+
+@pytest.fixture(scope="module")
+def collapsed_rate(tmp_path_factory):
+    """The same run at twice `TIME_BASE_MAX_RATE_HZ`."""
+    return _rate_build(tmp_path_factory, _COLLAPSED_DT)
+
+
+def _timeline_error(csv: Path, out: Path, scn) -> tuple[float, float]:
+    """`(worst per-frame Δ, worst Δ allowing ±TIME_TOL_S)` for query 1.
+
+    The first is docs/lossiness.md's per-frame predicate, read off the artifact
+    exactly as `test_the_separation_timeline_answers_every_frame_within_tolerance`
+    reads it. The second is the same comparison with the *time* the answer is
+    attached to allowed to be wrong by one quantum, and the gap between them is
+    what separates "the artifact holds the wrong value" from "the artifact holds
+    the right value and cannot say which frame it belongs to".
+    """
+    intervals = sorted(
+        (float(r["t_start"]), float(r["t_end"]), float(r["min_distance"]))
+        for r in _edges(out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
+    )
+    assert intervals, "precondition failed: no separation intervals for the human"
+
+    truth: list[tuple[float, float]] = []
+    for frame in read_frames(csv):
+        body = unary_union(link_polygons(frame.proprio(), scn.world.limits))
+        truth.append(
+            (
+                float(frame.t),
+                float(body.distance(scn.world.human_polygon(frame.human_pos))),
+            )
+        )
+
+    worst = 0.0
+    worst_with_slack = 0.0
+    for t_raw, d_raw in truth:
+        t = quantize_time(t_raw)
+        covering = [iv for iv in intervals if iv[0] <= t <= iv[1]]
+        assert covering, f"no SEPARATION interval covers t={t}"
+        answered = covering[0][2]
+        worst = max(worst, abs(answered - d_raw))
+        near = [
+            abs(answered - d)
+            for t_other, d in truth
+            if abs(t_other - t) <= TIME_TOL_S + 1e-12
+        ]
+        worst_with_slack = max(worst_with_slack, min(near))
+    return worst, worst_with_slack
+
+
+def test_at_the_documented_rate_the_time_base_addresses_every_frame(
+    resolved_rate,
+) -> None:
+    """The positive, at the bound itself: 100 Hz still answers frame by frame.
+
+    Two claims and they are not the same one. The artifact *says* every frame has
+    its own address, and query 1 *is* within `DISTANCE_TOL_M` at every frame. A
+    build that reported `yes` and missed the budget would be lying about its own
+    domain, which is the failure this pair exists to catch.
+    """
+    csv, out, scn = resolved_rate
+    meta = _meta(out)
+
+    assert meta[graph.META_TIME_BASE_RESOLVES] == graph.TIME_BASE_RESOLVED
+    assert int(meta[graph.META_TIME_BASE_INSTANTS]) == int(meta["frame_count"])
+    assert meta[graph.META_TIME_BASE_DOMAIN] == graph.TIME_BASE_DOMAIN
+
+    worst, _ = _timeline_error(csv, out, scn)
+    assert worst <= DISTANCE_TOL_M, (
+        f"at {TIME_BASE_MAX_RATE_HZ:g} Hz the worst per-frame separation error is "
+        f"{worst} m against a {DISTANCE_TOL_M} m budget. This is the rate "
+        "docs/lossiness.md says its per-frame predicates hold to, so either the "
+        "graph regressed or the documented range is wrong — not a tolerance to "
+        "widen either way."
+    )
+
+
+def test_above_the_documented_rate_the_artifact_says_its_time_base_collapsed(
+    collapsed_rate,
+) -> None:
+    """**THE NEGATIVE.** The check is shown able to say no, on both halves.
+
+    At twice `TIME_BASE_MAX_RATE_HZ` the artifact must report that it cannot
+    address every frame, *and* query 1 must actually miss its own budget. Only
+    asserting the flag would leave a build that always says `no` passing; only
+    asserting the error would leave a build that misses the budget silently
+    passing. The two together are what makes the flag mean something.
+    """
+    csv, out, scn = collapsed_rate
+    meta = _meta(out)
+    frames = int(meta["frame_count"])
+    instants = int(meta[graph.META_TIME_BASE_INSTANTS])
+
+    assert meta[graph.META_TIME_BASE_RESOLVES] == graph.TIME_BASE_COLLAPSED
+    assert instants < frames
+    # Two frames per addressable instant, because the rate is exactly twice the
+    # bound. Derived from the rates rather than typed, so the assertion says why.
+    assert instants == pytest.approx(frames / 2.0, abs=1.0)
+
+    worst, _ = _timeline_error(csv, out, scn)
+    assert worst > DISTANCE_TOL_M, (
+        f"at {2.0 * TIME_BASE_MAX_RATE_HZ:g} Hz the worst per-frame separation "
+        f"error is {worst} m, inside the {DISTANCE_TOL_M} m budget. Either the "
+        "time base stopped collapsing frames — in which case the range in "
+        "docs/lossiness.md is now wrong in the artifact's favour and should be "
+        "re-measured — or this check has stopped being able to fail."
+    )
+
+
+def test_the_time_base_miss_is_quantization_and_not_sampling(
+    resolved_rate, collapsed_rate
+) -> None:
+    """Which of the two diagnoses it is, as an assertion rather than as prose.
+
+    They have different fixes — a finer time base against retaining more frames —
+    so docs/limitations.md §5 is not allowed to guess. Two measurements decide it:
+
+    * **Nothing was sampled away.** Doubling the rate stores the same number of
+      `SEPARATION` intervals. The builder sees every frame at both rates and emits
+      an interval per quantized change at both; there is nothing more it *could*
+      retain, because the time base has no more addresses to hang it on. A
+      sampling limit would show the faster run retaining more and still missing.
+    * **Every value it holds is a true one.** Allow the *time* an answer is
+      attached to to be wrong by one `TIME_TOL_S`, and the error falls back inside
+      `DISTANCE_TOL_M` at the collapsed rate. The value is right; the frame it
+      belongs to is what the artifact cannot say.
+    """
+    fast_csv, fast_out, fast_scn = collapsed_rate
+    _, slow_out, _ = resolved_rate
+
+    fast_rows = _edges(fast_out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
+    slow_rows = _edges(slow_out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
+    assert len(fast_rows) == len(slow_rows), (
+        f"{len(fast_rows)} SEPARATION intervals at "
+        f"{2.0 * TIME_BASE_MAX_RATE_HZ:g} Hz against {len(slow_rows)} at "
+        f"{TIME_BASE_MAX_RATE_HZ:g} Hz. If the faster run retains more, the miss "
+        "is not purely a limit of the time base and docs/limitations.md §5's "
+        "diagnosis needs redoing."
+    )
+
+    worst, worst_with_slack = _timeline_error(fast_csv, fast_out, fast_scn)
+    assert worst > DISTANCE_TOL_M >= worst_with_slack, (
+        f"per-frame error {worst} m, error allowing ±TIME_TOL_S "
+        f"{worst_with_slack} m, budget {DISTANCE_TOL_M} m. The diagnosis in "
+        "docs/limitations.md §5 is that the values are right and their instants "
+        "are ambiguous; if the slack column also leaves the budget, some value in "
+        "the artifact is not a separation this run ever had, and that is a "
+        "different defect."
+    )
+
+
 # --- the negatives: what envelope_at refuses rather than approximates ------
 
 
@@ -1754,8 +1955,41 @@ def test_cli_builds_end_to_end(tmp_path: Path, capsys) -> None:
     )
     assert code == 0
     assert out.exists()
-    assert "frames=8" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "frames=8" in captured.out
+    # 50 Hz is inside the range docs/lossiness.md's per-frame predicates hold in,
+    # so there is nothing to warn about — and the note below must not be the kind
+    # that prints on every build and is therefore read by nobody.
+    assert captured.err == ""
     assert _edges(out)
+
+
+def test_cli_says_so_when_the_stream_is_faster_than_the_time_quantum(
+    tmp_path: Path, capsys
+) -> None:
+    """The `no` case of `TIME_BASE_DOMAIN`, said where a person will see it.
+
+    Exit 0 and a complete artifact: a stream above `TIME_BASE_MAX_RATE_HZ` is
+    built, not refused (`reg.graph.TIME_BASE_DOMAIN`). What it is not is silent —
+    a reader who builds a 1 kHz run and then quotes per-frame numbers off it needs
+    to know they are good to the quantum and not to the frame, and
+    `meta[time_base_domain]` is not somewhere anybody looks unprompted.
+    """
+    dt = _COLLAPSED_DT
+    frames = [replace(_frame(i, (2.0, 0.0)), t=i * dt) for i in range(8)]
+    csv = _write_stream(tmp_path / "fast.csv", frames)
+    out = tmp_path / "fast.sqlite"
+    code = graph.main(
+        ["build", str(csv), "--out", str(out), "--horizon", "0.1",
+         "--n-samples", "4", "--substep-dt", "0.05"]
+    )
+    assert code == 0
+    assert out.exists()
+    captured = capsys.readouterr()
+    assert "frames=8" in captured.out
+    assert graph.META_TIME_BASE_DOMAIN in captured.err
+    assert f"{TIME_BASE_MAX_RATE_HZ:g} Hz" in captured.err
+    assert _meta(out)[graph.META_TIME_BASE_RESOLVES] == graph.TIME_BASE_COLLAPSED
 
 
 def test_cli_refuses_a_stream_that_does_not_say_what_produced_it(

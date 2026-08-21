@@ -62,7 +62,7 @@ THE TWO ENVELOPE FAULTS DIFFER IN DIRECTION
 | fault | test | why the direction matters |
 |---|---|---|
 | declaration/action mismatch | commanded body polygon ⊄ `declared_envelope` | exact: both are polygons, and the comparison is at the resolution the artifact commits to |
-| envelope overclaim | `declared_envelope` ⊄ `computed_bound(limits)` | needs a bound that is sound in the **conservative** direction |
+| envelope overclaim | `declared_envelope` ⊄ `horizon_bound(state, limits, window)` | needs a bound that is sound in the **conservative** direction |
 
 **The resolution the mismatch test is performed at, and why it is not a widened
 tolerance.** Both sides are polygons the artifact commits to at
@@ -92,21 +92,45 @@ truthful policies, which is the "check that cries wolf" failure this project has
 an issue open about. Comparing against a bound that under-covers is the one way
 to get this check wrong, so it is not done.
 
-**The bound that is used, stated plainly.** `computed_bound(limits)` is the
-radius of the **workspace disc**: `sum(link_lengths) + link_radius`, centred on
-the base, which `reg.kinematics` fixes at the origin. Every point of the robot's
-body, in every configuration, at every instant, lies within it — by the triangle
-inequality over the link chain, with no horizon and no sampling involved. It is
-sound in the conservative direction: it *over*-covers, so nothing inside it is
-ever falsely accused. The containment test against it is exact rather than
-approximate — a polygon lies inside a disc iff all of its vertices do, because a
-disc is convex — so no polygonal rendering of the circle enters the comparison.
+**The bound that is used, stated plainly.** Two bounds, and the check takes the
+smaller:
 
-The honest cost of a sound-but-loose bound is that the check is **incomplete**:
-an overclaim that still fits inside the workspace disc is not detected. That is
-the correct trade for something whose response is VETO. A tighter sound bound is
-an *outer*-approximative reachable set — the zonotope machinery of ARMTD and
-ARMOUR (docs/prior-art.md §4) — which docs/plan.md de-scopes deliberately.
+    computed_bound(limits)          the radius of the **workspace disc**,
+                                    `sum(link_lengths) + link_radius`, centred on
+                                    the base that `reg.kinematics` fixes at the
+                                    origin. Every point of the robot's body, in
+                                    every configuration, at every instant, lies
+                                    within it — by the triangle inequality over
+                                    the link chain, with no horizon and no
+                                    sampling involved.
+
+    horizon_bound(state, limits, w) the radial projection of
+                                    `reg.envelope.outer_envelope` — the
+                                    horizon-limited **outer** reachable set, the
+                                    joint box pushed through the kinematics as an
+                                    interval (issue #82). Floored by the disc, so
+                                    it is never the worse of the two.
+
+Both are sound in the conservative direction: they *over*-cover, so nothing
+inside them is ever falsely accused, and the minimum of two sound bounds is
+sound. The containment test is exact rather than approximate — a polygon lies
+inside a disc iff all of its vertices do, because a disc is convex — so no
+polygonal rendering of a circle enters the comparison.
+
+**What the second bound closed, and what is still open.** The disc alone has no
+`q`, no `qd` and no horizon in it, so `envelope_overclaim` fired only on a
+declaration exceeding the *entire workspace*: the fault a Simplex / ASTM F3269
+monitor exists to catch — the policy declared more than it could occupy within
+the horizon — was undetectable. `horizon_bound` detects the **radial** half of
+it: an arm folded at the elbow, or one whose velocity bound will not carry it to
+full extension within the window, has a bound well inside the disc. What remains
+undetected is the **angular** half — a region of a reachable radius in a
+direction the robot cannot turn to in time. `reg.envelope.outer_envelope` is the
+polygon that catches those, it is retained beside every envelope in the artifact
+as its area and radius, and using it for *containment* here is a decision issue
+#82 leaves open rather than an oversight: measured against the fixtures, the
+polygon test re-labels three of the five fault runs as overclaims, which changes
+what a fault in the nine-fault taxonomy means. That is not a refactor.
 
 ESCALATION FAILURE, DEFINED HERE
 --------------------------------
@@ -171,7 +195,7 @@ from reg.chain import (
 # vocabulary. Anything more would give enforcement common-cause failure with the
 # thing it is checking. `tests/test_enforce.py` asserts this.
 from reg.declare import ACTION_CLASSES, Declaration
-from reg.envelope import HASH_COORD_PRECISION
+from reg.envelope import HASH_COORD_PRECISION, outer_envelope, outer_radius
 from reg.kinematics import link_polygons
 from reg.types import Limits, ProprioState
 
@@ -189,6 +213,8 @@ __all__ = [
     "declared_bound",
     "envelope_excess",
     "escape_region",
+    "horizon_bound",
+    "horizon_excess",
     "sign_acknowledgment",
     "sign_verdict",
     "verify_acknowledgment",
@@ -567,11 +593,11 @@ def computed_bound(limits: Limits) -> float:
 
     **Sound in the conservative direction.** It over-covers the true reachable
     set — by a lot, since it has no horizon in it — which is what makes it safe
-    to VETO on. The cost is that the overclaim check is incomplete: a declared
-    region that exceeds what the robot can reach *within the horizon* but still
-    fits inside this disc is not detected. Tightening it soundly needs an
-    outer-approximative reachable set (ARMTD / ARMOUR, docs/prior-art.md §4),
-    which docs/plan.md de-scopes.
+    to VETO on. It is the floor under `horizon_bound`, which tightens it with the
+    state and a window (issue #82) and can never be worse than it: an enforcer
+    with a state to work from uses the smaller of the two, and this one is what
+    remains true when the arm is extended and fast enough to reach the rim of the
+    workspace inside the window anyway.
 
     Raises:
         EnforcementError: `limits` has a malformed link geometry. A bound derived
@@ -602,6 +628,90 @@ def computed_bound(limits: Limits) -> float:
     return float(lengths.sum() + radius)
 
 
+def horizon_bound(state: ProprioState, limits: Limits, horizon: float) -> float:
+    """Radius of the bound for **this instant and this horizon**, metres (#82).
+
+    `min(computed_bound(limits), outer_radius(outer_envelope(state, limits,
+    horizon)))` — the radial projection of the horizon-limited outer reachable
+    set, floored by the workspace disc so it can never be worse than the bound it
+    tightens. Both terms are sound in the conservative direction, and the minimum
+    of two sound bounds is sound.
+
+    **What this buys, and what it does not.** `computed_bound` has no `q`, no
+    `qd` and no horizon in it, so it fires only on a declaration exceeding the
+    *entire workspace*. This one closes part of that gap: an arm folded at the
+    elbow, or one whose velocity bound will not carry it to full extension inside
+    the horizon, has a radius well under the workspace disc's, and a declaration
+    reaching between the two is now detected where it was not before. What it
+    still does not detect is an overclaim that is *angular* rather than radial —
+    a region of the right radius in a direction the robot cannot turn to in time.
+    `reg.envelope.outer_envelope` is the polygon that would catch those; using it
+    for containment rather than for its radius is a live decision, not an
+    oversight, and issue #82 records why (it re-labels three of the five fault
+    fixtures, which changes what a fault in the taxonomy means).
+
+    The check built on this stays **exact**: the bound is a radius, a disc is
+    convex, and a polygon lies inside a disc iff every vertex does. No polygonal
+    rendering of a circle enters the comparison.
+
+    Args:
+        state: Layer A proprioception at the instant the bound starts from.
+        limits: the robot. The outer set is a function of these and the state,
+            and of nothing the robot cannot see about itself.
+        horizon: seconds the bound covers. Required, no default — a bound
+            enforcement VETOes on must not be computed over a window nobody
+            stated.
+
+    Raises:
+        EnforcementError: `state` is not a `ProprioState`, or the outer set
+            cannot be computed. Each is a could-not-evaluate, and falling back to
+            the looser disc without saying so would let a failed computation read
+            as a weaker check that ran.
+    """
+    if not isinstance(state, ProprioState):
+        raise EnforcementError(
+            f"horizon_bound takes a ProprioState, got {type(state).__name__}. "
+            "This is the Layer A boundary: enforcement computes its bound from "
+            "what the robot knows about itself. If you hold a StateFrame, call "
+            ".proprio()."
+        )
+    try:
+        region = outer_envelope(state, limits, horizon)
+    except (TypeError, ValueError) as exc:
+        raise EnforcementError(
+            f"the horizon-limited outer reachable set could not be computed: "
+            f"{exc}. That is a could-not-evaluate; silently falling back to the "
+            "workspace disc would report a check that ran when it did not."
+        ) from None
+    return min(computed_bound(limits), outer_radius(region))
+
+
+def _furthest_vertex(region: BaseGeometry, fn: str) -> float:
+    """The greatest distance from the base over a region, metres.
+
+    Exact for a polygon — the maximum of a convex function over a polygon is
+    attained at a vertex — which is what makes every containment test against a
+    disc-shaped bound exact rather than approximate.
+    """
+    if not isinstance(region, BaseGeometry):
+        raise EnforcementError(
+            f"{fn} takes a shapely geometry, got {type(region).__name__}."
+        )
+    if region.is_empty:
+        raise EnforcementError(
+            f"{fn} was given an empty geometry. That is a could-not-evaluate, "
+            "not a region that trivially fits."
+        )
+    if not region.is_valid:
+        raise EnforcementError(
+            f"{fn} was given an invalid geometry: {shapely.is_valid_reason(region)}."
+        )
+    coords = shapely.get_coordinates(region)
+    if coords.size == 0:
+        raise EnforcementError(f"{fn} was given a geometry with no coordinates.")
+    return float(np.hypot(coords[:, 0], coords[:, 1]).max())
+
+
 def envelope_excess(region: BaseGeometry, limits: Limits) -> float:
     """How far a declared region reaches beyond `computed_bound`, metres.
 
@@ -613,32 +723,34 @@ def envelope_excess(region: BaseGeometry, limits: Limits) -> float:
     circle is *inscribed* — using it would shrink the bound and manufacture the
     false VETOs this whole check is arranged to avoid.
 
+    This is the static half of the overclaim check and it is what an enforcer
+    with no state to work from can compute. `horizon_excess` is the same test
+    against the tighter, state-dependent bound.
+
     Raises:
         EnforcementError: the region is not a geometry, or is empty or invalid.
             Each is a could-not-evaluate, and returning 0.0 ("fits") for any of
             them would clear a bound nobody could read.
     """
-    if not isinstance(region, BaseGeometry):
-        raise EnforcementError(
-            f"envelope_excess takes a shapely geometry, got {type(region).__name__}."
-        )
-    if region.is_empty:
-        raise EnforcementError(
-            "envelope_excess was given an empty geometry. That is a "
-            "could-not-evaluate, not a region that trivially fits."
-        )
-    if not region.is_valid:
-        raise EnforcementError(
-            f"envelope_excess was given an invalid geometry: "
-            f"{shapely.is_valid_reason(region)}."
-        )
-    coords = shapely.get_coordinates(region)
-    if coords.size == 0:
-        raise EnforcementError(
-            "envelope_excess was given a geometry with no coordinates."
-        )
-    furthest = float(np.hypot(coords[:, 0], coords[:, 1]).max())
-    return furthest - computed_bound(limits)
+    return _furthest_vertex(region, "envelope_excess") - computed_bound(limits)
+
+
+def horizon_excess(
+    region: BaseGeometry, state: ProprioState, limits: Limits, horizon: float
+) -> float:
+    """How far a declared region reaches beyond `horizon_bound`, metres (#82).
+
+    Positive means overclaim. Never smaller than `envelope_excess` for the same
+    region, because `horizon_bound` is never larger than `computed_bound` — so
+    every declaration the static check refused this one refuses too, and the
+    fault only ever gains cases.
+
+    Raises:
+        EnforcementError: as `envelope_excess` and `horizon_bound`.
+    """
+    return _furthest_vertex(region, "horizon_excess") - horizon_bound(
+        state, limits, horizon
+    )
 
 
 def declared_bound(declaration: Declaration) -> Polygon:
@@ -905,7 +1017,7 @@ class Enforcer:
 
     # -- declarations ----------------------------------------------------
 
-    def offer(self, declaration: Declaration) -> Verdict | None:
+    def offer(self, declaration: Declaration, state: ProprioState) -> Verdict | None:
         """Present a declaration. Returns a verdict **only if it is refused**.
 
         Four of the nine faults are properties of the declaration itself and are
@@ -924,22 +1036,59 @@ class Enforcer:
         3. **replay_or_reorder** — `seq` reused or regressed against the highest
            accepted so far. Response: VETO.
         4. **envelope_overclaim** — the declared region reaches outside
-           `computed_bound`. Response: VETO the declaration itself.
+           `horizon_bound(state, limits, ...)`. Response: VETO the declaration
+           itself.
 
         Then the escalation obligation (see the module header): while passivated
         and unacknowledged, a declaration that is not an `escalate` is an
         **escalation_failure**, flagged and answered with a safe state.
+
+        Args:
+            declaration: what the policy says it will do. Checked, never
+                believed.
+            state: Layer A proprioception at the instant the bound is computed
+                from. **Required, no default** (issue #82): the overclaim check
+                is against the region the robot can reach within the
+                declaration's own validity window, and that region is a function
+                of where the arm is and how fast it is moving. An enforcer that
+                invented a state here would compute a plausible bound for a robot
+                that was somewhere else. Normally the frame at `t_issued`; an
+                earlier one is accepted and the window is stretched to cover the
+                gap, because reaching further back can only widen the bound.
 
         Returns:
             The refusing `Verdict`, or `None` when the declaration is accepted
             and becomes the open one. `None` is not "fine" in the sense a bool
             would be — accepting a declaration adjudicates no action, and
             adjudication is what a verdict is a record of.
+
+        Raises:
+            EnforcementError: `declaration` or `state` is of the wrong type, or
+                `state` is *after* `t_issued` — the declaration's window has
+                already left that pose, so a bound integrated forward from it
+                would not cover the start of the interval being claimed.
         """
         if not isinstance(declaration, Declaration):
             raise EnforcementError(
                 f"offer takes a Declaration, got {type(declaration).__name__}. "
                 "Enforcement reads the record, not an object that resembles it."
+            )
+        if not isinstance(state, ProprioState):
+            raise EnforcementError(
+                f"offer takes a ProprioState as its second argument, got "
+                f"{type(state).__name__}. This is the Layer A boundary: the "
+                "bound is computed from what the robot knows about itself. If "
+                "you hold a StateFrame, call .proprio()."
+            )
+        state_t = _finite(state.t, "state.t")
+        if state_t > declaration.t_issued:
+            raise EnforcementError(
+                f"the state offered with declaration "
+                f"{declaration.declaration_id!r} is at t={state_t}, after the "
+                f"declaration was issued at t={declaration.t_issued}. The bound "
+                "is integrated forward from this pose, so a pose the claimed "
+                "interval has already left would bound a window that does not "
+                "contain the interval — an unsound bound with a sound one's shape."
             )
 
         # Liveness is receipt, and receipt is unconditional: the policy sending
@@ -988,13 +1137,25 @@ class Enforcer:
         # be a true statement about it. `Declaration.__post_init__` makes it
         # unreachable for a record built here, which is the point.
         bound = declared_bound(declaration)
-        excess = envelope_excess(declaration.envelope(), self._limits)
+        # The window the declared region is a claim about, measured from the
+        # pose the bound is integrated from. Equal to the declaration's own
+        # horizon when the state is the frame at `t_issued`, which is the normal
+        # case; stretched when the state is older, so the bound still covers the
+        # whole of the interval being claimed.
+        window = declaration.t_issued + declaration.horizon - state_t
+        radius = horizon_bound(state, self._limits, window)
+        # `horizon_excess` spelled out, so the bound is computed once and can be
+        # named in the reason: an operator reading a VETO has to be able to see
+        # which of the two bounds refused the declaration and by how much.
+        excess = _furthest_vertex(declaration.envelope(), "offer") - radius
         if excess > 0.0:
             return self._refuse(
                 declaration,
                 "envelope_overclaim",
                 f"the declared region reaches {excess:.4f} m beyond the "
-                f"independently computed bound of {self._bound:.4f} m",
+                f"independently computed bound of {radius:.4f} m for a "
+                f"{window:.4f} s window from this pose (the workspace disc, "
+                f"which has no horizon in it, is {self._bound:.4f} m)",
             )
 
         if self.is_passivated and not self._is_acknowledged():

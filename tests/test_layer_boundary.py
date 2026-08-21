@@ -383,6 +383,8 @@ def test_an_envelope_edge_may_not_be_written_without_stating_its_layer(
             config_id="cfg_0",
             horizon=0.1,
             source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
         )
 
         with pytest.raises(store.StoreError, match="no default to fall back on"):

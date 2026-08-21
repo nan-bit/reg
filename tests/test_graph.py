@@ -69,8 +69,13 @@ from reg.chain import (
     write_keyring,
 )
 from reg.declare import Declaration, envelope_wkb, verify_declaration
-from reg.enforce import Verdict, sign_verdict, verify_verdict
-from reg.envelope import compute_envelope, envelope_hash
+from reg.enforce import Verdict, computed_bound, sign_verdict, verify_verdict
+from reg.envelope import (
+    compute_envelope,
+    envelope_hash,
+    outer_envelope,
+    outer_radius,
+)
 from reg.graph import (
     HUMAN_ENTITY_ID,
     AttestationRecords,
@@ -88,10 +93,11 @@ from reg.tolerances import (
     TIME_TOL_S,
     distance_bucket,
     quantize_area,
+    quantize_distance,
     quantize_time,
     simplify_geometry,
 )
-from reg.types import Obstacle, StateFrame
+from reg.types import Obstacle, ProprioState, StateFrame
 from reg.world import DEMO_WORLD
 
 LIMITS = DEMO_WORLD.limits
@@ -880,6 +886,8 @@ def seeded(tmp_path: Path):
         config_id="cfg_0",
         horizon=0.2,
         source="computed",
+        outer_area=0.5,
+        outer_radius=0.95,
     )
     store.insert_entity(conn, "obs_a", "crate", geometry=Point(2.0, 0.0).buffer(0.25))
     yield conn
@@ -997,6 +1005,8 @@ def test_an_out_of_vocabulary_envelope_source_is_refused(seeded) -> None:
             config_id="cfg_0",
             horizon=0.2,
             source="guessed",
+            outer_area=None,
+            outer_radius=None,
         )
 
 
@@ -1027,7 +1037,8 @@ def _envelope_rows(path: Path) -> list[sqlite3.Row]:
                 "lower(hex(e.envelope_hash)) AS envelope_hash, "
                 "e.area AS area, e.geometry_wkb AS geometry_wkb, "
                 "e.config_key AS config_key, c.node_id AS config_id, "
-                "e.horizon AS horizon, e.source AS source "
+                "e.horizon AS horizon, e.source AS source, "
+                "e.outer_area AS outer_area, e.outer_radius AS outer_radius "
                 "FROM envelope e JOIN node n ON n.node_key = e.envelope_key "
                 "LEFT JOIN node c ON c.node_key = e.config_key "
                 "ORDER BY e.envelope_key"
@@ -1904,6 +1915,8 @@ def test_an_envelope_with_neither_geometry_nor_config_is_refused(seeded) -> None
             config_id=None,
             horizon=0.2,
             source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
         )
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
@@ -1938,6 +1951,8 @@ def test_geometry_attached_later_fills_a_row_written_without_it(seeded) -> None:
         config_id="cfg_0",
         horizon=0.2,
         source="computed",
+        outer_area=0.5,
+        outer_radius=0.95,
     )
     assert store.envelope_row(seeded, "env_late")["geometry_wkb"] is None
     store.attach_envelope_geometry(seeded, "env_late", Point(0.0, 0.0).buffer(0.5))
@@ -3110,6 +3125,133 @@ def test_the_declared_and_the_clamped_bound_are_separate_rows(attested) -> None:
     assert stored.equals(records.declarations[0].envelope())
 
 
+def test_the_outer_bracket_is_retained_for_computed_envelopes_only(attested) -> None:
+    """Issue #82: the artifact carries the other side of the bracket.
+
+    `area` is the area of an under-approximation and always was; without
+    something over-covering beside it, "how good is the sampled envelope" is a
+    question the file cannot answer at all. These two scalars are that answer,
+    and they are present for exactly the rows they mean something for — a
+    declared region is the policy's claim and a clamped bound is what a verdict
+    applied, and neither is a set the robot can reach.
+    """
+    out, _ = attested
+    rows = _envelope_rows(out)
+    by_source = {str(r["source"]): [] for r in rows}
+    for row in rows:
+        by_source[str(row["source"])].append(row)
+    assert {"computed", "declared", "clamped"} <= set(by_source)
+
+    for row in by_source["computed"]:
+        assert row["outer_area"] is not None and row["outer_radius"] is not None
+        assert row["outer_area"] >= row["area"], (
+            "the outer set does not contain the sampled one, so the two are not "
+            "a bracket and reporting them together would be misleading."
+        )
+        assert 0.0 < row["outer_radius"] <= computed_bound(SCENARIOS[
+            "declared_violation"
+        ].world.limits) + 1e-9, (
+            "the retained radius is outside the workspace disc, which the outer "
+            "set is intersected with; tightening a bound cannot loosen it."
+        )
+    for source in ("declared", "clamped"):
+        for row in by_source[source]:
+            assert row["outer_area"] is None and row["outer_radius"] is None
+
+
+def test_the_retained_bracket_is_the_region_enforcement_would_compute(attested) -> None:
+    """The scalars are not a summary of something else: they are that region.
+
+    Recomputed here from the `robot_config` the row names and the horizon it
+    stores — the same two inputs a reader has — and compared. If these could
+    drift, the bracket in the file would be a pair of numbers with no way to
+    check them.
+    """
+    out, _ = attested
+    conn = store.connect(out)
+    try:
+        # The horizon comes off the row and the substep off `meta`, which is
+        # where the artifact records the grid it was integrated on. A reader has
+        # exactly these two numbers and no others, which is the point.
+        substep = float(store.get_meta(conn, graph.META_SUBSTEP_DT))
+        row = conn.execute(
+            "SELECT e.area AS area, e.horizon AS horizon, "
+            "e.outer_area AS outer_area, e.outer_radius AS outer_radius, "
+            "c.q AS q, c.qd AS qd "
+            "FROM envelope e JOIN robot_config c ON c.config_key = e.config_key "
+            "WHERE e.source = 'computed' ORDER BY e.envelope_key LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    limits = SCENARIOS["declared_violation"].world.limits
+    state = ProprioState(
+        t=0.0,
+        q=np.asarray([float(v) for v in str(row["q"]).split(",")]),
+        qd=np.asarray([float(v) for v in str(row["qd"]).split(",")]),
+    )
+    region = outer_envelope(state, limits, float(row["horizon"]), substep)
+    assert row["outer_area"] == pytest.approx(quantize_area(region.area))
+    assert row["outer_radius"] == pytest.approx(
+        quantize_distance(outer_radius(region))
+    )
+
+
+def test_an_outer_bracket_on_something_that_is_not_a_reachable_set_is_refused(
+    seeded,
+) -> None:
+    """NEGATIVE, both directions. A number nothing computed must not get in.
+
+    A declared region with an outer area attached would read as a bracket around
+    a claim, which is not what it is; a computed envelope without one would be
+    an under-approximation with nothing bounding it from the other side, which
+    is the state issue #82 exists to end.
+    """
+    with pytest.raises(store.StoreError, match="computed envelope"):
+        store.insert_envelope(
+            seeded,
+            "env_declared_bracket",
+            envelope_hash=_HASH_B,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id=None,
+            horizon=0.2,
+            source="declared",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+    with pytest.raises(store.StoreError, match="computed envelope"):
+        store.insert_envelope(
+            seeded,
+            "env_computed_unbracketed",
+            envelope_hash=_HASH_B,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id="cfg_0",
+            horizon=0.2,
+            source="computed",
+            outer_area=None,
+            outer_radius=None,
+        )
+
+
+def test_half_a_bracket_is_refused(seeded) -> None:
+    """NEGATIVE. One projection without the other reads as a whole answer."""
+    with pytest.raises(store.StoreError, match="half a bracket"):
+        store.insert_envelope(
+            seeded,
+            "env_half",
+            envelope_hash=_HASH_B,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id="cfg_0",
+            horizon=0.2,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=None,
+        )
+
+
 def test_enforced_exists_for_a_clamp_and_for_nothing_else(attested) -> None:
     """A PERMIT bounds nothing; a VETO and a SAFE_STATE permit no action to
     bound. An ENFORCED edge to a region on a PERMIT would read as though
@@ -3460,6 +3602,8 @@ def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:
             config_id=None,
             horizon=0.2,
             source="clamped",
+            outer_area=None,
+            outer_radius=None,
         )
     with pytest.raises(store.StoreError, match="clamped bound"):
         store.insert_envelope(
@@ -3471,6 +3615,8 @@ def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:
             config_id=None,
             horizon=None,
             source="declared",
+            outer_area=None,
+            outer_radius=None,
         )
 
 
@@ -3839,6 +3985,8 @@ def test_the_record_layer_refuses_rather_than_answering_from_a_missing_table(
             config_id=None,
             horizon=0.2,
             source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
         )
         with pytest.raises(store.StoreError, match="attestation_records"):
             store.open_edge(conn, "DECLARED", "dec_0", "env_0", 0.0)
@@ -4144,6 +4292,8 @@ def test_a_hash_that_is_not_a_full_width_digest_is_refused(seeded) -> None:
                 config_id="cfg_0",
                 horizon=0.2,
                 source="computed",
+                outer_area=0.5,
+                outer_radius=0.95,
             )
     with pytest.raises(store.StoreError, match="32"):
         store.from_hash(b"\x00" * 16)

@@ -279,7 +279,21 @@ __all__ = [
 #: know the key that says otherwise. Both are the confident wrong answer the
 #: version exists to prevent, and the second is the worse one: "uncommitted" is
 #: a finding about the artifact and "I cannot see the commitment" is not.
-SCHEMA_VERSION = 8
+#:
+#: 9: `envelope.outer_area` and `envelope.outer_radius` arrived (issue #82). A
+#: `computed` envelope is an *under*-approximation, and until now the artifact
+#: retained nothing that bracketed it from the other side, so "how good is the
+#: sampled envelope" was a question only a benchmark could answer and only for a
+#: run somebody still had. These two scalars are the horizon-limited **outer**
+#: reachable set for the same frame — `reg.envelope.outer_envelope`, area and
+#: radius — and they turn the bracket into evidence in the file. The geometry is
+#: *not* retained: it is recomputable from the `robot_config` and the horizon
+#: this row already names, and a polygon a frame would have put WKB back into a
+#: retention figure that the incremental rule spent issues getting down. A v8
+#: reader meeting a v9 file sees the inner area and has no way to tell an
+#: artifact that brackets it from one that never did, which is the same confident
+#: wrong answer every other bump here is about.
+SCHEMA_VERSION = 9
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -623,6 +637,25 @@ CREATE TABLE robot_config (
 -- applied to one commanded action at one instant, and the `Verdict` record
 -- states no horizon for it (docs/plan.md Phase 4). NULL is that record's silence
 -- carried through rather than a plausible number invented at the write.
+-- THE OTHER SIDE OF THE BRACKET (issue #82). `area` above is the area of an
+-- under-approximation: sampling can only under-cover the true forward reachable
+-- set, so it is a lower bound on it and never an upper one. `outer_area` and
+-- `outer_radius` are the same frame's horizon-limited **outer** set
+-- (`reg.envelope.outer_envelope`), which over-covers. The true reachable set is
+-- between them, which is what makes "how good is the sampled envelope" a
+-- question this artifact answers rather than one a benchmark answers about a run
+-- somebody still has.
+--
+-- WHY SCALARS AND NOT THE POLYGON. The outer region is a deterministic function
+-- of the `robot_config` this row names plus the horizon it stores, so retaining
+-- its WKB would store the same information twice — once at 16 bytes a frame and
+-- once at several kilobytes. Enforcement computes the region, uses it, and
+-- discards it; these two numbers are what survives.
+--
+-- Both are present exactly for a `computed` envelope. A `declared` region is the
+-- policy's claim and a `clamped` one is the bound a verdict applied; neither is
+-- a reachable set, so neither has an outer approximation, and inventing one for
+-- them would put a number in the record that nothing computed.
 CREATE TABLE envelope (
     envelope_key  INTEGER PRIMARY KEY REFERENCES node (node_key),
     envelope_hash BLOB NOT NULL CHECK (length(envelope_hash) = {HASH_BYTES}),
@@ -631,9 +664,23 @@ CREATE TABLE envelope (
     config_key    INTEGER REFERENCES robot_config (config_key),
     horizon       REAL,
     source        TEXT NOT NULL CHECK (source IN ({_SQL_ENVELOPE_SOURCES})),
+    outer_area    REAL,
+    outer_radius  REAL,
     UNIQUE (envelope_hash, source, horizon),
     CHECK (geometry_wkb IS NOT NULL OR config_key IS NOT NULL),
-    CHECK ((horizon IS NULL) = (source = 'clamped'))
+    CHECK ((horizon IS NULL) = (source = 'clamped')),
+    CHECK ((outer_area IS NOT NULL) = (source = 'computed')),
+    CHECK ((outer_radius IS NULL) = (outer_area IS NULL)),
+    -- Strictly positive rather than "at least `area`", which is the invariant a
+    -- reader actually wants. `area` is the *simplified* inner region quantized
+    -- to two significant figures, and simplification may move a boundary by up
+    -- to `GEOM_SIMPLIFY_TOL_M` in either direction, so the two columns are not
+    -- two measurements of the same units of the same thing. The bracket is
+    -- asserted where the two geometries still exist, in tests/test_graph.py; a
+    -- CHECK on the rounded pair would be an invariant that fails a build for a
+    -- rounding rather than for a fault. Zero, though, is always a failed
+    -- computation: an outer bound of no extent contains no declared region.
+    CHECK (outer_area IS NULL OR (outer_area > 0.0 AND outer_radius > 0.0))
 );
 
 -- `geometry_wkb` is the entity's world-frame boundary and is present exactly
@@ -1401,6 +1448,8 @@ def insert_envelope(
     config_id: str | None,
     horizon: float | None,
     source: str,
+    outer_area: float | None,
+    outer_radius: float | None,
 ) -> str:
     """An envelope the artifact retains. Idempotent on `envelope_id`.
 
@@ -1424,6 +1473,15 @@ def insert_envelope(
     down, and a computed or declared envelope missing one would be silently
     dropping the interval its region is a claim about.
 
+    `outer_area` and `outer_radius` are the other side of the bracket (issue
+    #82): the area and radius of the horizon-limited **outer** reachable set for
+    the same frame, against an `area` column that holds an under-approximation.
+    Both are required arguments and both are `None` for exactly one thing — an
+    envelope that is not a `computed` one. A declared region is the policy's
+    claim and a clamped bound is what a verdict applied; neither is a reachable
+    set, so neither has an outer approximation, and a number invented for them
+    here would be indistinguishable downstream from one something computed.
+
     Re-inserting an id whose row already exists fills in a geometry or a
     `config_id` the first insert left `NULL`, and refuses a *different* value for
     any scalar column. A second `config_id` for a row that already has one is
@@ -1446,6 +1504,23 @@ def insert_envelope(
             "answers 'there was none' — which is what a frame with no envelope "
             "at all looks like."
         )
+    if (outer_area is None) != (outer_radius is None):
+        raise StoreError(
+            f"envelope {envelope_id!r} has outer_area={outer_area!r} and "
+            f"outer_radius={outer_radius!r}. They are two projections of one "
+            "region and are written together or not at all; one without the "
+            "other is half a bracket, which reads as a bracket."
+        )
+    if (outer_area is None) == (source == "computed"):
+        raise StoreError(
+            f"envelope {envelope_id!r} has source={source!r} and "
+            f"outer_area={outer_area!r}. The outer reachable set belongs to a "
+            "computed envelope and to nothing else: a declared region is the "
+            "policy's claim and a clamped bound is what a verdict applied, and "
+            "neither is a set the robot can reach. A computed envelope missing "
+            "it would be an under-approximation with nothing bracketing it, "
+            "which is the state issue #82 is about."
+        )
     if (horizon is None) != (source == "clamped"):
         raise StoreError(
             f"envelope {envelope_id!r} has source={source!r} and "
@@ -1466,6 +1541,8 @@ def insert_envelope(
         "area": float(area),
         "horizon": None if horizon is None else float(horizon),
         "source": str(source),
+        "outer_area": None if outer_area is None else float(outer_area),
+        "outer_radius": None if outer_radius is None else float(outer_radius),
     }
     # The configuration has to be in the artifact, because what is stored is its
     # surrogate. That is stricter than the old text column, and in the same
@@ -1571,7 +1648,9 @@ SELECT e.envelope_key              AS envelope_key,
        e.config_key                AS config_key,
        c.node_id                   AS config_id,
        e.horizon                   AS horizon,
-       e.source                    AS source
+       e.source                    AS source,
+       e.outer_area                AS outer_area,
+       e.outer_radius              AS outer_radius
 FROM envelope e
 JOIN node n ON n.node_key = e.envelope_key
 LEFT JOIN node c ON c.node_key = e.config_key

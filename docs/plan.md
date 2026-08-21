@@ -36,7 +36,7 @@ insurer.
 > because the benchmark showed the graph is ~13x *larger* per frame than a
 > gzipped proprioception stream. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
-> answers no audit question. Against a *sensor* log the artifact is **~692x**
+> answers no audit question. Against a *sensor* log the artifact is **~691x**
 > smaller over a six-month retention period at occurrence resolution (264 GB vs
 > 182.5 TB per robot). That is two orders of magnitude and not three: the
 > earlier ~9,900x was measured before the artifact carried any Layer A record
@@ -190,12 +190,12 @@ Per robot, from the measured resolution curve:
 | retained at | per robot, 6 months | fleet of 100 |
 |---|---|---|
 | **occurrence (±1 s, DSSAD-shaped)** | **264 GB** | 26.4 TB |
-| transition (10 ms) | 655 GB | 65.5 TB |
-| per-frame (10 ms) | 952 GB | 95.2 TB |
+| transition (10 ms) | 656 GB | 65.6 TB |
+| per-frame (10 ms) | 953 GB | 95.3 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
-Each is the measured `bytes/hour` for that level — 60.23, 149.59 and
-217.45 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
+Each is the measured `bytes/hour` for that level — 60.29, 149.72 and
+217.57 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
 one of those three figures is a figure at 50 Hz**, which is what
 `reg.scenarios.DEFAULT_DT` runs at, and all three are **linear in that rate**:
 enforcement emits one verdict and one chain record per commanded action and no
@@ -203,7 +203,7 @@ resolution level coarsens them. A real manipulator control loop runs at 1 kHz.
 That is measured, not asserted — see *The control rate* below and
 [`sensor-baseline.md`](sensor-baseline.md).
 
-At occurrence resolution the artifact is **~692x smaller** than the sensor
+At occurrence resolution the artifact is **~691x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
 two-order band, and **short of three**. The artifact side of that comparison is
 measured. The sensor side is an **assumption with a sourced range**, set out in
@@ -241,7 +241,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.23 MB/h → 264 GB → ~692x** | 149.59 MB/h → 655 GB → ~279x | 217.45 MB/h → 952 GB → ~192x |
+| **50 Hz (this simulator, published above)** | **60.29 MB/h → 264 GB → ~691x** | 149.72 MB/h → 656 GB → ~278x | 217.57 MB/h → 953 GB → ~192x |
 | 100 Hz | 106.14 MB/h → 465 GB → ~393x | 245.96 MB/h → 1.08 TB → ~169x | 409.33 MB/h → 1.79 TB → ~102x |
 | 250 Hz | 246.70 MB/h → 1.08 TB → ~169x | 527.82 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
 | **1 kHz (a real manipulator)** | **950.55 MB/h → 4.16 TB → ~44x** | 1.94 GB/h → 8.49 TB → ~22x | 4.26 GB/h → 18.65 TB → ~10x |
@@ -479,14 +479,27 @@ constraint layer supplied by the same party as the policy has common-cause
 failure with it; widening that import is never a refactor.
 
 **What the independent check actually checks, stated plainly.**
-`computed_bound(limits)` is the radius of the workspace disc —
-`sum(link_lengths) + link_radius`. It takes `Limits`, not a `ProprioState`: no
-`q`, no `q̇`, no horizon, the same scalar at every frame of every run. It is
-sound in the conservative direction, so nothing inside it is ever falsely
-accused, and it is **incomplete**: a declaration that overclaims what the robot
-could reach *within the horizon*, but still fits inside the workspace disc, is
-not detected. The independence is real; the capability is limited. Those are
-different sentences and this document has previously run them together.
+`horizon_bound(state, limits, window)` is the radius a declared region is tested
+against, and it is the smaller of two sound bounds: the workspace disc
+`sum(link_lengths) + link_radius`, which reads no `q`, no `q̇` and no horizon; and
+the radial projection of `reg.envelope.outer_envelope`, a horizon-limited **outer**
+reachable set — the joint box pushed through the forward kinematics as an interval
+— which reads all three. Both over-cover, so nothing inside is ever falsely
+accused.
+
+It is **still incomplete, and in a way that is now sayable in one line**: the bound
+is a radius, so it detects an overclaim that reaches *further than the robot can*
+and not one that points *where the robot cannot turn in time*. Until issue #82 the
+first was undetected too, and the fault a Simplex / ASTM F3269 runtime monitor
+exists to catch — the policy declared more than it could occupy within the horizon
+— could not fire at all unless the declaration left the entire workspace. The
+polygon that would close the angular half is computed and its area and radius are
+retained beside every envelope in the artifact; wiring it to the *containment* test
+re-labels three of the five fault fixtures as overclaims, which changes what a
+fault in the §5 taxonomy means, so it is left as a decision rather than taken as a
+step ([`docs/limitations.md`](limitations.md) §3). The independence is real; the
+capability is bounded and the bound is stated. Those are different sentences and
+this document has previously run them together.
 
 **What the chain proves, and what it does not.** It proves the records are
 internally consistent under the keys that signed them. It does not prove no
@@ -685,24 +698,34 @@ failure with it.
 **What that bound actually is, and what Phase 4 therefore delivers.** The bound
 is *not* `compute_envelope` from Phase 2 — that is an under-approximation, and
 vetoing against something that under-covers the reachable set would produce false
-VETOs on truthful policies. It is `reg.enforce.computed_bound(limits)`: the radius
-of the **workspace disc**, `sum(link_lengths) + link_radius`, base at the origin.
-It takes `Limits`, which is a property of the robot rather than of its state — so
-it reads no `q`, no `qd`, no horizon, and returns the same scalar at every frame
-of every scenario.
+VETOs on truthful policies. It is `reg.enforce.horizon_bound(state, limits,
+window)`, the smaller of two bounds that each over-cover:
 
-That makes Phase 4 an independent monitor whose bound is a static workspace disc:
-**sound in the conservative direction and weak.** It over-covers, so nothing
-inside it is ever falsely accused, and every VETO it does emit is real. The cost
-is that the overclaim check is **incomplete** — a declaration claiming more than
-the robot could reach *within the horizon*, but still fitting inside the workspace
-disc, is not detected, and the `envelope_overclaim` fixture has to declare past
-the entire workspace to trip it. The fault a Simplex / ASTM F3269 runtime monitor
-exists to catch is, at this bound, only partly caught. Tightening it soundly needs
-an outer-approximative reachable set — the zonotope machinery of ARMTD and ARMOUR
-([`docs/prior-art.md` §4](prior-art.md)) — which this plan de-scopes deliberately.
-Recorded as [`docs/limitations.md`](limitations.md) §3; `reg/enforce.py`'s module
-header is the authority on the reasoning.
+- `computed_bound(limits)`, the radius of the **workspace disc**,
+  `sum(link_lengths) + link_radius`, base at the origin. It takes `Limits`, a
+  property of the robot rather than of its state, so it reads no `q`, no `qd` and
+  no horizon and is the same scalar at every frame of every scenario.
+- the radial projection of `reg.envelope.outer_envelope(state, limits, window)` —
+  a horizon-limited **outer** reachable set, the joint box pushed through the
+  forward kinematics as an interval (issue #82). This one reads all three.
+
+That makes Phase 4 an independent monitor whose bound is **sound in the
+conservative direction and radial.** It over-covers, so nothing inside it is ever
+falsely accused, and every VETO it does emit is real. Until issue #82 the second
+term did not exist and the check was weak enough that the `envelope_overclaim`
+fixture had to declare past the *entire workspace* to trip it; it now fires on a
+declaration reaching further than the robot can get in the window it declared,
+which is the fault a Simplex / ASTM F3269 runtime monitor exists to catch. What
+remains uncaught is the **angular** half — a region of a reachable radius in a
+direction the robot cannot turn to in time. The polygon that would catch those is
+computed, and its area and radius are retained beside every envelope in the
+artifact as the other side of the bracket; using it for containment rather than
+for its radius re-labels three of the five fault fixtures as overclaims, so it is
+a decision about the taxonomy rather than a tightening. A tighter *construction*
+again is the zonotope machinery of ARMTD and ARMOUR ([`docs/prior-art.md`
+§4](prior-art.md)), which this plan still de-scopes. Recorded as
+[`docs/limitations.md`](limitations.md) §3; `reg/enforce.py`'s module header is
+the authority on the reasoning.
 
 The other eight faults in the taxonomy below are unaffected by this: staleness,
 replay, MAC, vocabulary, watchdog and the declaration/action mismatch are each

@@ -72,7 +72,7 @@ set.
 
 ---
 
-## 2. The envelope is an under-approximation, not an over-approximation
+## 2. The envelope the graph records is an under-approximation
 
 Stated here because [`docs/prior-art.md` §4](prior-art.md) requires it to be, in the
 right vocabulary, and because a reader who meets the word "envelope" will assume the
@@ -80,48 +80,96 @@ safety-relevant direction.
 
 `reg.envelope.compute_envelope` samples a finite set of constant-acceleration
 control sequences, forward-integrates each, and unions the bodies they pass through.
-A finite sample can only **under-cover** the true forward reachable set. So:
+A finite sample can only **under-cover** the true forward reachable set. That is the
+polygon `HAS_ENVELOPE` points at, the one `envelope_hash` covers, and the one every
+`INTERSECTS` interval was measured against, and it is unchanged by anything below:
+the evidence graph records the region the robot *demonstrably swept*.
 
-- "the robot **could have** reached (x, y)" is supported;
-- "the robot **could not have** reached (x, y)" is **not**, and no query in this
-  project may be read that way.
+**What issue #82 changed, precisely.** There is now a second region —
+`reg.envelope.outer_envelope(state, limits, horizon)` — which over-covers: the
+horizon-limited joint box pushed through the forward kinematics as an interval, so
+every configuration the arm can reach in the window has its body inside it. It is
+**not** stored as geometry and does not replace anything. What the artifact retains
+of it is two scalars per computed envelope, `outer_area` and `outer_radius`, which
+bracket the sampled area from the other side.
+`tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+is what makes it a bound rather than an estimate, and it ships with the negative
+that proves the test can fail.
 
-A safety guarantee needs the opposite direction — an over-approximation (outer
-approximation), where the true reachable set is contained in the computed one — and
-getting it requires the zonotope and polynomial-zonotope machinery of **ARMTD** and
-**ARMOUR** rather than sampling ([`docs/prior-art.md` §4](prior-art.md)).
-[`docs/plan.md`](plan.md) de-scopes an outer-approximative solver deliberately: this
-is a demonstration of the *evidence structure*, and every claim built on the
-envelope inherits this limitation. `reg.envelope`'s module docstring lists three
-further sources of under-coverage (substep sampling, flat link caps,
-constant-accelerations only) and is the authority on them.
+So the statement about *this* project's answers, in the two directions:
+
+- "the robot **could have** reached (x, y)" — supported, as before, from the
+  sampled envelope: every point in it is reachable.
+- "the robot **could not have** reached (x, y)" — now supported **for a point
+  outside the outer set**, which for a retained frame means *at a radius greater
+  than `outer_radius`* from the base. The artifact stores the outer set's radius
+  and area, not its boundary, so the answer a *stored* row alone gives is radial.
+  The full region is recomputable from the `robot_config` and `horizon` the row
+  already names, at which point the answer is the region's, not the disc's; that
+  recomputation inherits §1's dependence on the geometry library exactly as the
+  inner one does.
+- Between them lies the gap the bracket makes visible rather than closes: a point
+  inside the outer set and outside the sampled one is one the artifact says
+  nothing about.
+
+**What a tighter version would need.** The interval push-forward here is looser
+than the zonotope and polynomial-zonotope machinery of **ARMTD** and **ARMOUR**
+([`docs/prior-art.md` §4](prior-art.md)), which [`docs/plan.md`](plan.md) still
+de-scopes, and it is kinematic: `qdd_max` stands in for a torque limit and there is
+no dynamics model behind it. `reg.envelope`'s module docstring lists the three
+further sources of under-coverage in the *inner* set (substep sampling, flat link
+caps, constant-accelerations only) and the four steps of the outer construction,
+and is the authority on both.
 
 ---
 
-## 3. The bound enforcement checks declarations against is the whole workspace
+## 3. The overclaim check is radial: it bounds how far, not which way
 
 Stated here because a reader meets the phrase "the independently computed physical
 bound" in [`docs/plan.md`](plan.md) Phase 4 and in `reg.enforce`'s fault taxonomy,
 and will reasonably read it as *what this robot could reach from here* — a
-reachable set. It is not one.
+reachable set. It is a disc around one.
 
-**What.** `reg.enforce.computed_bound(limits)` is the radius of the **workspace
-disc**: `sum(link_lengths) + link_radius`, centred on the base, which
-`reg.kinematics` fixes at the origin. Its argument is `Limits`, a property of the
-robot rather than of its state, so the bound reads no `q`, no `qd` and no horizon,
-and is the same scalar at every frame of every scenario.
-`reg.enforce.envelope_excess` tests a declared region against that disc, exactly —
-a disc is convex, so a polygon lies inside it iff every vertex does.
+**What.** `reg.enforce.horizon_bound(state, limits, window)` is the radius the
+check uses, and it is the smaller of two things:
 
-**The cost.** The `envelope_overclaim` fault fires only on a declaration that
-exceeds the **entire workspace**. A policy that declares a region it could never
-occupy within the declaration's horizon — the fault a Simplex / ASTM F3269 runtime
-monitor exists to catch — passes the check as long as the region fits inside the
-disc, and enforcement emits PERMIT. The fixture is built accordingly: a 0.88 m
-body padded to 1.13 m against a 0.95 m disc
-(`reg/scenarios.py`, `envelope_overclaim`). What the check demonstrates is the
-*structure* — an independent bound, computed from Layer A alone, that can veto a
-declaration and leave signed evidence of the refusal — not a tight one.
+- `computed_bound(limits)`, the radius of the **workspace disc** —
+  `sum(link_lengths) + link_radius`, centred on the base that `reg.kinematics`
+  fixes at the origin. Its argument is `Limits` alone, so it reads no `q`, no `qd`
+  and no horizon and is the same scalar at every frame of every scenario.
+- `outer_radius(outer_envelope(state, limits, window))`, the radial projection of
+  the horizon-limited outer reachable set of §2 — which does read the state and the
+  window.
+
+The containment test against it is exact: a disc is convex, so a polygon lies
+inside it iff every vertex does, and no polygonal rendering of a circle enters the
+comparison.
+
+**What issue #82 closed.** Before it, only the first bound existed, and
+`envelope_overclaim` therefore fired only on a declaration exceeding the **entire
+workspace**. The fault a Simplex / ASTM F3269 runtime monitor exists to catch — the
+policy declared more than it could occupy within the horizon — was undetectable.
+It is now detected whenever the overclaim is *radial*: an arm folded at the elbow,
+or one whose velocity bound will not carry it to full extension within the window,
+is bounded well inside the disc, and a declaration reaching between the two is
+vetoed.
+`tests/test_enforce.py::test_envelope_overclaim_fires_on_a_region_inside_the_workspace_disc`
+is that case, with the positive control beside it: the same declaration offered
+from a pose that *can* honour it is accepted.
+
+**The cost, which is what remains.** The bound is a radius, so an overclaim that is
+**angular** rather than radial is still undetected — a region of a reachable radius
+in a direction the robot cannot turn to inside the window. `outer_envelope` is the
+polygon that would catch those and it is computed; using it for *containment*
+rather than for its radius is a decision issue #82 leaves open, not an oversight,
+and the reason is measurable: against the eleven fixtures, the polygon test
+re-labels three of the five fault runs as overclaims. `declared_violation`'s
+declared joint box spans an elbow range the arm cannot sweep in half a second, and
+`stale_declaration` and `escalation_failure` declare regions covering the frames
+their silent windows stretch past their stated horizon. Each of those is arguably a
+real overclaim; the point is that adopting the polygon test changes what a fault in
+the nine-fault taxonomy *means*, and [`docs/prior-art.md` §5](prior-art.md) cites
+that taxonomy as a contribution. Changing a fault's meaning is not a refactor.
 
 Two things this limitation is **not**:
 
@@ -132,26 +180,29 @@ Two things this limitation is **not**:
   `tests/test_enforce.py`. It is the *capability* that is limited, not the
   separation. Softening the import rule to buy a tighter bound would trade the
   mechanism for the measurement.
-- **It is not unsound.** The disc over-covers the true reachable set, so no
-  truthful declaration is ever vetoed by this check — the error is entirely in the
-  permissive direction, which is the correct direction for something whose
-  response is VETO. Comparing against `reg.envelope.compute_envelope` instead
-  would be the tempting move and the wrong one: §2 above is an
-  *under*-approximation, and a declaration larger than a sampled envelope is the
-  expected result for an honest policy, so vetoing on it would cry wolf.
-  The other eight faults in the taxonomy — staleness, replay, MAC, vocabulary,
-  watchdog, no-declaration, escalation failure and the declaration/action mismatch
-  — are decided against the record, not against a reachability bound, and none of
-  them inherits this.
+- **It is not unsound.** Both terms over-cover the true reachable set and the
+  minimum of two sound bounds is sound, so no truthful declaration is ever vetoed
+  by this check — the error is entirely in the permissive direction, which is the
+  correct direction for something whose response is VETO. Comparing against
+  `reg.envelope.compute_envelope` instead would be the tempting move and the wrong
+  one: that is the *under*-approximation of §2, and a declaration larger than a
+  sampled envelope is the expected result for an honest policy, so vetoing on it
+  would cry wolf. The other eight faults in the taxonomy — staleness, replay, MAC,
+  vocabulary, watchdog, no-declaration, escalation failure and the
+  declaration/action mismatch — are decided against the record, not against a
+  reachability bound, and none of them inherits this.
+- **It is not a bound the enforcer can skip.** `Enforcer.offer` takes the
+  proprioceptive state as a required second argument, with no default: the tighter
+  bound is a function of where the arm is and how fast it is moving, and an
+  enforcer that invented a state would compute a plausible bound for a robot that
+  was somewhere else.
 
-**What a claim would need instead.** A horizon-limited **outer** approximation of
-the reachable set: the zonotope and polynomial-zonotope machinery of ARMTD and
-ARMOUR ([`docs/prior-art.md` §4](prior-art.md)), the same thing §2 needs and for
-the same reason. With one, `envelope_overclaim` would become a meaningful check
-and §2's restriction on *could not have reached* would lift together with it.
-Without one, the supportable claim is exactly: **an overclaim is detected iff the
-declared region leaves the workspace disc.** `reg/enforce.py`'s module header is
-the authority on why the loose bound was chosen over an unsound tight one.
+**What the supportable claim now is, exactly.** *An overclaim is detected iff the
+declared region reaches further from the base than the robot can, within the window
+the declaration itself states.* The angular half is what a tighter version would
+add, and the tighter version is already computed — see the paragraph above for why
+adopting it is a decision rather than a step. `reg/enforce.py`'s module header is
+the authority on why a loose sound bound is preferred to a tight unsound one.
 
 ---
 

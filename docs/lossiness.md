@@ -120,6 +120,19 @@ Each entry is a claim that the graph can be tested against.
    says less. All three sources are retained separately; a clamp is only legible if
    the declared and the computed bound both survive.
 
+   **And the other side of the bracket, on a `computed` row (issue #82).**
+   `outer_area` and `outer_radius` are the area and radius of the horizon-limited
+   **outer** reachable set for the same frame — `reg.envelope.outer_envelope`,
+   which over-covers, against an `area` column that under-covers. Without them
+   "how good is the sampled envelope" is a question the artifact cannot answer at
+   all, only a benchmark can, and only for a run somebody still has. Sixteen bytes
+   a row buys it. What is *not* retained is that region's geometry — it is a
+   deterministic function of the `robot_config` and the `horizon` the row already
+   names, so storing its WKB would store the same information twice, once cheaply
+   and once expensively (the same argument as #9 below). A `declared` or `clamped`
+   row carries neither: neither is a reachable set, and a number invented for them
+   would be indistinguishable downstream from one something computed.
+
    Two narrower clauses sit under this one and both are in *Discarded*, because both
    are things the contract could have kept and does not: **which frames get a row at
    all** is #10, and **which of those rows carry the polygon** is #9.
@@ -313,7 +326,7 @@ outlived its own premise: *how coarse can the evidence get before it stops
 answering the question?* The resolution levels below are what answer it, and
 they turn out to be **where the compression argument actually lives** — a
 measured **264 GB** per robot per six months at occurrence resolution against a
-projected 182.5 TB of sensor log, i.e. ~692x (`docs/plan.md` Claim 1; measured
+projected 182.5 TB of sensor log, i.e. ~691x (`docs/plan.md` Claim 1; measured
 2026-08-20 at seed 0, and the sensor rate is an assumption with a sourced range
 and a sensitivity table, [`sensor-baseline.md`](sensor-baseline.md)). It lives
 there **less comfortably than the provisional 18.9 GB suggested**: that figure
@@ -502,11 +515,21 @@ plausible interpolated number.
 2. **Anything about entities outside the entity set.** An object nobody declared as
    an entity leaves no trace. Absence of an entity from the graph is not evidence of
    its absence from the room.
-3. **Whether the *true* reachable set contained a point the computed envelope
-   excluded.** The envelope is a sampling-based **under-approximation**
-   ([`docs/prior-art.md` §4](prior-art.md)); "the robot could not have reached
-   (x, y)" is not a claim this artifact supports. Only the positive direction —
-   "the robot could have reached it" — is.
+3. **Whether the *true* reachable set contained a point between the sampled
+   envelope and the outer one.** The envelope the graph's geometry records is a
+   sampling-based **under-approximation** ([`docs/prior-art.md`
+   §4](prior-art.md)), so "the robot could have reached (x, y)" is supported for
+   any point inside it and nothing follows from a point outside it.
+
+   **Narrowed 2026-08-21 (issue #82).** Every `computed` row now also carries
+   `outer_radius`, the radius of a horizon-limited **outer** reachable set for
+   that frame, which over-covers. So "the robot could **not** have reached
+   (x, y)" *is* supported for a point further from the base than that radius —
+   a claim this artifact previously could not make in any form. What stays
+   unanswerable is the gap between the two: a point inside the outer set and
+   outside the sampled one. The bracket makes the gap visible; it does not close
+   it. [`docs/limitations.md`](limitations.md) §2 is the authority on which
+   direction is supported at which radius.
 4. **Metric differences finer than the tolerances.** "Was the human 4 mm closer at
    t₁ than at t₂?" is below `DISTANCE_TOL_M` and unanswerable, not false.
 

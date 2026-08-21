@@ -36,7 +36,7 @@ insurer.
 > because the benchmark showed the graph is ~13x *larger* per frame than a
 > gzipped proprioception stream. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
-> answers no audit question. Against a *sensor* log the artifact is **~692x**
+> answers no audit question. Against a *sensor* log the artifact is **~691x**
 > smaller over a six-month retention period at occurrence resolution (264 GB vs
 > 182.5 TB per robot). That is two orders of magnitude and not three: the
 > earlier ~9,900x was measured before the artifact carried any Layer A record
@@ -190,12 +190,12 @@ Per robot, from the measured resolution curve:
 | retained at | per robot, 6 months | fleet of 100 |
 |---|---|---|
 | **occurrence (±1 s, DSSAD-shaped)** | **264 GB** | 26.4 TB |
-| transition (10 ms) | 655 GB | 65.5 TB |
-| per-frame (10 ms) | 952 GB | 95.2 TB |
+| transition (10 ms) | 656 GB | 65.6 TB |
+| per-frame (10 ms) | 953 GB | 95.3 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
-Each is the measured `bytes/hour` for that level — 60.23, 149.59 and
-217.45 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
+Each is the measured `bytes/hour` for that level — 60.29, 149.72 and
+217.57 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
 one of those three figures is a figure at 50 Hz**, which is what
 `reg.scenarios.DEFAULT_DT` runs at, and all three are **linear in that rate**:
 enforcement emits one verdict and one chain record per commanded action and no
@@ -203,7 +203,7 @@ resolution level coarsens them. A real manipulator control loop runs at 1 kHz.
 That is measured, not asserted — see *The control rate* below and
 [`sensor-baseline.md`](sensor-baseline.md).
 
-At occurrence resolution the artifact is **~692x smaller** than the sensor
+At occurrence resolution the artifact is **~691x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
 two-order band, and **short of three**. The artifact side of that comparison is
 measured. The sensor side is an **assumption with a sourced range**, set out in
@@ -241,7 +241,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.23 MB/h → 264 GB → ~692x** | 149.59 MB/h → 655 GB → ~279x | 217.45 MB/h → 952 GB → ~192x |
+| **50 Hz (this simulator, published above)** | **60.29 MB/h → 264 GB → ~691x** | 149.72 MB/h → 656 GB → ~278x | 217.57 MB/h → 953 GB → ~192x |
 | 100 Hz | 106.14 MB/h → 465 GB → ~393x | 245.96 MB/h → 1.08 TB → ~169x | 409.33 MB/h → 1.79 TB → ~102x |
 | 250 Hz | 246.70 MB/h → 1.08 TB → ~169x | 527.82 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
 | **1 kHz (a real manipulator)** | **950.55 MB/h → 4.16 TB → ~44x** | 1.94 GB/h → 8.49 TB → ~22x | 4.26 GB/h → 18.65 TB → ~10x |

@@ -326,7 +326,7 @@ outlived its own premise: *how coarse can the evidence get before it stops
 answering the question?* The resolution levels below are what answer it, and
 they turn out to be **where the compression argument actually lives** — a
 measured **264 GB** per robot per six months at occurrence resolution against a
-projected 182.5 TB of sensor log, i.e. ~692x (`docs/plan.md` Claim 1; measured
+projected 182.5 TB of sensor log, i.e. ~691x (`docs/plan.md` Claim 1; measured
 2026-08-20 at seed 0, and the sensor rate is an assumption with a sourced range
 and a sensitivity table, [`sensor-baseline.md`](sensor-baseline.md)). It lives
 there **less comfortably than the provisional 18.9 GB suggested**: that figure

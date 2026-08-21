@@ -242,9 +242,9 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
 | **50 Hz (this simulator, published above)** | **60.29 MB/h → 264 GB → ~691x** | 149.72 MB/h → 656 GB → ~278x | 217.57 MB/h → 953 GB → ~192x |
-| 100 Hz | 106.14 MB/h → 465 GB → ~393x | 245.96 MB/h → 1.08 TB → ~169x | 409.33 MB/h → 1.79 TB → ~102x |
-| 250 Hz | 246.70 MB/h → 1.08 TB → ~169x | 527.82 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
-| **1 kHz (a real manipulator)** | **950.55 MB/h → 4.16 TB → ~44x** | 1.94 GB/h → 8.49 TB → ~22x | 4.26 GB/h → 18.65 TB → ~10x |
+| 100 Hz | 106.45 MB/h → 466 GB → ~391x | 246.33 MB/h → 1.08 TB → ~169x | 409.70 MB/h → 1.79 TB → ~102x |
+| 250 Hz | 247.13 MB/h → 1.08 TB → ~169x | 528.44 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
+| **1 kHz (a real manipulator)** | **951.65 MB/h → 4.17 TB → ~44x** | 1.94 GB/h → 8.50 TB → ~21x | 4.26 GB/h → 18.66 TB → ~10x |
 
 The `MB/h` column is measured. The six-month size is that figure times the 4,380
 hours in the retention floor, and the ratio is against the **assumed** 182.5 TB
@@ -253,7 +253,7 @@ sensor log — an assumption, unchanged, at 1 TB/day
 
 **So the two-order claim is a claim about the control rate as well as about the
 sensor rate, and at 1 kHz it does not hold.** At occurrence resolution a 1 kHz
-robot retains **4.16 TB** for the mandated six months and the artifact is
+robot retains **4.17 TB** for the mandated six months and the artifact is
 **~44x** below the assumed sensor log — **one order of magnitude, not two**. The
 band survives at 250 Hz (~169x) and is gone by 1 kHz; where between those two it
 goes is not measured and is therefore not quoted. **The assumption was not

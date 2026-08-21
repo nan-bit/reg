@@ -28,7 +28,7 @@ value of the flag that makes the output claim to have measured a robot.
 | **Assumed** | 1 TB/day of raw sensor log, continuous |
 | **Sourced range** | ~0.02 – 21 TB/day depending on sensor suite and duty cycle |
 | **Where 1 TB/day sits in it** | low end — below every cited continuous-logging configuration |
-| **Retention window** | 182.5 days (EU AI Act Art. 12 six-month floor) |
+| **Retention window** | 182.5 days (EU AI Act six-month floor: Art. 19 providers, Art. 26(6) deployers — *not* Art. 12, which sets no period) |
 | **Implied continuous rate** | 11.6 MB/s over 24 h, or 34.7 MB/s over an 8-hour shift |
 
 ## Sources

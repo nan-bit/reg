@@ -139,7 +139,12 @@ Build in order. Each is independently shippable.
 
 **The commercial argument, stated as it should have been.** What matters to a
 buyer is not a ratio, it is the absolute cost of retaining evidence for as long
-as the law requires it. EU AI Act Article 12 sets that floor at six months.
+as the law requires it. The EU AI Act sets that floor at six months — in
+**Article 19** for providers and **Article 26(6)** for deployers; Article 12 is
+record-keeping and sets no period. (This read "Article 12 sets that floor"
+until 2026-08-21. `README.md` and this document's own regulatory table always
+cited it correctly; the slip was under the headline number, which is where it
+would have been read.)
 Per robot, from the measured resolution curve:
 
 > **Measured 2026-08-20 (issue #60). These replace the provisional figures.**

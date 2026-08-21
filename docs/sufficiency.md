@@ -100,7 +100,7 @@ Layer A question can be unanswerable at a coarse level: the occurrence view hold
 **zero** edge rows, so nothing about the envelope survives into it and the
 reachability question dies there despite being certifiable. A Layer B question can
 be perfectly answerable at the coarsest level: *did the robot contact the human*
-is answered from a DSSAD-shaped occurrence flag at 60.05 MB/h — a figure **at a
+is answered from a DSSAD-shaped occurrence flag at 60.23 MB/h — a figure **at a
 50 Hz control rate**, and **linear in it** — and is still only as strong as
 whatever said where the human was.
 
@@ -126,9 +126,9 @@ with `python -m reg.bench --resolution`:
 
 | level | ts res | SQLite B | bytes/hour @ 50 Hz | nodes | edges | occ | records |
 |---|---|---|---|---|---|---|---|
-| `occurrence` | 1.0 s | 1,000,448 | **60.05 MB/h** | 3,166 | 0 | 42 | 3,120 |
-| `transition` | 0.01 s | 2,490,368 | **149.47 MB/h** | 5,869 | 9,723 | 0 | 3,120 |
-| `per-frame` | 0.01 s | 3,620,864 | **217.32 MB/h** | 5,869 | 18,430 | 0 | 3,120 |
+| `occurrence` | 1.0 s | 1,000,448 | **60.23 MB/h** | 3,166 | 0 | 42 | 3,120 |
+| `transition` | 0.01 s | 2,490,368 | **149.59 MB/h** | 5,869 | 9,723 | 0 | 3,120 |
+| `per-frame` | 0.01 s | 3,620,864 | **217.45 MB/h** | 5,869 | 18,430 | 0 | 3,120 |
 
 The rate is in the column heading because the column is **linear in it**:
 enforcement emits one verdict and one chain record per commanded action and no
@@ -194,7 +194,7 @@ not omitted, and it is not softened into a claim.
 | 2 | Did the policy exceed its declared bound? (`violations(window)`) | **A** — [`docs/lossiness.md`](lossiness.md) supported-question set, query 6. No entity is named by a declaration or a verdict | **occurrence** — AGREE at every level. The record tables survive all three views intact, so this is the rare question the coarsest artifact answers in full | **certifiable**, and measured |
 | 3 | What did the policy declare at t? (`declared_bound(t)`) | **A** — same, query 5 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level states no declaration in force at t=30.0"), because the region a declaration names lives in the `edge` and `envelope` tables the occurrence view empties; transition and per-frame: AGREE | **certifiable**, and measured |
 | 4 | Was the record tampered with? (`verify_chain()`) | **A** — same, query 8. A hash chain and a MAC over records that name no entity | **occurrence** — AGREE at every level, walked under `measurement_keyring` over 3,120 chain records. Negative tests feed it a truncated chain, an altered record and a missing key | **certifiable**, and measured |
-| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 60.05 MB/h at 50 Hz. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
+| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 60.23 MB/h at 50 Hz. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
 | 6 | How close did the robot get to the human? (`min_separation`) | **B** — `SEPARATION` is `EdgeSpec("B", "RobotConfig", "Entity", "min_distance")`; `closest_approach` is `OccurrenceSpec("B", "entity", "min_distance_m")` | **occurrence** — AGREE, Δ 0.0007 m against a 0.01 m (`DISTANCE_TOL_M`) predicate | **only as strong as perception** |
 | 7 | Was the human inside the reachable set, and when did it first enter? (`first_envelope_intersection`) | **B** — `INTERSECTS` is `EdgeSpec("B", "Envelope", "Entity", "overlap_area")` | **transition** — `reg.query` declares it `answerable_from={edge}`: the occurrence layer locates entry only to ±1.0 s and carries no overlap area, so it cannot produce the intervals this query returns. Agreement **unmeasured**, for the same envelope-ground-truth reason as row 1 | **only as strong as perception** |
 | 8 | Which entities were inside the envelope during [t₀, t₁]? (`reachable_entities`) | **B** — `INTERSECTS`, as above | **transition** — `answerable_from={edge}`. The predicate is exact set equality with no tolerance to spend, and membership derived from ±1.0 s events would be exact-looking and wrong at the edges. Agreement **unmeasured**, as row 1 | **only as strong as perception** |
@@ -316,7 +316,7 @@ measures the sustained case coming back `AGREE` at the same 1.0 s. Whether a
 coarse timestamp suffices is a property of the event, not of the recorder.
 
 So this row carries both qualifiers: it is conditional on perception **and** it is
-conditional on retaining 149.47 MB/h instead of 60.05 — both figures **at a 50 Hz
+conditional on retaining 149.59 MB/h instead of 60.23 — both figures **at a 50 Hz
 control rate**, and both linear in it, so the retention this row asks for scales
 with the loop the robot runs. The two qualifiers are independent, and a deployment
 could fail either one on its own.

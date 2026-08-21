@@ -1541,7 +1541,17 @@ def _rate_build(tmp_path_factory, dt: float) -> tuple[Path, Path, object]:
     tmp = tmp_path_factory.mktemp(f"rate-{1.0 / dt:g}hz")
     csv = _scenario_stream(scn, dt, tmp / "near_miss.csv")
     out = tmp / "near_miss.sqlite"
-    build(csv, out, scn.world.limits, human_radius=scn.world.human_radius, **_FAST)
+    build(
+        csv,
+        out,
+        scn.world.limits,
+        human_radius=scn.world.human_radius,
+        # Required since issue #83; this helper predates it. The same
+        # TEST_IDENTITY every other build in this file uses, so runs stay
+        # comparable rather than differing in a field nobody set on purpose.
+        identity=TEST_IDENTITY,
+        **_FAST,
+    )
     return csv, out, scn
 
 
@@ -2031,7 +2041,7 @@ def test_cli_says_so_when_the_stream_is_faster_than_the_time_quantum(
     out = tmp_path / "fast.sqlite"
     code = graph.main(
         ["build", str(csv), "--out", str(out), "--horizon", "0.1",
-         "--n-samples", "4", "--substep-dt", "0.05"]
+         "--n-samples", "4", "--substep-dt", "0.05", *IDENTITY_ARGV]
     )
     assert code == 0
     assert out.exists()

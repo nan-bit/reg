@@ -30,6 +30,7 @@ import pytest
 from shapely.geometry import Point
 
 from reg import graph, store
+from reg.identity import RunIdentity
 from reg.envelope import envelope_hash, envelope_layer
 from reg.stream import write_frames
 from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
@@ -55,7 +56,22 @@ SSM_LIMITS = Limits(**_BOUNDS, source=LimitSource.DERIVED)
 
 #: Coarse envelope parameters — 4 samples is the corner count for a two-link
 #: arm. These tests are about the layer tag, not envelope fidelity.
-_FAST = {"horizon": 0.1, "n_samples": 4, "seed": 0, "substep_dt": 0.05}
+#: `identity` is required by `graph.build` since issue #83 — an artifact that
+#: cannot say which robot or which shift cannot be handed to anyone. These
+#: tests are about the Layer A/B boundary and not about identity, so they
+#: declare one and move on.
+_IDENTITY = RunIdentity.declare(
+    run_start="2026-08-21T09:00:00Z",
+    unit_id="unit-layer-boundary",
+    operator_id="op-test",
+)
+_FAST = {
+    "horizon": 0.1,
+    "n_samples": 4,
+    "seed": 0,
+    "substep_dt": 0.05,
+    "identity": _IDENTITY,
+}
 _HUMAN_RADIUS = 0.3
 
 

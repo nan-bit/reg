@@ -89,11 +89,16 @@ def test_the_front_page_still_quotes_a_retention_size_and_a_ratio() -> None:
 
 def test_a_drifted_figure_is_caught() -> None:
     """The negative test: feed it the condition it guards against."""
+    # 265 GB is deliberately not a figure this project publishes. It was 264 GB
+    # here until issue #83 made 264 the real one, at which point this negative
+    # test started asserting that a true figure was drift. A negative whose
+    # fixture drifts into the truth stops testing anything, so the value has to
+    # be one nothing can legitimately produce.
     verdict, missing = check(
-        "the artifact is **264 GB** per robot for six months", PLAN.read_text()
+        "the artifact is **265 GB** per robot for six months", PLAN.read_text()
     )
     assert verdict == DISAGREE
-    assert missing == ["264 GB"]
+    assert missing == ["265 GB"]
 
 
 def test_a_drifted_ratio_is_caught() -> None:

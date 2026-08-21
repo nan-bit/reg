@@ -114,9 +114,37 @@ If a task doesn't serve one of the four claims, cut it.
 
 ## The four claims
 
-Build in order. Each is independently shippable.
+**The numbers are identifiers, not a ranking.** They are referenced from 125
+places across this repository, including `reg/` and `tests/`, so they do not
+move. They were assigned in build order, and build order is not argument order —
+reading the numbering as a priority is what let the differentiating claim sit at
+six lines while the supporting one ran to 264.
 
-### Claim 1 — Compression (the commercial argument)
+Argument order is **4, 3, 2, 1**: what the artifact proves, what that proof is
+worth, how you ask it, and what it costs to keep. The sections below stay in
+numeric order so a reference to "Claim 1" still lands where a reader expects; the
+summary in [`README.md`](../README.md) presents them in argument order.
+
+Each is independently shippable.
+
+### Claim 1 — Retention (what it costs to keep, and why that is a supporting claim)
+
+**This section is the longest in the document and that is not a statement of its
+importance.** It is long because it has been wrong twice and the corrections are
+kept in place rather than tidied away — refuted against a baseline that was never
+the claim, then republished against an artifact that turned out to hold no Layer A
+at all. The record of how a number moved is worth more here than a clean
+statement of where it landed, in a project whose argument is that evidence should
+survive its own revision.
+
+**What it now supports.** An attestation you cannot afford to keep until the
+claim is filed is worthless, so retention is the enabling condition for Claim 4
+rather than a rival to it. The property the rest of the argument needs is *cheap
+enough to keep for the mandated window* — not *smaller than the alternative by
+the largest available factor*. That distinction is why the section is named
+Retention and no longer Compression: a ratio is a comparison against a
+counterfactual, and an absolute cost against a legal retention floor is a fact
+about a budget.
 
 **Success, as originally stated:** 2–4 orders of magnitude, one number, one chart.
 
@@ -396,14 +424,76 @@ discard.** A smaller artifact that answered differently would be worthless; this
 one answers the same and is the thing you can still hold when the stream is gone.
 Quote the agreement, mention the speed once, and never lead with it.
 
-### Claim 3 — Sufficiency boundary (the honest one)
-Which claims the proprioception-only layer can support, and which depend on an
-uncertifiable perceiver.
-**Success:** a taxonomy with worked examples of each.
+### Claim 3 — Sufficiency boundary (the strongest surviving novelty)
 
-### Claim 4 — Attestation (the differentiating one)
-Declaration, independent verification, verdict, tamper-evident chain.
-**Success:** the demo sentence answered end to end, as one query.
+**The claim.** Which answers the proprioception-only layer supports on its own
+authority, and which are a conjunction with *the entity was where the artifact
+says it was* — recorded per answer, in the artifact, and queryable afterwards.
+
+**Stated narrowly, because the broad version is taken.** ConSerts (Schneider &
+Trapp) formalised guarantees that hold conditional on runtime evidence supplied
+by components carrying their own assurance, and dynamic safety cases (Denney &
+Pai) update the argument as that evidence arrives —
+[`docs/prior-art.md`](prior-art.md) §13. So the novelty is **not** that a claim
+can be conditional on runtime evidence. It is that **the conditionality of each
+answer is retained with the answer and can be asked about months later**, and
+that the case it handles is the one where no assured component exists or ever
+will. A ConSert discharges a demand against a component's guarantee and withdraws
+the guarantee when it cannot; `reg` answers anyway and marks what the answer
+depends on. *May I act* versus *what may be concluded afterwards*.
+
+**Why it is Layer A that makes this work.** The boundary is enforced by types
+rather than by reviewer discipline — `ProprioState` names no entity, and
+`tests/test_layer_boundary.py` fails if that erodes — and by the schema, where
+`layer` is a column on every edge and every occurrence rather than a caveat in a
+README. The known gap is `Limits`: it is declared Layer A as a property of the
+robot, and under ISO/TS 15066 speed-and-separation monitoring a commanded speed
+bound is a function of measured separation, which would make it perception-derived
+and nothing currently catches that. See [`docs/sufficiency.md`](sufficiency.md) §7.
+
+**Success:** a taxonomy with worked examples of each, normative for what this
+project may claim.
+
+### Claim 4 — Attestation (the one the others exist to support)
+
+**The claim.** After the fact, the artifact can say what the policy committed to,
+what an independent check concluded about it, and whether the record has been
+altered since — and the first two do not come from the same party.
+
+**The mechanism.** A `Declaration` is emitted by the policy side and states a
+bound it intends to stay within. A `Verdict` is emitted by enforcement, which
+recomputes its own bound from the robot's own limits and never reads the declared
+one. Both are chained: every record carries a hash link to its predecessor and a
+keyed MAC, so a deletion or an edit breaks verification at that point and at
+every point after it.
+
+**Why the independence is structural rather than promised.** `reg/enforce.py`
+imports from `declare/` no further than the `Declaration` dataclass, and
+`tests/test_enforce.py` asserts that against the source at the AST level. A
+constraint layer supplied by the same party as the policy has common-cause
+failure with it; widening that import is never a refactor.
+
+**What the independent check actually checks, stated plainly.**
+`computed_bound(limits)` is the radius of the workspace disc —
+`sum(link_lengths) + link_radius`. It takes `Limits`, not a `ProprioState`: no
+`q`, no `q̇`, no horizon, the same scalar at every frame of every run. It is
+sound in the conservative direction, so nothing inside it is ever falsely
+accused, and it is **incomplete**: a declaration that overclaims what the robot
+could reach *within the horizon*, but still fits inside the workspace disc, is
+not detected. The independence is real; the capability is limited. Those are
+different sentences and this document has previously run them together.
+
+**What the chain proves, and what it does not.** It proves the records are
+internally consistent under the keys that signed them. It does not prove no
+record was withheld, and — because the artifact carries no absolute time and no
+external commitment — it does not prove the whole history was not re-issued
+offline by its own author. That is the party a regulator distrusts most. Closing
+it needs a run-start instant recorded as a required input and a commitment of the
+chain heads to something outside the artifact; neither exists yet, and until they
+do this is the **structure** of non-repudiation rather than non-repudiation.
+
+**Success:** the demo sentence answered end to end, as one query, with
+`verify_chain` able to say no — demonstrated by `--tamper`, not asserted.
 
 ---
 

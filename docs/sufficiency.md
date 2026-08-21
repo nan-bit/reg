@@ -403,6 +403,30 @@ work on `reg` raises them.** A finer quantum, a better envelope, a longer chain:
 none of it touches the conjunct that limits them. That asymmetry is the deliverable
 of Claim 3, and it is why the layered structure earns its complexity.
 
+**What that deliverable claims, narrowly.** Conditional assurance is not new and
+this document should not imply it is. **ConSerts** (Schneider & Trapp) formalised
+guarantees that hold conditional on runtime evidence supplied by components
+carrying their own assurance, and **dynamic safety cases** (Denney & Pai) update
+the argument as that evidence arrives — [`docs/prior-art.md`](prior-art.md) §13.
+Against that, two things here are narrow enough to survive:
+
+1. **The conditionality is retained with the answer.** A ConSert resolves at
+   runtime and the resolution is a control decision — *may I act*. Here the
+   dependency is a column on the record, so the question *what did this answer
+   depend on* can be put to the artifact months later, by someone the robot never
+   met. That is a different question — *what may be concluded afterwards* — and it
+   is the one this project exists for.
+2. **The case handled is the one with no assured component.** A ConSert demand is
+   discharged by a component that carries its own assurance; when none can, the
+   guarantee is withdrawn. `reg` has no such component to appeal to and does not
+   withdraw the answer — it answers and marks what the answer rests on, which is
+   the only option available when the perceiver is a learned model that will never
+   carry an assurance argument.
+
+Neither is a claim to have invented conditional assurance. Both are claims about
+what happens to the condition **after** the robot has stopped, which is where this
+document's asymmetry lives.
+
 ---
 
 ## 7. What this document does not claim

@@ -8,29 +8,41 @@ machine inside a bound while it is moving. Very little of it addresses
 reconstruction: someone asking, months later and with the robot long since
 stopped, what the system knew, what it intended, and what constrained it.
 
-That question has a retention problem attached. Full sensor logs from a humanoid
-run to terabytes per day — an assumption with a sourced range, not something this
-project measures — and on an air-gapped site they cannot leave the building at
-all. A scene graph is smaller by about two orders of magnitude: **~694x** at
-occurrence resolution over the six-month retention floor, 263 GB per robot
-against 182.5 TB of sensor log ([`docs/plan.md`](docs/plan.md) Claim 1) — **at a
-50 Hz control rate.** That figure is linear in the rate, because a verdict and a
-chain record are emitted per commanded action: measured at a 1 kHz manipulator
-loop it is 4.16 TB and **~44x**, which is one order of magnitude rather than
-two. The
-artifact side of that is measured; the sensor side is a **projection** from an
-assumed 1 TB/day, sourced and never measured here — the citations and the
-sensitivity analysis are in
-[`docs/sensor-baseline.md`](docs/sensor-baseline.md). For a regulated
-buyer it may be the only representation of an incident you can actually retain,
-export, and hand to an assessor or an insurer — which makes the interesting
-question not how to record everything, but what the smallest record is that still
-answers the questions an assessor will ask.
+**Robotics already has an answer to that.** The Ethical Black Box was proposed in
+2017 by Winfield and Jirotka and drafted as an open standard in 2022 — a
+flight-data-recorder equivalent carried by the robot so an accident can be
+reconstructed ([`docs/prior-art.md`](docs/prior-art.md) §11). `reg` is that idea
+with three things changed, and each is checkable against their published draft:
 
-`reg` is a prototype of that record, in two halves: a temporal scene graph that
-answers post-hoc audit questions without replaying raw sensor logs, and a
+1. **The record is not the robot's self-report.** An EBB is passive: everything in
+   it arrives on the authority of the system under investigation. Here, what the
+   policy *declared* it would do and what an independent check *concluded* are
+   separate records, computed and signed by different parties. When they disagree,
+   the artifact says which one was wrong.
+2. **Integrity is a keyed hash chain**, not a per-record checksum. The EBB draft's
+   `chkS` is an unkeyed 64-bit non-cryptographic value covering a single record,
+   with no link between records — delete a run of records and every remaining
+   checksum still verifies.
+3. **It is built for the six months *after* an incident**, not the hours before
+   it. An EBB is a ring buffer; the 2017 paper's own arithmetic is roughly three
+   hours on a 1 TB drive. The window that matters for liability is the retention
+   period, and that is a different engineering problem.
+
+Keeping the record that long is what makes it practical rather than theoretical,
+and it is measured rather than asserted: **263 GB** per robot for six months at a
+50 Hz control loop, **4.16 TB** at 1 kHz, against an assumed 1 TB/day sensor log —
+roughly **44x** smaller at the realistic rate ([`docs/plan.md`](docs/plan.md)
+Claim 1). The artifact side is measured; the sensor side is a **projection** from
+a sourced assumption and is never measured here
+([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). *Cheap enough to keep* is
+the only property the rest of the argument needs from it.
+
+`reg` is a prototype of that record, in two halves: a
 declaration-and-attestation protocol between an unbounded policy and a bounded
-enforcement layer, with a tamper-evident record of every exchange between them.
+enforcement layer, with a tamper-evident record of every exchange between them —
+and a temporal scene graph that answers post-hoc audit questions without
+replaying raw sensor logs. The attestation half is what the sentence below turns
+on; the scene graph is what makes the answers specific.
 Everything in the project serves one sentence:
 
 > The model declared it would stay inside this bound. Here is where it tried to
@@ -59,10 +71,13 @@ repository as it stands, not the plan.
 
 | | Claim | Status |
 |---|---|---|
-| **1** | **Compression** — evidence graph vs. raw logged state, one size ratio per scenario | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **263 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~694x** below an assumed 182.5 TB sensor log **at a 50 Hz control rate** — and **4.16 TB**, **~44x**, at a 1 kHz one, because a verdict and a chain record are emitted per commanded action. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: roughly 13x *larger* per frame than a gzipped copy of the nine-float stream, published beside it because that is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
-| **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
-| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim: which audit questions the artifact answers on its own authority and which are only as strong as whatever supplied the entity positions |
 | **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no |
+| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim: which audit questions the artifact answers on its own authority and which are only as strong as whatever supplied the entity positions |
+| **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
+| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **263 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~694x** below an assumed 182.5 TB sensor log **at a 50 Hz control rate** — and **4.16 TB**, **~44x**, at a 1 kHz one, because a verdict and a chain record are emitted per commanded action. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: roughly 13x *larger* per frame than a gzipped copy of the nine-float stream, published beside it because that is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
+
+The number is an identifier, not a rank — it is referenced from 125 places in this repository and does not move. The **order** is the argument: what the artifact proves, what that proof is worth, how you ask it, and what it costs to keep.
+
 
 ## The honesty note: this is the structure of non-repudiation, not non-repudiation
 
@@ -108,8 +123,10 @@ the full treatment, including what this project must *not* claim as novel.
 
 The gap: ISO 25785-1 will specify what the *robot* must do and UL 4600 specifies
 how to structure the *evidence*. Nothing specifies what the model must **emit** so
-an OEM can build its safety case. Automated driving has a mandated evidence
-recorder; robotics has none.
+an OEM can build its safety case. Automated driving has a **mandated** evidence
+recorder; robotics has a **proposal** — the Ethical Black Box, above — and no
+mandate. The distinction matters: a proposal is something to build on, and a
+mandate is what makes someone build.
 
 ## How to run
 

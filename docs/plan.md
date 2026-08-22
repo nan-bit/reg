@@ -740,7 +740,7 @@ The 61784-3 pattern applied to semantics rather than transport.
 | **No declaration** | Actuation with no open valid declaration | VETO |
 | **Stale declaration** | `t_now > t_issued + horizon` | VETO, require re-declaration |
 | **Declaration/action mismatch** | Commanded action outside the declared envelope | CLAMP to declared bound |
-| **Envelope overclaim** | Declared envelope exceeds the independently computed physical bound — the static workspace disc, so an overclaim that fits inside the workspace is **not** detected | VETO the declaration itself |
+| **Envelope overclaim** | Declared envelope exceeds `horizon_bound` — the smaller of the static workspace disc and the radial projection of the horizon-limited outer reachable set (#82). Catches the **radial** half: a folded arm, or one whose velocity bound will not carry it to full extension in the window, has a bound well inside the disc. The **angular** half is still undetected — a region of reachable radius in a direction the robot cannot turn to in time. The polygon that would catch it is computed and retained; using it for containment is a held decision | VETO the declaration itself |
 | **Out-of-vocabulary action** | `action_class` not in schema | VETO |
 | **Unattributed** | MAC verification fails | VETO |
 | **Replay / reorder** | `seq` reuse or regression | VETO |

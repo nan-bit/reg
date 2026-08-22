@@ -34,7 +34,9 @@ insurer.
 > **Amended twice on 2026-08-19; read the second amendment. Re-measured
 > 2026-08-20.** The clause "orders of magnitude smaller" was struck that morning,
 > because the benchmark showed the graph is ~13x *larger* per frame than a
-> gzipped proprioception stream. It was restored the same day, because that
+> gzipped proprioception stream — **measured on an artifact holding no Layer A**;
+> the artifact this project ships carries the record stream and is ~41x larger,
+> which is the figure Claim 1 publishes. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
 > answers no audit question. Against a *sensor* log the artifact is **~691x**
 > smaller over a six-month retention period at occurrence resolution (264 GB vs
@@ -251,10 +253,37 @@ hours in the retention floor, and the ratio is against the **assumed** 182.5 TB
 sensor log — an assumption, unchanged, at 1 TB/day
 ([`sensor-baseline.md`](sensor-baseline.md)).
 
+**Two of those rungs are above the artifact's own declared domain of validity, and
+that is stated here rather than two documents away.**
+`reg.tolerances.TIME_BASE_MAX_RATE_HZ` is 100 Hz — the reciprocal of `TIME_TOL_S`
+— and above it several control frames share one addressable instant, so a
+per-frame value read back out of an interval is the value of whichever frame
+opened it ([`limitations.md`](limitations.md) §5). The 250 Hz and 1 kHz rows are
+real retention costs a real manipulator really pays, and they are what a reader
+should budget from; what they are not is rates at which every per-frame query
+answers inside its published tolerance. The `DISAGREE` below is the same fact
+arriving from the other side. Wherever these two rungs are quoted, §5 is quoted
+with them.
+
+**They are also not pinned, and this is the record of that decision (issue #98).**
+`tests/test_published_figures.py` re-measures the published curve on every CI run
+and compares it against the tables in this repository — but only the **50 Hz**
+row, which is the curve it builds. Extending it to the ladder means running
+`--control-rate-hz 50,100,250,1000` in the test session, and the 1 kHz point alone
+is twenty times the frames of the pinned build, for rows that can only move when
+the 50 Hz row moves: every one of them is the same curve at a different `dt`.
+**The decision is to leave the pin where it is and to stop the unpinned rungs
+being quoted as though they were pinned** — the ladder is a manual measurement,
+dated and commanded in the blockquote above, and `README.md` now says so in the
+same breath as it quotes the 1 kHz figure rather than leading with it. Silence was
+the third option and it is the one this project keeps having to correct.
+
 **So the two-order claim is a claim about the control rate as well as about the
 sensor rate, and at 1 kHz it does not hold.** At occurrence resolution a 1 kHz
 robot retains **4.17 TB** for the mandated six months and the artifact is
-**~44x** below the assumed sensor log — **one order of magnitude, not two**. The
+**~44x** below the assumed sensor log — **one order of magnitude, not two**, and
+at a rate whose per-frame queries are outside the artifact's stated time base
+([`limitations.md`](limitations.md) §5). The
 band survives at 250 Hz (~169x) and is gone by 1 kHz; where between those two it
 goes is not measured and is therefore not quoted. **The assumption was not
 touched to fix this** — the sensor multiplier is the same 1 TB/day it was, for
@@ -262,7 +291,9 @@ the same sourced reasons, and moving it to keep a conclusion is the exact
 failure `sensor-baseline.md` exists to prevent.
 
 **How to state Claim 1 now.** *At occurrence resolution, two orders of magnitude
-at a 50 Hz control rate and one at 1 kHz.* Both are measured; which one applies
+at a 50 Hz control rate and one at 1 kHz — the first pinned, the second a manual
+measurement at a rate above the artifact's time base
+([`limitations.md`](limitations.md) §5).* Both are measured; which one applies
 is a property of the robot, not of this argument. The growth is **sublinear** —
 15.8x for a 20x rate increase — because the scene rows and the fixed
 schema-and-index cost do not scale with the rate; only the record layer does,
@@ -314,10 +345,12 @@ against the raw stream and holds no Layer A):
 The ratio *does* improve with run length — the fixed schema cost amortises — and
 then flattens. **It does not reach 1.0 anywhere in the measured range.** The
 marginal cost of one more frame is constant across every measured interval:
-~21 B of gzipped CSV against ~263 B of SQLite. The artifact is roughly 13x
-*larger* than a gzipped copy of the stream it replaces, and no amount of run
-length changes that, because it is the per-frame cost that dominates, not the
-fixed one.
+~21 B of gzipped CSV against ~263 B of SQLite. **With no record stream in it —
+which is what every rung above holds** — the artifact is roughly 13x *larger*
+than a gzipped copy of the stream it replaces, and no amount of run length
+changes that, because it is the per-frame cost that dominates, not the fixed one.
+That condition travels with the number: the artifact Claim 1 actually prices
+carries Layer A and is **~41x** larger, measured immediately below.
 
 **Why, and it is structural rather than an encoding detail:** the incremental
 rule compresses relationships that hold still. An arm in motion changes its
@@ -336,6 +369,50 @@ Two encoding passes (#54 page size and unused tables, #55 integer surrogate keys
 and a binary hash) took ~13% off on disk and ~3% compressed. That bounds the
 lever: **encoding does not move this number, and no further encoding work should
 be undertaken expecting it to.** The variable that moves it is resolution.
+
+##### The same comparison, measured on the artifact that carries Layer A
+
+**13x is the figure for an artifact holding no declaration, no verdict, no fault
+and no chain record.** The ladder above sets `records=None` at every rung, for the
+reason the blockquote gives: a record stream adds a term that scales with the
+replan interval rather than with the run, and the study's variable is the run.
+That is the right parameterization for a study about *length* and the wrong number
+to quote as the cost of the artifact this project ships — which is issue #59's
+error, found in the resolution curve, surviving in the front page until issue #98.
+
+**What was measured** on the build the retention figures above come from
+(`python -m reg.bench --resolution --seed 0`; `long_run` at 3,000 frames **at a
+50 Hz control rate**, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
+resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog), taking
+the artifact `reg.graph build` produced before any resolution view is materialized
+from it:
+
+| the build Claim 1 prices, at 3,000 frames | measured |
+|---|---|
+| declarations | 120 |
+| verdicts | 3,000 |
+| faults | 24 |
+| chain records | 3,120 |
+| artifact on disk | 2,580,480 B |
+| gzipped CSV baseline | 63,432 B |
+| x gz CSV | 0.02x |
+| how much larger | ~41x |
+
+The baseline is the same 63,432 B on both sides of the comparison — same fixture,
+same seed, same stream — so the whole of the distance between 13x and **~41x** is
+the Layer A the build carries: the ladder above has **no record stream** in it and
+this build has 3,120 chain records in it. **~41x is the number to quote**, and 13x
+may be quoted only with that condition attached in the same sentence, which
+`tests/test_published_figures.py` now checks in every document that quotes it.
+
+The table itself is pinned rather than asserted: the same module re-measures this
+build on every CI run and compares it against the table above, and it fails in both
+directions — a code change that moves the measurement fails it, and a table edited
+to match a regression fails it too.
+
+Nothing here changes the conclusion the section exists for. The answer to *is the
+graph smaller than the stream it replaces* is still **no**, by rather more than it
+looked, and for the same structural reason.
 
 **Success, restated to something a measurement can meet or miss:**
 

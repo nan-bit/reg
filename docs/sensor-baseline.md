@@ -16,6 +16,11 @@ robot's own control rate.** Every artifact size in this document was measured at
 verdict and a chain record per commanded action. A real manipulator loop runs at
 1 kHz. That is measured now too, in [The control rate](#the-control-rate), and
 it moved the conclusion a second time — the multiplier, a second time, did not.
+**Two of the rates measured there are above the rate the artifact's time base is
+declared valid at** (`reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz), which is a
+statement about what those artifacts can be *asked*, not about what they cost —
+[`limitations.md`](limitations.md) §5, linked again beside each table that
+publishes them.
 
 `docs/plan.md` Claim 1 compares the artifact against a raw sensor log at
 **1 TB/day**. `reg` has no sensors. Nothing in this repository measures, or can
@@ -203,7 +208,13 @@ published curve exactly, which is what makes the other three comparable to it.
 
 Those are measured points. **Nothing between them is interpolated and nothing
 beyond them is extrapolated** — a rate nobody ran is not in the table, however
-obvious it would look on a line through the ones that are.
+obvious it would look on a line through the ones that are. They are also a
+**manual measurement**: only the 50 Hz row is re-measured by
+`tests/test_published_figures.py` on every CI run, and the decision to leave the
+pin there rather than extend it to the ladder is recorded in
+[`plan.md`](plan.md), *The control rate*. And the 250 Hz and 1 kHz rows are above
+`reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, so their artifacts cannot address
+every frame of the run they price ([`limitations.md`](limitations.md) §5).
 
 The growth is **sublinear**: 15.8x at the occurrence level for a 20x rate
 increase, because the scene rows and the fixed schema-and-index cost do not
@@ -229,7 +240,10 @@ rather than repairing it.** ~44x at occurrence resolution is **one** order, not
 two. The two-order band is still occupied at 250 Hz (~169x) and is gone by
 1 kHz; where between those two it goes was not measured and is therefore not
 quoted. Every finer level is worse: transition is ~21x and per-frame ~10x at
-1 kHz.
+1 kHz. Both of those rows are also above the 100 Hz the artifact's time base is
+declared valid at, so what they buy at per-frame resolution is bounded by
+[`limitations.md`](limitations.md) §5 as well as by the price
+([`plan.md`](plan.md), *The control rate*, has the same pairing).
 
 **The sensor assumption was not adjusted to compensate.** It is the same
 1 TB/day it has been since this document was written, for the same sourced
@@ -256,7 +270,9 @@ control period above 100 Hz, so a per-frame separation read back out of an
 interval can miss by more than `DISTANCE_TOL_M`. That is a property of the graph
 builder rather than of retention, it is reported rather than tuned away, and it
 means a 1 kHz robot does not get the finer levels' full answer even after paying
-for them.
+for them. What a claim may and may not rest on above 100 Hz is
+[`limitations.md`](limitations.md) §5; this paragraph is the cost side of the same
+limit.
 
 ## What would retire this document
 

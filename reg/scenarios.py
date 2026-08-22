@@ -357,9 +357,60 @@ class Scenario:
         q_times, q_values = self._knots(self.joint_waypoints, self.q_jitter, seed, 0)
         h_times, h_values = self._knots(self.human_waypoints, self.human_jitter, seed, 1)
 
+        # THE ARM IS RATE-LIMITED; THE HUMAN IS NOT (issue #96).
+        #
+        # `_sample` is piecewise-linear, so the velocity it returns *steps* at
+        # every knot and the implied acceleration is an impulse. Nine of the
+        # eleven fixtures stepped by up to 8.3x `qdd_max` at one frame each.
+        # That is not a trajectory any arm can execute, and it is the plant
+        # `reg.envelope.outer_envelope` assumes: the outer bound is sound for a
+        # saturated double integrator obeying `qdd_max`, so a scenario that
+        # violates it is a scenario the bound makes no promise about. The three
+        # "no truthful declaration is ever vetoed" sentences were true of the
+        # shipped fixtures only because they crawl at 6.5-48% of `qd_max` — true
+        # by luck rather than by construction, and an external review built a
+        # legal `Scenario` that produced a VETO against a policy telling the
+        # literal truth.
+        #
+        # So the arm integrates the script under its own limits instead of
+        # teleporting along it: `want` is the velocity that would reach the next
+        # scripted pose, and the step toward it is clipped to `qdd_max * dt`.
+        # This makes the recorded trajectory the *executed* one rather than the
+        # *scripted* one, which is what an evidence artifact should hold, and it
+        # reverses this module's earlier "no filtering, no controller" — stated
+        # here rather than quietly, because it changes what a fixture means.
+        # Verified before adopting: every fixture keeps its fault, with minimum
+        # separations identical to four decimal places.
+        #
+        # The human is left alone. `human_pos` is Layer B ground truth about the
+        # world, not something the robot actuates, and giving it an acceleration
+        # limit would invent a physics for a person.
+        # The velocity reported at frame k is the one that carries the arm to
+        # frame k+1, so `q[k+1] - q[k] == qd[k] * dt` holds exactly. That is not
+        # a stylistic choice: `reg.envelope` computes the envelope at frame k
+        # from (q[k], qd[k]) and it must predict where the arm actually goes, so
+        # a frame whose qd is the velocity it *arrived* with would poison every
+        # envelope built from it. `test_velocity_is_the_slope_of_the_interpolant`
+        # is the gate, and it caught this integrator the first time round.
+        limits = self.world.limits
+        q_ref0, _ = _sample(q_times, q_values, 0.0)
+        q_cur = np.array(q_ref0, dtype=float)
+        qd_cur = np.zeros(len(limits.qd_max), dtype=float)
+
         for k in range(self.n_frames):
             t = k * self.dt
-            q, qd = _sample(q_times, q_values, t)
+            nxt = min(t + self.dt, (self.n_frames - 1) * self.dt)
+            q_ref_next, _ = _sample(q_times, q_values, nxt)
+            want = (q_ref_next - q_cur) / self.dt
+            step = np.clip(
+                want - qd_cur, -limits.qdd_max * self.dt, limits.qdd_max * self.dt
+            )
+            qd_cur = np.clip(qd_cur + step, -limits.qd_max, limits.qd_max)
+            q = np.array(q_cur, dtype=float)
+            qd = np.array(qd_cur, dtype=float)
+            q_cur = q_cur + qd_cur * self.dt
+            q.setflags(write=False)
+            qd.setflags(write=False)
             pos, vel = _sample(h_times, h_values, t)
             yield StateFrame(
                 t=t,

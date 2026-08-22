@@ -35,7 +35,7 @@ insurer.
 > 2026-08-20.** The clause "orders of magnitude smaller" was struck that morning,
 > because the benchmark showed the graph is ~13x *larger* per frame than a
 > gzipped proprioception stream — **measured on an artifact holding no Layer A**;
-> the artifact this project ships carries the record stream and is ~41x larger,
+> the artifact this project ships carries the record stream and is ~40x larger,
 > which is the figure Claim 1 publishes. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
 > answers no audit question. Against a *sensor* log the artifact is **~691x**
@@ -350,7 +350,7 @@ which is what every rung above holds** — the artifact is roughly 13x *larger*
 than a gzipped copy of the stream it replaces, and no amount of run length
 changes that, because it is the per-frame cost that dominates, not the fixed one.
 That condition travels with the number: the artifact Claim 1 actually prices
-carries Layer A and is **~41x** larger, measured immediately below.
+carries Layer A and is **~40x** larger, measured immediately below.
 
 **Why, and it is structural rather than an encoding detail:** the incremental
 rule compresses relationships that hold still. An arm in motion changes its
@@ -393,15 +393,15 @@ from it:
 | verdicts | 3,000 |
 | faults | 24 |
 | chain records | 3,120 |
-| artifact on disk | 2,580,480 B |
-| gzipped CSV baseline | 63,432 B |
-| x gz CSV | 0.02x |
-| how much larger | ~41x |
+| artifact on disk | 2,577,408 B |
+| gzipped CSV baseline | 64,651 B |
+| x gz CSV | 0.03x |
+| how much larger | ~40x |
 
-The baseline is the same 63,432 B on both sides of the comparison — same fixture,
-same seed, same stream — so the whole of the distance between 13x and **~41x** is
+The baseline is the same 64,651 B on both sides of the comparison — same fixture,
+same seed, same stream — so the whole of the distance between 13x and **~40x** is
 the Layer A the build carries: the ladder above has **no record stream** in it and
-this build has 3,120 chain records in it. **~41x is the number to quote**, and 13x
+this build has 3,120 chain records in it. **~40x is the number to quote**, and 13x
 may be quoted only with that condition attached in the same sentence, which
 `tests/test_published_figures.py` now checks in every document that quotes it.
 

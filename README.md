@@ -29,13 +29,19 @@ with three things changed, and each is checkable against their published draft:
    period, and that is a different engineering problem.
 
 Keeping the record that long is what makes it practical rather than theoretical,
-and it is measured rather than asserted: **264 GB** per robot for six months at a
-50 Hz control loop, **4.17 TB** at 1 kHz, against an assumed 1 TB/day sensor log —
-roughly **44x** smaller at the realistic rate ([`docs/plan.md`](docs/plan.md)
-Claim 1). The artifact side is measured; the sensor side is a **projection** from
-a sourced assumption and is never measured here
-([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). *Cheap enough to keep* is
-the only property the rest of the argument needs from it.
+and it is measured rather than asserted: **264 GB** per robot for six months at
+the 50 Hz control loop this simulator runs at, against an assumed 1 TB/day sensor
+log — roughly **691x** smaller ([`docs/plan.md`](docs/plan.md) Claim 1). That
+figure is re-measured on every CI run and compared against every document that
+publishes it (`tests/test_published_figures.py`), so it cannot drift quietly. A
+real manipulator runs at 1 kHz, where the same measurement is **4.17 TB** and
+roughly **44x** — **one recorded manual measurement**, outside that pin, and at a
+rate above `reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, where the artifact can
+no longer address every frame of the run it prices
+([`docs/limitations.md` §5](docs/limitations.md)). The artifact side is measured;
+the sensor side is a **projection** from a sourced assumption and is never
+measured here ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). *Cheap
+enough to keep* is the only property the rest of the argument needs from it.
 
 `reg` is a prototype of that record, in two halves: a
 declaration-and-attestation protocol between an unbounded policy and a bounded
@@ -74,7 +80,7 @@ repository as it stands, not the plan.
 | **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no |
 | **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim: which audit questions the artifact answers on its own authority and which are only as strong as whatever supplied the entity positions |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
-| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **264 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~691x** below an assumed 182.5 TB sensor log **at a 50 Hz control rate** — and **4.17 TB**, **~44x**, at a 1 kHz one, because a verdict and a chain record are emitted per commanded action. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: roughly 13x *larger* per frame than a gzipped copy of the nine-float stream, published beside it because that is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
+| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **264 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~691x** below an assumed 182.5 TB sensor log **at a 50 Hz control rate** — and **4.17 TB**, **~44x**, at a 1 kHz one, because a verdict and a chain record are emitted per commanded action. The 50 Hz figure is the pinned one; the 1 kHz rung is a single recorded manual measurement at a rate above the 100 Hz the artifact's time base can place a frame at ([`docs/limitations.md` §5](docs/limitations.md)). Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: **~40x** *larger* than a gzipped copy of the nine-float stream, measured on the artifact that carries Layer A. (The 13x this row quoted until issue #98 was measured on a build holding **no declaration, verdict, fault or chain record at all**, and that condition travels with it wherever it is quoted.) Published beside the retention figure because it is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
 
 The number is an identifier, not a rank — it is referenced from 125 places in this repository and does not move. The **order** is the argument: what the artifact proves, what that proof is worth, how you ask it, and what it costs to keep.
 
@@ -162,7 +168,7 @@ pip install -e ".[dev]"
 pytest                      # the whole suite; CI runs exactly this
 ```
 
-As of this commit that is `1345 passed`.
+As of this commit that is `1486 passed`.
 
 The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`,
 `python -m reg.query` and `python -m reg.bench`; each takes `--help`. The build

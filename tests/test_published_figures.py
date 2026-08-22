@@ -79,6 +79,30 @@ WHAT THIS DOES NOT COVER
 * **The rows for control rates other than 50 Hz.** They come from
   `--control-rate-hz 50,100,250,1000`, a study four times the length of this one;
   its 50 Hz row is the published curve, and that row is what is pinned here.
+  **Issue #98 asked for this exclusion to be decided rather than left implicit**,
+  because `README.md` was leading with the 1 kHz figure. It is decided and it
+  stands: the 1 kHz point alone is twenty times the frames of the fixture below,
+  for rows that can only move when the 50 Hz row moves, since every one of them is
+  the same curve at a different `dt`. What changed is that the documents now say
+  so where they quote it — `docs/plan.md`, *The control rate*, carries the
+  decision, and the front page no longer leads with an unpinned figure.
+
+WHAT ISSUE #98 ADDED
+--------------------
+Two things, both at the bottom of this module and both free of any new build:
+
+* **The Layer-A-carrying comparison against the stream.** `docs/plan.md` published
+  `~13x larger than a gzipped copy of the stream` measured with `records=None` —
+  the scaling ladder's parameterization — and `README.md` repeated it with no
+  qualifier at all. The artifact the retention claim actually prices carries the
+  record stream and is `~41x`. That figure is now published in `docs/plan.md` and
+  pinned here against `curve.source`, which the fixture below already builds: the
+  comparison costs nothing to check and was wrong by a factor of three.
+* **The condition on the `13x`.** A figure a reader can take away without its
+  condition is the defect, not the arithmetic. Every table row and every paragraph
+  in `README.md` and `docs/plan.md` that quotes `13x` has to name the absence of
+  Layer A in that same unit of text — checked mechanically, three-valued, with the
+  documents that quote it pinned so deleting the figure is not a way to pass.
 """
 
 from __future__ import annotations
@@ -95,6 +119,7 @@ from reg.scenarios import DEFAULT_DT
 
 REPO = Path(__file__).resolve().parent.parent
 DOCS = REPO / "docs"
+README = REPO / "README.md"
 
 #: The command every document names as the one that produced these figures.
 #: Quoted in the failure message rather than described, so the remedy is
@@ -675,3 +700,392 @@ def test_prose_that_is_not_a_table_yields_nothing() -> None:
         )
         == ()
     )
+
+
+# --------------------------------------------------------------------------
+# THE LAYER-A-CARRYING COMPARISON AGAINST THE STREAM (issue #98).
+#
+# `docs/plan.md`'s scaling ladder answers "is the graph smaller than the stream
+# it replaces" with `0.08x`, i.e. ~13x larger — and it answers it for an artifact
+# built with `records=None`. That is the correct parameterization for a study
+# whose variable is run length, and the wrong number to quote as the cost of the
+# artifact this project ships: with the record stream in it the same fixture at
+# the same length is ~41x larger. `README.md` quoted the 13x with no qualifier at
+# all, on the front page, months after issue #59 corrected the same error in the
+# resolution curve.
+#
+# WHY IT IS PINNED HERE AND NOT SOMEWHERE CHEAPER. The build it is measured on is
+# the one the fixture above already makes — `curve.source` is the artifact
+# `reg.graph.build` produced before any view was materialized from it — so this
+# whole section adds no measurement, only a comparison. Everything it compares is
+# rendered by the same `reg.bench` functions the rest of the module uses, for the
+# same reason: a document publishes a string, and the pin is that the same
+# function of today's measurement is that string.
+# --------------------------------------------------------------------------
+
+#: The level slot `divergences` reports these under. They are not a resolution
+#: level — they are properties of the source artifact — so the slot names the
+#: build instead, and the failure message reads as a sentence either way.
+LAYER_A_BUILD = "the build Claim 1 prices"
+
+#: Every row of the table, so a table that quietly lost one does not read as a
+#: table that never had it. This is the same property
+#: `test_every_site_publishes_all_three_levels` gives the curve.
+LAYER_A_COMPARISON_ROWS: tuple[str, ...] = (
+    "declarations",
+    "verdicts",
+    "faults",
+    "chain records",
+    "artifact on disk",
+    "gzipped CSV baseline",
+    "x gz CSV",
+    "how much larger",
+)
+
+
+def plan_text() -> str:
+    """`docs/plan.md`, read at call time so no test holds a stale copy."""
+    return (DOCS / "plan.md").read_text(encoding="utf-8")
+
+
+def layer_a_comparison(text: str) -> dict[str, str]:
+    """The `label -> figure` table `docs/plan.md` publishes the comparison in.
+
+    Identified by its first header cell rather than by position: a table found by
+    counting tables from the top of a document is a table that moves the first
+    time somebody adds another one above it.
+    """
+    found: dict[str, str] = {}
+    for header, rows in _tables(text):
+        if not header or LAYER_A_BUILD not in header[0]:
+            continue
+        for row in rows:
+            if len(row) >= 2 and row[0]:
+                found[row[0]] = row[1]
+    return found
+
+
+def measured_layer_a_comparison(curve: bench.ResolutionCurve) -> dict[str, str]:
+    """The same eight figures, measured, rendered as the documents render them.
+
+    `how much larger` is the one quantity `reg.bench` has no renderer for — it
+    publishes the ratio, not its reciprocal — so the arithmetic is here, once, and
+    the document states what this produces. It is not a tolerance: `~41x` is
+    `f"~{40.68:.0f}x"`, and a measurement that moved far enough to round
+    differently is a measurement the document has to be re-measured for.
+    """
+    sizes = curve.source.sizes
+    counts = curve.attestation_counts
+    return {
+        "declarations": bench._int_text(counts["declarations"]),
+        "verdicts": bench._int_text(counts["verdicts"]),
+        "faults": bench._int_text(counts["faults"]),
+        "chain records": bench._int_text(counts["chain_records"]),
+        "artifact on disk": f"{bench._int_text(sizes.sqlite)} B",
+        "gzipped CSV baseline": f"{bench._int_text(sizes.gzip_csv)} B",
+        "x gz CSV": bench._ratio_text(sizes.ratio_vs_gzip_csv),
+        "how much larger": f"~{sizes.sqlite / sizes.gzip_csv:.0f}x",
+    }
+
+
+def _as_layer_a_figures(doc: str, published: Mapping[str, str]) -> tuple[Figure, ...]:
+    """The published table as `Figure`s, so `divergences` compares it.
+
+    Reused rather than reimplemented: the failure message, the delta and the two
+    remedies are the deliverable of that function, and a second comparison here
+    would be a second definition of what a divergence is.
+    """
+    return tuple(
+        Figure(doc, label, LAYER_A_BUILD, text) for label, text in published.items()
+    )
+
+
+def test_the_layer_a_comparison_is_the_one_the_code_measures(
+    curve: bench.ResolutionCurve,
+) -> None:
+    """**THE PIN ISSUE #98 ADDED.** `~41x`, not `13x`, and re-measured every run.
+
+    Fails in both directions for the same reason the curve's pin does: the
+    expected values are the document.
+    """
+    published = layer_a_comparison(plan_text())
+    assert published, (
+        "docs/plan.md publishes no Layer-A-carrying comparison table at all, so "
+        "this had nothing to compare. That is a could-not-evaluate — the figure "
+        "it guards was wrong by a factor of three on the front page for months."
+    )
+    measured = {
+        (label, LAYER_A_BUILD): text
+        for label, text in measured_layer_a_comparison(curve).items()
+    }
+    problems = divergences(_as_layer_a_figures("plan.md", published), measured)
+    assert not problems, "\n".join(problems)
+
+
+def test_the_layer_a_comparison_publishes_every_row() -> None:
+    """A table that lost a row is not a table that never had one.
+
+    Without this, deleting `how much larger` would leave the pin above green over
+    seven rows and the `~41x` unpublished.
+    """
+    published = set(layer_a_comparison(plan_text()))
+    assert published == set(LAYER_A_COMPARISON_ROWS), (
+        "the Layer-A-carrying comparison in docs/plan.md publishes "
+        f"{sorted(published)}; this pin covers {sorted(LAYER_A_COMPARISON_ROWS)}. "
+        "A missing row is a figure that stopped being published, not a figure "
+        "that agrees; a new one needs adding here and to "
+        "`measured_layer_a_comparison`, or it is published and unchecked."
+    )
+
+
+# --- the negatives for the pin above ---
+
+#: The published table and the measurement it came from, in agreement.
+_LAYER_A_HEALTHY = {"artifact on disk": "2,580,480 B", "how much larger": "~41x"}
+_LAYER_A_MEASURED = {
+    ("artifact on disk", LAYER_A_BUILD): "2,580,480 B",
+    ("how much larger", LAYER_A_BUILD): "~41x",
+}
+
+
+def test_a_layer_a_comparison_that_agrees_is_not_reported() -> None:
+    """The positive control: the check is not one that can only say no."""
+    healthy = _as_layer_a_figures("plan.md", _LAYER_A_HEALTHY)
+    assert divergences(healthy, _LAYER_A_MEASURED) == []
+
+
+def test_the_13x_republished_as_the_layer_a_figure_is_caught() -> None:
+    """**THE NEGATIVE THIS SECTION EXISTS FOR**, and it is issue #98's own defect:
+    the `records=None` ladder's number standing where the Layer-A one belongs."""
+    problems = divergences(
+        _as_layer_a_figures("plan.md", {"artifact on disk": "818,176 B"}),
+        {("artifact on disk", LAYER_A_BUILD): "2,580,480 B"},
+    )
+    assert len(problems) == 2  # the finding, and what to do about it
+    assert "818,176 B" in problems[0] and "2,580,480 B" in problems[0]
+    assert "+1,762,304" in problems[0]
+
+
+def test_a_layer_a_figure_the_build_does_not_measure_is_a_refusal() -> None:
+    """A row published under a label nothing measures is a could-not-evaluate, and
+    the third verdict never resolves to the first."""
+    problems = divergences(
+        _as_layer_a_figures("plan.md", {"bytes per frame": "860 B"}), _LAYER_A_MEASURED
+    )
+    assert problems and "could not be checked at all" in problems[0]
+
+
+def test_the_layer_a_parser_reads_the_table_by_its_header() -> None:
+    """The shape it has to get right, in miniature."""
+    assert layer_a_comparison(
+        f"| {LAYER_A_BUILD}, at 3,000 frames | measured |\n"
+        "|---|---|\n"
+        "| artifact on disk | 2,580,480 B |\n"
+        "| how much larger | **~41x** |\n"
+    ) == {"artifact on disk": "2,580,480 B", "how much larger": "~41x"}
+
+
+def test_the_layer_a_parser_ignores_every_other_table() -> None:
+    """The scaling ladder is two-column and sits in the same section. Reading its
+    rungs as this comparison would pin the number this issue exists to correct."""
+    assert (
+        layer_a_comparison(
+            "| frames | robot time | x gz CSV |\n"
+            "|---|---|---|\n"
+            "| 3,000 | 60 s | 0.08x |\n"
+        )
+        == {}
+    )
+
+
+# --------------------------------------------------------------------------
+# THE CONDITION ON THE `13x` (issue #98).
+#
+# The arithmetic was never the defect. `docs/plan.md` measured 13x correctly and
+# said, three sentences away, that the ladder holds no Layer A; `README.md` then
+# quoted the number with the condition left behind. **A figure a reader can take
+# away without its condition is the figure being wrong**, and no amount of
+# correctness elsewhere in the document repairs it.
+#
+# So this checks proximity, mechanically, in the unit a reader actually takes a
+# number away in: a markdown table row on its own, and a paragraph otherwise. It
+# cannot check that the wording is honest — a reviewer still has to — but it can
+# check that the words are there.
+# --------------------------------------------------------------------------
+
+AGREE = "AGREE"
+DISAGREE = "DISAGREE"
+COULD_NOT_EVALUATE = "COULD-NOT-EVALUATE"
+
+#: The figure whose condition may not be dropped. `13.0x` in
+#: `docs/sensor-baseline.md`'s rate-comparison row is a different number and is
+#: deliberately not matched.
+THIRTEEN_X = re.compile(r"~?13x\b")
+
+#: The condition, in any of the forms the documents state it in. Every one of
+#: them names an *absence*, which is what the reader has to be told.
+NO_LAYER_A = re.compile(r"no (?:record stream|layer\s+a|declaration)", re.IGNORECASE)
+
+#: The documents that quote the figure today. Pinned because deleting it is the
+#: one way a check of this shape goes green without the condition being stated.
+DOCS_QUOTING_THE_13X: frozenset[str] = frozenset({"README.md", "plan.md"})
+
+
+def _quotation_units(text: str) -> list[str]:
+    """The spans a figure is read in: a table row alone, a paragraph otherwise.
+
+    A markdown table row is its own unit because a reader takes a row away whole
+    and leaves the rest of the table behind — `README.md`'s Claim 1 row is one
+    such row and is where this defect lived. Everything else is a paragraph,
+    joined into one line so a condition split across a line break still counts.
+    """
+    units: list[str] = []
+    paragraph: list[str] = []
+
+    def flush() -> None:
+        if paragraph:
+            units.append(" ".join(paragraph))
+            paragraph.clear()
+
+    for line in [*text.splitlines(), ""]:
+        if line.lstrip().startswith("|"):
+            flush()
+            units.append(line)
+        elif line.strip():
+            paragraph.append(line.strip())
+        else:
+            flush()
+    return units
+
+
+def condition_travels_with_the_13x(text: str) -> tuple[str, list[str]]:
+    """Verdict on whether every `13x` in `text` names the condition beside it.
+
+    Three-valued, and the third does not resolve to the first: a document that
+    quotes the figure nowhere is `COULD-NOT-EVALUATE`, because deleting the figure
+    is otherwise a way to pass. Returns the verdict and the offending spans.
+    """
+    checked = 0
+    missing: list[str] = []
+    for unit in _quotation_units(text):
+        if not THIRTEEN_X.search(unit):
+            continue
+        checked += 1
+        if not NO_LAYER_A.search(unit):
+            missing.append(unit)
+    if not checked:
+        return COULD_NOT_EVALUATE, []
+    return (DISAGREE if missing else AGREE), missing
+
+
+CORPUS_QUOTING_FIGURES: tuple[tuple[str, Path], ...] = (
+    ("README.md", README),
+    *((path.name, path) for path in sorted(DOCS.glob("*.md"))),
+)
+
+
+@pytest.mark.parametrize("doc,path", CORPUS_QUOTING_FIGURES)
+def test_the_13x_is_never_quoted_without_its_condition(doc: str, path: Path) -> None:
+    """**THE DOCUMENT CHECK ISSUE #98 EXISTS FOR.**
+
+    `README.md:77` carried `roughly 13x larger per frame than a gzipped copy of
+    the nine-float stream` with nothing attached, in the file most readers open
+    first, while `docs/plan.md` stated the condition for the same number.
+    """
+    verdict, missing = condition_travels_with_the_13x(
+        path.read_text(encoding="utf-8")
+    )
+    assert verdict != DISAGREE, (
+        f"{doc} quotes 13x in {len(missing)} place(s) that never say the "
+        "artifact it was measured on holds no Layer A:\n"
+        + "\n".join(f"  - {unit[:160]}" for unit in missing)
+        + "\nThat figure is ~41x for the artifact Claim 1 prices. Either quote "
+        "~41x, or state the condition in the same paragraph or table row."
+    )
+
+
+def test_the_documents_that_quote_the_13x_are_the_ones_expected() -> None:
+    """**SILENCE IS NOT A PASS.** The check above passes on a document with the
+    figure removed, so this names where it is quoted. A loss is worth a look: the
+    number is a bounded engineering finding this project deliberately publishes."""
+    quoting = {
+        doc
+        for doc, path in CORPUS_QUOTING_FIGURES
+        if condition_travels_with_the_13x(path.read_text(encoding="utf-8"))[0]
+        != COULD_NOT_EVALUATE
+    }
+    assert quoting == set(DOCS_QUOTING_THE_13X), (
+        "the set of documents quoting the 13x has moved: gained "
+        f"{sorted(quoting - DOCS_QUOTING_THE_13X)}, lost "
+        f"{sorted(DOCS_QUOTING_THE_13X - quoting)}. A gain needs adding here — it "
+        "is a new place a conditional figure is published; a loss means the "
+        "finding stopped being published where this check was guarding it."
+    )
+
+
+# --- the negatives for the check above ---
+
+
+def test_a_bare_13x_is_caught() -> None:
+    """**The negative this check exists for**, and it is the README's own sentence
+    as it stood before this change."""
+    verdict, missing = condition_travels_with_the_13x(
+        "roughly 13x *larger* per frame than a gzipped copy of the nine-float\n"
+        "stream, published beside it because that is the comparison a skeptic runs.\n"
+    )
+    assert verdict == DISAGREE
+    assert len(missing) == 1
+
+
+def test_the_condition_three_paragraphs_away_does_not_cover_the_figure() -> None:
+    """The exact defect: correct elsewhere in the document, absent here."""
+    verdict, missing = condition_travels_with_the_13x(
+        "This ladder holds no Layer A at any rung.\n"
+        "\n"
+        "Some other paragraph entirely.\n"
+        "\n"
+        "The artifact is roughly 13x larger than the stream it replaces.\n"
+    )
+    assert verdict == DISAGREE
+    assert missing == [
+        "The artifact is roughly 13x larger than the stream it replaces."
+    ]
+
+
+def test_the_condition_in_the_same_paragraph_passes() -> None:
+    """The positive control, across a line break, since the documents wrap."""
+    verdict, missing = condition_travels_with_the_13x(
+        "**With no record stream in it** — the artifact is roughly 13x\n"
+        "*larger* than a gzipped copy of the stream it replaces.\n"
+    )
+    assert (verdict, missing) == (AGREE, [])
+
+
+def test_a_table_row_is_its_own_unit() -> None:
+    """`README.md`'s Claim 1 row is one row of a table whose other rows say
+    nothing about Layer A. A condition in a neighbouring row is not a condition a
+    reader of this row sees."""
+    verdict, missing = condition_travels_with_the_13x(
+        "| claim | status |\n"
+        "|---|---|\n"
+        "| **3** | the build carries no record stream |\n"
+        "| **1** | the artifact is roughly 13x larger |\n"
+    )
+    assert verdict == DISAGREE
+    assert missing == ["| **1** | the artifact is roughly 13x larger |"]
+
+
+def test_a_document_that_never_quotes_the_figure_is_not_a_pass() -> None:
+    """Three-valued: nothing to check is could-not-evaluate, and the roster test
+    above is what stops that from becoming a hiding place."""
+    verdict, missing = condition_travels_with_the_13x("no figures here at all\n")
+    assert (verdict, missing) == (COULD_NOT_EVALUATE, [])
+
+
+def test_the_rate_comparison_row_is_not_this_figure() -> None:
+    """`docs/sensor-baseline.md` publishes `13.0x` — the transition level's growth
+    from 50 Hz to 1 kHz. Demanding a Layer A condition beside it would be noise."""
+    verdict, _ = condition_travels_with_the_13x(
+        "| *x, 50 Hz → 1 kHz* | *15.8x* | *13.0x* | *19.6x* |\n"
+    )
+    assert verdict == COULD_NOT_EVALUATE

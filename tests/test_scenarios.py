@@ -35,9 +35,10 @@ import dataclasses
 import numpy as np
 import pytest
 from shapely.geometry import LineString, Point, Polygon
+from shapely.ops import unary_union
 
 from reg.enforce import FAULTS
-from reg.envelope import compute_envelope
+from reg.envelope import compute_envelope, outer_envelope
 from reg.scenarios import (
     DEFAULT_DT,
     SCENARIOS,
@@ -45,7 +46,8 @@ from reg.scenarios import (
     Waypoint,
     scenario,
 )
-from reg.types import Limits, Obstacle
+from reg.kinematics import link_polygons
+from reg.types import Limits, Obstacle, ProprioState
 from reg.world import BASE_XY, DEMO_WORLD, LIMITS, ROOM, Room, World
 
 #: Several seeds, fixed. Every semantic claim a scenario name makes must hold for
@@ -322,6 +324,63 @@ def test_velocity_is_the_slope_of_the_interpolant(name: str) -> None:
             continue  # velocity steps at a knot; the secant spans two segments
         assert np.allclose(b.q - a.q, a.qd * sc.dt, atol=1e-12)
         assert np.allclose(b.human_pos - a.human_pos, a.human_vel * sc.dt, atol=1e-12)
+
+
+@pytest.mark.parametrize("name", EXPECTED_NAMES)
+def test_no_fixture_commands_more_acceleration_than_the_arm_has(name: str) -> None:
+    """**THE PLANT THE OUTER BOUND ASSUMES** (issue #96).
+
+    `reg.envelope.outer_envelope` is sound for a saturated double integrator
+    obeying `qdd_max`. A fixture that steps its velocity is not that plant, so
+    the bound makes it no promise — and three documents claimed "no truthful
+    declaration is ever vetoed" on the strength of it.
+
+    Before the rate limit, nine of eleven fixtures violated this, worst 8.3x, at
+    one frame each. They never actually escaped the bound, but only because they
+    crawl at 6.5-48% of `qd_max`: the guarantee held by luck. An external review
+    built a legal `Scenario` where the luck ran out and enforcement vetoed a
+    policy telling the literal truth.
+    """
+    sc = scenario(name)
+    got = frames(name, seed=0)
+    qd = np.array([f.qd for f in got])
+    accel = np.abs(np.diff(qd, axis=0)) / sc.dt
+    worst = float((accel / sc.world.limits.qdd_max).max())
+    assert worst <= 1.0 + 1e-9, (
+        f"{name} commands {worst:.1f}x its own qdd_max. The outer reachable set "
+        "is sound only for a plant that respects it, so this fixture is outside "
+        "the model every envelope built from it assumes."
+    )
+
+
+@pytest.mark.parametrize("name", EXPECTED_NAMES)
+def test_the_outer_bound_contains_the_body_it_promises_to(name: str) -> None:
+    """**THE SOUNDNESS TEST THAT WAS MISSING** (issue #96).
+
+    `tests/test_envelope.py` integrates with `compute_envelope`'s own integrator
+    on `compute_envelope`'s own grid: it proves the bound covers the model, and
+    nothing proved the model covers the fixture. This asks the question the
+    other way round — against the frames the simulator actually emits.
+
+    For every frame `i`, the outer set computed from `(q[i], qd[i])` must contain
+    the body at every frame the horizon spans. Ship it with #96's rate limit
+    reverted and it fails; that is what makes it a test rather than a fixture.
+    """
+    sc = scenario(name)
+    got = frames(name, seed=0)
+    horizon = 0.2
+    span = int(round(horizon / sc.dt))
+    for i in range(0, len(got) - span, max(1, span // 2)):
+        state = ProprioState(t=got[i].t, q=got[i].q, qd=got[i].qd)
+        outer = outer_envelope(state, sc.world.limits, horizon=horizon)
+        for j in range(i, i + span + 1):
+            body = unary_union(link_polygons(got[j].q, sc.world.limits))
+            escaped = body.difference(outer).area
+            assert escaped == 0.0, (
+                f"{name}: body at frame {j} escapes the outer set computed at "
+                f"frame {i} by {escaped:.6f} m^2. The bound promises to contain "
+                "it and does not."
+            )
 
 
 @pytest.mark.parametrize("name", EXPECTED_NAMES)

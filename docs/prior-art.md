@@ -328,6 +328,55 @@ means "bind the record to the thing that made it" is a *requirement in force*
 rather than a nice idea. `reg`'s `meta` should carry the equivalent — code
 version and envelope parameters — which it partly does already.
 
+### The element-by-element mapping, and the one that is not implemented
+
+| DSSAD element | `reg` | Where |
+|---|---|---|
+| occurrence flag | implemented | `occurrence.type`, vocabulary fixed in `reg.store.OCCURRENCE_SPECS` |
+| reason, where applicable | implemented | `occurrence.reason`, non-empty or refused |
+| date, `yyyy/mm/dd` | implemented (issue #83) | `occurrence.date`, derived from the declared `--run-start` |
+| timestamp, ±1.0 s | implemented | `occurrence.t` and `occurrence.t_utc`, at `meta[occurrence_time_resolution_s]` |
+| **R157SWIN** — the software version identifier present when the event occurred | **not implemented** | see below |
+
+**R157SWIN is not implemented, and until issue #109 this project's mapping said
+otherwise.** The regulation's subject is *the automated driving system whose
+behaviour is under investigation*: the element exists so an occurrence can be
+attributed to the build that produced the behaviour. What `reg` had was a column
+named `sw_version` carrying `reg`'s own version plus a digest of the envelope
+parameters — the version of the tool that was **watching**, not of the thing
+being watched — and `reg/store.py`'s schema comment presented that as the
+element. Those are two different pieces of software. The mapping did not
+simplify the element; it identified the wrong one, which is worse than a gap,
+because a column that reads as satisfied is not looked at twice.
+
+The gap is left open rather than filled. Nothing in this prototype has a policy
+version to bind: the simulator has no policy vendor, `reg.declare.Declaration`
+carries no version field, and no `META_*` key names a policy, model or vendor.
+Manufacturing an identifier to fill the column would be the invented default
+`CLAUDE.md` forbids, one layer up from a parameter — indistinguishable
+downstream from a real one. A deployment with a real policy build is where the
+element becomes bindable, and there it would be a **required, caller-supplied
+input** with no default, the shape `--run-start` and the keyring already have;
+it is not derivable from anything inside this process.
+
+What survives is the recorder stamp, under a name that says what it is:
+`occurrence.recorder_version` and `meta[occurrence_recorder_version]`
+(`reg.graph.recorder_version`). It is not offered as R157SWIN anywhere. It earns
+its place on a different argument — the same code at a different horizon
+computes a different envelope and therefore a different set of
+`envelope_entered` occurrences, so an occurrence is interpretable only beside
+the parameters that produced it, and the digest on every row is checkable
+against the parameters `meta` carries in full. `reg.graph.OCCURRENCE_RETENTION`
+states the absence inside the artifact, so a reader holding only the file learns
+the element is unimplemented rather than inferring it from a column that is not
+there — the discipline `meta[attestation_records]` already applies to the record
+tables.
+
+This costs Claim 4 nothing it had. The "free gift" above was that *binding a
+record to the software that produced it is a requirement in force*, and that
+argument is about the signing keys, which do bind the party that made each
+record. It was never that `reg` had already satisfied the element.
+
 ## 10. Intent attestation now has an active adjacent field — in software, not robots
 
 The first pass found nothing occupying Claim 4. That is no longer true, and the

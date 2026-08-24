@@ -733,10 +733,33 @@ CREATE TABLE edge (
 --                 meta[run_start_utc] + `t`
 --   `t_utc`       the same instant absolutely, so DSSAD's ±1.0 s accuracy is a
 --                 statement about a wall clock rather than about a float
---   `sw_version`  DSSAD's **R157SWIN**, the software version identifier present
---                 when the event occurred, in this project's terms: the `reg`
---                 version plus a digest binding the envelope parameters that
---                 produced the run, both of which are also in `meta` in full.
+--   `recorder_version`
+--                 the **recorder's** build: the `reg` version plus a digest
+--                 binding the envelope parameters that produced the run, both
+--                 of which are also in `meta` in full.
+--
+-- **DSSAD's R157SWIN element is NOT implemented, and the column above is not it
+-- (issue #109).** R157SWIN is "the software version identifier present when the
+-- event occurred" — of *the automated driving system whose behaviour is under
+-- investigation*, so that an occurrence can be attributed to the build that
+-- produced the behaviour. Until issue #109 this column was named `sw_version`
+-- and this comment presented it as that element. It never was: it identifies
+-- `reg`, the tool that was *watching*, and the parameters it watched with.
+-- Those are two different pieces of software, and a mapping that offers one
+-- where the regulation asks for the other is worse than a mapping with a gap in
+-- it, because a column that reads as satisfied is not looked at twice.
+--
+-- The gap is not filled, because filling it would be a fiction. `reg`'s
+-- simulator has no policy vendor and `reg.declare.Declaration` carries no
+-- version field, so there is no policy build here to name; inventing a string
+-- for the column is the invented default CLAUDE.md forbids, one layer up from a
+-- parameter. A deployment that does have a policy version is where binding one
+-- becomes a real requirement, and it would be a required, caller-supplied input
+-- there — the shape `--run-start` and the keyring already have — not a value
+-- derived from anything in this process. `reg.graph.OCCURRENCE_RETENTION` says
+-- the same thing inside the artifact, so a reader holding only the file learns
+-- the element is absent rather than inferring it from a column that is not
+-- there. See `docs/prior-art.md` §9.
 --
 -- **The `date` column arrived in issue #83, and it closes a stated deviation.**
 -- Until then there was none, on the argument that a wall-clock date is the
@@ -752,17 +775,17 @@ CREATE TABLE edge (
 -- to each other, which is the cost being measured; it must not silently lose one
 -- of them, which would be a different and much worse thing.
 CREATE TABLE occurrence (
-    occurrence_key INTEGER PRIMARY KEY REFERENCES node (node_key),
-    seq            INTEGER NOT NULL UNIQUE,
-    type           TEXT    NOT NULL CHECK (type IN ({_SQL_OCCURRENCE_TYPES})),
-    layer          TEXT    NOT NULL CHECK (layer IN ('A', 'B')),
-    reason         TEXT    NOT NULL,
-    t              REAL    NOT NULL,
-    date           TEXT    NOT NULL,
-    t_utc          TEXT    NOT NULL,
-    entity_key     INTEGER REFERENCES entity (entity_key),
-    value          REAL,
-    sw_version     TEXT    NOT NULL,
+    occurrence_key   INTEGER PRIMARY KEY REFERENCES node (node_key),
+    seq              INTEGER NOT NULL UNIQUE,
+    type             TEXT    NOT NULL CHECK (type IN ({_SQL_OCCURRENCE_TYPES})),
+    layer            TEXT    NOT NULL CHECK (layer IN ('A', 'B')),
+    reason           TEXT    NOT NULL,
+    t                REAL    NOT NULL,
+    date             TEXT    NOT NULL,
+    t_utc            TEXT    NOT NULL,
+    entity_key       INTEGER REFERENCES entity (entity_key),
+    value            REAL,
+    recorder_version TEXT    NOT NULL,
     CHECK ((type IN ({_SQL_OCCURRENCE_ENTITY_TYPES})) = (entity_key IS NOT NULL)),
     CHECK ((type IN ({_SQL_OCCURRENCE_VALUED_TYPES})) = (value IS NOT NULL))
 );
@@ -1718,7 +1741,7 @@ def insert_occurrence(
     t_utc: str,
     entity_id: str | None,
     value: float | None,
-    sw_version: str,
+    recorder_version: str,
 ) -> str:
     """One DSSAD-shaped occurrence. Every element required, none defaulted.
 
@@ -1750,14 +1773,19 @@ def insert_occurrence(
             than instead of it — the run-relative float is what every edge and
             every query in the artifact is expressed in, and dropping it would
             re-base the whole file on a datum only this column carries.
-        sw_version: DSSAD's `R157SWIN` in this project's terms — the software
-            version identifier present when the event occurred.
+        recorder_version: the **recorder's** build — `reg`'s version plus the
+            envelope-parameter digest (`reg.graph.recorder_version`). It is
+            **not** DSSAD's `R157SWIN`, which names the system under
+            investigation; that element is unimplemented here and the schema
+            comment above says why. Non-empty for the same reason `reason` is:
+            an occurrence nobody can attribute to a build of the recorder cannot
+            be checked against the parameters in `meta`.
 
     Raises:
         StoreError: an unknown type, a blank reason, `date`, `t_utc` or
-            `sw_version`, an entity named by a type that has no subject (or
-            missing from one that does), a value on a type that carries none (or
-            missing from one that does), or an `entity_id` no `entity` row
+            `recorder_version`, an entity named by a type that has no subject
+            (or missing from one that does), a value on a type that carries none
+            (or missing from one that does), or an `entity_id` no `entity` row
             matches.
     """
     spec = OCCURRENCE_SPECS.get(occurrence_type)
@@ -1772,13 +1800,14 @@ def insert_occurrence(
             "blank one leaves a row saying an event happened and nothing about "
             "which condition produced it."
         )
-    if not isinstance(sw_version, str) or not sw_version.strip():
+    if not isinstance(recorder_version, str) or not recorder_version.strip():
         raise StoreError(
             f"a {occurrence_type} occurrence was written with "
-            f"sw_version={sw_version!r}. That is DSSAD's R157SWIN element: an "
-            "occurrence not bound to the software that produced it cannot be "
-            "attributed to a build, which is the one thing the element exists "
-            "for."
+            f"recorder_version={recorder_version!r}. That is the recorder's own "
+            "build and envelope digest — not DSSAD's R157SWIN, which this "
+            "artifact does not implement — and an occurrence carrying none "
+            "cannot be checked against the envelope parameters in meta, so "
+            "nothing downstream can tell which build's envelope produced it."
         )
     if not isinstance(date, str) or not _DATE_RE.fullmatch(date):
         raise StoreError(
@@ -1840,7 +1869,7 @@ def insert_occurrence(
             "t_utc": str(t_utc),
             "entity_key": entity_key,
             "value": None if value is None else float(value),
-            "sw_version": str(sw_version),
+            "recorder_version": str(recorder_version),
         },
     )
 

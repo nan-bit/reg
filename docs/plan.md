@@ -67,7 +67,7 @@ project from a toy, and it is the section that belongs on the personal site.
 | Actively controlled stability — de-energize is *not* a safe state; fall-zone and balance hazards | **ISO/CD 25785-1** | Committee Draft, no publication date |
 | Cybersecurity requirements as they pertain to robot safety | **ISO 10218:2025** (Parts 1 & 2) | Published Feb 2025 |
 | Speed and separation monitoring; time-varying protective volume from speed, stopping distance, sensor latency | ISO/TS 15066, now absorbed into **ISO 10218-2:2025** | Published |
-| A mandated, retained evidence recorder for autonomy: **occurrences** with flag, reason, date, timestamp (±1.0 s) and the software version present at the event | **UNECE DSSAD**, UN R157 (ALKS) | Published; the closest existing thing to this project |
+| A mandated, retained evidence recorder for autonomy: **occurrences** with flag, reason, date, timestamp (±1.0 s) and the software version present at the event (`R157SWIN`) | **UNECE DSSAD**, UN R157 (ALKS) | Published; the closest existing thing to this project. `reg` implements the first four elements and **not** `R157SWIN` — see [`prior-art.md` §9](prior-art.md) |
 | Automatic event logging over the system lifetime, retained ≥6 months, sufficient for post-hoc reconstruction of individual decisions | **EU AI Act Art. 12** (record-keeping), Art. 19 | In force |
 
 ### Two deviations from precedent, both deliberate — state them prominently
@@ -900,7 +900,7 @@ not raw state.
 | `Envelope` | `envelope_id`, `area`, `geometry_wkb`, `horizon`, `source` (`computed` / `declared` / `clamped`), `envelope_hash` (stored as 32 raw bytes since issue #55; hex on the wire) |
 | `Entity` | `entity_id`, `kind`, `geometry_wkb` |
 | `RobotConfig` | `config_id`, `q`, `qd` (quantized) |
-| `Occurrence` | `occurrence_id`, `seq`, `type` (the DSSAD occurrence flag), `layer`, `reason`, `t` (at `occurrence_time_resolution_s`), `entity_id`, `value`, `sw_version` (`R157SWIN`) — **added, issue #35.** The event-level layer, additive beside the edges; see [`docs/lossiness.md`](lossiness.md) *The three resolution levels* and [`docs/prior-art.md` §9](prior-art.md) |
+| `Occurrence` | `occurrence_id`, `seq`, `type` (the DSSAD occurrence flag), `layer`, `reason`, `t` (at `occurrence_time_resolution_s`), `date`, `t_utc`, `entity_id`, `value`, `recorder_version` — **added, issue #35.** The event-level layer, additive beside the edges; see [`docs/lossiness.md`](lossiness.md) *The three resolution levels* and [`docs/prior-art.md` §9](prior-art.md). `recorder_version` is the **recorder's** build and envelope digest and was called `sw_version` until issue #109; it is **not** DSSAD's `R157SWIN`, which names the system under investigation and which this project does **not implement** — nothing here has a policy version to bind ([`docs/prior-art.md` §9](prior-art.md)) |
 | `Declaration` | as Phase 3 |
 | `Verdict` | as Phase 4 |
 

@@ -372,9 +372,13 @@ not be a measurement.
 entity carrying the smallest separation of the run, and — added 2026-08-19 with
 issue #45 — the five enforcement events, `declaration_vetoed`, `action_clamped`,
 `safe_state_entered`, `reintegrated` and `escalation_failed`. Each row carries DSSAD's
-elements — the flag (the type), the reason, the timestamp, and a provenance stamp
-binding the event to the `reg` version and the envelope parameters that produced
-it, which is `R157SWIN` in this project's terms. The entity set and the run's
+elements — the flag (the type), the reason, the date, the timestamp, and a
+provenance stamp binding the event to the `reg` version and the envelope
+parameters that produced it. That stamp is `recorder_version`, and it is **not**
+`R157SWIN`: the regulation's element names the system under investigation, this
+one names the recorder, and the element is **not implemented** here because
+nothing in this prototype has a policy version to bind (issue #109,
+[`prior-art.md` §9](prior-art.md)). The entity set and the run's
 provenance stay, because an occurrence naming an entity the file does not contain
 is not a record of anything. The rule itself is written into `meta` under
 `occurrence_retention`.

@@ -409,9 +409,14 @@ have to establish, at minimum:
   from the room. A person nobody detected leaves an artifact that answers *no
   contact* with total confidence;
 - and evidence, retained, that the stack running at the time was the one that was
-  validated. DSSAD's `R157SWIN` element is the shape of that requirement, and the
-  occurrence layer carries this project's analogue (`sw_version`) for the builder —
-  not for a perceiver, because there is none.
+  validated. DSSAD's `R157SWIN` element is the shape of that requirement, and
+  **this project does not meet it** (issue #109): what the occurrence layer
+  carries is `recorder_version`, the build of `reg` that was *watching* and the
+  envelope parameters it watched with. That is the evidence tool, not the stack
+  under investigation, and it is not offered as the element
+  ([`prior-art.md` §9](prior-art.md)). A real deployment has to bind a policy
+  build, as a required caller-supplied input; a simulator with no policy vendor
+  has nothing to bind, and filling the column anyway would be a fiction.
 
 Two consequences worth stating plainly.
 

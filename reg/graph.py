@@ -278,9 +278,9 @@ __all__ = [
     "META_DECLARATION_COUNT",
     "META_ENVELOPE_RETENTION",
     "META_GEOMETRY_RETENTION",
+    "META_OCCURRENCE_RECORDER_VERSION",
     "META_OCCURRENCE_RESOLUTION",
     "META_OCCURRENCE_RETENTION",
-    "META_OCCURRENCE_SW_VERSION",
     "META_OPERATOR_ID",
     "META_RUN_START",
     "META_TIME_BASE_DOMAIN",
@@ -304,7 +304,7 @@ __all__ = [
     "envelope_at",
     "main",
     "quantize_occurrence_time",
-    "sw_version",
+    "recorder_version",
 ]
 
 EXIT_OK = 0
@@ -597,13 +597,17 @@ OCCURRENCE_RETENTION = (
     "clock, so the artifact stays byte-reproducible: same seed and same "
     "declared start, same bytes. It is a claim by whoever built this file, "
     "exactly as the records are, and it is what makes the run correlatable with "
-    "the other logs in the cell."
+    "the other logs in the cell. DSSAD's R157SWIN element is NOT implemented "
+    "here: it identifies the system under investigation, and nothing in this "
+    "prototype has a policy version to bind, so no row carries one. The "
+    "recorder_version column is the evidence tool's own build and envelope "
+    "digest — a different piece of software — and must not be read as it."
 )
 
 #: Where the occurrence-layer facts land in `meta`.
 META_OCCURRENCE_RETENTION = "occurrence_retention"
 META_OCCURRENCE_RESOLUTION = "occurrence_time_resolution_s"
-META_OCCURRENCE_SW_VERSION = "occurrence_sw_version"
+META_OCCURRENCE_RECORDER_VERSION = "occurrence_recorder_version"
 
 # --------------------------------------------------------------------------
 # The attestation layer (issue #45, docs/plan.md Phase 5's other half).
@@ -1099,18 +1103,32 @@ def quantize_occurrence_time(t: float, resolution: float) -> float:
     return round(t / resolution) * resolution
 
 
-def sw_version(
+def recorder_version(
     *, horizon: float, n_samples: int, seed: int, substep_dt: float
 ) -> str:
-    """DSSAD's `R157SWIN` element in this project's terms.
+    """The **recorder's** build and envelope parameters. Not DSSAD's `R157SWIN`.
 
-    UN R157 requires each recorded occurrence to carry "the software version
-    identifier present when the event occurred" (docs/prior-art.md §9), so that
-    an event can be attributed to the build that produced it. Here that is the
-    `reg` version plus a digest over the envelope parameters, which are the rest
-    of what decides what this build would have seen: the same code with a
-    different horizon computes a different envelope and therefore a different set
-    of `envelope_entered` occurrences.
+    THE NAME IS THE FIX (issue #109). This value was called `sw_version` and the
+    schema comment in `reg.store` presented it as UN R157's **R157SWIN**. It is
+    not that element and cannot be. R157SWIN identifies *the automated driving
+    system whose behaviour is under investigation*, so that an occurrence can be
+    attributed to the build that produced the behaviour. This returns the version
+    of `reg` — the evidence tool that was *watching* — plus a digest over the
+    envelope parameters. Those are two different pieces of software, and offering
+    one where the regulation asks for the other is worse than offering nothing: a
+    column that reads as satisfied is not looked at twice.
+
+    Nothing in this prototype has a policy version to bind. The simulator has no
+    policy vendor and `reg.declare.Declaration` carries no version field, so the
+    element is recorded as **not implemented** — in the schema comment, in
+    `OCCURRENCE_RETENTION` so the artifact itself says so, and in
+    `docs/prior-art.md` §9. Filling it with a plausible string would be the
+    invented default CLAUDE.md forbids, one layer up from a parameter.
+
+    What the value *is* good for stands unchanged, and is why it is kept rather
+    than dropped: the same code with a different horizon computes a different
+    envelope and therefore a different set of `envelope_entered` occurrences, so
+    an occurrence is interpretable only beside the parameters that produced it.
 
     A digest rather than the parameters spelled out, because the parameters are
     already in `meta` in full and an occurrence row is not the place to keep a
@@ -1218,7 +1236,7 @@ class _OccurrenceLog:
             t_utc=self._identity.timestamp_utc(t_q),
             entity_id=entity_id,
             value=value,
-            sw_version=self._stamp,
+            recorder_version=self._stamp,
         )
 
     def run_began(self, t: float) -> None:
@@ -1773,7 +1791,7 @@ def build(
             "artifact would answer 'no' for a reason nobody wrote down."
         )
 
-    stamp = sw_version(
+    stamp = recorder_version(
         horizon=horizon, n_samples=n_samples, seed=seed, substep_dt=substep_dt
     )
 
@@ -2260,7 +2278,7 @@ def _write_provenance(
     store.put_meta(
         conn, META_OCCURRENCE_RESOLUTION, _float_text(occurrence_resolution_s)
     )
-    store.put_meta(conn, META_OCCURRENCE_SW_VERSION, stamp)
+    store.put_meta(conn, META_OCCURRENCE_RECORDER_VERSION, stamp)
 
     # The attestation layer's rule, and whether this build was given anything to
     # store under it. The counts are written only when it was, so an artifact

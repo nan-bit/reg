@@ -2307,8 +2307,9 @@ def test_the_closest_approach_agrees_with_the_edge_layers_minimum(
 def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
     """The data model, per UN R157 and docs/prior-art.md §9.
 
-    The flag, the reason, the timestamp, the **date**, and the software version
-    present at the event (`R157SWIN`).
+    The flag, the reason, the timestamp and the **date** — the four elements
+    this artifact implements. The fifth, `R157SWIN`, it does not; see
+    `test_the_artifact_does_not_offer_the_recorder_stamp_as_r157swin`.
 
     The date was deliberately absent until issue #83, on the argument that a
     wall-clock date is the ambient value that would break byte reproducibility.
@@ -2332,12 +2333,12 @@ def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
         conn.close()
 
     assert rows, "precondition failed: this run produced no occurrences at all"
-    expected = graph.sw_version(**_FAST)
+    expected = graph.recorder_version(**_FAST)
     for row in rows:
         assert str(row["type"]) in store.OCCURRENCE_SPECS
         assert str(row["reason"]).strip()
         assert row["t"] is not None
-        assert str(row["sw_version"]) == expected
+        assert str(row["recorder_version"]) == expected
         assert str(row["layer"]) == store.occurrence_layer(str(row["type"]))
         # The two time bases name one moment. Derived from the row's own
         # quantized `t`, so the three timestamp columns cannot disagree by up
@@ -2348,7 +2349,7 @@ def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
     # The stamp is checkable against the parameters it binds, both of which the
     # artifact carries: an occurrence whose digest its own meta cannot reproduce
     # would be an event and a parameter set from two different runs.
-    assert meta[graph.META_OCCURRENCE_SW_VERSION] == expected
+    assert meta[graph.META_OCCURRENCE_RECORDER_VERSION] == expected
     assert meta[graph.META_OCCURRENCE_RESOLUTION] == repr(
         float(graph.OCCURRENCE_TIME_RESOLUTION_S)
     )
@@ -2362,19 +2363,146 @@ def test_every_occurrence_carries_the_dssad_elements(tmp_path: Path) -> None:
     assert meta[graph.META_RUN_START] == TEST_IDENTITY.run_start_text
 
 
-def test_the_software_stamp_changes_when_the_envelope_parameters_do() -> None:
-    """`R157SWIN`'s negative. A stamp that never moved would bind nothing.
+#: A DSSAD mapping is read for what it claims, so the claim is what is checked.
+#: `True` means the text under test presents R157SWIN as an element this project
+#: supplies. Three-valued by construction: a text that says nothing about the
+#: element at all is not "unimplemented" either, which is why
+#: `_declares_r157swin_unimplemented` is a separate predicate rather than this
+#: one negated — silence is a could-not-evaluate and must not read as a clean
+#: declaration of absence.
+def _claims_r157swin_implemented(text: str) -> bool:
+    lowered = text.lower()
+    if "r157swin" not in lowered:
+        return False
+    return not _declares_r157swin_unimplemented(text)
 
-    The regulation's point is that a recorded event can be attributed to the
-    software that produced it. Here that includes the envelope parameters,
-    because the same code at a different horizon computes a different envelope
-    and therefore records a different set of `envelope_entered` events.
+
+def _declares_r157swin_unimplemented(text: str) -> bool:
+    lowered = text.lower()
+    if "r157swin" not in lowered:
+        return False
+    return any(
+        phrase in lowered
+        for phrase in ("not implemented", "unimplemented", "is not it")
+    )
+
+
+def test_the_artifact_does_not_offer_the_recorder_stamp_as_r157swin(
+    tmp_path: Path,
+) -> None:
+    """Issue #109. The one element this project does **not** implement.
+
+    R157SWIN identifies *the automated driving system whose behaviour is under
+    investigation*. `reg` has no policy version to bind — its simulator has no
+    policy vendor and `Declaration` carries no version field — so what the
+    occurrence rows carried under the name `sw_version` was the *recorder's*
+    build: the wrong software, presented in a mapping the project claims
+    conformance to.
+
+    The fix is a name and a stated absence, not an invented identifier. This
+    asserts three things a reader holding only the file depends on:
+
+    * the column no longer bears a name that invites the misreading, and the
+      old one is gone rather than aliased — an alias would leave the claim
+      standing for anyone who queried it;
+    * the retention rule *in the artifact* says the element is unimplemented, so
+      absence is a recorded fact and not something inferred from a missing
+      column (the same discipline as `meta[attestation_records]`);
+    * `docs/prior-art.md` §9, which is where the DSSAD data model is compared
+      element by element, records it the same way.
     """
-    base = graph.sw_version(**_FAST)
-    assert base != graph.sw_version(**{**_FAST, "horizon": 0.2})
-    assert base != graph.sw_version(**{**_FAST, "n_samples": 8})
-    assert base != graph.sw_version(**{**_FAST, "seed": 1})
-    assert base == graph.sw_version(**_FAST)
+    csv = _write_stream(
+        tmp_path / "walk.csv", _creep_frames(12, lambda i: (0.95 - 0.03 * i, 0.0))
+    )
+    out = tmp_path / "walk.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(occurrence)")
+        }
+        schema_sql = "\n".join(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL"
+            )
+        )
+        meta = store.all_meta(conn)
+    finally:
+        conn.close()
+
+    assert "recorder_version" in columns
+    assert "sw_version" not in columns
+    assert not hasattr(graph, "sw_version")
+    assert graph.META_OCCURRENCE_RECORDER_VERSION in meta
+    assert "occurrence_sw_version" not in meta
+    # Nothing left in the file's own schema text presents the column as the
+    # element. The stored SQL is what a reader with sqlite3 and no repository
+    # sees first.
+    assert not _claims_r157swin_implemented(schema_sql)
+
+    rule = meta[graph.META_OCCURRENCE_RETENTION]
+    assert _declares_r157swin_unimplemented(rule), (
+        "the artifact's own retention rule has to state that R157SWIN is not "
+        "implemented. A reader holding only the file cannot otherwise tell "
+        "'this build does not record the element' from 'this run had nothing "
+        "to record' — the distinction meta[attestation_records] exists for."
+    )
+    assert not _claims_r157swin_implemented(rule)
+
+    prior_art = (Path(__file__).resolve().parent.parent / "docs" / "prior-art.md")
+    section = prior_art.read_text(encoding="utf-8")
+    assert _declares_r157swin_unimplemented(section)
+    assert not _claims_r157swin_implemented(section)
+
+
+def test_the_r157swin_check_rejects_the_wording_it_was_written_against() -> None:
+    """THE NEGATIVE. Fed the pre-#109 text, the predicate above must say no.
+
+    The defect being guarded is a *claim*, and a check that only ever sees the
+    corrected wording proves nothing about whether it can fail. So it is fed the
+    sentence that was actually in `reg/store.py` before this issue — the mapping
+    line that presented the recorder's stamp as the element — and the silence
+    case beside it, which is neither a claim nor a declared absence.
+    """
+    before = (
+        "`sw_version`  DSSAD's **R157SWIN**, the software version identifier "
+        "present when the event occurred, in this project's terms: the `reg` "
+        "version plus a digest binding the envelope parameters."
+    )
+    assert _claims_r157swin_implemented(before)
+    assert not _declares_r157swin_unimplemented(before)
+
+    # Silence is a could-not-evaluate, and it must not resolve to either answer.
+    silent = "an occurrence row carries a flag, a reason, a date and a stamp."
+    assert not _claims_r157swin_implemented(silent)
+    assert not _declares_r157swin_unimplemented(silent)
+
+    after = (
+        "DSSAD's R157SWIN element is NOT implemented here: nothing in this "
+        "prototype has a policy version to bind."
+    )
+    assert _declares_r157swin_unimplemented(after)
+    assert not _claims_r157swin_implemented(after)
+
+
+def test_the_recorder_stamp_changes_when_the_envelope_parameters_do() -> None:
+    """The stamp's negative. A stamp that never moved would bind nothing.
+
+    What it binds is the **recorder** — `reg`'s build and the envelope
+    parameters it watched with — and not the policy under investigation
+    (issue #109). That is still worth binding: the same code at a different
+    horizon computes a different envelope and therefore records a different set
+    of `envelope_entered` events, so an occurrence is interpretable only beside
+    the parameters that produced it. A constant here would make the digest in
+    `meta` uncheckable against the rows.
+    """
+    base = graph.recorder_version(**_FAST)
+    assert base != graph.recorder_version(**{**_FAST, "horizon": 0.2})
+    assert base != graph.recorder_version(**{**_FAST, "n_samples": 8})
+    assert base != graph.recorder_version(**{**_FAST, "seed": 1})
+    assert base == graph.recorder_version(**_FAST)
 
 
 @pytest.mark.parametrize("resolution", [1.0, 0.5, 0.02])
@@ -2558,7 +2686,7 @@ def _occurrence_kwargs(**overrides):
         "t_utc": TEST_IDENTITY.timestamp_utc(1.0),
         "entity_id": "obs_a",
         "value": 0.4,
-        "sw_version": "reg-test",
+        "recorder_version": "reg-test",
     }
     fields.update(overrides)
     return fields
@@ -2584,7 +2712,8 @@ def test_the_schema_itself_refuses_an_unknown_occurrence_type(seeded) -> None:
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
             "INSERT INTO occurrence (occurrence_key, seq, type, layer, reason, "
-            "t, date, t_utc, sw_version) VALUES (99, 0, 'veto', 'A', 'because', "
+            "t, date, t_utc, recorder_version) VALUES (99, 0, 'veto', 'A', "
+            "'because', "
             "1.0, '2026/08/21', '2026-08-21T09:00:01.000000Z', 'v')"
         )
 
@@ -2598,10 +2727,17 @@ def test_an_occurrence_with_no_reason_is_refused(seeded) -> None:
             )
 
 
-def test_an_occurrence_with_no_software_version_is_refused(seeded) -> None:
-    """`R157SWIN`. An event nobody can attribute to a build is not evidence."""
-    with pytest.raises(store.StoreError, match="R157SWIN"):
-        store.insert_occurrence(seeded, "occ_0", **_occurrence_kwargs(sw_version=""))
+def test_an_occurrence_with_no_recorder_version_is_refused(seeded) -> None:
+    """An event nobody can attribute to a build of the recorder is not evidence.
+
+    Not `R157SWIN` — this artifact does not implement that element (issue #109).
+    What the column binds is which build of `reg`, at which envelope parameters,
+    was watching; a blank one makes the digest in `meta` uncheckable.
+    """
+    with pytest.raises(store.StoreError, match="recorder_version"):
+        store.insert_occurrence(
+            seeded, "occ_0", **_occurrence_kwargs(recorder_version="")
+        )
 
 
 def test_an_entity_occurrence_without_an_entity_is_refused(seeded) -> None:

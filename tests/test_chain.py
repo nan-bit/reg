@@ -32,6 +32,8 @@ import dataclasses
 import hashlib
 import json
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -1168,6 +1170,125 @@ def test_a_tamper_spec_takes_either_name_for_a_chain() -> None:
 
 
 # --- the report's own vocabulary ------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# THE TRUNCATION TABLE (issue #97)
+#
+# An external review reported that `verify_chain` returned VERIFIED on several
+# tampers. Two mattered, and only one of them reproduced — which is recorded here
+# rather than quietly dropped, because a test suite that only keeps the findings
+# that held is a suite that cannot tell you when a reviewer was wrong.
+# --------------------------------------------------------------------------
+
+
+def _copy(src: Path, dst: Path) -> Path:
+    shutil.copyfile(src, dst)
+    return dst
+
+
+def test_deleting_every_link_edge_is_not_a_verified_artifact(
+    attested: Path, tmp_path: Path
+) -> None:
+    """**THE ONE THAT REPRODUCED.**
+
+    `_dangling_links` reports `FOLLOWS` edges that exist and point at nothing, so
+    deleting them all leaves nothing to dangle and the artifact verified clean.
+    An empty witness list reading as a pass is the inversion CLAUDE.md forbids.
+    The census asserts the count instead of inspecting the survivors.
+    """
+    out = _copy(attested, tmp_path / "no-links.sqlite")
+    conn = sqlite3.connect(out)
+    conn.execute("DELETE FROM edge WHERE type = 'FOLLOWS'")
+    conn.commit()
+    conn.close()
+
+    report = verify_chain(store.connect(out), KEYRING)
+    assert report.state is ChainState.BROKEN, (
+        "every link edge was removed and the artifact still verified. Counting "
+        "them is what notices it; inspecting the ones that remain cannot."
+    )
+    kinds = {f.kind for chain in report.chains for f in chain.failures}
+    assert "link-census" in kinds, f"expected a link-census failure, got {kinds}"
+
+
+def test_a_view_that_dropped_the_edge_layer_is_not_a_tampered_chain(
+    attested: Path, tmp_path: Path
+) -> None:
+    """**THE NEGATIVE FOR THE CENSUS**, and it caught a bug in the census itself.
+
+    `reg.bench.materialize_level` builds the occurrence view with a bare
+    `DELETE FROM edge`: that level retains events and not relationships, and says
+    so in its own retention rule. The first version of the census called that a
+    broken chain, and the second — guarding on "are there any FOLLOWS edges" —
+    was worse, because deleting every FOLLOWS edge is exactly the attack.
+
+    Dropping the edge layer takes *every* edge. Removing the links alone leaves
+    the others behind. That is the difference, and it is in the artifact.
+    """
+    out = _copy(attested, tmp_path / "coarsened.sqlite")
+    conn = sqlite3.connect(out)
+    conn.execute("DELETE FROM edge")
+    conn.commit()
+    conn.close()
+
+    report = verify_chain(store.connect(out), KEYRING)
+    kinds = {f.kind for chain in report.chains for f in chain.failures}
+    assert "link-census" not in kinds, (
+        "a view with no edge layer was reported as a chain with its links "
+        "removed. Those are different facts about the artifact."
+    )
+    assert report.state is not ChainState.VERIFIED, (
+        "a census that could not run must not read as a pass"
+    )
+
+
+def test_deleting_a_declaration_a_verdict_names_is_caught(
+    attested: Path, tmp_path: Path
+) -> None:
+    """**THE ONE THAT DID NOT REPRODUCE**, kept because the reason matters.
+
+    The review reported this as VERIFIED. It is not, and was not before issue #97
+    touched anything: since issue #55 a `Verdict` stores `declaration_id` as a key
+    into `node`, so deleting the declaration's node row changes the verdict's
+    *reconstructed* reference and breaks its MAC.
+
+    The relational storage supplies the integrity the review said was absent —
+    which is worth a test, because the day the record tables stop being
+    relational that protection disappears silently. `_cross_referenced_records`
+    now checks the reference directly, so the finding is legible rather than
+    arriving as a confusing MAC mismatch.
+    """
+    out = _copy(attested, tmp_path / "orphaned.sqlite")
+    conn = sqlite3.connect(out)
+    key, = conn.execute(
+        "SELECT declaration_key FROM declaration ORDER BY seq DESC LIMIT 1"
+    ).fetchone()
+    held, = conn.execute("SELECT count(*) FROM declaration").fetchone()
+    conn.execute("DELETE FROM declaration WHERE declaration_key = ?", (key,))
+    conn.execute("DELETE FROM node WHERE node_key = ?", (key,))
+    # Fix the count and drop the edges: both are unauthenticated, both editable.
+    conn.execute(
+        "UPDATE meta SET value = ? WHERE key = 'declaration_count'", (str(held - 1),)
+    )
+    conn.execute(
+        "DELETE FROM edge WHERE type = 'FOLLOWS' AND (src_key = ? OR dst_key = ?)",
+        (key, key),
+    )
+    conn.commit()
+    conn.close()
+
+    report = verify_chain(store.connect(out), KEYRING)
+    assert report.state is ChainState.BROKEN, (
+        "a declaration was removed while a verdict still names it, and every "
+        "unauthenticated witness was repaired to match. The reference is inside "
+        "the enforcement MAC; it is the one thing here that cannot be edited."
+    )
+
+
+def test_an_untampered_artifact_still_verifies(attested: Path) -> None:
+    """The control. Three checks were added; none may fire on a clean artifact."""
+    assert verify_chain(store.connect(attested), KEYRING).state is ChainState.VERIFIED
 
 
 def test_a_failure_cannot_be_recorded_as_verified() -> None:

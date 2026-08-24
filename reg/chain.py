@@ -815,6 +815,18 @@ FAILURE_KINDS: tuple[str, ...] = (
     "count",
     #: A `FOLLOWS` edge names a record this artifact no longer holds.
     "dangling-link",
+    #: A chain of N records is not joined by N-1 `FOLLOWS` edges. Distinct from
+    #: `dangling-link`, which reports edges that exist and point at nothing:
+    #: deleting the edges too leaves none to dangle, and only a census sees that.
+    "link-census",
+    #: The `FOLLOWS` edges could not be read, so the census was not taken.
+    "link-census-unreadable",
+    #: A record names another record this artifact no longer holds, in a field
+    #: covered by its own MAC. Unlike every other witness here, this one cannot
+    #: be edited around without the signing key.
+    "cross-reference",
+    #: The referenced table could not be read, so the references were not checked.
+    "cross-reference-unreadable",
     #: A stored row could not be read back as the record it claims to be.
     "unreadable",
     #: This chain holds no records, so nothing was checked.
@@ -1223,7 +1235,143 @@ def _walk(
         )
 
     failures.extend(_dangling_links(conn, spec, walked_ids))
+    failures.extend(_link_edge_census(conn, spec, walked_ids))
+    failures.extend(_cross_referenced_records(conn, spec, records))
     return _result(spec, len(records), links_checked, macs_checked, stated, failures)
+
+
+def _link_edge_census(
+    conn: sqlite3.Connection, spec: ChainSpec, walked_ids: set[str]
+) -> list[ChainFailure]:
+    """A chain of N records must be joined by exactly N-1 `FOLLOWS` edges.
+
+    `_dangling_links` reports edges that **exist and point at nothing**, which
+    means deleting the edges too leaves nothing to dangle and reads as a pass.
+    `DELETE FROM edge WHERE type='FOLLOWS'` verified clean before this existed.
+    An empty witness list rendering as a pass is the inversion CLAUDE.md forbids,
+    so the count is asserted rather than the survivors inspected.
+
+    The edge rows are not covered by any MAC, so this is a *witness* and not
+    proof — an attacker who edits records and edges consistently defeats it.
+    `_cross_referenced_records` is the check that does not have that property.
+    """
+    walked = len(walked_ids)
+    if walked < 1:
+        return []
+    expected = walked - 1
+    try:
+        rows = store.read_edges(conn, edge_type="FOLLOWS")
+    except (store.StoreError, sqlite3.DatabaseError) as exc:
+        return [
+            ChainFailure(
+                chain=spec.role,
+                kind="link-census-unreadable",
+                state=ChainState.COULD_NOT_EVALUATE,
+                reason=(
+                    "the FOLLOWS edges could not be read, so the walk cannot "
+                    f"say whether this chain's {expected} link edge(s) are present: {exc}"
+                ),
+            )
+        ]
+    # A COARSENED VIEW HAS NO EDGE LAYER, AND THAT IS NOT TAMPERING.
+    # `reg.bench.materialize_level` builds the occurrence view with a bare
+    # `DELETE FROM edge`: the level retains events and not relationships, and it
+    # says so in its own retention rule. A census run against it would report
+    # every link edge missing and call a correct projection broken.
+    #
+    # The artifact carries the distinction without needing a flag. Dropping the
+    # edge layer takes *every* edge; removing the link edges alone leaves the
+    # others behind. So no edges at all is could-not-evaluate — this view cannot
+    # be asked — and edges present with the links missing is the finding.
+    # `rows` being empty is NOT the test: deleting every FOLLOWS edge also empties
+    # it, and that is the attack. What separates a coarsened view from a tampered
+    # one is whether the edge layer is gone *entirely*.
+    try:
+        any_edge = conn.execute("SELECT 1 FROM edge LIMIT 1").fetchone() is not None
+    except sqlite3.DatabaseError:
+        any_edge = True
+    if not any_edge:
+        return [
+            ChainFailure(
+                chain=spec.role,
+                kind="link-census-unreadable",
+                state=ChainState.COULD_NOT_EVALUATE,
+                reason=(
+                    "this artifact holds no edges at all, so its link edges could "
+                    "not be counted. A view that dropped the edge layer is not a "
+                    "chain with its links removed, and this is not a pass: what "
+                    "the census would have checked went unchecked."
+                ),
+            )
+        ]
+    found = sum(1 for r in rows if str(r["src_id"]) in walked_ids)
+    if found == expected:
+        return []
+    return [
+        ChainFailure(
+            chain=spec.role,
+            kind="link-census",
+            state=ChainState.BROKEN,
+            reason=(
+                f"{walked} {spec.kind} record(s) must be joined by {expected} "
+                f"FOLLOWS edge(s); the artifact holds {found}. Edges were "
+                "removed after the build. Deleting every link edge leaves none to "
+                "dangle, so counting them is what notices it."
+            ),
+        )
+    ]
+
+
+def _cross_referenced_records(
+    conn: sqlite3.Connection, spec: ChainSpec, records: list[object]
+) -> list[ChainFailure]:
+    """A record naming another record the artifact no longer holds.
+
+    **This is the check that cannot be edited around.** A `Verdict` carries
+    `declaration_id`, and `signing_bytes` covers every field except the MAC, so
+    the reference is *inside the enforcement signature*. Delete the declaration,
+    fix `meta[declaration_count]`, drop the link edges — all unauthenticated, all
+    editable — and the surviving verdict still names the record that is gone, in
+    a field nobody can change without invalidating a MAC they cannot forge.
+
+    The artifact held that evidence all along and did not look at it.
+    """
+    if spec.role != "enforcement":
+        return []
+    try:
+        held = {d.declaration_id for d in store.read_declarations(conn)}
+    except (store.StoreError, ValueError, sqlite3.DatabaseError) as exc:
+        return [
+            ChainFailure(
+                chain=spec.role,
+                kind="cross-reference-unreadable",
+                state=ChainState.COULD_NOT_EVALUATE,
+                reason=(
+                    "the declarations could not be read, so the verdicts' "
+                    f"references to them were not checked: {exc}"
+                ),
+            )
+        ]
+    out: list[ChainFailure] = []
+    for record in records:
+        named = getattr(record, "declaration_id", None)
+        if named is None or named in held:
+            continue
+        out.append(
+            ChainFailure(
+                chain=spec.role,
+                kind="cross-reference",
+                state=ChainState.BROKEN,
+                reason=(
+                    f"this verdict adjudicates {named!r} and the artifact holds no "
+                    "such declaration. The reference is inside the enforcement "
+                    "MAC, so it is evidence the record was removed that nobody "
+                    "could edit without the enforcement key."
+                ),
+                record_id=getattr(record, "verdict_id", None),
+            )
+        )
+    return out
 
 
 def _dangling_links(

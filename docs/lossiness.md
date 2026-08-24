@@ -109,11 +109,26 @@ Each entry is a claim that the graph can be tested against.
    because a `FOLLOWS` edge written across a break would let a chain walk cleanly
    over records nobody ever saw.
 
-   **`Acknowledgment` is not stored yet, and the gap is a refusal rather than a
+   **`Acknowledgment` is not stored, and the gap is a refusal rather than a
    hole.** Acknowledgments share the verdict chain, so a run containing one has a
    verdict whose `prev_hash` names a record the artifact would not hold — and that
-   stream is refused rather than stored with a link written over it. The fixtures
-   that produce a passivation arrive with issue #46, and so does the row it needs.
+   stream is refused rather than stored with a link written over it. The refusal is
+   two checks, both deliberate: `AttestationRecords` refuses a non-`Verdict` in
+   `verdicts`, so an acknowledgment cannot enter the stream disguised as one, and
+   `_check_link` refuses the verdict that follows an acknowledgment, because its
+   `prev_hash` names the record that is missing. Both are pinned by
+   `tests/test_graph.py`, which feeds `build` a real signed acknowledgment and
+   asserts it says no.
+
+   That is the correct behaviour for an artifact that cannot represent the record,
+   and it is not free: passivation and reintegration are implemented in
+   `reg/enforce.py` and **only** there, so *was the passivation acknowledged, and by
+   whom* is a question no artifact answers. This paragraph and `README.md`'s Claim 4
+   row state the same gap deliberately, and issue #112 is where it would close —
+   which is a schema change, a new edge type, a query, a fixture and a
+   re-measurement, not a repair. It said "not stored **yet**, arriving with issue
+   #46" until 2026-08-24, when issue #110 found #46 closed with the fixtures shipped
+   and the row not: a pointer at a closed issue reads as scheduled work and was not.
 8. **Envelope *identity and scalars* on every envelope the artifact keeps** — every
    `envelope` row records `envelope_hash`, `area`, `horizon`, and `source`
    (`computed` / `declared` / `clamped`). There is no such thing here as a row that

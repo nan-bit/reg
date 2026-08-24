@@ -69,7 +69,15 @@ from reg.chain import (
     write_keyring,
 )
 from reg.declare import Declaration, envelope_wkb, verify_declaration
-from reg.enforce import Verdict, computed_bound, sign_verdict, verify_verdict
+from reg.enforce import (
+    Acknowledgment,
+    Verdict,
+    computed_bound,
+    sign_acknowledgment,
+    sign_verdict,
+    verify_acknowledgment,
+    verify_verdict,
+)
 from reg.envelope import (
     compute_envelope,
     envelope_hash,
@@ -3582,6 +3590,155 @@ def test_records_must_be_records(tmp_path: Path) -> None:
     csv = _held_stream(tmp_path / "held.csv", 4)
     with pytest.raises(GraphBuildError, match="AttestationRecords or None"):
         _build(csv, tmp_path / "held.sqlite", records=("not", "records"))
+
+
+def _chain_across_an_acknowledgment() -> tuple[Verdict, Acknowledgment, Verdict]:
+    """A real enforcement chain with an acknowledgment in the middle of it.
+
+    Signed with the enforcement key and chained the way `reg.enforce.Enforcer`
+    chains them: `acknowledge` advances the same `prev_hash` the verdicts use, so
+    the verdict that resumes the run commits to the acknowledgment and not to the
+    verdict before it. That is the whole reason the stream cannot be stored with
+    the acknowledgment simply dropped out of it.
+
+    Constructed rather than driven through an `Enforcer`, for the same reason
+    `_verdict_chain` is: no shipped scenario acknowledges a passivation. These are
+    real records all the same — every field validated, both MACs verifying under
+    the fixture keyring.
+    """
+    key = FIXTURE_KEYRING.key("enforcement")
+    passivating = sign_verdict(
+        Verdict(
+            verdict_id="synthetic-verdict-00000",
+            declaration_id=None,
+            seq=0,
+            t=0.00,
+            outcome="VETO",
+            fault="no_declaration",
+            clamped_envelope=None,
+            prev_hash=GENESIS_HASH,
+            mac=UNSIGNED_MAC,
+        ),
+        key,
+    )
+    ack = sign_acknowledgment(
+        Acknowledgment(
+            ack_id="synthetic-ack-00000",
+            t=0.02,
+            fault="no_declaration",
+            verdict_id=passivating.verdict_id,
+            reason="operator inspected the cell and cleared it to resume",
+            prev_hash=chain_hash(passivating, passivating.prev_hash),
+            mac=UNSIGNED_MAC,
+        ),
+        key,
+    )
+    resumed = sign_verdict(
+        Verdict(
+            verdict_id="synthetic-verdict-00001",
+            declaration_id=None,
+            seq=1,
+            t=0.04,
+            outcome="PERMIT",
+            fault=None,
+            clamped_envelope=None,
+            prev_hash=chain_hash(ack, ack.prev_hash),
+            mac=UNSIGNED_MAC,
+        ),
+        key,
+    )
+    return passivating, ack, resumed
+
+
+def test_an_acknowledgment_is_not_a_verdict(tmp_path: Path) -> None:
+    """THE FIRST HALF of a refusal the docs call deliberate (issue #110).
+
+    The artifact has no row for an `Acknowledgment`, so the only way one could
+    reach `build` is inside the verdict tuple. `AttestationRecords` refuses it
+    there — by type, before anything is written — because storing an
+    acknowledgment's fields in a verdict's columns would record a passivation
+    *clearing* as a passivation.
+    """
+    _, ack, _ = _chain_across_an_acknowledgment()
+    assert (
+        verify_acknowledgment(ack, FIXTURE_KEYRING.key("enforcement")).state
+        is MacState.VALID
+    ), "the record offered below must be a valid one, or the refusal is about the MAC"
+    with pytest.raises(GraphBuildError, match="not a Verdict"):
+        AttestationRecords(declarations=(), verdicts=(ack,))
+
+
+def test_a_run_containing_an_acknowledgment_is_refused(tmp_path: Path) -> None:
+    """THE SECOND HALF, and the one that makes the gap a refusal and not a hole.
+
+    An acknowledgment shares the verdict chain, so the verdict after it links to a
+    record this artifact cannot hold. Dropping the acknowledgment and storing the
+    two verdicts either side of it would write a FOLLOWS edge across a record
+    nobody ever saw — which is the one thing `verify_chain` must never walk
+    cleanly over — so `build` refuses the whole stream.
+
+    The control is the same chain cut *before* the acknowledgment: it stores. So
+    what is refused is the gap, not these records.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    passivating, _, resumed = _chain_across_an_acknowledgment()
+
+    _build(
+        csv,
+        tmp_path / "before.sqlite",
+        records=AttestationRecords(declarations=(), verdicts=(passivating,)),
+    )
+    assert (tmp_path / "before.sqlite").exists(), (
+        "the control build failed, so the refusal below proves nothing about "
+        "the acknowledgment"
+    )
+
+    with pytest.raises(GraphBuildError, match="consecutive"):
+        _build(
+            csv,
+            tmp_path / "across.sqlite",
+            records=AttestationRecords(
+                declarations=(), verdicts=(passivating, resumed)
+            ),
+        )
+    assert not (tmp_path / "across.sqlite").exists(), (
+        "a refused build must leave no artifact behind"
+    )
+
+
+def _modules_calling(method: str) -> list[str]:
+    """Which modules of the package contain a call to `Enforcer.<method>`."""
+    return sorted(
+        path.name
+        for path in Path(graph.__file__).parent.glob("*.py")
+        if f".{method}(" in path.read_text()
+    )
+
+
+def test_nothing_in_the_package_produces_an_acknowledgment() -> None:
+    """The other claim `README.md` Claim 4 and `docs/lossiness.md` #7 make: no
+    shipped fixture produces one.
+
+    Asserted against the source, like `tests/test_enforce.py`'s import check,
+    because the alternative is a run that builds today and stops building the day
+    somebody wires `acknowledge` into a scenario — a chain-break failure a long
+    way from its cause. `Enforcer.acknowledge` is exercised only by
+    `tests/test_enforce.py`; nothing that produces a record stream calls it. When
+    that changes, issue #112 has become load-bearing and this is where it says so.
+
+    `adjudicate` is the control: it is the sibling method the record-stream
+    producer *does* call, so a search that finds nothing anywhere — a renamed
+    method, a moved package — fails here rather than passing quietly.
+    """
+    assert "graph.py" in _modules_calling("adjudicate"), (
+        "the search found no caller of Enforcer.adjudicate either, so it cannot "
+        "be trusted to find a caller of Enforcer.acknowledge"
+    )
+    assert _modules_calling("acknowledge") == [], (
+        f"{_modules_calling('acknowledge')} call Enforcer.acknowledge. An "
+        "acknowledgment a fixture produces cannot be stored: graph.build refuses "
+        "the run it appears in (issue #112)."
+    )
 
 
 def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:

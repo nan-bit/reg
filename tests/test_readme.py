@@ -26,6 +26,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 PLAN = REPO / "docs" / "plan.md"
+LOSSINESS = REPO / "docs" / "lossiness.md"
 
 # A retention size (`263 GB`) or a ratio (`694x`, `13x`). The tilde, the
 # asterisks and the surrounding markdown are stripped before matching, so
@@ -117,4 +118,118 @@ def test_a_drifted_ratio_is_caught() -> None:
 def test_nothing_to_compare_is_not_a_pass(readme: str, plan: str) -> None:
     """Silence and an empty document are could-not-evaluate, never AGREE."""
     verdict, _ = check(readme, plan)
+    assert verdict == COULD_NOT_EVALUATE
+
+
+# ==========================================================================
+# The claim statuses restate what the code can do, and those go stale too.
+#
+# Issue #110: `README.md` said Claim 4 was `landed` while passivation and
+# reintegration existed only in `reg/enforce.py` and reached no artifact, and
+# `docs/lossiness.md` *Retained* #7 conceded exactly that gap. Two documents,
+# one repository, opposite claims, and nothing failed. This is the same shape of
+# check as the one above: the front page may not be more confident than the
+# lossiness contract about what the artifact holds.
+# ==========================================================================
+
+#: The Claim 4 row of the README's claims table. Anchored on the row's number
+#: cell, which `README.md` states is an identifier and does not move.
+CLAIM_4_ROW = re.compile(r"^\|\s*\*\*4\*\*\s*\|.*$", re.M)
+
+#: *Retained* #7, the hash-chain clause, up to the start of #8.
+RETAINED_7 = re.compile(r"^7\. \*\*The complete hash chain\*\*.*?(?=^8\. )", re.M | re.S)
+
+#: The status word, the first backticked token of the row's third cell.
+STATUS = re.compile(r"`([^`]+)`")
+
+
+def claim_4(readme: str) -> str | None:
+    """The Claim 4 row, or `None` if the table no longer has one."""
+    found = CLAIM_4_ROW.search(readme)
+    return found.group(0) if found else None
+
+
+def retained_7(lossiness: str) -> str | None:
+    """The *Retained* #7 clause, or `None` if it has been renumbered away."""
+    found = RETAINED_7.search(lossiness)
+    return found.group(0) if found else None
+
+
+def agree_about_acknowledgment(readme: str, lossiness: str) -> tuple[str, list[str]]:
+    """Verdict on whether the two documents say the same thing about passivation.
+
+    An acknowledgment is not stored, and `graph.build` refuses a run containing
+    one (`tests/test_graph.py`). Both documents have to say so, and the front
+    page's status word may not be a bare `landed` over a half nobody can
+    exercise. A README with no Claim 4 row, or a lossiness file with no #7, is
+    COULD-NOT-EVALUATE: this check is meaningless if it cannot find what it
+    compares, and silence must not read as agreement.
+    """
+    row, clause = claim_4(readme), retained_7(lossiness)
+    if row is None or clause is None:
+        return COULD_NOT_EVALUATE, []
+
+    disagreements = []
+    if "acknowledg" not in row.lower():
+        disagreements.append(
+            "README.md's Claim 4 row does not mention the acknowledgment"
+        )
+    if "acknowledg" not in clause.lower():
+        disagreements.append(
+            "docs/lossiness.md Retained #7 does not mention the acknowledgment"
+        )
+    status = STATUS.search(row.split("|")[3]) if row.count("|") > 3 else None
+    if status is not None and status.group(1).strip() == "landed":
+        disagreements.append(
+            "README.md's Claim 4 status is a bare `landed` over a half that is "
+            "implemented only in reg/enforce.py"
+        )
+    return (DISAGREE if disagreements else AGREE), disagreements
+
+
+def test_the_front_page_and_the_lossiness_contract_agree_about_passivation() -> None:
+    verdict, disagreements = agree_about_acknowledgment(
+        README.read_text(), LOSSINESS.read_text()
+    )
+    assert verdict == AGREE, (
+        f"{disagreements}. Passivation and reintegration are implemented in "
+        "reg/enforce.py and reach no artifact; graph.build refuses a run "
+        "containing an Acknowledgment. Both documents state that gap, or issue "
+        "#112 closed it and both should stop stating it — not one each."
+    )
+
+
+def test_a_bare_landed_on_claim_4_is_caught() -> None:
+    """The negative test: the exact row this check was written against (#110)."""
+    verdict, disagreements = agree_about_acknowledgment(
+        "| **4** | **Attestation** | `landed` — the chain and the taxonomy |",
+        LOSSINESS.read_text(),
+    )
+    assert verdict == DISAGREE
+    assert any("bare `landed`" in d for d in disagreements)
+    assert any("does not mention the acknowledgment" in d for d in disagreements)
+
+
+def test_a_lossiness_clause_that_dropped_the_concession_is_caught() -> None:
+    """The other direction: the artifact half lands in one document only."""
+    verdict, disagreements = agree_about_acknowledgment(
+        README.read_text(),
+        "7. **The complete hash chain** — every link, unbroken.\n8. next\n",
+    )
+    assert verdict == DISAGREE
+    assert disagreements == [
+        "docs/lossiness.md Retained #7 does not mention the acknowledgment"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("readme", "lossiness"),
+    [
+        ("a front page with no claims table", "7. **The complete hash chain**\n8. x\n"),
+        ("| **4** | x | `landed, minus the acknowledgment` |", "no retained list here"),
+    ],
+)
+def test_a_missing_claim_row_or_clause_is_not_a_pass(readme: str, lossiness: str) -> None:
+    """Silence is could-not-evaluate. A renamed heading must not read as AGREE."""
+    verdict, _ = agree_about_acknowledgment(readme, lossiness)
     assert verdict == COULD_NOT_EVALUATE

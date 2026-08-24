@@ -611,6 +611,16 @@ needs a network call at artifact close, which the air-gap claim rules out. The
 `Committer` interface exists so that dropping that claim makes them adapters
 rather than a rewrite.
 
+**What this claim does not cover, stated here rather than left to be inferred.**
+Passivation and reintegration — Phase 4's asymmetry, the part the plan says people
+omit — is implemented in `reg/enforce.py` and reaches no artifact, so *was the
+passivation acknowledged, and by whom* is not among the questions this claim's
+evidence answers. The refusal that keeps the `Acknowledgment` out is deliberate
+and documented (Phase 4 below, [`docs/lossiness.md`](lossiness.md) *Retained* #7);
+what it means for the claim is that the attestation an artifact carries is
+declaration, verdict and chain, and not the record that cleared a fault. Issue
+#112.
+
 **Success:** the demo sentence answered end to end, as one query, with
 `verify_chain` able to say no — demonstrated by `--tamper`, not asserted.
 
@@ -849,6 +859,25 @@ class Verdict:
 After VETO or SAFE_STATE, recovery is **not** automatic. Requires a fresh
 declaration plus an explicit acknowledgment record. That asymmetry is deliberate
 and it's the part people omit when they copy the pattern — implement it.
+
+**It is implemented, and it is implemented here and nowhere else.**
+`reg.enforce.Acknowledgment` is signed with the enforcement key, names the
+`verdict_id` that passivated rather than just the fault, refuses a second
+acknowledgment of the same passivation, and refuses a pre-emptive one outright;
+`Enforcer.acknowledge` and a fresh accepted declaration are both required, and
+either alone resumes nothing. That is the mechanism, and it is Phase 4's
+deliverable.
+
+**What it does not do is reach an artifact, and Phase 5 onwards does not carry
+it.** There is no acknowledgment table, no edge type and no query for one, and
+`graph.build` *refuses* a record stream containing one — twice, deliberately, and
+pinned by `tests/test_graph.py`. So a passivation is auditable after the fact and
+its *clearing* is not: the run's own enforcer knew who acknowledged it and why,
+and the file that outlives the run does not. Issue #112 is where that changes, and
+it changes what Claim 4 claims — a schema change, a new edge type, a query, a
+fixture and a re-measurement. See [`docs/lossiness.md`](lossiness.md) *Retained*
+#7, which states the same gap, and `README.md`'s Claim 4 row, which is worded to
+agree with both.
 
 **Deliverable:** verdict stream, and a scenario where the `declared_violation` run
 produces a clean CLAMP with a named fault.

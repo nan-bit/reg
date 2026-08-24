@@ -777,11 +777,17 @@ class AttestationRecords:
     order — `build` refuses a stream whose links do not hold, because a FOLLOWS
     edge written across a break asserts a link that is not there.
 
-    Acknowledgments are not here. They share the verdict chain, and a run that
-    contains one therefore has a verdict whose `prev_hash` names a record this
-    artifact does not hold; `build` refuses that stream rather than writing a
-    FOLLOWS edge over the gap. Storing them is issue #46's, which is where the
-    fixtures that produce a passivation arrive.
+    Acknowledgments are not here, and that is a **deliberate refusal, not an
+    omission** (issue #110). They share the verdict chain, so a run that contains
+    one has a verdict whose `prev_hash` names a record this artifact does not
+    hold; `build` refuses that stream rather than writing a FOLLOWS edge over the
+    gap. Two checks do it and both must keep doing it while the schema has no row
+    for the record: the type check below refuses an `Acknowledgment` offered as a
+    `Verdict`, and `_check_link` refuses the verdict that follows one. The cost is
+    that no artifact can be asked whether a passivation was acknowledged — stated
+    in `docs/lossiness.md` *Retained* #7 and in `README.md`'s Claim 4 row, and
+    issue #112 is where it would change. Until then, removing either check is not
+    a widening; it is a chain that walks cleanly over a record nobody ever saw.
     """
 
     declarations: tuple[Declaration, ...]

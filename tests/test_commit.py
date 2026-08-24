@@ -201,7 +201,7 @@ def test_an_empty_chain_has_the_genesis_hash_as_its_head(tmp_path: Path) -> None
         scn.world.limits,
         identity=TEST_IDENTITY,
         human_radius=scn.world.human_radius,
-        records=graph.AttestationRecords(declarations=(), verdicts=()),
+        records=graph.AttestationRecords(declarations=(), verdicts=(), acknowledgments=()),
         **_FAST,
     )
     conn = store.connect(out)

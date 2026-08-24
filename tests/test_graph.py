@@ -261,7 +261,7 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
 
     assert result.frames == n_frames
     # One HAS_ENVELOPE, and one SEPARATION per entity (obstacle + human). No
-    # INTERSECTS and no CONTACT: both are far outside a 0.1 s envelope. The four
+    # INTERSECTS and no CONTACT: both are far outside a 0.1 s envelope. The five
     # attestation edges are zero because this build was given no record stream —
     # a zero here and a missing key in `meta` are two different facts and the
     # artifact carries both (issue #45, `META_ATTESTATION_RECORDS`).
@@ -273,6 +273,7 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "DECLARED": 0,
         "ADJUDICATED": 0,
         "ENFORCED": 0,
+        "ACKNOWLEDGED": 0,
         "FOLLOWS": 0,
     }
     # And the nodes those edges anchor, once each — not per frame. There is no
@@ -290,6 +291,7 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "Occurrence": 4,
         "Declaration": 0,
         "Verdict": 0,
+        "Acknowledgment": 0,
     }
 
 
@@ -329,6 +331,7 @@ def test_node_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "Occurrence": 4,
         "Declaration": 0,
         "Verdict": 0,
+        "Acknowledgment": 0,
     }
     assert result.edges == {
         "HAS_ENVELOPE": 2,
@@ -338,6 +341,7 @@ def test_node_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "DECLARED": 0,
         "ADJUDICATED": 0,
         "ENFORCED": 0,
+        "ACKNOWLEDGED": 0,
         "FOLLOWS": 0,
     }
 
@@ -3431,7 +3435,7 @@ def test_the_artifact_says_whether_it_was_given_a_record_stream(
 
     produced_none = tmp_path / "empty.sqlite"
     result = _build(
-        csv, produced_none, records=AttestationRecords(declarations=(), verdicts=())
+        csv, produced_none, records=AttestationRecords(declarations=(), verdicts=(), acknowledgments=())
     )
     meta = _meta(produced_none)
     assert meta[graph.META_ATTESTATION_RECORDS] == "present"
@@ -3528,7 +3532,9 @@ def test_the_five_enforcement_occurrences_are_emitted(tmp_path: Path) -> None:
         csv,
         out,
         records=AttestationRecords(
-            declarations=(), verdicts=_verdict_chain(_OCCURRENCE_WALK)
+            declarations=(),
+            verdicts=_verdict_chain(_OCCURRENCE_WALK),
+            acknowledgments=(),
         ),
     )
 
@@ -3650,7 +3656,9 @@ def test_a_verdict_naming_no_declaration_is_stored_and_gets_no_edge(
     out = tmp_path / "held.sqlite"
     verdicts = _verdict_chain([(0.0, "SAFE_STATE", "watchdog_expiry")])
     result = _build(
-        csv, out, records=AttestationRecords(declarations=(), verdicts=verdicts)
+        csv, out, records=AttestationRecords(
+            declarations=(), verdicts=verdicts, acknowledgments=()
+        )
     )
     assert result.nodes["Verdict"] == 1
     assert result.edges["ADJUDICATED"] == 0
@@ -3682,7 +3690,9 @@ def test_a_record_stream_that_is_not_one_chain_is_refused(
             csv,
             tmp_path / "broken.sqlite",
             records=AttestationRecords(
-                declarations=records.declarations, verdicts=broken
+                declarations=records.declarations,
+                verdicts=broken,
+                acknowledgments=(),
             ),
         )
     assert not (tmp_path / "broken.sqlite").exists(), (
@@ -3710,7 +3720,9 @@ def test_a_record_that_was_altered_after_signing_breaks_its_successors_link(
             csv,
             tmp_path / "altered.sqlite",
             records=AttestationRecords(
-                declarations=records.declarations, verdicts=tuple(altered)
+                declarations=records.declarations,
+                verdicts=tuple(altered),
+                acknowledgments=(),
             ),
         )
 
@@ -3720,9 +3732,13 @@ def test_records_must_be_records(tmp_path: Path) -> None:
     that makes it one, and `build` refuses the whole stream rather than storing
     part of it."""
     with pytest.raises(GraphBuildError, match="not a Declaration"):
-        AttestationRecords(declarations=("decl-0",), verdicts=())
+        AttestationRecords(
+            declarations=("decl-0",), verdicts=(), acknowledgments=()
+        )
     with pytest.raises(GraphBuildError, match="must be a tuple"):
-        AttestationRecords(declarations=[], verdicts=())
+        AttestationRecords(
+            declarations=[], verdicts=(), acknowledgments=()
+        )
     csv = _held_stream(tmp_path / "held.csv", 4)
     with pytest.raises(GraphBuildError, match="AttestationRecords or None"):
         _build(csv, tmp_path / "held.sqlite", records=("not", "records"))
@@ -3787,13 +3803,12 @@ def _chain_across_an_acknowledgment() -> tuple[Verdict, Acknowledgment, Verdict]
 
 
 def test_an_acknowledgment_is_not_a_verdict(tmp_path: Path) -> None:
-    """THE FIRST HALF of a refusal the docs call deliberate (issue #110).
+    """The half of issue #110's refusal that issue #112 kept.
 
-    The artifact has no row for an `Acknowledgment`, so the only way one could
-    reach `build` is inside the verdict tuple. `AttestationRecords` refuses it
-    there — by type, before anything is written — because storing an
-    acknowledgment's fields in a verdict's columns would record a passivation
-    *clearing* as a passivation.
+    An acknowledgment has its own tuple and its own table now, so the only reason
+    to put one in `verdicts` is a mistake — and the columns are not a verdict's.
+    Storing a passivation *clearing* in the row that records a passivation would
+    be the same false statement it was when there was no other row to put it in.
     """
     _, ack, _ = _chain_across_an_acknowledgment()
     assert (
@@ -3801,20 +3816,84 @@ def test_an_acknowledgment_is_not_a_verdict(tmp_path: Path) -> None:
         is MacState.VALID
     ), "the record offered below must be a valid one, or the refusal is about the MAC"
     with pytest.raises(GraphBuildError, match="not a Verdict"):
-        AttestationRecords(declarations=(), verdicts=(ack,))
+        AttestationRecords(declarations=(), verdicts=(ack,), acknowledgments=())
+    # And the mirror: a verdict offered as an acknowledgment. Without it the
+    # check above would pass for a class that only ever validated one field.
+    passivating, _, _ = _chain_across_an_acknowledgment()
+    with pytest.raises(GraphBuildError, match="not a Acknowledgment"):
+        AttestationRecords(
+            declarations=(), verdicts=(), acknowledgments=(passivating,)
+        )
 
 
-def test_a_run_containing_an_acknowledgment_is_refused(tmp_path: Path) -> None:
-    """THE SECOND HALF, and the one that makes the gap a refusal and not a hole.
+def test_a_run_containing_an_acknowledgment_is_stored(tmp_path: Path) -> None:
+    """The half issue #112 reversed, and the row that made reversing it safe.
 
-    An acknowledgment shares the verdict chain, so the verdict after it links to a
-    record this artifact cannot hold. Dropping the acknowledgment and storing the
-    two verdicts either side of it would write a FOLLOWS edge across a record
-    nobody ever saw — which is the one thing `verify_chain` must never walk
-    cleanly over — so `build` refuses the whole stream.
+    The whole chain goes in — the passivating verdict, the acknowledgment, and
+    the verdict that commits to it — as three records of one enforcement chain,
+    with an ACKNOWLEDGED edge to the verdict the acknowledgment names and two
+    FOLLOWS edges joining the three. Before this the same stream was refused
+    outright, and that refusal was correct while the schema had no row for the
+    middle record.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    passivating, ack, resumed = _chain_across_an_acknowledgment()
 
-    The control is the same chain cut *before* the acknowledgment: it stores. So
-    what is refused is the gap, not these records.
+    out = tmp_path / "across.sqlite"
+    result = _build(
+        csv,
+        out,
+        records=AttestationRecords(
+            declarations=(), verdicts=(passivating, resumed), acknowledgments=(ack,)
+        ),
+    )
+    assert result.nodes["Acknowledgment"] == 1
+    assert result.nodes["Verdict"] == 2
+    assert result.edges["ACKNOWLEDGED"] == 1
+    assert result.edges["FOLLOWS"] == 2, (
+        "three records of one chain are joined by two links; a count of one "
+        "would mean the acknowledgment was stored beside the chain rather than "
+        "in it"
+    )
+
+    conn = store.connect(out)
+    try:
+        held = store.read_acknowledgments(conn)
+        assert [a.ack_id for a in held] == [ack.ack_id]
+        assert held[0] == ack, (
+            "the record came back changed. It is stored verbatim or its MAC "
+            "stops verifying under the key that signed it"
+        )
+        edge = next(
+            row
+            for row in store.read_edges(conn, edge_type="ACKNOWLEDGED")
+        )
+        assert (str(edge["src_id"]), str(edge["dst_id"])) == (
+            ack.ack_id,
+            passivating.verdict_id,
+        )
+        assert str(edge["layer"]) == "A", (
+            "an acknowledgment names no entity, so the edge to the verdict it "
+            "clears is Layer A like every other attestation edge"
+        )
+        assert int(store.get_meta(conn, graph.META_ACKNOWLEDGMENT_COUNT)) == 1
+    finally:
+        conn.close()
+
+
+def test_a_run_with_its_acknowledgment_removed_is_still_refused(
+    tmp_path: Path,
+) -> None:
+    """THE NEGATIVE that issue #112 had to keep, and the reason the reversal is
+    not a widening.
+
+    The verdict after an acknowledgment commits to the acknowledgment, so a
+    stream with the acknowledgment dropped out of it is two records that do not
+    link. Storing them would write a FOLLOWS edge across a record nobody ever
+    saw, and `verify_chain` would walk it cleanly — which is the one thing it
+    must never be able to do. The control is the same chain cut *before* the
+    acknowledgment: it stores, so what is refused is the gap and not these
+    records.
     """
     csv = _held_stream(tmp_path / "held.csv", 4)
     passivating, _, resumed = _chain_across_an_acknowledgment()
@@ -3822,19 +3901,21 @@ def test_a_run_containing_an_acknowledgment_is_refused(tmp_path: Path) -> None:
     _build(
         csv,
         tmp_path / "before.sqlite",
-        records=AttestationRecords(declarations=(), verdicts=(passivating,)),
+        records=AttestationRecords(
+            declarations=(), verdicts=(passivating,), acknowledgments=()
+        ),
     )
     assert (tmp_path / "before.sqlite").exists(), (
         "the control build failed, so the refusal below proves nothing about "
         "the acknowledgment"
     )
 
-    with pytest.raises(GraphBuildError, match="consecutive"):
+    with pytest.raises(GraphBuildError, match="does not continue"):
         _build(
             csv,
             tmp_path / "across.sqlite",
             records=AttestationRecords(
-                declarations=(), verdicts=(passivating, resumed)
+                declarations=(), verdicts=(passivating, resumed), acknowledgments=()
             ),
         )
     assert not (tmp_path / "across.sqlite").exists(), (
@@ -3851,29 +3932,30 @@ def _modules_calling(method: str) -> list[str]:
     )
 
 
-def test_nothing_in_the_package_produces_an_acknowledgment() -> None:
-    """The other claim `README.md` Claim 4 and `docs/lossiness.md` #7 make: no
-    shipped fixture produces one.
+def test_the_record_stream_producer_can_acknowledge_a_passivation() -> None:
+    """The inversion of what this test asserted until issue #112.
 
-    Asserted against the source, like `tests/test_enforce.py`'s import check,
-    because the alternative is a run that builds today and stops building the day
-    somebody wires `acknowledge` into a scenario — a chain-break failure a long
-    way from its cause. `Enforcer.acknowledge` is exercised only by
-    `tests/test_enforce.py`; nothing that produces a record stream calls it. When
-    that changes, issue #112 has become load-bearing and this is where it says so.
+    It used to assert that **nothing** in the package calls
+    `Enforcer.acknowledge`, because an acknowledgment a fixture produced could
+    not be stored and the run it appeared in was refused. That is now the thing
+    that must be true instead: `reg.graph.attestation_from_stream` is the
+    producer every artifact in this project comes from, and if it cannot make an
+    acknowledgment then no shipped run can exercise the second half of
+    docs/plan.md Phase 4 — which is exactly the state issue #110 documented.
 
-    `adjudicate` is the control: it is the sibling method the record-stream
-    producer *does* call, so a search that finds nothing anywhere — a renamed
-    method, a moved package — fails here rather than passing quietly.
+    Asserted against the source, like `tests/test_enforce.py`'s import check.
+    `adjudicate` is the control: it is the sibling method the same producer
+    calls, so a search that finds nothing anywhere — a renamed method, a moved
+    package — fails here rather than passing quietly.
     """
     assert "graph.py" in _modules_calling("adjudicate"), (
         "the search found no caller of Enforcer.adjudicate either, so it cannot "
         "be trusted to find a caller of Enforcer.acknowledge"
     )
-    assert _modules_calling("acknowledge") == [], (
-        f"{_modules_calling('acknowledge')} call Enforcer.acknowledge. An "
-        "acknowledgment a fixture produces cannot be stored: graph.build refuses "
-        "the run it appears in (issue #112)."
+    assert "graph.py" in _modules_calling("acknowledge"), (
+        "nothing in the package calls Enforcer.acknowledge, so no shipped run "
+        "produces an acknowledgment and the artifact half of passivation is "
+        "unexercised again (issue #112)."
     )
 
 
@@ -4239,7 +4321,7 @@ def test_half_a_record_layer_is_a_could_not_evaluate(tmp_path: Path) -> None:
     try:
         conn.execute("DROP TABLE declaration")
         conn.commit()
-        with pytest.raises(store.StoreError, match="both tables or neither"):
+        with pytest.raises(store.StoreError, match="every one of those tables"):
             store.has_record_tables(conn)
     finally:
         conn.close()
@@ -4324,7 +4406,7 @@ def test_the_record_tables_follow_the_record_stream_and_nothing_else(
     csv, records = _held_attested(tmp_path)
     cases = {
         "absent.sqlite": (None, False),
-        "empty.sqlite": (AttestationRecords(declarations=(), verdicts=()), True),
+        "empty.sqlite": (AttestationRecords(declarations=(), verdicts=(), acknowledgments=()), True),
         "full.sqlite": (records, True),
     }
     for name, (given, expected) in cases.items():

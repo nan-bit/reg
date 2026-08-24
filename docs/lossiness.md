@@ -47,13 +47,23 @@ nothing else:
 | 6 | `violations(window)` — commanded actions outside their declared bound, with fault code | A |
 | 7 | `verdicts(declaration_id)` — what enforcement did, and why | A |
 | 8 | `verify_chain()` — integrity over the full record | A |
-| 9 | `incident_report(t_incident)` — 1–8 composed into one structured answer | A + B |
+| 9 | `incident_report(t_incident)` — 1–8 composed into one structured answer, with query 10's summary in its enforcement clause | A + B |
+| 10 | `passivations()` — every passivation the record holds, and for each one whether an acknowledgment cleared it, when, and with what stated reason | A |
 
 **Adding a query to this list is a change to this contract.** If a new question
 needs something currently in *Discarded*, the discard is what has to change, and it
 changes here first — before the graph is taught to retain it. Answering a new
 question out of whatever the graph happens to still contain is exactly the failure
 this document exists to prevent.
+
+Query 10 is the worked example and arrived with issue #112. It needed something the
+graph did not retain — the `Acknowledgment` record, which reached no table and whose
+run `graph.build` refused outright — so the retention changed first: a record table,
+an `ACKNOWLEDGED` edge, a place in the merged enforcement chain and a fixture that
+produces one. It is *not* answered out of what the graph happened to contain, and
+the difference is visible in the answer: an unacknowledged passivation comes back as
+a passivation with no acknowledgment naming it, which is a finding, and it is a
+different answer from a run that holds no passivation at all.
 
 ---
 

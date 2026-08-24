@@ -1,4 +1,4 @@
-"""The eleven named scenario fixtures, and one generated long run. **Layer B** —
+"""The twelve named scenario fixtures, and one generated long run. **Layer B** —
 this is simulator ground truth.
 
 These are the fixtures everything downstream is measured against, so they come
@@ -6,7 +6,7 @@ first (docs/plan.md, Phase 1). They are hand-authored and small on purpose:
 randomised scenarios would make the compression numbers in Claim 1
 unfalsifiable — you cannot argue about a ratio nobody can regenerate.
 
-The catalogue is in two halves. The **six situations** — approach, near miss,
+The catalogue is in three parts. The **six situations** — approach, near miss,
 contact, bystander, sustained overlap, declared violation — are what the
 compression and query claims are measured against. The **five fault fixtures**
 after them (issue #46) each produce exactly one of the semantic faults in
@@ -16,7 +16,15 @@ five of the six semantic faults had never occurred in one. Their geometry is
 deliberately dull: the human is parked in a corner and the arm does something
 unremarkable, because what is wrong with those runs is what the *policy* said.
 
-The seventh, `long_run(n_frames)`, is generated rather than hand-authored,
+The twelfth, `acknowledged_passivation` (issue #112), is the one run that
+*recovers*. Every fixture before it either never passivates or passivates and
+stays there, so the second half of docs/plan.md Phase 4 — the enforcement-signed
+`Acknowledgment` and the reintegration it gates — had no run behind it and no
+artifact ever held one. It is `escalation_failure`'s trajectory with the other
+ending, which is what makes the pair legible: the two differ in what the operator
+did and in nothing else.
+
+`long_run(n_frames)` is generated rather than hand-authored,
 because the question it exists for is a question about *length* (issue #30:
 "does the compression ratio improve with run length?"). It is still not
 randomised: the same frame count produces the same waypoints, and its shape is
@@ -158,6 +166,20 @@ class Scenario:
     #: time. It is a claim about the run, not a switch: nothing here changes what
     #: the fixture does.
     fault: str | None = None
+    #: The operator's acknowledgments of a passivation this run produces, as
+    #: `(instant_seconds, stated_reason)`. Empty means nobody acknowledges, which
+    #: is what every other fixture here does and what makes recovery *not*
+    #: automatic (`reg.enforce`, docs/plan.md Phase 4).
+    #:
+    #: Both halves are required and neither is invented: an acknowledgment is an
+    #: operator saying it is safe to resume, and one with no instant or no stated
+    #: reason is a rubber stamp — `Acknowledgment.__post_init__` refuses to
+    #: construct it. The instant must be a frame of the run and must fall while
+    #: the enforcer is passivated; `reg.graph.attestation_from_stream` refuses
+    #: the first and `Enforcer.acknowledge` refuses the second, so a fixture that
+    #: claims to clear a fault it never raised fails loudly rather than recording
+    #: a pre-emptive acknowledgment.
+    acknowledgments: tuple[tuple[float, str], ...] = ()
     dt: float = DEFAULT_DT
 
     def __post_init__(self) -> None:
@@ -205,6 +227,27 @@ class Scenario:
                     f"({x}, {y}) partly outside the room once "
                     f"human_jitter={self.human_jitter} is applied."
                 )
+        for i, entry in enumerate(self.acknowledgments):
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                raise ValueError(
+                    f"{self.name}: acknowledgments[{i}] is {entry!r}, not an "
+                    "(instant, reason) pair. An acknowledgment with no stated "
+                    "reason is a rubber stamp, and the record refuses to be one."
+                )
+            t, reason = entry
+            if not _is_number(t) or not 0.0 <= float(t) <= self.duration:
+                raise ValueError(
+                    f"{self.name}: acknowledgments[{i}] is at t={t!r}, which is "
+                    f"not an instant inside [0, {self.duration}]. An "
+                    "acknowledgment outside the run is one no frame can make."
+                )
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(
+                    f"{self.name}: acknowledgments[{i}] states no reason. The "
+                    "whole point of the record is that somebody had to say "
+                    "something a reader can later disagree with."
+                )
+
         if self.declared_q_bounds is not None:
             if len(self.declared_q_bounds) != n_joints:
                 raise ValueError(
@@ -845,6 +888,52 @@ OUT_OF_VOCABULARY_ACTION = Scenario(
     fault="out_of_vocabulary_action",
 )
 
+ACKNOWLEDGED_PASSIVATION = Scenario(
+    name="acknowledged_passivation",
+    description=(
+        "`escalation_failure`'s run with the other ending. The policy goes quiet, "
+        "its last declaration expires, enforcement VETOes and passivates — and "
+        "then an operator acknowledges, in a signed record naming the verdict "
+        "that passivated and stating why it is safe to resume. The policy "
+        "re-declares, the fresh declaration is accepted, and the run reintegrates "
+        "and is permitted to the end. It is the fixture for the half of "
+        "docs/plan.md Phase 4 that `reg/enforce.py` had implemented and no "
+        "artifact had ever held (issue #112): every other fixture here either "
+        "never passivates or passivates and stays there, so *was the passivation "
+        "acknowledged, and by whom, and why* was a question with no run behind "
+        "it. Both halves of recovery are exercised and neither alone: the "
+        "acknowledgment does not resume anything until the declaration arrives, "
+        "and the declaration would have been an escalation failure without the "
+        "acknowledgment — which is exactly what `escalation_failure` is."
+    ),
+    world=DEMO_WORLD,
+    duration=4.0,
+    # `escalation_failure`'s trajectory. The two runs differ in what the operator
+    # did and in nothing else, which is what makes the pair readable.
+    joint_waypoints=(
+        Waypoint(0.0, (-0.60, 1.20)),
+        Waypoint(4.0, (0.60, 0.80)),
+    ),
+    human_waypoints=_parked(4.0),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    declared_q_bounds=((-0.80, 0.80), (0.60, 1.40)),
+    silent_windows=((2.0, 3.0),),
+    # Inside the silence and after the expiry: the passivation has happened and
+    # the policy has not yet resumed, so the acknowledgment lands on the fault it
+    # names and not on a later one. A frame of the run at dt=0.02 by
+    # construction.
+    acknowledgments=(
+        (
+            2.60,
+            "operator inspected the cell, confirmed the arm is clear of the "
+            "human and the declaration channel is back, and cleared the robot "
+            "to resume",
+        ),
+    ),
+    fault="stale_declaration",
+)
+
 _ALL: tuple[Scenario, ...] = (
     APPROACH_AND_RETREAT,
     NEAR_MISS,
@@ -857,6 +946,7 @@ _ALL: tuple[Scenario, ...] = (
     ESCALATION_FAILURE,
     ENVELOPE_OVERCLAIM,
     OUT_OF_VOCABULARY_ACTION,
+    ACKNOWLEDGED_PASSIVATION,
 )
 
 #: Name to definition. `list(SCENARIOS)` is the authoritative list, and its order

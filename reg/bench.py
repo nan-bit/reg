@@ -1469,7 +1469,7 @@ class SupportedQuestion:
             )
 
 
-#: **The denominator.** All nine of docs/lossiness.md's supported question set,
+#: **The denominator.** All ten of docs/lossiness.md's supported question set,
 #: in its order, each in exactly one bucket. Adding a query to that document is
 #: a change to its contract; adding a row here without asking the question is
 #: how a report claims coverage it does not have.
@@ -1541,11 +1541,26 @@ SUPPORTED_QUESTIONS: tuple[SupportedQuestion, ...] = (
         ),
     ),
     SupportedQuestion(
+        name="passivations",
+        layer=LAYER_A,
+        status=EXCLUDED,
+        reason=(
+            "added by issue #112, and excluded because the curve's fixture "
+            "cannot make it fail. `long_run` is a compliant run: it never "
+            "passivates, so the ground truth is the empty set at every level and "
+            "an AGREE over it says only that nothing was there to lose. Pricing "
+            "it would need a fixture that stops and recovers — "
+            "`acknowledged_passivation` is one — and a passivating long run is a "
+            "different measurement from the published curve, not a wider column "
+            "on it"
+        ),
+    ),
+    SupportedQuestion(
         name="incident_report",
         layer="A + B",
         status=EXCLUDED,
         reason=(
-            "a composition of the eight above, so its agreement is the "
+            "a composition of queries 1-8 above, so its agreement is the "
             "conjunction of theirs and pricing it separately would count the "
             "same evidence twice under a new name. Its scene clause also "
             "inherits the envelope exclusion, so it could not come back clean "

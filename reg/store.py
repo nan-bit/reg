@@ -61,14 +61,16 @@ would otherwise be indistinguishable from a right one:
 
 THE RECORD TABLES STORE WHAT THE RECORD CARRIES, AND NOTHING DERIVED
 --------------------------------------------------------------------
-`declaration` and `verdict` (issue #45) hold the Milestone 3 records verbatim:
-every field, including `prev_hash` and `mac`, exactly as the record was signed.
+`declaration`, `verdict` (issue #45) and `acknowledgment` (issue #112) hold the
+Milestone 3 records verbatim: every field, including `prev_hash` and `mac`,
+exactly as the record was signed.
 This module **never re-signs and never re-hashes**. It holds no keys, so it
 cannot check a MAC at all — and that is the property that matters, because a
 store that could recompute a MAC is a store that can quietly repair a broken
 chain, which is precisely what the chain exists to make visible. A record whose
-MAC does not match is stored, and `read_declarations` / `read_verdicts` hand back
-a record that still fails verification under the key that signed the original.
+MAC does not match is stored, and `read_declarations` / `read_verdicts` /
+`read_acknowledgments` hand back a record that still fails verification under the
+key that signed the original.
 `tests/test_graph.py` asserts that persistence does not launder it.
 
 Reconstruction is therefore byte-exact by construction: text columns for the
@@ -204,12 +206,14 @@ __all__ = [
     "insert_occurrence",
     "insert_robot_config",
     "insert_verdict",
+    "insert_acknowledgment",
     "open_edge",
     "extend_edge",
     "read_declarations",
     "read_edges",
     "read_occurrences",
     "read_verdicts",
+    "read_acknowledgments",
     "to_wkb",
     "from_wkb",
     "to_hash",
@@ -293,7 +297,17 @@ __all__ = [
 #: reader meeting a v9 file sees the inner area and has no way to tell an
 #: artifact that brackets it from one that never did, which is the same confident
 #: wrong answer every other bump here is about.
-SCHEMA_VERSION = 9
+#:
+#: 10: the `acknowledgment` table arrived (issue #112). Until now the enforcement
+#: chain in an artifact was the verdicts alone, and a run containing an
+#: `Acknowledgment` was refused at build time rather than stored — so *was the
+#: passivation acknowledged, and by whom, and why* was a question only the live
+#: enforcer could answer. The record now has a row, an `ACKNOWLEDGED` edge to the
+#: verdict it names, and a place in the merged enforcement chain. A v9 reader
+#: meeting a v10 file walks the verdicts alone and skips the acknowledgments,
+#: which is a chain that reads as unbroken over records it never saw — the one
+#: outcome every bump here exists to prevent.
+SCHEMA_VERSION = 10
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
@@ -351,11 +365,19 @@ ENVELOPE_SOURCES = ("computed", "declared", "clamped")
 
 #: The node kinds a chain link may join. `FOLLOWS` is the one edge type whose
 #: endpoints are polymorphic: declarations chain among themselves under the
-#: policy key and verdicts among themselves under the enforcement key, so the
-#: same edge type runs `Declaration -> Declaration` in one chain and
-#: `Verdict -> Verdict` in the other. A separate edge type per chain would make
-#: "walk the record chain" two queries that have to be kept in step.
-RECORD_KINDS: frozenset[str] = frozenset({"Declaration", "Verdict"})
+#: policy key, and verdicts and acknowledgments share **one** chain under the
+#: enforcement key — so the same edge type runs `Declaration -> Declaration` in
+#: the first and any of four combinations of `Verdict` and `Acknowledgment` in
+#: the second. A separate edge type per pair would make "walk the record chain"
+#: four queries that have to be kept in step.
+#:
+#: `Acknowledgment` joined them in issue #112. It is not a third chain: an
+#: acknowledgment's `prev_hash` names whichever enforcement record preceded it,
+#: which is why `reg.chain.chain_records` reconstructs that chain by linkage
+#: rather than by reading one table in `seq` order.
+RECORD_KINDS: frozenset[str] = frozenset(
+    {"Declaration", "Verdict", "Acknowledgment"}
+)
 
 
 #: The layers `HAS_ENVELOPE` may carry, and the reason `EdgeSpec.layer` is not
@@ -410,15 +432,23 @@ class EdgeSpec:
 #: because each one names an entity, and where an entity is comes from perception
 #: in any real system.
 #:
-#: **The four attestation edges are Layer A, every one of them, and not one names
+#: **The five attestation edges are Layer A, every one of them, and not one names
 #: an `Entity`.** That is not a coincidence and it is not a convenience: it is
 #: the asymmetry docs/sufficiency.md §2 is about. A declaration is a statement
 #: the policy made about itself, a verdict is enforcement's finding about a
 #: commanded action, the bound in each case is a region computed from `Limits`
-#: and proprioception, and the chain link is a fact about the record. None of it
-#: needs to know where anybody is standing — so every attestation answer in this
-#: artifact survives an uncertifiable perceiver, while every answer about who was
-#: near the robot does not. `tests/test_graph.py::
+#: and proprioception, an `ACKNOWLEDGED` link is one enforcement record naming
+#: another, and the chain link is a fact about the record. None of it needs to
+#: know where anybody is standing — so every attestation answer in this artifact
+#: survives an uncertifiable perceiver, while every answer about who was near the
+#: robot does not.
+#:
+#: `ACKNOWLEDGED` (issue #112) runs `Acknowledgment -> Verdict`, from the record
+#: that cleared a passivation to the verdict that caused it. `verdict_id` is
+#: already the binding and is inside the acknowledgment's own MAC; the edge is
+#: what makes it queryable. It names no entity — an operator is not an `Entity`
+#: in this schema and there is no column here that could hold one — so the
+#: `tests/test_layer_boundary.py` argument applies to it unchanged. `tests/test_graph.py::
 #: test_layer_b_is_exactly_the_entity_naming_edges` holds the line: an edge that
 #: names an `Entity` is Layer B whatever its author intended.
 #:
@@ -441,6 +471,7 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
     "DECLARED": EdgeSpec("A", "Declaration", "Envelope", None),
     "ADJUDICATED": EdgeSpec("A", "Verdict", "Declaration", None),
     "ENFORCED": EdgeSpec("A", "Verdict", "Envelope", None),
+    "ACKNOWLEDGED": EdgeSpec("A", "Acknowledgment", "Verdict", None),
     "FOLLOWS": EdgeSpec("A", RECORD_KINDS, RECORD_KINDS, None),
 }
 
@@ -522,6 +553,7 @@ NODE_TABLES: dict[str, tuple[str, str]] = {
     "Occurrence": ("occurrence", "occurrence_key"),
     "Declaration": ("declaration", "declaration_key"),
     "Verdict": ("verdict", "verdict_key"),
+    "Acknowledgment": ("acknowledgment", "acknowledgment_key"),
 }
 
 #: The tables `RECORD_SCHEMA` creates, derived from `NODE_TABLES` rather than
@@ -806,10 +838,11 @@ CREATE INDEX edge_by_interval  ON edge (t_start, t_end);
 CREATE INDEX occurrence_by_type ON occurrence (type, entity_key);
 """
 
-#: The two record tables, created **only** when the build was handed a record
-#: stream (issue #54). A build without `--keyring` used to create them empty,
-#: along with their two automatic indexes, and pay for four objects holding zero
-#: rows.
+#: The record tables, created **only** when the build was handed a record stream
+#: (issue #54). A build without `--keyring` used to create them empty, along with
+#: their automatic indexes, and pay for objects holding zero rows. There are three
+#: since issue #112; `RECORD_TABLE_NAMES` is derived from `RECORD_KINDS` so that
+#: adding one does not leave a second list of them to be kept in step.
 #:
 #: THEIR ABSENCE IS NOT THE FACT AN ASSESSOR READS. "This build was given no
 #: record stream" and "a run that produced no records" are different facts
@@ -891,6 +924,41 @@ CREATE TABLE verdict (
     -- is what is being stated, not the vocabulary, which is `reg.enforce`'s.
     CHECK ((outcome = 'PERMIT') = (fault IS NULL)),
     CHECK ((outcome = 'CLAMP') = (clamped_envelope_wkb IS NOT NULL))
+);
+
+-- THE ACKNOWLEDGMENT (issue #112). The record that unlocks reintegration after a
+-- passivation, stored field for field as `reg.enforce` signed it, exactly like
+-- the two above. It shares the verdict chain rather than starting a third:
+-- `prev_hash` names whichever enforcement record came before it, which may be a
+-- verdict or (in principle) another acknowledgment.
+--
+-- THERE IS NO `seq` COLUMN, AND NONE IS INVENTED. `Acknowledgment` carries no
+-- `seq` — the enforcer's counter advances per verdict — so a `seq` here would be
+-- a number this module made up, outside the MAC, that every reader would take
+-- for the record's own. The chain's order is `prev_hash`, and
+-- `reg.chain.chain_records` walks it; `read_acknowledgments` orders by `(t, id)`
+-- because a reader needs *some* total order and that one is derived from stored
+-- fields alone.
+--
+-- `verdict_key` is NOT NULL: an acknowledgment that named no passivation would
+-- clear whichever one happened to be open, which is the pre-emptive
+-- acknowledgment `Enforcer.acknowledge` refuses to create. `insert_acknowledgment`
+-- refuses a dangling reference for `insert_verdict`'s reason.
+--
+-- The `reason` CHECK restates `Acknowledgment.__post_init__`'s invariant where
+-- the rows live, the way the two verdict CHECKs above do: an acknowledgment with
+-- no stated reason is a rubber stamp, and the whole point of the record is that
+-- somebody had to say something a reader can later disagree with. No CHECK on
+-- `fault`, for the reason given above the declaration table: the vocabulary has
+-- one definition and it is `reg.enforce.FAULTS`.
+CREATE TABLE acknowledgment (
+    acknowledgment_key INTEGER PRIMARY KEY REFERENCES node (node_key),
+    verdict_key        INTEGER NOT NULL REFERENCES verdict (verdict_key),
+    t                  REAL    NOT NULL,
+    fault              TEXT    NOT NULL,
+    reason             TEXT    NOT NULL CHECK (trim(reason) <> ''),
+    prev_hash          TEXT    NOT NULL,
+    mac                TEXT    NOT NULL
 );
 """
 
@@ -994,8 +1062,9 @@ def create(
     created — the caller named the path, this only makes it writable.
 
     Args:
-        record_tables: whether to create `declaration` and `verdict`
-            (`RECORD_SCHEMA`). **Required, with no default in either direction.**
+        record_tables: whether to create `declaration`, `verdict` and
+            `acknowledgment` (`RECORD_SCHEMA`). **Required, with no default in
+            either direction.**
             A caller that did not say would either pay for two empty tables it
             will never write to or, worse, get a `no such table` from the middle
             of a build that did have records to store. It is one boolean and the
@@ -1039,7 +1108,10 @@ def create(
 
 
 def has_record_tables(conn: sqlite3.Connection) -> bool:
-    """Whether this artifact holds the two record tables at all (issue #54).
+    """Whether this artifact holds the record tables at all (issue #54).
+
+    All of them or none of them — `RECORD_TABLE_NAMES`, which is three tables
+    since issue #112 and is derived from `RECORD_KINDS` rather than listed again.
 
     **Not the same question as "did this run produce records".** A build handed
     no record stream does not create the tables, and one handed an empty stream
@@ -1050,11 +1122,11 @@ def has_record_tables(conn: sqlite3.Connection) -> bool:
     `no such table: declaration` out of SQLite.
 
     Raises:
-        StoreError: one table is present and the other is not. That is neither
-            state, so it is a could-not-evaluate: every verdict in a file with no
-            `declaration` table names a declaration nobody can look up, and a
-            walk over half a record layer would report a shorter chain with no
-            break in it.
+        StoreError: some of the tables are present and some are not. That is
+            neither state, so it is a could-not-evaluate: every verdict in a file
+            with no `declaration` table names a declaration nobody can look up,
+            and a walk over half a record layer would report a shorter chain with
+            no break in it.
     """
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
@@ -1067,8 +1139,9 @@ def has_record_tables(conn: sqlite3.Connection) -> bool:
         return False
     raise StoreError(
         f"this artifact holds {sorted(present)} but not "
-        f"{sorted(RECORD_TABLE_NAMES - present)}. The record layer is both "
-        "tables or neither: a verdict whose declaration table is gone names a "
+        f"{sorted(RECORD_TABLE_NAMES - present)}. The record layer is every "
+        "one of those tables or none of them: a verdict whose declaration table "
+        "is gone names a "
         "record nobody can look up, and a chain walked over half a layer comes "
         "back shorter with no break in it."
     )
@@ -1079,7 +1152,7 @@ def _require_record_tables(conn: sqlite3.Connection, doing: str) -> None:
     if has_record_tables(conn):
         return
     raise StoreError(
-        f"this artifact has no declaration and verdict tables, so {doing} is a "
+        f"this artifact has no record tables, so {doing} is a "
         "could-not-evaluate rather than an empty result. It was created with "
         "`create(..., record_tables=False)` — the build was handed no record "
         "stream — and meta[attestation_records] says so. That is a different "
@@ -1940,8 +2013,8 @@ def read_occurrences(
 # --------------------------------------------------------------------------
 
 
-def _record_types() -> tuple[type, type]:
-    """`(Declaration, Verdict)`, imported here and not at module scope.
+def _record_types() -> tuple[type, type, type]:
+    """`(Declaration, Verdict, Acknowledgment)`, imported here, not at module scope.
 
     `reg.declare` reaches `reg.stream` through `reg.chain` — the canonical
     serialization commits floats at the raw stream's own precision, deliberately
@@ -1955,9 +2028,9 @@ def _record_types() -> tuple[type, type]:
     one dict lookup per call.
     """
     from reg.declare import Declaration
-    from reg.enforce import Verdict
+    from reg.enforce import Acknowledgment, Verdict
 
-    return Declaration, Verdict
+    return Declaration, Verdict, Acknowledgment
 
 
 def insert_declaration(conn: sqlite3.Connection, declaration: object) -> str:
@@ -1977,7 +2050,7 @@ def insert_declaration(conn: sqlite3.Connection, declaration: object) -> str:
             histories would merge into an answer about neither.
     """
     _require_record_tables(conn, "storing a declaration")
-    declaration_type, _ = _record_types()
+    declaration_type, _, _ = _record_types()
     if not isinstance(declaration, declaration_type):
         raise StoreError(
             f"insert_declaration takes a reg.declare.Declaration, got "
@@ -2022,7 +2095,7 @@ def insert_verdict(conn: sqlite3.Connection, verdict: object) -> str:
             contents.
     """
     _require_record_tables(conn, "storing a verdict")
-    _, verdict_type = _record_types()
+    _, verdict_type, _ = _record_types()
     if not isinstance(verdict, verdict_type):
         raise StoreError(
             f"insert_verdict takes a reg.enforce.Verdict, got "
@@ -2082,7 +2155,7 @@ def read_declarations(conn: sqlite3.Connection) -> list:
             report a shorter chain with no break in it.
     """
     _require_record_tables(conn, "reading the declarations back")
-    declaration_type, _ = _record_types()
+    declaration_type, _, _ = _record_types()
     rows = conn.execute(
         """
         SELECT d.*, n.node_id AS declaration_id
@@ -2129,7 +2202,7 @@ def read_verdicts(conn: sqlite3.Connection) -> list:
     outcomes (`reg.enforce`, module header).
     """
     _require_record_tables(conn, "reading the verdicts back")
-    _, verdict_type = _record_types()
+    _, verdict_type, _ = _record_types()
     # The declaration join is a LEFT one and reaches `node`, not `declaration`:
     # a verdict naming no declaration is a finding rather than a gap, and a
     # verdict whose declaration row was *removed* still named it when it was
@@ -2177,6 +2250,113 @@ def read_verdicts(conn: sqlite3.Connection) -> list:
             raise StoreError(
                 f"verdict row {record_id!r} cannot be reconstructed as the record "
                 f"it claims to be: {exc}"
+            ) from None
+    return out
+
+
+def insert_acknowledgment(conn: sqlite3.Connection, ack: object) -> str:
+    """Store one `Acknowledgment` verbatim. Idempotent on `ack_id` (issue #112).
+
+    An acknowledgment naming a verdict this artifact does not hold is refused,
+    for `insert_verdict`'s reason and one more besides. The `ACKNOWLEDGED` edge
+    would point at nothing, and the join that reads it comes back empty — which
+    is indistinguishable from "this passivation was never acknowledged", the one
+    answer this record exists to make different from silence. Store the verdicts
+    of a run before its acknowledgments.
+
+    Like `insert_declaration` and `insert_verdict`, this checks no MAC and
+    recomputes no hash. The store holds no keys.
+
+    Raises:
+        StoreError: the argument is not an `Acknowledgment`, it names a verdict
+            this artifact does not hold, or an id already present carries
+            different contents.
+    """
+    _require_record_tables(conn, "storing an acknowledgment")
+    _, _, ack_type = _record_types()
+    if not isinstance(ack, ack_type):
+        raise StoreError(
+            f"insert_acknowledgment takes a reg.enforce.Acknowledgment, got "
+            f"{type(ack).__name__}. The record is what is stored; an object that "
+            "resembles one has not been through the validation that makes it a "
+            "record."
+        )
+    verdict_key = _require_node(conn, "Verdict", ack.verdict_id)
+    return _insert_node(
+        conn,
+        "Acknowledgment",
+        ack.ack_id,
+        {
+            "verdict_key": verdict_key,
+            "t": float(ack.t),
+            "fault": ack.fault,
+            "reason": ack.reason,
+            "prev_hash": ack.prev_hash,
+            "mac": ack.mac,
+        },
+    )
+
+
+def read_acknowledgments(conn: sqlite3.Connection) -> list:
+    """Every stored acknowledgment, reconstructed, ordered by `(t, ack_id)`.
+
+    **`(t, ack_id)` is a presentation order, not the chain's.** The record has no
+    `seq` and this module invents none (see `RECORD_SCHEMA`), so there is no
+    stored field that puts an acknowledgment between two verdicts. The chain's
+    own order is `prev_hash`, and `reg.chain.chain_records` is what walks it; a
+    reader that needs the enforcement chain in order asks there and never sorts
+    this list into it. What this order guarantees is only what every reader here
+    needs — that it is total, derived from stored fields, and the same on two
+    reads of one artifact.
+
+    Raises:
+        StoreError: a row cannot be reconstructed. Raised rather than skipped,
+            for `read_declarations`' reason: a dropped record is a chain that
+            comes back shorter with no break in it.
+    """
+    _require_record_tables(conn, "reading the acknowledgments back")
+    _, _, ack_type = _record_types()
+    # The verdict join reaches `node`, not `verdict`, for the reason
+    # `read_verdicts`' declaration join does: an acknowledgment whose verdict row
+    # was *removed* still named it when it was signed, and reading the id off the
+    # record table would rewrite the record to say it named nothing.
+    rows = conn.execute(
+        """
+        SELECT a.*, n.node_id AS ack_id, vn.node_id AS verdict_id
+        FROM acknowledgment a
+        JOIN node n ON n.node_key = a.acknowledgment_key
+        LEFT JOIN node vn ON vn.node_key = a.verdict_key
+        ORDER BY a.t, n.node_id
+        """
+    ).fetchall()
+    out: list = []
+    for row in rows:
+        record_id = str(row["ack_id"])
+        named = row["verdict_id"]
+        if named is None:
+            raise StoreError(
+                f"acknowledgment row {record_id!r} names verdict_key "
+                f"{row['verdict_key']!r} and this artifact holds no node with "
+                "that key, so the record cannot be reconstructed as the one it "
+                "claims to be. `verdict_id` is inside its MAC; an acknowledgment "
+                "read back without it would verify against nothing."
+            )
+        try:
+            out.append(
+                ack_type(
+                    ack_id=record_id,
+                    t=float(row["t"]),
+                    fault=str(row["fault"]),
+                    verdict_id=str(named),
+                    reason=str(row["reason"]),
+                    prev_hash=str(row["prev_hash"]),
+                    mac=str(row["mac"]),
+                )
+            )
+        except ValueError as exc:
+            raise StoreError(
+                f"acknowledgment row {record_id!r} cannot be reconstructed as "
+                f"the record it claims to be: {exc}"
             ) from None
     return out
 

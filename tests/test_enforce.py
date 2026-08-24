@@ -1298,13 +1298,21 @@ def declarations_for(
 def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
     """Adjudicate a whole fixture: real declarations, real enforcer, in time order.
 
-    Nobody acknowledges anything. An acknowledgment is an operator saying it is
-    safe to resume, and inserting one here would be this harness deciding that —
-    which is exactly the decision `escalation_failure` is about the absence of.
+    Nobody acknowledges anything **unless the fixture says so**. An
+    acknowledgment is an operator saying it is safe to resume, and inventing one
+    here would be this harness deciding that — which is exactly the decision
+    `escalation_failure` is about the absence of. `Scenario.acknowledgments` is
+    the fixture stating it instead, and honouring it is not optional: it is the
+    only thing that separates `acknowledged_passivation` from
+    `escalation_failure`, so a harness that ignored the field would run one
+    fixture and report on the other. Same wiring, same order and same argument as
+    `reg.graph.attestation_from_stream`, which is the producer that has to agree
+    with this one.
     """
     states = [frame.proprio() for frame in scenario.states(seed)]
     declarations = declarations_for(scenario, states)
     pending = {round(d.t_issued, 9): d for d in declarations}
+    outstanding = {round(float(t), 9): why for t, why in scenario.acknowledgments}
 
     e = Enforcer(
         LIMITS,
@@ -1317,7 +1325,15 @@ def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
     refusals: list[Verdict] = []
     actions: list[Verdict] = []
     for state in states:
-        due = pending.pop(round(state.t, 9), None)
+        instant = round(state.t, 9)
+        # First at its frame, before the declaration offered at the same instant:
+        # the order decides whether a declaration arriving there is an escalation
+        # failure or a reintegration, and `attestation_from_stream` states the
+        # same one.
+        why = outstanding.pop(instant, None)
+        if why is not None:
+            e.acknowledge(t=state.t, reason=why)
+        due = pending.pop(instant, None)
         if due is not None:
             refused = e.offer(due, state)
             if refused is not None:
@@ -1326,6 +1342,10 @@ def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
     assert not pending, (
         f"{scenario.name}: {len(pending)} declarations were issued at instants "
         "that are not frames of the run, so they were never offered."
+    )
+    assert not outstanding, (
+        f"{scenario.name}: {sorted(outstanding)} name instants that are not "
+        "frames of the run, so those acknowledgments were never made."
     )
     return FixtureRun(
         scenario=scenario,
@@ -1421,6 +1441,12 @@ FAULT_RESPONSE: dict[str, str] = {
     "envelope_overclaim": "VETO",
     "out_of_vocabulary_action": "VETO",
     "escalation_failure": "SAFE_STATE",
+    # `acknowledged_passivation` is named for the expiry that stops it, and the
+    # response to an expiry is a VETO whoever clears it afterwards. What is
+    # different about the fixture is what happens *next* — an operator
+    # acknowledges and the run reintegrates (issue #112) — and that is not a
+    # response in the taxonomy, so it is not this table's to state.
+    "acknowledged_passivation": "VETO",
 }
 
 FAULT_FIXTURES = [name for name, s in SCENARIOS.items() if s.fault is not None]
@@ -1589,6 +1615,12 @@ def test_arranging_the_fault_away_leaves_a_run_that_is_permitted_throughout(
         declared_margin_m=None,
         declared_action_class=None,
         silent_windows=(),
+        # And the acknowledgment goes with the fault it clears (issue #112). A
+        # run with nothing wrong has nothing to acknowledge, and `acknowledge`
+        # refuses one there rather than letting it sit in the chain ready to
+        # clear the next fault before it happens — which is the same refusal
+        # this arrangement is asserting the absence of a fault by.
+        acknowledgments=(),
         fault=None,
     )
     run = run_scenario(compliant, seed)

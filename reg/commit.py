@@ -222,17 +222,22 @@ def chain_heads(conn: sqlite3.Connection) -> ChainHeads:
     heads: dict[str, str] = {}
     for spec in chain.CHAINS:
         try:
-            records = getattr(store, spec.reader)(conn)
+            # `chain_records`, not the chain's primary reader: since issue #112
+            # the enforcement chain is verdicts *and* acknowledgments, and a fold
+            # over the verdicts alone would commit to a chain the enforcer never
+            # produced — one whose head moves when an acknowledgment is deleted
+            # and whose commitment would not.
+            records = chain.chain_records(conn, spec)
         except (store.StoreError, ValueError, sqlite3.DatabaseError) as exc:
             raise CommitmentError(
                 f"the {spec.role} chain could not be read, so this artifact has "
-                f"no computable {spec.kind} head: {exc}"
+                f"no computable {spec.label} head: {exc}"
             ) from None
         try:
             head = chain.chain_head(records)
         except chain.CanonicalizationError as exc:
             raise CommitmentError(
-                f"a stored {spec.kind} could not be hashed, so the "
+                f"a stored {spec.label} could not be hashed, so the "
                 f"{spec.role} chain has no computable head: {exc}"
             ) from None
         heads[spec.role] = head

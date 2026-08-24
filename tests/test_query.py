@@ -1064,7 +1064,11 @@ def test_the_cli_verifies_an_intact_chain(attested, capsys) -> None:
     # counts beside it does not distinguish a walk over 250 records from a walk
     # over none.
     assert "policy (Declaration)" in out
-    assert "enforcement (Verdict)" in out
+    assert "enforcement (Verdict + Acknowledgment)" in out, (
+        "the enforcement chain is two record kinds since issue #112, and a "
+        "report naming only the verdicts would let a walk that skipped every "
+        "acknowledgment read as a walk over the whole chain"
+    )
     assert "links checked" in out and "MACs checked" in out
 
 
@@ -2079,6 +2083,10 @@ def _every_query(conn, *, declaration_id: str = "any-declaration-id") -> tuple:
         "declared_bound": (1.0,),
         "violations": ((0.0, 5.0),),
         "verdicts": (declaration_id,),
+        # `passivations` takes the artifact and nothing else: which stops the
+        # record holds is a question about the whole run, and a window would make
+        # a passivation that began before it read as one that never happened.
+        "passivations": (),
     }
     return tuple(
         getattr(query, name)(conn, *arguments[name]) for name in query.QUERIES
@@ -2216,7 +2224,7 @@ def empty_record_stream(built, tmp_path_factory) -> Path:
         scenario(SCENARIO).world.limits,
         identity=TEST_IDENTITY,
         human_radius=scenario(SCENARIO).world.human_radius,
-        records=graph.AttestationRecords(declarations=(), verdicts=()),
+        records=graph.AttestationRecords(declarations=(), verdicts=(), acknowledgments=()),
         horizon=_FAST["horizon"],
         n_samples=_FAST["n_samples"],
         seed=_FAST["envelope_seed"],

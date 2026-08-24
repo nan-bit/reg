@@ -183,8 +183,10 @@ __all__ = [
     "META_T_LAST",
     "META_VERDICT_COUNT",
     "OCCURRENCE_LAYER",
+    "PASSIVATING_FAULTS",
     "PERMITTED_OUTCOME",
     "QUERIES",
+    "AcknowledgmentRecord",
     "Adjudication",
     "Answer",
     "Clause",
@@ -196,6 +198,8 @@ __all__ = [
     "FramesAtRisk",
     "IncidentReport",
     "OverlapInterval",
+    "Passivation",
+    "Passivations",
     "QueryError",
     "QuerySpec",
     "ReachableEntities",
@@ -361,6 +365,28 @@ META_VERDICT_COUNT = "verdict_count"
 #: compares the two sides and fails on a rename, which is the same bargain the
 #: `meta` keys above are held to.
 PERMITTED_OUTCOME = "PERMIT"
+
+#: The faults whose response stops the robot — every one of them except the
+#: CLAMP, which is the taxonomy's only graceful degradation. Named here for
+#: exactly `PERMITTED_OUTCOME`'s reason and under exactly the same bargain:
+#: `reg.enforce.PASSIVATING_FAULTS` is the single definition, importing it would
+#: pull the raw stream into this module at import time, and
+#: `tests/test_query.py::test_the_passivating_faults_are_the_enforcers` compares
+#: the two sides and fails on any drift. `passivations` is the query that needs
+#: it: without the set there is no way to say which verdict stopped the robot,
+#: and therefore no way to say which stop was never acknowledged.
+PASSIVATING_FAULTS: frozenset[str] = frozenset(
+    {
+        "no_declaration",
+        "stale_declaration",
+        "envelope_overclaim",
+        "out_of_vocabulary_action",
+        "unattributed",
+        "replay_or_reorder",
+        "watchdog_expiry",
+        "escalation_failure",
+    }
+)
 
 #: `reg.chain.ChainState.VERIFIED`'s value, for the same reason and under the
 #: same test. A report that compared against a misspelled state would report
@@ -539,8 +565,9 @@ QUERIES: dict[str, QuerySpec] = {
         why_not="",
         layer_tag=_SCENE_LAYER,
     ),
-    # The attestation half (docs/plan.md Phase 7, queries 5-7; issue #50). No
-    # numeric tolerance on any of the three, and that is docs/lossiness.md's
+    # The attestation half (docs/plan.md Phase 7, queries 5-7, and query 10
+    # since issue #112). No
+    # numeric tolerance on any of the four, and that is docs/lossiness.md's
     # agreement table rather than an omission: they are Layer A and exact by
     # construction, and a tolerance on them would mean the record is fuzzy about
     # what the policy declared — the one thing this artifact must be certain of.
@@ -579,6 +606,26 @@ QUERIES: dict[str, QuerySpec] = {
             "A fault is a finding an independent enforcement layer signed. It "
             "is in the verdict stream or it is nowhere; no density of scene "
             "edges reconstructs one."
+        ),
+        layer_tag=_RECORD_LAYER,
+    ),
+    "passivations": QuerySpec(
+        name="passivations",
+        question=(
+            "every passivation the record holds, and for each one whether an "
+            "acknowledgment cleared it — which record, when, and with what "
+            "stated reason"
+        ),
+        answerable_from=frozenset({ATTESTATION_LAYER}),
+        arguments=(),
+        tolerance="none — exact field equality against the stored records",
+        why_not=(
+            "A passivation is a finding an independent enforcement layer signed "
+            "and an acknowledgment is a record an operator signed off on; both "
+            "are in the record stream or nowhere. The occurrence layer holds a "
+            "safe_state_entered and a reintegrated event, which say the robot "
+            "stopped and later resumed — and neither says whether anybody "
+            "acknowledged anything, nor who, nor why."
         ),
         layer_tag=_RECORD_LAYER,
     ),
@@ -900,6 +947,84 @@ class DeclarationVerdicts:
     def outcomes(self) -> tuple[str, ...]:
         """Every distinct outcome this declaration received, sorted."""
         return tuple(sorted({a.outcome for a in self.adjudications}))
+
+
+@dataclass(frozen=True)
+class AcknowledgmentRecord:
+    """The enforcement-signed record that cleared one passivation (issue #112).
+
+    `reason` is free text the record carries and is reproduced verbatim — this
+    module does not summarise it, because what somebody actually wrote is the
+    only part of the record a reader can later disagree with.
+
+    **Who signed it is the MAC, not a column.** There is no operator name in the
+    schema and none is invented here: the acknowledgment is signed under the
+    enforcement key, which `--verify-chain` checks, and an artifact whose chain
+    has not been walked has attributed this record to nobody. `Passivations`
+    says so in its own `reason` rather than leaving the field to be assumed.
+    """
+
+    ack_id: str
+    t: float
+    fault: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class Passivation:
+    """One stop, and what the record says about clearing it.
+
+    `acknowledgment is None` is a **finding**, not a gap: the artifact states
+    that every record the run produced is stored (`attestation_retention`), so a
+    passivating verdict no acknowledgment names is one nobody acknowledged. That
+    is a different answer from "this run holds no passivation", which is an empty
+    `Passivations.items`, and the two must never be read as each other.
+    """
+
+    verdict_id: str
+    seq: int
+    t: float
+    fault: str
+    outcome: str
+    declaration_id: str | None
+    acknowledgment: AcknowledgmentRecord | None
+
+    @property
+    def acknowledged(self) -> bool:
+        return self.acknowledgment is not None
+
+
+@dataclass(frozen=True)
+class Passivations:
+    """docs/plan.md Phase 4's other half, asked of the artifact (issue #112).
+
+    An empty `items` is the answer "this run was never passivated" — legitimate
+    under `attestation_retention` and the common case, since eight of the twelve
+    shipped fixtures never stop the robot at all.
+
+    WHAT MAKES A VERDICT A PASSIVATION HERE, AND WHY IT IS DERIVED. The record
+    does not carry a "this one passivated" flag: `reg.enforce` emits a verdict
+    per commanded action, and while the robot is stopped every one of them
+    carries the fault that stopped it. Counting those would report one
+    passivation per frame of a robot standing still. So this walks the verdicts
+    in chain order and holds the state the enforcer held — a verdict carrying a
+    passivating fault opens a *new* passivation when the record does not already
+    show the robot stopped, or when it names a declaration (which a continuation
+    never does, and an `offer` refused inside a passivation always does); a
+    PERMIT or a CLAMP is the reintegration that ends one. It is the same
+    derivation `reg.graph`'s occurrence log makes from the same stream, and it is
+    stated here because a reader has to be able to check it.
+    """
+
+    items: tuple[Passivation, ...]
+
+    @property
+    def acknowledged(self) -> tuple[Passivation, ...]:
+        return tuple(item for item in self.items if item.acknowledged)
+
+    @property
+    def unacknowledged(self) -> tuple[Passivation, ...]:
+        return tuple(item for item in self.items if not item.acknowledged)
 
 
 @dataclass(frozen=True)
@@ -1795,7 +1920,8 @@ def did_contact_occur(conn: sqlite3.Connection, entity_id: str) -> Answer:
 
 
 # --------------------------------------------------------------------------
-# The attestation queries. docs/plan.md Phase 7, queries 5-8 (issue #50).
+# The attestation queries. docs/plan.md Phase 7, queries 5-8 (issue #50), and
+# query 10, `passivations` (issue #112).
 #
 # All Layer A. Read with SQL over the record tables and the four Layer A edges,
 # and **never** through `reg.store.read_declarations` / `read_verdicts`: those
@@ -2175,6 +2301,134 @@ def verdicts(conn: sqlite3.Connection, declaration_id: str) -> Answer:
     )
 
 
+def _acknowledgment_rows(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
+    """`verdict_id -> the acknowledgment that cleared it` (issue #112).
+
+    Keyed on the verdict rather than listed, because that is the join every
+    caller here makes. The `verdict_id` comes off the `ACKNOWLEDGED` edge and not
+    off `acknowledgment.verdict_key`, for the reason every other query in this
+    module reads its relationships off edges: the edge is the queryable form of
+    the binding, and an acknowledgment whose edge is missing has to come back
+    *absent* and be visible as such rather than be recovered from the payload
+    table behind the graph's back.
+
+    A verdict named by two acknowledgments cannot occur — `Enforcer.acknowledge`
+    refuses a second — so the last one wins and the count is reported beside the
+    answer, where a reader can see that it did not.
+    """
+    rows = conn.execute(
+        """
+        SELECT an.node_id AS ack_id,
+               vn.node_id AS verdict_id,
+               a.t        AS t,
+               a.fault    AS fault,
+               a.reason   AS reason
+        FROM acknowledgment a
+        JOIN node an ON an.node_key = a.acknowledgment_key
+        JOIN edge e  ON e.type = 'ACKNOWLEDGED' AND e.src_key = a.acknowledgment_key
+        JOIN node vn ON vn.node_key = e.dst_key
+        ORDER BY a.t, an.node_id
+        """
+    ).fetchall()
+    return {str(row["verdict_id"]): row for row in rows}
+
+
+def passivations(conn: sqlite3.Connection) -> Answer:
+    """Query 10 — every stop the record holds, and whether anybody cleared it.
+
+    **Layer A.** A passivation is enforcement's finding about a commanded action
+    and an acknowledgment is a record signed under the enforcement key naming the
+    verdict it clears. Neither names an entity, so both survive an uncertifiable
+    perceiver (docs/sufficiency.md §2).
+
+    Three answers, and they are three because they are three facts:
+
+    * **no passivation** — `items` is empty. This run never stopped the robot.
+    * **acknowledged** — the passivation carries the record that cleared it, with
+      the instant and the reason somebody stated.
+    * **unacknowledged** — the passivation carries `None`, and that is a finding.
+      The artifact says every record the run produced is stored, so a passivation
+      no acknowledgment names is one nobody acknowledged. `escalation_failure` is
+      the shipped fixture that ends this way and `acknowledged_passivation` is
+      the one that does not.
+
+    Before issue #112 this question had no answer at any resolution: the record
+    reached no table, and `reg.graph.build` refused any run containing one.
+
+    Returns:
+        An `Answer` whose value is a `Passivations`, or a could-not-evaluate for
+        an artifact with no record layer.
+    """
+    spec = QUERIES["passivations"]
+    refusal = _no_record_layer(conn, spec)
+    if refusal is not None:
+        return refusal
+
+    cleared = _acknowledgment_rows(conn)
+    items: list[Passivation] = []
+    stopped = False
+    for row in _verdict_rows(conn):
+        outcome = str(row["outcome"])
+        fault = None if row["fault"] is None else str(row["fault"])
+        declaration_id = (
+            None if row["declaration_id"] is None else str(row["declaration_id"])
+        )
+        if stopped and outcome == PERMITTED_OUTCOME:
+            # Reintegration. `reg.enforce` returns SAFE_STATE for every action
+            # while passivated, so an action that came back permitted is proof
+            # that a fresh declaration and an acknowledgment cleared it.
+            stopped = False
+        if fault is not None and fault in PASSIVATING_FAULTS:
+            if not stopped or declaration_id is not None:
+                verdict_id = str(row["verdict_id"])
+                ack = cleared.get(verdict_id)
+                items.append(
+                    Passivation(
+                        verdict_id=verdict_id,
+                        seq=int(row["seq"]),
+                        t=float(row["t"]),
+                        fault=fault,
+                        outcome=outcome,
+                        declaration_id=declaration_id,
+                        acknowledgment=(
+                            None
+                            if ack is None
+                            else AcknowledgmentRecord(
+                                ack_id=str(ack["ack_id"]),
+                                t=float(ack["t"]),
+                                fault=str(ack["fault"]),
+                                reason=str(ack["reason"]),
+                            )
+                        ),
+                    )
+                )
+            stopped = True
+
+    value = Passivations(items=tuple(items))
+    if not items:
+        detail = (
+            "this run holds no passivation at all — no verdict in it carries a "
+            "fault whose response stops the robot. That is a fact about the run "
+            "and not an unacknowledged stop"
+        )
+    else:
+        detail = (
+            f"{len(value.acknowledged)} of {len(items)} passivation(s) were "
+            "acknowledged; the rest were not, read closed-world under "
+            f"meta[{META_ATTESTATION_RETENTION!r}]. Who signed an acknowledgment "
+            "is its MAC and not a column here: run --verify-chain with the "
+            "keyring, or the records in this answer are attributed to nobody"
+        )
+    return Answer(
+        query=spec.name,
+        verdict=ANSWERED,
+        layer=ATTESTATION_LAYER,
+        value=value,
+        tolerances={},
+        reason=detail,
+    )
+
+
 def verify_chain(conn: sqlite3.Connection, keyring: object) -> object:
     """Query 8 — integrity over the full record. `reg.chain.verify_chain`, here.
 
@@ -2447,6 +2701,78 @@ def _assumption_for(item: Evidence) -> str:
     )
 
 
+def _passivation_clause_lines(
+    conn: sqlite3.Connection,
+) -> tuple[list[str], list[Evidence]]:
+    """The enforcement clause's passivation lines, and the evidence for them.
+
+    **Over the whole record, not the report's window** (issue #112). A
+    passivation is a state the run enters and stays in until something clears it,
+    so a window cut through the middle of one would show either the stop or the
+    clearing and read as though the other had not happened. The same argument
+    `first_refusal` is reported on.
+
+    An unacknowledged passivation gets a line saying so in those words. It is the
+    finding this half of the report exists for, and the alternative — printing
+    the acknowledged ones and nothing else — makes silence and a clean recovery
+    look identical.
+
+    Returns `([], [])` for a run with no passivation, which the caller renders as
+    the sentence rather than as nothing: an enforcement clause that simply did
+    not mention passivation would read as an artifact that cannot answer it.
+    """
+    answer = passivations(conn)
+    if not answer.answered:  # pragma: no cover - the caller already has records
+        return (
+            [f"  passivation: could not be evaluated — {answer.reason}"],
+            [],
+        )
+    found: Passivations = answer.value  # type: ignore[assignment]
+    if not found.items:
+        return (
+            [
+                "  the robot was never passivated in this run: no verdict in the "
+                "record carries a fault whose response stops it"
+            ],
+            [],
+        )
+
+    lines = [
+        f"  the record holds {len(found.items):,} passivation(s), "
+        f"{len(found.acknowledged):,} acknowledged and "
+        f"{len(found.unacknowledged):,} not"
+    ]
+    evidence: list[Evidence] = []
+    for item in found.items:
+        lines.append(
+            f"  at t={item.t:.4f}s verdict {item.verdict_id} stopped the robot "
+            f"({item.fault.upper()})"
+        )
+        ack = item.acknowledgment
+        if ack is None:
+            lines.append(
+                "    NOT ACKNOWLEDGED — this artifact holds no acknowledgment "
+                "naming that verdict, and it states that every record the run "
+                "produced is stored, so nobody cleared it"
+            )
+            continue
+        lines.append(
+            f"    acknowledged at t={ack.t:.4f}s by {ack.ack_id}: {ack.reason}"
+        )
+        evidence.append(
+            Evidence(
+                kind="acknowledgment",
+                ref=ack.ack_id,
+                layer=LAYER_A,
+                detail=(
+                    f"signed by enforcement, clearing {item.verdict_id} "
+                    f"({ack.fault}) at t={ack.t}: {ack.reason}"
+                ),
+            )
+        )
+    return lines, evidence
+
+
 def _ordered_clauses(
     clauses: Mapping[str, Clause], integrity: Clause
 ) -> tuple[Clause, ...]:
@@ -2618,14 +2944,20 @@ def incident_report(
                 )
             ),
         )
+        passivation_lines, passivation_evidence = _passivation_clause_lines(conn)
         enforcement_clause = Clause(
             name=CLAUSE_ENFORCEMENT,
             verdict=ANSWERED,
             layer=LAYER_A,
-            text=(
-                "Enforcement bounded nothing in this window: a PERMIT applies no "
-                "bound, and there is no verdict here that applied one."
+            text="\n".join(
+                [
+                    "Enforcement bounded nothing in this window: a PERMIT "
+                    "applies no bound, and there is no verdict here that "
+                    "applied one.",
+                    *passivation_lines,
+                ]
             ),
+            solution=tuple(passivation_evidence),
         )
     else:
         fault_text = "none" if first.fault is None else first.fault.upper()
@@ -2713,6 +3045,9 @@ def incident_report(
                     ),
                 )
             )
+        passivation_lines, passivation_evidence = _passivation_clause_lines(conn)
+        enforcement_lines.extend(passivation_lines)
+        enforcement_evidence.extend(passivation_evidence)
         enforcement_clause = Clause(
             name=CLAUSE_ENFORCEMENT,
             verdict=ANSWERED,
@@ -2845,7 +3180,8 @@ def render_chain_report(report: object) -> str:
         )
         lines.extend(
             [
-                f"chain:           {result.chain} ({result.kind})",
+                f"chain:           {result.chain} "
+                f"({' + '.join(result.kinds)})",
                 f"  state:         {result.state.value}",
                 f"  records:       {result.records_walked} walked; {stated}",
                 f"  links checked: {result.links_checked}",
@@ -3026,6 +3362,37 @@ def _render_value(value: object) -> list[str]:
             f"{(a.fault or '-'):<28} {a.applied_envelope_id or '-'}"
             for a in value.adjudications
         )
+        return out
+    if isinstance(value, Passivations):
+        if not value.items:
+            return [
+                "this run holds no passivation: no verdict in it carries a "
+                "fault whose response stops the robot — read closed-world "
+                f"under meta[{META_ATTESTATION_RETENTION!r}]"
+            ]
+        out = [
+            f"{len(value.items):,} passivation(s): "
+            f"{len(value.acknowledged):,} acknowledged, "
+            f"{len(value.unacknowledged):,} not"
+        ]
+        width = _column_width("verdict", (p.verdict_id for p in value.items))
+        out.append(
+            f"{'verdict':<{width}} seq  t          {'fault':<28} acknowledged_by"
+        )
+        for item in value.items:
+            ack = item.acknowledgment
+            out.append(
+                f"{item.verdict_id:<{width}} {item.seq:<4} {item.t:<10.4f} "
+                f"{item.fault:<28} "
+                + ("NOBODY" if ack is None else ack.ack_id)
+            )
+            if ack is None:
+                out.append(
+                    "    this passivation was never acknowledged; the run "
+                    "either ended in it or resumed without one"
+                )
+            else:
+                out.append(f"    at t={ack.t:.4f}s: {ack.reason}")
         return out
     if isinstance(value, bool):
         return [str(value)]
@@ -3211,6 +3578,11 @@ def _parser() -> argparse.ArgumentParser:
         help=QUERIES["verdicts"].question,
     )
     group.add_argument(
+        "--passivations",
+        action="store_true",
+        help=QUERIES["passivations"].question,
+    )
+    group.add_argument(
         "--incident",
         metavar="T",
         help=(
@@ -3321,6 +3693,8 @@ def _dispatch(conn: sqlite3.Connection, args: argparse.Namespace) -> Answer:
         )
     if args.verdicts is not None:
         return verdicts(conn, args.verdicts)
+    if args.passivations:
+        return passivations(conn)
     raise QueryError(
         "no query was named. Nothing is answered by default — a query layer "
         "that picked one for you would answer a question nobody asked.\n"

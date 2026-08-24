@@ -70,7 +70,21 @@ EXPECTED_NAMES = [
     "escalation_failure",
     "envelope_overclaim",
     "out_of_vocabulary_action",
+    # The recovery fixture (issue #112). Not a sixth fault fixture: it produces
+    # `stale_declaration` because it has to have something to recover *from*, and
+    # what it exists to exercise is what happens afterwards — an operator
+    # acknowledges, the policy re-declares, and the run reintegrates. It is
+    # therefore the one fixture that shares a fault and a policy behaviour with
+    # another, and `RECOVERY_FIXTURES` below is where every one-per-fault
+    # invariant says so rather than quietly widening.
+    "acknowledged_passivation",
 ]
+
+#: Fixtures whose subject is recovery rather than a fault. They still *produce* a
+#: fault — there is nothing to recover from otherwise — so they are excluded from
+#: the one-fixture-per-fault invariants below and from nothing else: every
+#: geometric and determinism invariant in this file applies to them unchanged.
+RECOVERY_FIXTURES = {"acknowledged_passivation"}
 
 #: The six faults in `reg.enforce.FAULTS` that are about what a declaration
 #: *meant*. Each one has a fixture, which is the claim issue #46 makes.
@@ -225,15 +239,34 @@ def test_every_semantic_fault_has_a_fixture_and_no_transport_fault_does() -> Non
         "and needs a fixture here — or transport, and needs a stated reason not "
         "to have one."
     )
-    # One fixture per fault, not two arguing about the same one.
-    faults = [sc.fault for sc in SCENARIOS.values() if sc.fault is not None]
+    # One fault fixture per fault, not two arguing about the same one. A recovery
+    # fixture is excluded because it is not one of them, and it is required to
+    # share its fault with one that is: a recovery from a fault nothing else in
+    # the catalogue produces would be demonstrating the fault as well as the
+    # recovery, in a fixture named for neither.
+    faults = [
+        sc.fault
+        for name, sc in SCENARIOS.items()
+        if sc.fault is not None and name not in RECOVERY_FIXTURES
+    ]
     assert len(faults) == len(set(faults))
+    for name in RECOVERY_FIXTURES:
+        assert SCENARIOS[name].fault in faults, (
+            f"{name} recovers from {SCENARIOS[name].fault!r} and no fault "
+            "fixture produces it, so this run is demonstrating the fault as well "
+            "as the recovery."
+        )
 
 
 def test_each_fault_fixture_is_named_for_the_fault_it_produces() -> None:
-    """`declared_violation` is the one exception, and it predates the taxonomy."""
+    """Two exceptions. `declared_violation` predates the taxonomy, and a
+    recovery fixture is named for what it recovers rather than for the fault it
+    recovers from — `acknowledged_passivation` producing `stale_declaration` is
+    the point of it, not a disagreement between its name and its behaviour."""
     for name, sc in SCENARIOS.items():
         if sc.fault is None or name == "declared_violation":
+            continue
+        if name in RECOVERY_FIXTURES:
             continue
         assert name == sc.fault, (
             f"fixture {name!r} produces {sc.fault!r}. A fixture whose name and "
@@ -542,7 +575,12 @@ def test_declared_violation_leaves_the_bound_it_declares(seed: int) -> None:
 #: stays *true* for the whole run at every seed — a claim that followed the arm
 #: around would go stale in the same window the declaration does, and the run
 #: would produce a mismatch on top of the fault it exists for.
-FIXED_BOX_FIXTURES = {"declared_violation", "stale_declaration", "escalation_failure"}
+FIXED_BOX_FIXTURES = {
+    "declared_violation",
+    "stale_declaration",
+    "escalation_failure",
+    "acknowledged_passivation",
+}
 
 
 def test_a_fixture_declares_a_fixed_bound_only_where_it_needs_one() -> None:
@@ -567,8 +605,24 @@ def test_the_policy_fields_are_set_only_on_the_fixture_that_needs_them() -> None
     silent = {n for n, sc in SCENARIOS.items() if sc.silent_windows}
     stamped = {n for n, sc in SCENARIOS.items() if sc.declared_action_class is not None}
 
+    acknowledging = {n for n, sc in SCENARIOS.items() if sc.acknowledgments}
+
     assert padded == {"envelope_overclaim"}
-    assert silent == {"no_declaration", "stale_declaration", "escalation_failure"}
+    assert silent == {
+        "no_declaration",
+        "stale_declaration",
+        "escalation_failure",
+        # The recovery fixture is silent for the same reason
+        # `escalation_failure` is — the silence is what expires the declaration
+        # it then recovers from. It is the one place two fixtures share a policy
+        # behaviour, and what separates them is the operator's, below.
+        "acknowledged_passivation",
+    }
+    assert acknowledging == RECOVERY_FIXTURES, (
+        "an acknowledgment is an operator saying it is safe to resume. A second "
+        "fixture carrying one would mean two runs claim to demonstrate "
+        "reintegration, and neither would be the one it is demonstrated against."
+    )
     assert stamped == {"out_of_vocabulary_action"}
     assert padded.isdisjoint(silent) and padded.isdisjoint(stamped)
     assert silent.isdisjoint(stamped)

@@ -1,6 +1,28 @@
 # Prior art — what exists, what this borrows, what it must not claim
 
-**Status:** first pass, 2026-08-18 · run before Phase 1, as `plan.md` requires
+**Status:** **normative** where it disagrees with [`plan.md`](plan.md) — prior art
+wins and `plan.md` gets edited, which is the README's stated rule and this file's
+whole purpose · **four passes**: 2026-08-18 before Phase 1, 2026-08-19 after the
+benchmark appeared to refute Claim 1, and 2026-08-21 and 2026-08-26 each prompted
+by an outside reader · keep current
+
+Each pass is kept whole and dated rather than folded into the one after it,
+because half of what this file records is *when* something was found: a citation
+that was there before the claim was written reads differently from one added
+after the claim was published. Later passes correct earlier entries in place,
+marked and dated — §1's mandate-versus-proposal amendment is the pattern, and the
+correction runs in that direction only, because an entry that is quietly rewritten
+stops being evidence of what was known when.
+
+Every pass ends on a table of changes it orders into other files. §20 is what
+happened when one of those tables went undischarged for five days while nothing
+went red; `tests/test_prior_art.py` is why that cannot now happen quietly, and
+[`plan.md`](plan.md)'s own header carries the seven ordered changes that have not
+been made there yet.
+
+---
+
+# First pass — 2026-08-18, before any code existed
 
 The purpose of this pass was to find where the plan reinvents something with a
 name. It found four things that change the plan and one that sharpens the

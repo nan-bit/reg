@@ -1282,9 +1282,10 @@ claim to whoever owns §6.
 a reimplementation of a 1998 construction; §18 establishes that the 1998
 construction was itself superseded for this problem, twice, in ways that address
 the exact limitation `chain.py` documents. What `reg` has is a *reason* — offline,
-air-gapped, one auditor, no service — and that reason is a design constraint the
-project chose, not a gap in the literature. Nothing about the chain is novel and
-nothing about it should be described as solving the append-only-log problem.
+one auditor, no service still running — and that reason is a requirement this
+project set for itself, not a gap in the literature. Nothing about the chain is
+novel and nothing about it should be described as solving the append-only-log
+problem.
 
 **Action:** cite Crosby & Wallach and RFC 6962/9162 in `chain.py`'s header beside
 the truncation paragraph, as the structural answer this artifact does not use.
@@ -1470,7 +1471,7 @@ survey does not edit the claims it bears on:
   neither is decided in a survey.
 - **Whether a witness set replaces a witness.** `--witness` is cosigning with
   N = 1 inside the operator (§18). Raising N is an operational change, not an
-  encoding one, and the air-gap claim survives it.
+  encoding one, and off-network verifiability survives it.
 - **Whether SOTIF's areas belong in `docs/sufficiency.md` at all**, given §19's
   warning that the two partitions are on different axes. Adopting the vocabulary
   is safe; adopting the taxonomy is not, and the document has to say which it did.

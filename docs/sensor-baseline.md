@@ -360,6 +360,47 @@ this repository against the same fixture, recorded here with its version and
 command line. That replaces a projection with a measurement and should be done
 before any outside-facing document leans on the 2.51x.
 
+## A premise this document does not carry: air-gapped sites
+
+Until 2026-08-26 the retention argument rested on a **second** empirical claim
+beside the sensor rate: that full sensor logs *cannot leave an air-gapped site*.
+It was stated as a fact in `README.md` and three times in [`plan.md`](plan.md),
+it stood in for the requirement below in three more places, and it appeared
+**zero times here** — no source, no range, no sensitivity, in the document where
+every other input to this argument gets exactly those three (issue #102).
+
+**It is retired rather than sourced, because the argument does not need it.**
+What the retention argument needs is that keeping the raw log for the mandated
+window is expensive per robot and keeping the artifact is not. Both halves are
+above and neither mentions a network: 182.5 TB per robot per retention window at
+the published multiplier, against 264 GB of artifact at occurrence resolution and
+a 50 Hz control rate, with the ratio's sensitivity to the multiplier in
+[Sensitivity](#sensitivity). None of that arithmetic moves on a site with a fibre
+uplink. Sourcing the premise instead would have added a second empirical input to
+a claim that already turns on one, and the second would have been carrying no
+weight.
+
+**What was not retired, because it is a different kind of claim.** *Off-network
+verifiability* — one self-contained file an assessor can check years later with no
+service still running and no call to anyone — is a **requirement of the design**,
+not an observation about how sites are run. These sites are heavily instrumented
+and their telemetry already flows to a cloud the operator runs; that is the reason
+for the requirement rather than an obstacle to it, because an assessor certifying
+what happened needs a record whose integrity does not rest on infrastructure
+belonging to the party being assessed. Requirements are stated, not sourced, so
+that half needs nothing from this document. It is stated in
+[`limitations.md`](limitations.md) §6, in [`plan.md`](plan.md) under Claim 4, and
+in `reg/commit.py`, which is where it decides something: RFC 3161 and
+transparency-log commitment are documented and deliberately unimplemented under
+it.
+
+**What would bring the premise back.** A measurement rather than an assertion: how
+many deployments in the target class run isolated, over what range, with the
+sensitivity of the retention argument to it — the same three things every other
+input on this page carries. Absent that, no document in this repository states
+site isolation as a fact, and `tests/test_air_gap_framing.py` fails if one starts
+to.
+
 ## What would retire this document
 
 A measured figure from a fielded humanoid — sensor manifest, sample rates, codec,

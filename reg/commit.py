@@ -39,9 +39,11 @@ DOCUMENTED AND DELIBERATELY NOT IMPLEMENTED
 -------------------------------------------
 * **RFC 3161 timestamp tokens.** Strictly stronger — a TSA with no relationship
   to the operator asserts the heads existed by an instant. Rejected here for one
-  reason only: it needs a network call at artifact close, and the README claims
-  air-gapped operation. If that claim is ever dropped, this is the upgrade path,
-  and the interface above is what makes it an adapter rather than a rewrite.
+  reason only: it needs a network call at artifact close, and this artifact is
+  required to be checkable years later with no service still running and no call
+  to anyone — least of all to infrastructure the party being assessed runs. A
+  deployment prepared to take that dependency has its upgrade path here, and the
+  interface above is what makes it an adapter rather than a rewrite.
 * **Transparency-log inclusion** (a Certificate-Transparency-shaped append-only
   log; docs/prior-art.md). Same shape, same reason, and additionally it makes
   *withholding* an artifact detectable, which nothing here does.
@@ -144,7 +146,8 @@ COMMITMENT_STATEMENT = (
     "timestamp: it does not prove the heads existed by any given instant to "
     "anyone with no relationship to the operator. An RFC 3161 token or a "
     "transparency-log inclusion proof would; both need a network call at "
-    "artifact close, which this project's air-gapped operation rules out."
+    "artifact close, and this artifact is required to be checkable years later "
+    "with no service still running and no call to anyone."
 )
 
 #: Witness key material length, the same 32 bytes `reg.chain` uses and for the

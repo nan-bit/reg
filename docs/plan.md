@@ -27,9 +27,11 @@ Two halves:
 **The thesis:** safety work tells you a robot probably won't hurt anyone.
 Evidence tells you what happened when it did. Almost all robot safety research is
 runtime; very little addresses reconstruction months later. Full sensor logs from
-a humanoid are terabytes/day and cannot leave an air-gapped site. A scene graph
-may be the only representation you can retain, export, and hand to an assessor or
-insurer.
+a humanoid are terabytes/day, against a retention floor of six months — 182.5 TB
+per robot at the rate Claim 1 assumes, and that arithmetic is the same on a site
+with a fibre uplink as on one without ([`sensor-baseline.md`](sensor-baseline.md)
+sources the rate and gives the sensitivity). A scene graph may be the only
+representation you can retain, export, and hand to an assessor or insurer.
 
 > **Amended twice on 2026-08-19; read the second amendment. Re-measured
 > 2026-08-20.** The clause "orders of magnitude smaller" was struck that morning,
@@ -45,6 +47,18 @@ insurer.
 > (issue #59). The artifact side is measured; the sensor side is sourced and must
 > always be labelled a projection. See Claim 1 for both numbers and why the first
 > amendment was wrong.
+
+> **Amended 2026-08-26 (issue #102).** The thesis paragraph rested on a second
+> empirical premise beside the sensor rate — an unsourced claim about the
+> connectivity of the sites this targets — which appeared nowhere in
+> [`sensor-baseline.md`](sensor-baseline.md), the document where every other
+> assumption of this argument carries a source, a range and a sensitivity. It is
+> **retired rather than sourced**: the volume and the retention floor carry the
+> retention argument on their own. The retirement, and what evidence would bring
+> the premise back, is recorded in `sensor-baseline.md`. *Off-network
+> verifiability* is a different thing and is not retired — it is a **requirement**
+> of this design rather than an observation about sites, and it is stated as one
+> under Claim 4 and in [`limitations.md`](limitations.md) §6.
 
 **This is not:** a perception system, a safety controller, a physics engine, a
 research contribution to reachability analysis, or a proposed standard. It is an
@@ -636,9 +650,14 @@ site**, and that is the honest ceiling of it. An on-site witness is not a
 third-party timestamp: it does not prove the heads existed by any given instant
 to someone with no relationship to the operator. RFC 3161 and transparency-log
 adapters would, and both are documented and deliberately unimplemented — each
-needs a network call at artifact close, which the air-gap claim rules out. The
-`Committer` interface exists so that dropping that claim makes them adapters
-rather than a rewrite.
+needs a network call at artifact close, and this artifact is required to be
+checkable years later with no service still running and no call to anyone. That
+requirement is not a site constraint worked around; it is the point. An assessor
+certifying what happened needs a record whose integrity does not rest on
+infrastructure belonging to the party being assessed, and the telemetry pipeline
+these sites already run is that party's. The `Committer` interface exists so that
+a deployment prepared to take the dependency gets an adapter rather than a
+rewrite.
 
 **What this claim does not cover, stated here rather than left to be inferred.**
 Passivation and reintegration — Phase 4's asymmetry, the part the plan says people
@@ -1181,7 +1200,9 @@ Lead paragraph, roughly:
 > assurance moves to the endpoints — and applies it to a learned control policy.
 > The policy stays arbitrarily capable and uncertified. A bounded enforcement layer
 > independently verifies what it declared it would do, and every exchange lands in
-> a queryable, tamper-evident record small enough to leave an air-gapped site.
+> a queryable, tamper-evident record cheap enough to keep for the mandated
+> retention window and self-contained enough to check with no service still
+> running.
 
 Then: the headline compression number. The incident report block. The GIF. Link to
 repo. A short "what this doesn't do" section — that one earns more credibility than

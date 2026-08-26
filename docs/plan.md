@@ -68,7 +68,7 @@ project from a toy, and it is the section that belongs on the personal site.
 | Cybersecurity requirements as they pertain to robot safety | **ISO 10218:2025** (Parts 1 & 2) | Published Feb 2025 |
 | Speed and separation monitoring; time-varying protective volume from speed, stopping distance, sensor latency | ISO/TS 15066, now absorbed into **ISO 10218-2:2025** | Published |
 | A mandated, retained evidence recorder for autonomy: **occurrences** with flag, reason, date, timestamp (±1.0 s) and the software version present at the event (`R157SWIN`) | **UNECE DSSAD**, UN R157 (ALKS) | Published; the closest existing thing to this project. `reg` implements the first four elements and **not** `R157SWIN` — see [`prior-art.md` §9](prior-art.md) |
-| Automatic event logging over the system lifetime, retained ≥6 months, sufficient for post-hoc reconstruction of individual decisions | **EU AI Act Art. 12** (record-keeping), Art. 19 | In force |
+| Automatic event logging over the system lifetime, retained ≥6 months, sufficient for post-hoc reconstruction of individual decisions | **EU AI Act Art. 12** (record-keeping), Art. 19 | In force. The ≥6 months is a floor *"unless provided otherwise… in particular Union law on the protection of personal data"* — an artifact holding personal data is bounded from both sides, and the obligations that creates are unaddressed here: [`limitations.md` §8](limitations.md) |
 
 ### Two deviations from precedent, both deliberate — state them prominently
 
@@ -175,6 +175,19 @@ record-keeping and sets no period. (This read "Article 12 sets that floor"
 until 2026-08-21. `README.md` and this document's own regulatory table always
 cited it correctly; the slip was under the headline number, which is where it
 would have been read.)
+
+**And that floor is subordinate to data-protection law, which this section does
+not price** (issue #101). Both Articles set the six-month period *"unless
+provided otherwise in applicable Union or national law, **in particular Union law
+on the protection of personal data**"*. The artifact contains personal data:
+`meta[operator_id]` with `meta[run_start_utc]` selects a shift, and the Layer B
+edges record how close a human came to a machine, to the centimetre, all shift.
+So for that half of the file six months may be a **ceiling** rather than a floor.
+Every figure below is what it costs to keep the artifact for the mandated window;
+none of them is a claim that keeping it for that window is permitted. The
+entry — with Art. 26(7) and the DPIA obligation named, and no claim of
+compliance — is [`docs/limitations.md` §8](limitations.md).
+
 Per robot, from the measured resolution curve:
 
 > **Measured 2026-08-20 (issue #60). These replace the provisional figures.**

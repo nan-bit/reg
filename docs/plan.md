@@ -411,6 +411,22 @@ from it:
 | x gz CSV | 0.03x |
 | how much larger | ~40x |
 
+**That baseline is not the incumbent, and the gap is now measured.** Nobody
+retains a gzipped CSV; practitioners retain rosbag2, in MCAP. For the same
+proprioceptive content — `t`, `q`, `qd` over the same fixture — MCAP
+`/joint_states` costs **2.51x** what the gzipped CSV costs: 7,669 B against
+3,053 B, computed from the MCAP specification and chunk-compressed, recorded as a
+projection in [`sensor-baseline.md`](sensor-baseline.md) *The incumbent encoding*
+and held to the byte by `tests/test_incumbent_encoding.py`.
+
+So **~40x overstates the artifact's disadvantage against what a buyer actually
+keeps**, and by an amount this project has not measured: the 2.51x is
+proprioception on both sides, while the ~40x baseline carries the human's state
+and three obstacles as well. The two comparisons do not cover the same content
+and are not composable into a single corrected ratio. **~40x remains the number
+to quote**, now with the incumbent named beside it rather than left unstated.
+
+
 The baseline is the same 64,651 B on both sides of the comparison — same fixture,
 same seed, same stream — so the whole of the distance between 13x and **~40x** is
 the Layer A the build carries: the ladder above has **no record stream** in it and

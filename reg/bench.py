@@ -134,12 +134,15 @@ from __future__ import annotations
 import argparse
 import bisect
 import concurrent.futures
+import csv
 import gzip
+import io
 import hashlib
 import math
 import multiprocessing
 import shutil
 import sqlite3
+import struct
 import statistics
 import sys
 import tempfile
@@ -898,6 +901,120 @@ def agreement(
     return AGREE if abs(graph_answer - csv_answer) <= tolerance else DISAGREE
 
 
+def proprioceptive_columns(header: Sequence[str]) -> list[str]:
+    """`t` and the per-joint `q`/`qd` columns, in header order.
+
+    The stream carries more than this — the human's position and velocity and
+    every obstacle's pose — and none of it is proprioception. Naming the subset
+    explicitly is what keeps the incumbent comparison like-for-like on both
+    sides; see `docs/sensor-baseline.md`, *The Layer B asymmetry*.
+    """
+    return [c for c in header if c == "t" or c.startswith(("q_", "qd_"))]
+
+
+def mcap_joint_states_bytes(path: str | Path) -> int:
+    """Bytes a rosbag2/MCAP `/joint_states` topic would hold for this stream.
+
+    Message records only: the file-level header, schema, channel, chunk index,
+    statistics, summary and footer are excluded, which understates a real bag by
+    one to two kilobytes. Excluded rather than estimated, because an estimate
+    would be a number nobody measured sitting beside numbers that were.
+
+    Raises rather than guessing when the stream cannot be priced. A stream with
+    no proprioceptive columns is a could-not-evaluate, and returning 0 for it
+    would read downstream as a free encoding.
+    """
+    path = Path(path)
+    rows = [
+        line for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("#")
+    ]
+    if len(rows) < 2:
+        raise BenchError(
+            f"{path} holds no frames to price. An empty stream cannot be "
+            "compared against an encoding of it, and a zero here would read as "
+            "an encoding that costs nothing."
+        )
+    reader = csv.reader(rows)
+    header = next(reader)
+    prop = proprioceptive_columns(header)
+    joints = sorted(
+        {c.split("_", 1)[1] for c in prop if c.startswith("q_")},
+        key=int,
+    )
+    if not joints:
+        raise BenchError(
+            f"{path} has no q_* columns, so it carries no joint state. "
+            f"Its header is {header!r}. There is nothing for a /joint_states "
+            "topic to hold and this comparison does not apply to it."
+        )
+    names = [f"joint_{j}" for j in joints]
+    ti = header.index("t")
+    qi = [header.index(f"q_{j}") for j in joints]
+    di = [header.index(f"qd_{j}") for j in joints]
+    stream = bytearray()
+    for seq, row in enumerate(reader):
+        t_s = float(row[ti])
+        payload = joint_state_cdr(
+            t_s,
+            [float(row[i]) for i in qi],
+            [float(row[i]) for i in di],
+            names,
+        )
+        # The framing is written with its real values, not with zero bytes.
+        # A sequence number and two timestamps that actually advance do not
+        # compress the way a run of zeros does, and padding this out with nulls
+        # would hand the incumbent a discount no bag ever gets.
+        ns = int(t_s * 1_000_000_000)
+        record = struct.pack("<HIQQ", 0, seq, ns, ns) + payload
+        stream += b"\x05" + struct.pack("<Q", len(record)) + record
+    # Chunk-compressed, because that is what rosbag2 writes and because the
+    # baseline this is compared against is gzipped. Uncompressed here against
+    # gzipped there would not be a comparison, it would be a category error.
+    # `gzip` stands in for `zstd`, MCAP's rosbag2 default — comparable in class,
+    # not identical, and stated as an assumption in `docs/sensor-baseline.md`.
+    return len(
+        gzip.compress(
+            bytes(stream), compresslevel=GZIP_COMPRESSLEVEL, mtime=GZIP_MTIME
+        )
+    )
+
+
+def gzip_bytes_of_columns(path: str | Path, columns: Sequence[str]) -> int:
+    """The named columns of `path`, as CSV, gzipped at `GZIP_COMPRESSLEVEL`.
+
+    The other half of the like-for-like: the incumbent encoding is priced over
+    proprioception, so the baseline it is compared against must be too.
+    """
+    path = Path(path)
+    rows = [
+        line for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("#")
+    ]
+    reader = csv.reader(rows)
+    header = next(reader)
+    missing = [c for c in columns if c not in header]
+    if missing:
+        raise BenchError(
+            f"{path} is missing {missing}, which this comparison needs. A "
+            "subset silently narrowed to whatever happened to be present would "
+            "price two different things and call them the same."
+        )
+    idx = [header.index(c) for c in columns]
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(list(columns))
+    for row in reader:
+        writer.writerow([row[i] for i in idx])
+    return len(
+        gzip.compress(
+            buf.getvalue().encode("utf-8"),
+            compresslevel=GZIP_COMPRESSLEVEL,
+            mtime=GZIP_MTIME,
+        )
+    )
+
+
 def gzip_bytes(path: str | Path) -> int:
     """Size of `path` gzipped at `GZIP_COMPRESSLEVEL`, in bytes.
 
@@ -915,6 +1032,82 @@ def gzip_bytes(path: str | Path) -> int:
     return len(
         gzip.compress(data, compresslevel=GZIP_COMPRESSLEVEL, mtime=GZIP_MTIME)
     )
+
+
+
+# --- the incumbent encoding, for the baseline nobody actually runs -----------
+#
+# WHY THIS EXISTS. The headline ratio is measured against a gzipped CSV, and
+# nobody retains a gzipped CSV. What practitioners retain is rosbag2, in MCAP.
+# Comparing against a format no one runs prices a counterfactual, so the same
+# proprioceptive content is priced a second way and both numbers are published.
+#
+# WHAT IT IS NOT. This is a **projection computed from published specification**,
+# not a measurement: no `mcap` library is imported and no `zstd` is run, because
+# this project adds no dependency for a baseline. What is measured is the byte
+# stream the encoder below produces. What is projected is that a rosbag2 writer
+# would lay the same bytes out the same way.
+#
+# WHY IT IS A FLOOR. Every assumption here makes MCAP look *better* than it is:
+# file-level records are excluded, joint names are the shortest plausible, and
+# `effort` is empty. A real bag is larger than this, so the penalty computed from
+# it understates the incumbent's cost.
+
+MCAP_MESSAGE_RECORD_OVERHEAD = 31
+"""Bytes of MCAP framing per message, from the format specification.
+
+1 opcode + 8 record length + 22 of Message fields (channel_id 2, sequence 4,
+log_time 8, publish_time 8). See mcap.dev/spec. Not a guess and not tunable: a
+number that moved with the answer would be the invented default this project
+refuses everywhere else.
+"""
+
+CDR_ENCAPSULATION = 4
+"""The XCDR1 representation identifier and options, ahead of every payload."""
+
+
+def _cdr_align(buf: bytes, n: int) -> bytes:
+    """Pad to an `n`-byte boundary. CDR aligns primitives to their own width."""
+    return buf + b"\x00" * (-len(buf) % n)
+
+
+def joint_state_cdr(t_s: float, q: Sequence[float], qd: Sequence[float],
+                    names: Sequence[str]) -> bytes:
+    """One `sensor_msgs/msg/JointState` in XCDR1 little-endian.
+
+    Derived from the IDL, field by field, so the padding is where CDR puts it
+    rather than where an estimate would: a Time struct, an empty `frame_id`, the
+    joint-name sequence, `position`, `velocity`, and an empty `effort`.
+
+    `names` is required and has no default. The strings are repeated in every
+    single message and are a real part of what the format costs, so inventing
+    them here would move the answer by inventing the input.
+    """
+    if len(q) != len(qd):
+        raise BenchError(
+            f"joint_state_cdr got {len(q)} position(s) and {len(qd)} "
+            "velocity(ies). A JointState with mismatched arrays is not a message "
+            "any robot publishes, and pricing one would price nothing."
+        )
+    if len(names) != len(q):
+        raise BenchError(
+            f"joint_state_cdr got {len(names)} joint name(s) for {len(q)} "
+            "joint(s). The names are per-message payload; a count that does not "
+            "match the arrays would misprice every message in the run."
+        )
+    sec = int(t_s)
+    nsec = int(round((t_s - sec) * 1e9))
+    b = struct.pack("<i", sec) + struct.pack("<I", nsec)
+    b = _cdr_align(b, 4) + struct.pack("<I", 1) + b"\x00"          # frame_id ""
+    b = _cdr_align(b, 4) + struct.pack("<I", len(names))            # name[]
+    for n in names:
+        b = _cdr_align(b, 4) + struct.pack("<I", len(n) + 1) + n.encode() + b"\x00"
+    b = _cdr_align(b, 4) + struct.pack("<I", len(q))                # position[]
+    b = _cdr_align(b, 8) + b"".join(struct.pack("<d", v) for v in q)
+    b = _cdr_align(b, 4) + struct.pack("<I", len(qd))               # velocity[]
+    b = _cdr_align(b, 8) + b"".join(struct.pack("<d", v) for v in qd)
+    b = _cdr_align(b, 4) + struct.pack("<I", 0)                     # effort[]
+    return b"\x00\x01\x00\x00" + b
 
 
 # --------------------------------------------------------------------------

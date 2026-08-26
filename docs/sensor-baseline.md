@@ -274,12 +274,101 @@ for them. What a claim may and may not rest on above 100 Hz is
 [`limitations.md`](limitations.md) §5; this paragraph is the cost side of the same
 limit.
 
+## The incumbent encoding: rosbag2 / MCAP
+
+**Status: a projection, computed from published specification, 2026-08-26
+(issue #117).** No `mcap` library was used and no `zstd` was run — this
+repository adds no dependency for a baseline. What is *measured* is the byte
+stream produced by an encoder written here from the spec, applied to real fixture
+data. What is *projected* is that a rosbag2 writer would produce the same layout.
+
+### Why this baseline exists
+
+Claim 1's negative result is measured against a **gzipped CSV**. Nobody retains a
+gzipped CSV. What practitioners retain is rosbag2, increasingly in MCAP, and two
+independent external reviews named it as the unnamed incumbent. A comparison
+against a format nobody runs prices a counterfactual.
+
+### The comparison
+
+Same information on both sides — `t`, `q`, `qd` for a two-joint arm, 251 frames
+of the `declared_violation` fixture at 50 Hz:
+
+| Encoding | Size |
+|---|---|
+| CSV, gzip -9 | **3,051 B** |
+| MCAP `/joint_states` | **7,669 B** |
+
+**MCAP is 2.51x the gzipped CSV for identical content.** The cost is per-message
+self-description, which is what a bag format is for and is expensive at 50 Hz:
+
+```
+127 B  MCAP Message record
+   1   opcode
+   8   record length
+  22   channel_id, sequence, log_time, publish_time   (mcap.dev/spec)
+  96   CDR payload
+        of which 32 B is the four float64s that carry the data;
+        the rest is the encapsulation header, the Time struct, the
+        joint-name strings repeated on every message, and alignment padding
+```
+
+So the baseline Claim 1 currently uses is not merely unrepresentative — it is
+**about 2.5x more efficient than the incumbent**. The artifact's disadvantage
+against what practitioners actually keep is correspondingly smaller than the
+published figure against gzipped CSV.
+
+**This document does not restate the headline.** The ratio above is an encoding
+ratio, free of fixed cost on both sides. Translating it into Claim 1 requires
+`reg.bench` measuring its own fixtures, which is the work of issue #117. A
+short-run artifact measurement will not do it: over a five-second fixture the
+artifact's fixed schema and index cost dominates completely, and any ratio taken
+there says more about the schema than about the encoding.
+
+### Assumptions, each of which can move the number
+
+- **gzip -9 stands in for zstd**, which is rosbag2's MCAP default. Comparable in
+  class, not identical.
+- **File-level records excluded** — header, schema, channel, chunk index,
+  statistics, summary, footer. Adds roughly 1-2 kB fixed: negligible at scale,
+  material at 251 messages, and it makes MCAP look *better* here than it is.
+- **Joint names `joint_0` / `joint_1`, empty `frame_id`, empty `effort`.** Real
+  robots use longer joint names, which makes MCAP look worse.
+- **`sensor_msgs/msg/JointState` with position and velocity only.** A system
+  publishing effort, or publishing at a higher rate than it commands, differs.
+- **XCDR1 little-endian**, the ROS 2 default via Fast-CDR.
+
+### The Layer B asymmetry
+
+The two sides do not carry the same information about the world, and the
+comparison is only honest with that stated rather than footnoted.
+
+The fixture stream carries `human_x`, `human_y`, `human_vx`, `human_vy` —
+**simulator ground truth for the person**. No robot's `/joint_states` contains
+that and no bag does either; a real system carries perception output, and the
+sensing that produced it. Neither is priced here.
+
+This comparison therefore prices **proprioception only, on both sides**. It says
+nothing about what it costs to know where the human was. That is Layer B, it is
+the expensive half, and it is the half this document projects rather than
+measures everywhere else.
+
+### What would retire this section
+
+A rosbag2 writer with the real `mcap` library and real `zstd`, run once outside
+this repository against the same fixture, recorded here with its version and
+command line. That replaces a projection with a measurement and should be done
+before any outside-facing document leans on the 2.51x.
+
 ## What would retire this document
 
 A measured figure from a fielded humanoid — sensor manifest, sample rates, codec,
 duty cycle, and a logged byte count over a known interval. Until then the honest
 form is the one used throughout: an explicit multiplier, a linear sensitivity, and
 the word *projection* on every number derived from it.
+
+The rosbag2/MCAP projection above retires separately and on its own terms — see
+[What would retire this section](#what-would-retire-this-section).
 
 That would retire the *sensor* side. The control rate is the other half and is
 already retired as an assumption: it is measured, and the figure a reader needs

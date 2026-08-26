@@ -31,17 +31,17 @@ with three things changed, and each is checkable against their published draft:
 Keeping the record that long is what makes it practical rather than theoretical,
 and it is measured rather than asserted: **264 GB** per robot for six months at
 the 50 Hz control loop this simulator runs at, against an assumed 1 TB/day sensor
-log — roughly **691x** smaller ([`docs/plan.md`](docs/plan.md) Claim 1). That
-figure is re-measured on every CI run and compared against every document that
-publishes it (`tests/test_published_figures.py`), so it cannot drift quietly. A
-real manipulator runs at 1 kHz, where the same measurement is **4.17 TB** and
-roughly **44x** — **one recorded manual measurement**, outside that pin, and at a
-rate above `reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, where the artifact can
-no longer address every frame of the run it prices
-([`docs/limitations.md` §5](docs/limitations.md)). The artifact side is measured;
-the sensor side is a **projection** from a sourced assumption and is never
-measured here ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). *Cheap
-enough to keep* is the only property the rest of the argument needs from it.
+log — roughly **691x** smaller ([`docs/plan.md`](docs/plan.md) Claim 1). The
+artifact side is measured, and re-measured on every CI run against every document
+that publishes it (`tests/test_published_figures.py`), so it cannot drift quietly.
+The sensor side is a **projection** from a sourced assumption, never measured here
+([`docs/sensor-baseline.md`](docs/sensor-baseline.md)).
+
+The figure at a 1 kHz control rate, and the rate ceiling above which the artifact
+can no longer address every frame of the run it prices, are in
+[`docs/plan.md`](docs/plan.md) Claim 1 and
+[`docs/limitations.md` §5](docs/limitations.md). *Cheap enough to keep* is the
+only property the rest of the argument needs from this.
 
 `reg` is a prototype of that record, in two halves: a
 declaration-and-attestation protocol between an unbounded policy and a bounded
@@ -49,6 +49,7 @@ enforcement layer, with a tamper-evident record of every exchange between them �
 and a temporal scene graph that answers post-hoc audit questions without
 replaying raw sensor logs. The attestation half is what the sentence below turns
 on; the scene graph is what makes the answers specific.
+
 Everything in the project serves one sentence:
 
 > The model declared it would stay inside this bound. Here is where it tried to
@@ -77,12 +78,12 @@ repository as it stands, not the plan.
 
 | | Claim | Status |
 |---|---|---|
-| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed, minus the passivation half` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no. What it binds is the *party that made each record*, by key. It does **not** bind the build of the policy under investigation: DSSAD's `R157SWIN` element is **not implemented**, because nothing in this prototype has a policy version to bind, and the occurrence layer's `recorder_version` is the evidence tool's own build ([`docs/prior-art.md` §9](docs/prior-art.md)) — all of that is exercisable end to end, from a shipped fixture to a query. **Passivation and reintegration are not.** They are implemented, in the hard way `docs/plan.md` Phase 4 asks for — an enforcement-signed `Acknowledgment` bound to the `verdict_id` that passivated, refused pre-emptively — and they are implemented **only in `reg/enforce.py`**, where the tests for them also live. The record reaches no table, no edge type and no query, no shipped fixture produces one, and `graph.build` *refuses* a run containing one rather than write a chain link over the gap it would leave. That refusal is deliberate and documented where it happens (`reg/graph.py`, `AttestationRecords`); what it costs is that **"was the passivation acknowledged, and by whom" is a question this artifact cannot be asked**. Issue #112 is where that would change, and it is a claim change, not a refactor. [`docs/lossiness.md`](docs/lossiness.md) *Retained* #7 states the same gap |
+| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed, minus the passivation half` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no. All of that is exercisable end to end, from a shipped fixture to a query. What the chain binds is the *party that made each record*, not the build of the policy under investigation — DSSAD's `R157SWIN` element is **not implemented**, because nothing here has a policy version to bind ([`docs/prior-art.md` §9](docs/prior-art.md)). **Passivation and reintegration are not exercisable.** They exist only in `reg/enforce.py`: the record reaches no table, no edge type and no query, no shipped fixture produces one, and `graph.build` *refuses* a run containing one rather than write a chain link over the gap. The refusal is deliberate and documented where it happens; what it costs is that **"was the passivation acknowledged, and by whom" is a question this artifact cannot be asked**. Issue #112 is where that would change, and it is a claim change, not a refactor. [`docs/lossiness.md`](docs/lossiness.md) *Retained* #7 states the same gap |
 | **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim: which audit questions the artifact answers on its own authority and which are only as strong as whatever supplied the entity positions |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
-| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the figure is measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **264 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~691x** below an assumed 182.5 TB sensor log **at a 50 Hz control rate** — and **4.17 TB**, **~44x**, at a 1 kHz one, because a verdict and a chain record are emitted per commanded action. The 50 Hz figure is the pinned one; the 1 kHz rung is a single recorded manual measurement at a rate above the 100 Hz the artifact's time base can place a frame at ([`docs/limitations.md` §5](docs/limitations.md)). Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: **~40x** *larger* than a gzipped copy of the nine-float stream, measured on the artifact that carries Layer A. (The 13x this row quoted until issue #98 was measured on a build holding **no declaration, verdict, fault or chain record at all**, and that condition travels with it wherever it is quoted.) Published beside the retention figure because it is the comparison a skeptic runs. `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
+| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — measured and published in [`docs/plan.md`](docs/plan.md) Claim 1: **264 GB** per robot for six months at occurrence resolution (±1 s, DSSAD-shaped), **~691x** below an assumed 182.5 TB sensor log at a 50 Hz control rate. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: **~40x** *larger* than a gzipped copy of the nine-float stream, measured on the artifact that carries Layer A. A **13x** figure appears in the same comparison measured on a build holding **no declaration, verdict, fault or chain record at all**, and that condition travels with it wherever it is quoted. Published beside the retention figure because it is the comparison a skeptic runs. The 1 kHz rung and the rate ceiling above which the time base cannot place a frame are in [`docs/limitations.md` §5](docs/limitations.md). `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
 
-The number is an identifier, not a rank — it is referenced from 125 places in this repository and does not move. The **order** is the argument: what the artifact proves, what that proof is worth, how you ask it, and what it costs to keep.
+The number is an identifier, not a rank — it is referenced throughout this repository and does not move. The **order** is the argument: what the artifact proves, what that proof is worth, how you ask it, and what it costs to keep.
 
 
 ## The honesty note: this is the structure of non-repudiation, not non-repudiation
@@ -102,7 +103,7 @@ as a constraint layer supplied by the policy vendor does.
 **The chain alone deters editing, not re-issuance**, and the two are different
 faults. A chain under keys held by the record's own author cannot notice the
 whole history being re-run and re-signed offline — the resulting artifact
-verifies perfectly. Two things bear on that, both added in issue #83:
+verifies perfectly. Two things bear on that:
 
 - `--run-start` is a **required, no-default** UTC instant, and `meta` names the
   unit and the operator, so the artifact says which robot and which shift.
@@ -110,15 +111,15 @@ verifies perfectly. Two things bear on that, both added in issue #83:
   from a clock: same seed **and** same declared start, same bytes.
 - `--witness` commits both chain heads at artifact close, signed by a second
   on-site keyholder whose key signed no record in the file. Half of that check
-  needs no key at all — the heads are recomputed from the records the artifact
-  holds, so anyone with the file can see a re-issued chain.
+  needs no key at all, which the demonstration below makes concrete.
 
 **An on-site witness is not a third-party timestamp.** It proves a second party
 at the same site saw these heads, not that they existed by any instant to someone
 with no relationship to the operator. RFC 3161 and transparency-log adapters
-would; both need a network call at artifact close, which the air-gapped operation
-above rules out, so both are documented and deliberately unimplemented
-([`docs/limitations.md` §4](docs/limitations.md)). An artifact closed without a
+would; both need a network call at the moment the artifact closes, and this
+artifact is meant to be verifiable years later with no service still running and
+no call to anyone. Both are documented and deliberately unimplemented
+([`docs/limitations.md` §6](docs/limitations.md)). An artifact closed without a
 witness records `commitment: none` in so many words — silence never reads as
 commitment.
 
@@ -167,8 +168,6 @@ artifact has to open without a runtime.
 pip install -e ".[dev]"
 pytest                      # the whole suite; CI runs exactly this
 ```
-
-As of this commit that is `1486 passed`.
 
 The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`,
 `python -m reg.query` and `python -m reg.bench`; each takes `--help`. The build
@@ -241,11 +240,9 @@ python -m reg.query tampered.sqlite --incident 3.5 --keyring keyring.json  # exi
 
 ### Committing the chain heads
 
-The chain above deters *editing*. It cannot deter *re-issuance*, because the
-party that signed the records could re-run the whole thing offline and produce an
-artifact that verifies. Commit the two heads at artifact close to a second
-on-site keyholder — a different key from either of the two that sign records, and
-one this project refuses to accept if it is not:
+The re-issuance defence argued above, operationally. Commit the two chain heads
+at artifact close to a second on-site keyholder — a different key from either of
+the two that sign records, and one this project refuses to accept if it is not:
 
 ```bash
 python -c "from reg.commit import generate_witness, write_witness; write_witness(generate_witness('witness-safety-officer'), 'witness.json')"
@@ -262,46 +259,28 @@ the records the file actually holds and compared against the recorded ones, so
 the tampered artifact above reports `commitment: INVALID` and names which head
 moved even with no `--keyring` and no `--witness` on the command line. The
 witness signature is what stops the recorded heads being rewritten to match.
-Again: this is a second party at the same site, **not** a third-party timestamp
-([`docs/limitations.md` §4](docs/limitations.md)).
 
 ## Status
 
-Built: `reg/types.py` — the shared record types and the Layer A / Layer B split,
-which is the single most important structural property in the codebase. Layer A
-(certifiable) is proprioception, actuation limits, declarations, verdicts and the
-chain; Layer B (uncertifiable) is where anything else in the world is. The
-envelope computation takes a `ProprioState`, which has no field naming any entity
-— that absence *is* the enforcement, and
-[`tests/test_layer_boundary.py`](tests/test_layer_boundary.py) fails if it
-erodes. Actuation limits are Layer A **when they are a property of the robot**:
-under ISO/TS 15066 speed-and-separation monitoring the speed bound is a function
-of a measured separation distance, so `Limits` carries a required `source` and an
-envelope computed from derived bounds is tagged Layer B
-([`docs/sufficiency.md`](docs/sufficiency.md) §7). Also built: the simulator and its scenario fixtures, the
+**Built.** The shared record types and the Layer A/B split (`reg/types.py`, and
+Claim 3 above), the simulator and its eleven scenario fixtures, the
 proprioception-only envelope, the evidence graph and its SQLite store, the
-benchmarks, the viz, the hash chain with its two keyed MACs (`reg/chain.py`), the
-`Declaration` record and the scripted policy that emits it (`reg/declare.py`),
-independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), chain
-verification with the `--tamper` demonstration that it can fail, and — new in
-this change — the query API in full (`reg/query.py`): the four scene questions,
+benchmarks and the viz, the hash chain with its two keyed MACs (`reg/chain.py`),
+the `Declaration` record and the scripted policy that emits it
+(`reg/declare.py`), independent adjudication and the nine-fault taxonomy
+(`reg/enforce.py`), chain verification with the `--tamper` demonstration that it
+can fail, and the query API in full (`reg/query.py`): the four scene questions,
 the four attestation questions, and `incident_report()` above them.
 
-Not built: the GIF and the write-up of [`docs/plan.md`](docs/plan.md) Phase 10.
-Phase 8 has landed — `reg/bench.py` publishes the per-scenario table for all
-eleven scenarios (`python -m reg.bench --all`) and the resolution curve
-(`--resolution`), and the retention figures those produce are in
-[`docs/plan.md`](docs/plan.md) Claim 1.
+**Not built.** The GIF and the write-up — [`docs/plan.md`](docs/plan.md) Phase 10.
 
-The compression figures on this page are quoted from
-[`docs/plan.md`](docs/plan.md) rather than re-derived, and no GIF appears because
-none has been produced yet. A plausible placeholder would be indistinguishable
-from a measured result to every later reader, and this project's whole argument
-is about the difference — which is why the sensor-log comparison above is
-labelled a projection and why `reg.bench --sensor-multiplier` has no default:
-there is no value of that flag that makes the output claim to have measured a
-robot. The incident report above **is** real output, reproduced by the four
-commands beside it.
+No GIF appears because none has been produced yet. A plausible placeholder would
+be indistinguishable from a measured result to every later reader, and that
+difference is the project's whole argument — which is also why the sensor-log
+comparison is labelled a projection, and why `reg.bench --sensor-multiplier` has
+no default: there is no value of that flag that makes the output claim to have
+measured a robot. The incident report above **is** real output, reproduced by the
+four commands beside it.
 
 Read [`docs/plan.md`](docs/plan.md) for the argument and the full build order, and
 [`docs/prior-art.md`](docs/prior-art.md) before claiming anything here is novel.

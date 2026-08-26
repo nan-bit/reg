@@ -100,6 +100,22 @@ separation, one level down: a signature from a key the signer's counterparty als
 holds has common-cause failure with the thing it is supposed to attest, exactly
 as a constraint layer supplied by the policy vendor does.
 
+**The chain itself is not this project's invention, and the version here is the
+weaker one.** A per-record MAC plus a per-record hash link to the predecessor is
+Schneier and Kelsey's 1998 construction for secure logs on untrusted machines
+(USENIX Security 1998; ACM TISSEC, 1999), and `reg` implements it **without its
+forward security**: their scheme evolves the key after every entry and deletes the
+old one, so an attacker who takes the machine cannot forge what was written before
+they arrived, and `reg`'s keys are static for the life of a run. Anyone holding the
+keyring can also re-sign the whole history. Both are named, deliberate absences
+rather than oversights ([`docs/limitations.md` §7](docs/limitations.md)), and what
+this project adds to the ancestor — two chains under role-typed keys, and a
+verifier with three outcomes — is not cryptographic. Deleting the *last* records of
+a chain, which breaks no link, is likewise a named attack against exactly this
+construction — Ma and Tsudik's truncation attack — with a published fix in a
+different data structure that `reg` does not use
+([`docs/prior-art.md` §14 and §18](docs/prior-art.md)).
+
 **The chain alone deters editing, not re-issuance**, and the two are different
 faults. A chain under keys held by the record's own author cannot notice the
 whole history being re-run and re-signed offline — the resulting artifact

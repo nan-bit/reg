@@ -964,6 +964,20 @@ serialization of the previous record) and a `mac` under its own key. Two keys:
 policy and enforcement. Verification walks the chain and checks every link and
 every MAC.
 
+**This construction has a name and a 1998 paper, and neither is this project's.**
+Per-record MAC plus per-record hash link over one canonical preimage is
+**Schneier & Kelsey, "Cryptographic Support for Secure Logs on Untrusted
+Machines"** (USENIX Security 1998; ACM TISSEC 2(2), 1999) — implemented here
+**minus its forward security**, which is a named, deliberate absence
+([`docs/limitations.md`](limitations.md) §7) and not an oversight. What this phase
+adds to the ancestor is two chains under role-typed keys and a verifier with three
+outcomes; nothing cryptographic. The truncation limit is the **truncation attack**
+of Ma & Tsudik (2008), and the structural answer — a Merkle history tree, as
+deployed in Certificate Transparency — is a Phase 6 design question this plan does
+not take. [`docs/prior-art.md`](prior-art.md) §14 and §18 hold the full comparison;
+`reg/chain.py`'s header is the authority on what this module does and does not
+inherit.
+
 Include a `--tamper` flag that mutates one record in the persisted graph, so
 `verify_chain()` visibly fails. That's the demo.
 

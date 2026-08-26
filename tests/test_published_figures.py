@@ -1089,3 +1089,311 @@ def test_the_rate_comparison_row_is_not_this_figure() -> None:
         "| *x, 50 Hz → 1 kHz* | *15.8x* | *13.0x* | *19.6x* |\n"
     )
     assert verdict == COULD_NOT_EVALUATE
+
+
+# ==========================================================================
+# THE COARSEST LEVEL'S LABEL IS A CLAIM ABOUT COMPOSITION, SO IT IS PINNED TOO
+# (issue #116).
+#
+# `docs/plan.md` Claim 1's retention table named its first row
+# `occurrence (±1 s, DSSAD-shaped)` and priced it at 264 GB. The label described
+# 1.3% of the level: 3,120 of its 3,166 node rows are declarations and verdicts,
+# because no resolution level coarsens a record. Every figure in that table was
+# right; the sentence a reader took away from it was not, and nothing in this
+# repository could go red about it.
+#
+# The replacement label states the share, which turns it into the same kind of
+# object as the figures above — a number the code measures — and so it is pinned
+# the same way, with no constant in this file. If the encoding changes and
+# records stop being 98.5% of the level, the label fails here.
+# ==========================================================================
+
+#: The header cell that identifies Claim 1's retention table. The table is
+#: keyed on its header rather than on any figure in it, so this check cannot be
+#: satisfied or broken by a number moving.
+RETENTION_TABLE_HEADER = "retained at"
+
+#: The label this issue removed. Named so that reinstating it fails rather than
+#: passing quietly on a table whose first cell happens to contain the share.
+REJECTED_LABEL = "DSSAD-shaped"
+
+
+def coarsest_level_label(text: str) -> str | None:
+    """The first body row's label from Claim 1's retention table, or `None`."""
+    for header, rows in _tables(text):
+        if header and header[0].lower() == RETENTION_TABLE_HEADER and rows:
+            return rows[0][0]
+    return None
+
+
+def label_states_the_composition(text: str, share: str) -> tuple[str, list[str]]:
+    """Verdict on whether the coarsest level's label says what the level holds.
+
+    Three-valued, and the third is not a pass: a document with no retention
+    table has nothing to check and comes back `COULD-NOT-EVALUATE`, because
+    deleting the table is otherwise the way to make this green.
+    """
+    label = coarsest_level_label(text)
+    if label is None:
+        return COULD_NOT_EVALUATE, []
+    problems = []
+    if share not in label:
+        problems.append(
+            f"the label is {label!r} and does not state the measured share "
+            f"{share} of the level that is attestation records"
+        )
+    if REJECTED_LABEL in label:
+        problems.append(
+            f"the label is {label!r}, which reinstates {REJECTED_LABEL!r} — "
+            "the phrase issue #116 removed, for describing 1.3% of the level"
+        )
+    return (DISAGREE if problems else AGREE), problems
+
+
+def record_share_text(curve: bench.ResolutionCurve) -> str:
+    """The measured record share of the coarsest level, as the documents write it."""
+    point = next(p for p in curve.points if p.level == bench.OCCURRENCE_LEVEL)
+    assert point.nodes > 0, (
+        "the coarsest level has no node rows at all, so its composition is a "
+        "could-not-evaluate rather than a share."
+    )
+    return f"{100.0 * point.records / point.nodes:.1f}%"
+
+
+def test_the_coarsest_levels_label_is_the_composition_the_code_measures(
+    curve: bench.ResolutionCurve,
+) -> None:
+    """**THE TEST ISSUE #116's FIRST ACCEPTANCE CRITERION EXISTS FOR.**"""
+    share = record_share_text(curve)
+    verdict, problems = label_states_the_composition(
+        (DOCS / "plan.md").read_text(encoding="utf-8"), share
+    )
+    assert verdict == AGREE, (
+        "docs/plan.md Claim 1's retention table: "
+        + "; ".join(problems)
+        + f". The measured composition is {share} — re-measure with "
+        f"`{MEASURING_COMMAND}` and republish the label, or fix the change that "
+        "moved the composition."
+    )
+
+
+def test_the_measured_composition_is_published_row_by_row(
+    curve: bench.ResolutionCurve,
+) -> None:
+    """The share is a ratio, and a ratio hides which of the two moved.
+
+    So the counts behind it are published too, and pinned here: a change that
+    moved the record count and the node count together would keep the share and
+    would still be a different artifact.
+    """
+    point = next(p for p in curve.points if p.level == bench.OCCURRENCE_LEVEL)
+    plan = (DOCS / "plan.md").read_text(encoding="utf-8")
+    for name, value in (("records", point.records), ("node rows", point.nodes)):
+        assert bench._int_text(value) in plan, (
+            f"docs/plan.md does not publish the coarsest level's {name} count, "
+            f"which the code measures as {bench._int_text(value)}. The label on "
+            "that level is a claim about composition; the counts behind it are "
+            "what make the claim checkable."
+        )
+
+
+def test_a_label_that_hides_the_composition_is_caught() -> None:
+    """**The negative test.** Both ways the label can be wrong: silent about the
+    composition, and reinstating the phrase that misdescribed it."""
+    silent = (
+        "| retained at | per robot, 6 months |\n|---|---|\n"
+        "| **occurrence (±1 s)** | **264 GB** |\n"
+    )
+    verdict, problems = label_states_the_composition(silent, "98.5%")
+    assert verdict == DISAGREE
+    assert len(problems) == 1
+
+    reinstated = (
+        "| retained at | per robot, 6 months |\n|---|---|\n"
+        "| **occurrence (±1 s, DSSAD-shaped) — 98.5% attestation records** | "
+        "**264 GB** |\n"
+    )
+    verdict, problems = label_states_the_composition(reinstated, "98.5%")
+    assert verdict == DISAGREE
+    assert len(problems) == 1
+
+
+def test_a_document_with_no_retention_table_is_not_a_pass() -> None:
+    """Deleting the table is not a way to go green."""
+    verdict, problems = label_states_the_composition("nothing here", "98.5%")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems == []
+
+
+# ==========================================================================
+# THE BYTE ATTRIBUTION BEHIND THE SUBLINEARITY IS A PUBLISHED FIGURE TOO
+# (issue #116).
+#
+# `docs/plan.md` Claim 1, *Why the growth is sublinear*, replaces a stated cause
+# with a measured one: per-table bytes from `dbstat` on the coarsest level of the
+# published curve. That correction is only worth what its arithmetic is worth, so
+# the arithmetic is pinned the same way every other figure in this file is —
+# parsed out of the document, with no constant here. A schema change that moves
+# the `declaration` table fails this and has to be republished; a document edited
+# to make a regression read better fails it too.
+#
+# It is pinned by **group**, not by row: the document folds the three tables that
+# hold one empty page each into a single row, which is the right thing for a
+# reader and would be unparseable if this check insisted on one label per row. So
+# a row claims a set of labels — the comma-separated table names before any em
+# dash in its first cell — and its byte cell has to equal what those labels hold
+# together. The union of the groups has to be the whole set, which is what stops
+# a table going green by omitting the label that moved.
+# ==========================================================================
+
+#: The header cell identifying the attribution table in `docs/plan.md`. Keyed on
+#: the header, like the retention table above, so no figure in it can key it.
+ATTRIBUTION_TABLE_HEADER = "table, coarsest level at 50 hz"
+
+#: The row that carries the whole file rather than a table. It has no backticked
+#: label, so it forms no group; it is checked against `size_bytes` instead.
+ATTRIBUTION_TOTAL_ROW = "file"
+
+
+def _attributed_labels(cell: str, tables: Mapping[str, int]) -> list[str]:
+    """The table names a row claims, from its first cell.
+
+    `_tables` has already stripped the backticks, so the names are matched as
+    whole comma-separated items rather than as substrings of the prose: a row
+    reads `envelope, robot_config, edge — one empty page each`, and only the part
+    before the em dash names tables. Matching `in cell` instead would let a gloss
+    mentioning a table silently claim its bytes.
+    """
+    return [
+        item
+        for item in (part.strip() for part in cell.split("\u2014")[0].split(","))
+        if item in tables
+    ]
+
+
+def attribution_divergences(
+    text: str, tables: Mapping[str, int], size_bytes: int
+) -> tuple[str, list[str]]:
+    """Verdict on whether the published byte attribution is the measured one.
+
+    Three-valued, and the third is not a pass: a document with no attribution
+    table comes back `COULD-NOT-EVALUATE`, because deleting the table is
+    otherwise the way to green — and deleting it is exactly the regression this
+    issue repaired, a sublinearity with no measurement behind it.
+
+    Returns the verdict and one line per divergence.
+    """
+    for header, rows in _tables(text):
+        if header and header[0].lower() == ATTRIBUTION_TABLE_HEADER:
+            break
+    else:
+        return COULD_NOT_EVALUATE, []
+
+    total = sum(tables.values())
+    problems: list[str] = []
+    claimed: set[str] = set()
+    for row in rows:
+        labels = _attributed_labels(row[0], tables)
+        if not labels:
+            # The file row: no table of its own, and the one row whose figure is
+            # the artifact rather than a part of it.
+            if ATTRIBUTION_TOTAL_ROW in row[0].lower():
+                expected = bench._int_text(size_bytes)
+                if expected not in row[1]:
+                    problems.append(
+                        f"the {ATTRIBUTION_TOTAL_ROW!r} row publishes {row[1]!r}; "
+                        f"the level measures {expected} B"
+                    )
+            continue
+        overlap = claimed & set(labels)
+        if overlap:
+            problems.append(
+                f"{sorted(overlap)} is attributed by more than one row, so the "
+                "column does not sum to the file"
+            )
+        claimed |= set(labels)
+        measured = sum(tables[label] for label in labels)
+        if bench._int_text(measured) not in row[1]:
+            problems.append(
+                f"{labels} is published as {row[1]!r} and measures "
+                f"{bench._int_text(measured)} B"
+            )
+        if len(row) > 2 and row[2].strip():
+            share = f"{100.0 * measured / total:.1f}%"
+            if share not in row[2]:
+                problems.append(
+                    f"{labels} is published at {row[2]!r} of the level and "
+                    f"measures {share}"
+                )
+
+    if claimed != set(tables):
+        problems.append(
+            f"the table attributes {sorted(claimed)} and the level holds "
+            f"{sorted(tables)}; an attribution that omits a table is not an "
+            "attribution — the omitted one is where a reader would look last"
+        )
+    return (DISAGREE if problems else AGREE), problems
+
+
+def test_the_published_byte_attribution_is_the_one_the_code_measures(
+    curve: bench.ResolutionCurve,
+) -> None:
+    """**THE TEST ISSUE #116's THIRD ACCEPTANCE CRITERION EXISTS FOR.**
+
+    The cause of the sublinearity is now a table of bytes rather than a
+    sentence. A table of bytes can be wrong in a way a sentence cannot, and this
+    is what goes red when it is.
+    """
+    point = next(p for p in curve.points if p.level == bench.OCCURRENCE_LEVEL)
+    assert point.tables is not None, (
+        "this SQLite build has no dbstat virtual table, so the attribution "
+        "docs/plan.md publishes cannot be checked here. That is a "
+        "could-not-evaluate for the check, not a pass for the document."
+    )
+    verdict, problems = attribution_divergences(
+        (DOCS / "plan.md").read_text(encoding="utf-8"),
+        point.tables,
+        point.size_bytes,
+    )
+    assert verdict == AGREE, (
+        "docs/plan.md Claim 1, *Why the growth is sublinear*, publishes a byte "
+        "attribution that is not what the code measures:\n  "
+        + "\n  ".join(problems)
+        + f"\nRe-measure with `{MEASURING_COMMAND}` and republish, or fix the "
+        "change that moved the bytes."
+    )
+
+
+def test_an_attribution_that_drifted_is_caught() -> None:
+    """**The negative test.** A figure moved, and the document did not."""
+    verdict, problems = attribution_divergences(
+        "| table, coarsest level at 50 Hz | bytes | share of the level |\n"
+        "|---|---|---|\n"
+        "| `verdict` | 551,936 | 54.9% |\n"
+        "| `meta` | 10,240 | 1.0% |\n"
+        "| **file** | **562,176** | |\n",
+        {"verdict": 551_936, "meta": 20_480},
+        562_176,
+    )
+    assert verdict == DISAGREE
+    assert any("`meta`" in problem or "meta" in problem for problem in problems)
+
+
+def test_an_attribution_that_omits_a_table_is_caught() -> None:
+    """Leaving a row out is not a way to keep the rest green."""
+    verdict, problems = attribution_divergences(
+        "| table, coarsest level at 50 Hz | bytes | share of the level |\n"
+        "|---|---|---|\n"
+        "| `verdict` | 100 | 100.0% |\n",
+        {"verdict": 100, "meta": 900},
+        1_000,
+    )
+    assert verdict == DISAGREE
+    assert any("omits a table" in problem for problem in problems)
+
+
+def test_a_document_with_no_attribution_table_is_not_a_pass() -> None:
+    """Deleting the measurement is how this defect happened the first time."""
+    verdict, problems = attribution_divergences("nothing here", {"verdict": 1}, 1)
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems == []

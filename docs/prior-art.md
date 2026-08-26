@@ -1063,9 +1063,13 @@ than the real one. **That is argued, not measured** — it is in "Still open" be
 and no published figure is edited on the strength of an argument.
 
 **Action:** name rosbag2/MCAP as the incumbent wherever the retention comparison
-is introduced (`docs/sensor-baseline.md`, README, `plan.md` Claim 1). **Not done in
-this pass** — outside issue #104's affected areas, the same way §11a records the
-README standards table.
+is introduced. **Partly done, and not by this pass.** `docs/sensor-baseline.md`
+gained an *incumbent encoding* section in 54175ee (issue #117) that names the
+format and prices it: MCAP `/joint_states` is **2.51x** a gzipped CSV carrying the
+same content, computed from the MCAP specification and recorded as a projection
+rather than a measurement. **README and `plan.md` Claim 1 still describe the
+baseline without naming what it stands in for** — outside issue #104's affected
+areas, the same way §11a records the README standards table.
 
 ---
 

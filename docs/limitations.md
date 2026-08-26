@@ -455,3 +455,119 @@ Phase 6 design decision about key custody, not an encoding change, and it is ope
 ([`prior-art.md`](prior-art.md), *Still open after this pass*). Until it is taken,
 the supportable claim is exactly: **the records were not edited by anyone who did
 not hold the keys, and the keys have been valid since the run began.**
+
+## 8. The artifact contains personal data and this project has not addressed that
+
+Added 2026-08-26 (issue #101). Every other section of this file limits what the
+artifact can *answer*. This one limits whether it may be **kept**, which is a
+different kind of limit and is why it went unwritten: before this section,
+`grep -riE "gdpr|personal data|data protection|works council"` over `docs/` and
+`reg/` returned nothing substantive, and the only matches for "worker" were
+"worker host", the CI machine. It was the one large hole in this file with no
+entry, in a repository whose credibility rests on stating its own holes first.
+
+**Nothing here is legal advice and nothing here is a claim of compliance.** The
+obligations below are named because they exist and because this project does not
+discharge any of them. That is the same register as the six sections above it.
+
+**What the artifact records about a person.** Per shift:
+
+- the position-derived relationship between the robot and an entity whose `kind`
+  is `human` — `INTERSECTS` and `SEPARATION` edges carrying `overlap_area` and
+  `min_distance` to `DISTANCE_TOL_M` = 0.01 m, over intervals whose endpoints are
+  good to `TIME_TOL_S` = 10 ms (`reg/store.py`, the `edge` table);
+- `envelope_entered`, `envelope_left`, `contact_began`, `contact_ended` and
+  `closest_approach` occurrences naming that entity, each with a DSSAD `date` and
+  a wall-clock `t_utc` (`reg.store.OCCURRENCE_SPECS`);
+- `meta[unit_id]`, `meta[operator_id]` and `meta[run_start_utc]` — three declared
+  strings, all required, none with a default (`reg/identity.py`).
+
+`operator_id` with `run_start_utc` is what turns the rest from telemetry into
+personal data: together they select a shift, and a shift resolves against any
+roster to a person. The proximity and contact record then attaches to that
+person. Retained for six months and **handed to an assessor or an insurer** —
+which is the use this project was built for — that is processing of personal data
+in an employment context, and in Germany it is also a technical device objectively
+suitable for monitoring workers' behaviour or performance under **§87(1)(6)
+BetrVG**, which is subject to works-council co-determination *before the robot
+runs*, not before the artifact is exported.
+
+**The retention window is bounded from both sides and this project has only ever
+cited one of them.** AI Act **Art. 19** (providers) and **Art. 26(6)** (deployers)
+set the six-month period *"unless provided otherwise in applicable Union or
+national law, **in particular Union law on the protection of personal data**"*.
+The floor is expressly subordinate on its own face. So for the Layer B half of an
+artifact six months may be a **ceiling** rather than a floor, and
+[`docs/plan.md`](plan.md)'s Claim 1 is citation-correct and
+**argument-incomplete**: it prices retaining an artifact for a window that
+data-protection law may forbid it from filling. The two bounds come from different
+instruments and this project has measured against one of them.
+
+**Two further obligations, named and not discharged.**
+
+- **Art. 26(7).** A deployer who is an employer must inform workers'
+  representatives and the affected workers *before* putting a high-risk AI system
+  into service at the workplace. Nothing in this repository produces that notice
+  or records that it was given, and `meta` has no key that would say so.
+- **A DPIA.** GDPR **Art. 35(1)** requires one where processing is likely to
+  result in a high risk to data subjects; systematic monitoring of employees is on
+  the Art. 35(4) lists national supervisory authorities publish, which is why one
+  is near-certain here. Whether this processing also lands inside Art. 35(3)'s
+  three enumerated cases is not a question this project is competent to answer.
+  That there is no DPIA is not in doubt, and that is the part stated here.
+
+**The minimisation is real, and it is in the schema rather than in a policy.**
+`entity` holds four columns — `entity_key`, `kind`, `is_static`, `geometry_wkb` —
+and not one of them names a person: the human's `node_id` is `human`, a role, and
+the kind vocabulary is `human`, `crate`, `pillar`, `pallet`. There is no
+biometric, no image and no raw frame; [`docs/lossiness.md`](lossiness.md)
+*Discarded* #5 excludes raw sensor data "by construction", for a retention
+reason, and the effect of that is a data-protection one. And the Layer A boundary
+keeps the certifiable half clear of the person entirely: `ProprioState` has no
+field naming an entity and `tests/test_layer_boundary.py` fails if one appears
+(CLAUDE.md rule 1). **The artifact is data-minimising almost by accident** — a
+consequence of a 2D simulator and a structural boundary drawn for a different
+reason, not of a data-protection decision anyone took. Which is exactly why the
+honest statement is *"this contains personal data and here is the minimisation
+contract"* rather than silence. `tests/test_personal_data.py` is what turns the
+accident into a contract: it fails if the `entity` table grows a column this
+section does not disclose, or if `RunIdentity` grows a field it does not name.
+
+**What this limitation is not.**
+
+- **It is not an argument for dropping `operator_id`.** *Which robot, which
+  shift* is what makes the file handable to an assessor at all, and Art. 73's
+  15-day serious-incident clock cannot start against a record that will not place
+  itself in time (`reg/identity.py`). The identifier is load-bearing for the
+  purpose the artifact exists to serve. Two obligations pull in opposite
+  directions here; that is a conflict to resolve in a deployment, not a defect to
+  patch out of a prototype.
+- **It is not confined to Layer B.** The identity block is **Layer A** —
+  `reg/identity.py` says so in its first line — so discarding every entity-naming
+  edge in the file would still leave an artifact stating which operator ran which
+  unit from which instant. Minimisation cannot be reached by dropping Layer B, and
+  the Layer A / Layer B boundary is not a personal-data boundary. It was never
+  drawn to be one.
+- **It is not something the retention rules already in `meta` address.**
+  `GEOMETRY_RETENTION`, `ENVELOPE_RETENTION`, `OCCURRENCE_RETENTION` and
+  `ATTESTATION_RETENTION` each state what a *build* keeps. None of them states how
+  long the *file* may be kept, there is no deadline field and there is no erasure
+  or expiry path anywhere in this codebase. An artifact carries no date after
+  which it should not exist.
+- **It is not inherited from DSSAD.** DSSAD is privacy-light precisely because it
+  records authority transitions and system events and says nothing about third
+  parties. `reg` borrows that schema shape and **inverts its privacy profile** —
+  [`docs/prior-art.md` §9](prior-art.md) is where that is stated, beside the
+  element-by-element mapping that borrows it.
+
+**What a claim would need instead.** A DPIA on record; where §87(1)(6) BetrVG
+applies, a works agreement in place before the robot runs; the Art. 26(7) notice
+given and recorded; and a retention rule that is the **minimum** of the AI Act
+floor and the data-protection ceiling, written into `meta` with the same
+discipline as the four retention rules already there, so that a reader holding
+only the file learns when it should have been destroyed. None of that is code this
+prototype should invent: like `--run-start` and the keyring, each is a
+caller-supplied input from a deployment that does not exist here, and a plausible
+invented retention deadline would be indistinguishable downstream from a lawful
+one. What this section does is stop the artifact reading as though the question
+had been asked and answered.

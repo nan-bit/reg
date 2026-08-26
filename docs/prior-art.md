@@ -379,6 +379,35 @@ record to the software that produced it is a requirement in force*, and that
 argument is about the signing keys, which do bind the party that made each
 record. It was never that `reg` had already satisfied the element.
 
+### The shape transfers and the privacy profile inverts
+
+Added 2026-08-26 (issue #101), because the mapping table above is where this
+project claims the DSSAD alignment and it is where the cost of the alignment
+belongs too.
+
+**DSSAD is privacy-light by construction.** Every element it mandates —
+occurrence flag, reason, date, timestamp, `R157SWIN` — is about the *system*: a
+transition of driving authority, and the build that was running when it happened.
+None of them is about a person outside the vehicle, so a DSSAD record can be
+retained, exported and audited without personal data being the subject of it.
+
+**`reg` imports that shape and points it the other way.** Five of the twelve
+occurrence types in `reg.store.OCCURRENCE_SPECS` — `envelope_entered`,
+`envelope_left`, `contact_began`, `contact_ended`, `closest_approach` — take an
+`entity_key`, and in the fixtures this project ships that entity is a human. The
+edge layer beneath them records that human's separation from the machine to the
+centimetre for the length of the shift, and `meta[operator_id]` names who was
+running it. Same elements, opposite privacy profile: DSSAD records what the
+system did, `reg` records what the system did *near someone*.
+
+The inversion is invisible in the element-by-element table above, because it is
+not a property of *which* elements exist — `reg` implements four of the five —
+but of what they are filled with. That is exactly why it is written down here
+rather than assumed to travel with the citation.
+[`docs/limitations.md` §8](limitations.md) is the entry for what the inversion
+obliges and what this project has not done about it; nothing here is a claim of
+compliance.
+
 ## 10. Intent attestation now has an active adjacent field — in software, not robots
 
 The first pass found nothing occupying Claim 4. That is no longer true, and the

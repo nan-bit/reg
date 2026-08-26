@@ -8,6 +8,23 @@ it. Together those give the record two properties an audit needs and a log file
 does not have: a reader can tell that no record was altered, and a reader can
 tell *which side* issued each one.
 
+WHERE THIS CONSTRUCTION COMES FROM — IT IS NOT THIS PROJECT'S
+-------------------------------------------------------------
+A per-record MAC plus a per-record hash link to the predecessor, over one
+canonical preimage, walked by a verifier that checks both, is **Schneier, B. and
+Kelsey, J., "Cryptographic Support for Secure Logs on Untrusted Machines"**, 7th
+USENIX Security Symposium, 1998 — journal version, "Secure Audit Logs to Support
+Computer Forensics", ACM TISSEC 2(2), 1999; forward integrity for logs is due to
+Bellare and Yee. This module is that scheme **minus its forward security**: the
+1998 construction evolves the secret after every entry and deletes the old value,
+so an attacker who takes the machine cannot forge anything written before the
+compromise, and `reg`'s keys are static for the life of a run. That absence is
+deliberate and is written down as a limitation, not left here as a footnote —
+`docs/limitations.md` §7, and `docs/prior-art.md` §14 for what the comparison
+costs the project's claims. Nothing about this chain is novel; two things about
+it are not in the ancestor (two chains under role-typed keys, and a verifier with
+three outcomes) and both are below.
+
 THE CRUX IS THE SERIALIZATION, NOT THE HASH
 -------------------------------------------
 SHA-256 and HMAC are stdlib and uninteresting. The part that can actually be got
@@ -103,6 +120,27 @@ detected by this walk, and that is stated here rather than left to be discovered
 What defeats it is an external commitment to the final chain hash, which is a
 deployment question (the same one the honesty note above is about) and not
 something this file can solve on its own.
+
+**This is a named attack against this exact construction, and it has a published
+answer this module does not implement.** It is the *truncation attack*, named
+against Schneier–Kelsey by **Ma, D. and Tsudik, G., "A New Approach to Secure
+Logging"** (IACR ePrint 2008/185): the adversary erases a contiguous run of
+tail-end entries, no `Yᵢ` protects anything written after `i`, and nothing detects
+it unless a trusted party knows the current record count. Their answer is a
+forward-secure *aggregate* MAC, which makes verification all-or-nothing without a
+trusted server. The structural answer is older and is a different data structure:
+**Crosby, S. and Wallach, D., "Efficient Data Structures for Tamper-Evident
+Logging"** (USENIX Security 2009) — the *history tree* — and its deployed
+descendant, **Certificate Transparency** (Laurie, Langley & Kasper, RFC 6962,
+2013; RFC 9162, 2021). In a Merkle-tree log a *consistency proof* against any
+previously published head shows that the tree is a prefix extension of the earlier
+one, so removing anything committed before it is detected, and an *inclusion
+proof* needs a logarithmic number of hashes rather than the records in between.
+A chain gives neither. Arriving independently at a correct statement of a known
+limitation is fine; presenting it as though it were peculiar to this artifact is
+not, which is why the citations are here. `docs/prior-art.md` §14 and §18 hold the
+comparison in full, and whether the chain should become a tree is a Phase 6 design
+question, not something to decide in a module header.
 """
 
 from __future__ import annotations

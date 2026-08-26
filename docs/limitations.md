@@ -395,3 +395,63 @@ is built as an interface — `(ChainHeads) -> Commitment` — precisely so that
 dropping the air-gap claim makes either one an adapter rather than a rewrite.
 Until then the supportable claim is exactly: **the records were not edited, and a
 second party at the same site saw the heads.**
+
+---
+
+## 7. The chain has no forward security, and the verifier holds the keys
+
+**What.** `reg/chain.py` is Schneier and Kelsey's 1998 construction for secure logs
+on untrusted machines — per-record MAC, per-record hash link to the predecessor,
+one canonical preimage, a walk that checks both — **minus the property that scheme
+was written for.** In the original, the secret is evolved through a one-way
+function after every entry and the old value is deleted, so an attacker who takes
+the machine at time *b* can write whatever they like from *b* onward and can
+neither forge nor undetectably alter anything written before it. `reg`'s keys are
+static for the life of a run: `generate_keyring` draws from OS entropy once and
+nothing evolves.
+
+Beside it, a second asymmetry with the same root. In Schneier–Kelsey the verifier
+`V` walks the chain and asks a trusted server `T` about the final MAC; `V` never
+learns a key and therefore cannot forge. `reg` hands the auditor the keyring, so
+**anyone who can verify a `reg` artifact can also forge one.**
+
+Both are **named, deliberate absences, recorded here rather than discovered**
+([`prior-art.md` §14](prior-art.md), issue #104). Neither is a defect against an
+intent: the second is the price of offline verification with no trusted server, and
+the first is a design question this project has not taken.
+
+**What it costs.**
+
+- **A stolen key is retroactive.** An attacker who obtains the enforcement key can
+  rewrite and re-sign the *entire* verdict chain back to genesis, and the result
+  verifies. Under forward security the same attacker gets everything after the
+  compromise and nothing before it — which is the difference between "this
+  artifact is worthless" and "this artifact is trustworthy up to a knowable
+  instant".
+- **It compounds the re-issuance limit the README already states.** That note says
+  a chain under keys held by the record's own author cannot notice the whole
+  history being re-run offline. Static keys are why: there is no point in the
+  history at which the key that signed it no longer exists.
+- **The auditor is not a safe place to put the keyring.** The honesty note says
+  both keys in one process demonstrates the *structure* of non-repudiation rather
+  than non-repudiation. This is the sharper version of the same sentence and it
+  survives even after the enforcement key moves into hardware: whoever is given
+  the keys to check the artifact is given the ability to produce a different one.
+
+**What is *not* limited.** The half of the commitment check that catches a
+re-issued chain needs **no key at all** — `verify_commitment` recomputes both heads
+from the records the file holds and compares them against the recorded ones (§6).
+So the verifier-holds-the-key asymmetry does not extend to that check, and an
+assessor who is given the artifact and *not* the keyring can still detect that the
+history no longer matches what was committed to.
+
+**What a claim would need instead.** Key evolution — the 1998 scheme's `Aᵢ₊₁ =
+H(Aᵢ)` with the old value erased, or a forward-secure aggregate MAC (Ma & Tsudik
+2008), which additionally resists the truncation attack `chain.py`'s header
+describes. Either changes **what an auditor must be given and when**: a verifier
+that holds an evolved key cannot check records written before it, so verification
+starts needing either the epoch boundaries or a party that kept `A₀`. That is a
+Phase 6 design decision about key custody, not an encoding change, and it is open
+([`prior-art.md`](prior-art.md), *Still open after this pass*). Until it is taken,
+the supportable claim is exactly: **the records were not edited by anyone who did
+not hold the keys, and the keys have been valid since the run began.**

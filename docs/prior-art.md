@@ -252,7 +252,9 @@ Not resolved in this pass; none block Phase 1.
   text is paywalled. Either buy the standard or cite the PROFIsafe profile's
   published fault table and say which it is.
 - **ISO 21448 (SOTIF)** — hazards from correct-but-inadequate function. Likely the
-  right framing for Claim 3's sufficiency boundary; not yet read.
+  right framing for Claim 3's sufficiency boundary. **Closed by §19** (fourth
+  pass): read from secondary sources and entered, with the paywalled clause text
+  recorded as the part that is still outstanding.
 - **Control barrier functions** as an alternative envelope representation. Noted in
   the plan as a tradeoff to consider; not investigated, and not needed unless the
   sampling envelope proves inadequate.
@@ -870,6 +872,11 @@ a Phase 6 design question and not a small one — it changes what an auditor mus
 given and when — and this file's job is to record that the gap is a deviation from
 a known scheme, not to decide it.
 
+**Status: discharged by issue #104** (fourth pass, §20), which also added the
+history tree and Certificate Transparency beside the truncation paragraph (§18) —
+citing a named attack without its published fix reproduces this section's own
+complaint one level down.
+
 ---
 
 ## 15. What this pass did not disturb
@@ -911,7 +918,7 @@ untouched by all four.
 | 11a | Amend the "robotics has none" sentence to distinguish mandate from proposal | §1 above (**done**), `README.md` standards table (**not done** — outside issue #69's scope) |
 | 12 | Add IEEE 7001-2021 to the standards baseline with the investigator levels; state that `reg` cannot be placed on that ladder and that Claim 3 is why; claim no level | `plan.md` standards, README, `docs/sufficiency.md` |
 | 13 | Cite ConSerts as the formalism covering conditional guarantees; narrow the layer-tag contribution to *retained* conditionality; adopt "runtime evidence" for a `Verdict`; cite Denney & Pai beside GSN as the consumer | `docs/sufficiency.md`, `plan.md` Phases 7 and 9 |
-| 14 | Cite Schneier–Kelsey as the chain's construction and Ma & Tsudik for the truncation attack; record the missing forward security and the verifier-holds-the-key asymmetry | README, `plan.md` Phase 6, `chain.py` header, `docs/limitations.md` |
+| 14 | Cite Schneier–Kelsey as the chain's construction and Ma & Tsudik for the truncation attack; record the missing forward security and the verifier-holds-the-key asymmetry | README, `plan.md` Phase 6, `chain.py` header, `docs/limitations.md` (**done** — issue #104, §20) |
 
 ## Still open after this pass
 
@@ -922,8 +929,519 @@ untouched by all four.
 - **Whether the EBB draft standard advanced past draft 0.1.** It was an RFC in
   2022 inviting comment. If a later draft specified the checksum, §11.2 needs
   re-reading before it is repeated anywhere public.
-- **Forward security for `reg.chain`.** Named as a gap in §14, not designed. It is
-  a Phase 6 question about key custody, not an encoding change.
+- **Forward security for `reg.chain`.** Named as a gap in §14, not designed, and
+  now **recorded** as a named absence in [`limitations.md`](limitations.md) §7
+  (issue #104) — which is not the same as closed. It is a Phase 6 question about
+  key custody, not an encoding change.
 - **ConSerts' guarantee levels as a model for graded claims.** `reg` has one bound
   and a binary verdict. Whether the sufficiency boundary should be graded rather
   than binary is a real design question this pass opened and did not answer.
+
+---
+
+# Fourth pass — 2026-08-26, three named by a second external review, one this file kept calling unread
+
+The third pass was prompted from outside and found four bodies of work. A second
+external review, reading the file the third pass produced, named three more — and
+then pointed at this file's own action lists, which is the sharper of its two
+observations. §14 ordered four citations on 2026-08-21 and none of them was in the
+repository on 2026-08-26; the file that says *publishing a known limitation as
+though it were peculiar to this artifact is not fine* had published exactly that
+for five days, because a survey's action list is prose and prose does not fail.
+Issue #104 is where that was discharged (§20), and
+`tests/test_prior_art.py` is what keeps it discharged.
+
+What the pass costs, up front:
+
+- **§16 names the incumbent.** Every retention comparison this project publishes
+  was against a gzipped nine-float CSV. What practitioners actually retain is a
+  **rosbag2/MCAP** bag, and a reader who runs one was never told this file knew
+  the name. The arithmetic does not move; the honesty of the framing does.
+- **§17 takes "Simplex, applied to a learned policy, in robotics".** SOTER did
+  that in 2019, with a switching rule derived from a reachability check, a
+  composition proof and a flying drone. §3 said "it *is* the Simplex
+  architecture; say so" and then cited a 2001 paper and a 2021 standard with the
+  2019 robotics implementation between them missing.
+- **§18 takes the append-only log, again and further.** §14 gave the chain back to
+  Schneier and Kelsey. §18 observes that the problem has moved on twice since —
+  history trees in 2009, Certificate Transparency in 2013 — and that the
+  truncation limit `chain.py`'s header documents has a **published structural
+  fix** this project does not use.
+- **§19 costs nothing and was overdue.** ISO 21448 is the standard's own name for
+  what `docs/sufficiency.md` describes in longhand. It has been listed as *not yet
+  read* since the first pass.
+
+What survives, as in the third pass, is **retention** and **attribution**. It is a
+smaller pair every time and it is still there.
+
+---
+
+## 16. rosbag2 and MCAP — the incumbent every retention figure was quietly compared against
+
+**rosbag2**, the recording subsystem of ROS 2, and **MCAP** — the container format
+(Foxglove, Apache-2.0, spec at `mcap.dev`) that has been rosbag2's default storage
+plugin since ROS 2 Iron (2023), superseding its SQLite plugin and ROS 1's `.bag`.
+Read alongside the `mcap` CLI and Foxglove, which are what an engineer opens a bag
+with.
+
+**What it is.** A container of length-prefixed, opcode-tagged records — Header,
+Schema, Channel, Message, Chunk, MessageIndex, ChunkIndex, Attachment, Metadata,
+DataEnd, Footer — holding serialised messages, each tagged with its channel and
+carrying both a log time and a publish time. Messages are grouped into chunks,
+chunks are compressed (zstd or lz4) and indexed, so a reader seeks to a time range
+without decoding the file. **Schemas are embedded**, so a bag is self-describing: it
+opens years later without the ROS installation that wrote it, which is why the
+format has users outside ROS. Integrity is a **CRC32** over each chunk and over the
+data section.
+
+**Why its absence from this file mattered.** Not because a bag is a competitor —
+it is not, and the section below says why — but because it is the thing a buyer
+already has. A retention argument addressed to someone who runs rosbag2 and is told
+about a gzipped CSV is an argument that has not met its reader. Two independent
+reviews named it, in two rounds, before it was written down.
+
+### What `reg` does that a bag does not
+
+- **It is not the robot's self-report.** Every record in a bag arrives on the
+  authority of the system under investigation — the same property §11 identifies
+  in the ethical black box, and for the same reason: a recorder writes what it is
+  handed. `reg`'s two chains hold what the policy *declared* and what an
+  independent check *concluded*, under different keys, and the artifact says which
+  one was wrong when they disagree.
+- **CRC32 is error detection, not tamper evidence.** It catches a flipped bit on
+  disk. An attacker who edits a message recomputes it in a line of code. There is
+  no key, so there is nothing to forge and nothing to attribute.
+- **A bag is *designed* to survive truncation, which is the same thing as being
+  unable to detect it.** MCAP's summary section and index sit at the end and are
+  optional precisely so that a recorder killed mid-write leaves a readable file.
+  That is the right engineering call for a recorder, and it means the attack
+  `chain.py`'s header documents and Ma & Tsudik name (§14) is not an anomaly in a
+  bag — it is a supported state. `reg` cannot detect the same attack either,
+  without an external commitment; the difference is that `reg` treats it as a
+  limit to be written down and a bag treats it as a feature.
+- **Content, not carriage.** A bag is indifferent to what a message means, in
+  exactly the way §14 says Schneier–Kelsey is indifferent to what an entry means.
+  There is no verdict, no fault taxonomy, no layer tag, and therefore no
+  representation for *which of this answer's conjuncts came from the perceiver* —
+  the question Claim 3 exists to make askable.
+- **A retention horizon.** This is the one that matters and it is not a
+  cleverness: bags hold every message on the recorded topics at full rate, so the
+  practice is hours to days on the robot with selective upload, and the six-month
+  question is answered by **deleting**. `reg`'s comparison is therefore not "a
+  smaller file with the same contents". It is a different and much smaller thing,
+  kept for a period nobody keeps a bag for.
+
+### What a bag does that `reg` does not
+
+- **Replay.** `ros2 bag play` reconstitutes the messages and a stack can be re-run
+  against them. `reg` retains no inputs and can replay nothing, by construction —
+  the envelope takes a `ProprioState` and the artifact holds no sensor data at all.
+- **Self-description of its semantics.** MCAP embeds a machine-readable schema for
+  every message it holds. A `reg` artifact carries its SQLite schema and a `meta`
+  table of stated rules, which is the same instinct — but the meaning of a `fault`
+  value or a `layer` tag still lives in this repository, not in the file.
+- **Indexed random access, an install base and tooling.** Foxglove renders a bag;
+  nothing renders a `reg` artifact except `reg.query` and `reg.viz`.
+
+### What this does *not* change, and one thing it does
+
+**The benchmark is not re-run against a bag, and §8 is why.** That section already
+settled that a purpose-built float codec beats a relational store at storing
+floats and that the contest was never the claim. Adding a third float container to
+that comparison buys nothing.
+
+It does, however, sharpen one figure's direction. The `~40x larger` comparison is
+against a **gzipped copy of this project's own nine-float stream at
+`reg.stream.FLOAT_PRECISION`** — text, quantised to the artifact's stated
+resolution before it is compressed. A bag of the same nine floats carries CDR
+doubles with all 52 mantissa bits, a per-message record header and two timestamps,
+under a general-purpose compressor that does no better on float noise than gzip
+does (§8's Gorilla citation is the same observation from the other side). So the
+incumbent is very probably **larger** than the baseline this project chose to lose
+against, and the `~40x` is against the most favourable possible comparator rather
+than the real one. **That is argued, not measured** — it is in "Still open" below,
+and no published figure is edited on the strength of an argument.
+
+**Action:** name rosbag2/MCAP as the incumbent wherever the retention comparison
+is introduced. **Partly done, and not by this pass.** `docs/sensor-baseline.md`
+gained an *incumbent encoding* section in 54175ee (issue #117) that names the
+format and prices it: MCAP `/joint_states` is **2.51x** a gzipped CSV carrying the
+same content, computed from the MCAP specification and recorded as a projection
+rather than a measurement. **README and `plan.md` Claim 1 still describe the
+baseline without naming what it stands in for** — outside issue #104's affected
+areas, the same way §11a records the README standards table.
+
+---
+
+## 17. SOTER — Simplex with an implementation, in robotics, in 2019
+
+**Desai, A., Ghosh, S., Seshia, S.A., Shankar, N. and Tiwari, A., "SOTER: A
+Runtime Assurance Framework for Programming Safe Robotics Systems"**, DSN 2019
+(arXiv:1808.07921); and **"SOTER on ROS: A Run-Time Assurance Framework on the
+Robot Operating System"**, RV 2020. Beside it, the runtime-verification-for-robotics
+line: **Huang, Erdogan, Zhang, Moore, Luo, Sundaresan and Roşu, "ROSRV: Runtime
+Verification for Robots"**, RV 2014; **Ferrando, Cardoso, Fisher, Ancona,
+Franceschini and Mascardi, "ROSMonitoring: A Runtime Verification Framework for
+ROS"**, TAROS 2020.
+
+**SOTER.** A runtime-assurance *module* as a language construct. Each module wraps
+an unverified **advanced controller** — explicitly allowed to be a learned or
+otherwise unverifiable component — with a verified **safe controller** and a
+switching rule, and the framework derives the switching rule from a time-bounded
+reachability check on a plant model: if the advanced controller's proposed action
+cannot be shown to keep the system inside the safe set for the response window,
+control transfers to the safe controller and returns after a settling period.
+Composition of modules is proved to preserve the safety invariant, and the whole
+is demonstrated on a drone surveillance mission in simulation and on hardware.
+
+That is the architecture §3 already names — Simplex, in ASTM F3269's vocabulary —
+with the two things §3's citations did not have: an implementation in robotics, and
+a switching condition *computed* rather than hand-written. `reg/enforce.py`'s
+`horizon_bound` is the same decision procedure one dimension poorer (a radius, not
+a region — [`docs/limitations.md`](limitations.md) §3), and `reg` stops where SOTER
+continues, at the refusal.
+
+**ROSRV** interposes on the ROS master, checks messages against monitors generated
+from formal specifications, and can **block** a command that violates one — and it
+carries an access-control layer saying which nodes may publish what, which is the
+nearest thing in this line to `reg`'s role-typed keys. **ROSMonitoring** generates
+monitor nodes from an RML specification and runs them online or **offline against a
+recorded log** — the closest anything here gets to retention, and it is worth being
+precise about how close: the log is the monitor's *input*, the verdicts are the
+monitor's output, and nothing writes the verdicts back into the log as records that
+a later reader could check. The artifact stays a bag (§16).
+
+### What `reg` does that SOTER does not
+
+- **It retains.** A SOTER switch is a control decision; neither paper produces an
+  evidence artifact, and what a SOTER deployment has afterwards is §16's bag. The
+  reason the switch fired — the containment check that failed — is not in it.
+- **It attributes.** SOTER's advanced and safe controllers are two modules of one
+  program, written, compiled and deployed by one team. The independence is
+  architectural. `reg`'s is between **parties**: the import rule asserted against
+  the source at the AST level, plus two keys carrying their roles, and a `sign`
+  that raises rather than producing a MAC that would verify under the wrong one.
+  Nothing in SOTER asks who wrote a verdict, because there is only one author —
+  structurally the same absence §14 finds in Schneier–Kelsey's single logger.
+- **Three outcomes.** A switching condition is binary because it has to be; it is
+  in the loop. An adjudicator that runs after the robot has stopped can afford
+  COULD-NOT-EVALUATE, and this project requires it.
+
+### What SOTER does that `reg` does not
+
+- **The recovery half, working, on a real vehicle.** `reg`'s passivation and
+  reintegration reach no table, no edge type and no query, and `graph.build`
+  refuses a run containing one (README; issue #112). ASTM F3269's
+  Complex/Recovery split is cited in §3 and only half of it is exercisable here.
+- **A derived switching condition and a composition proof.** SOTER computes the
+  safe set from a model; `reg`'s bound is hand-derived, radial, and incomplete in
+  a documented direction.
+- **Guarantees at the language level.** SOTER's argument is a proof over the P
+  program. `reg`'s is a unit test over a hand-written bound.
+
+### Contribution, or different setting?
+
+**Different setting — and the setting is downstream of SOTER's, not beside it.**
+SOTER decides; `reg` records what was decided so that someone who was not there can
+check it. Nothing here is a better runtime monitor and this file should not be read
+as claiming one. What it does cost is a sentence nobody has written but a reader
+might infer: **"runtime assurance applied to a learned policy" is not this
+project's move, it is SOTER's from 2019**, and any positioning that leans on the
+novelty of bounding an unverifiable controller in robotics is leaning on something
+already occupied. What is not occupied is the record.
+
+**Action:** cite SOTER and SOTER-on-ROS in `reg/enforce.py`'s module header beside
+the Simplex and F3269 citations already there, and in `plan.md` Phase 4, as the
+robotics implementation of the architecture rather than as a competitor. **Not done
+in this pass** — `reg/enforce.py` and Phase 4 are outside issue #104's affected
+areas.
+
+---
+
+## 18. Transparency logs — the append-only-log problem, with proofs instead of a walk
+
+**Laurie, B., Langley, A. and Kasper, E., "Certificate Transparency", RFC 6962
+(2013)**; **Laurie, Messeri and Stradling, "Certificate Transparency Version 2.0",
+RFC 9162 (2021)**. Underneath them: **Merkle, R., "Protocols for Public Key
+Cryptosystems"** (IEEE S&P 1980) for the hash tree, and **Crosby, S. and Wallach,
+D., "Efficient Data Structures for Tamper-Evident Logging"** (USENIX Security
+2009) for the **history tree**, which is written directly against the
+Schneier–Kelsey line §14 places `reg` in. Deployed descendants worth knowing exist:
+**CONIKS** (Melara et al., 2015), Google's **Trillian**, the **Go checksum
+database** (Cox, "Transparent Logs for Skeptical Clients", 2019) and
+**Sigstore/Rekor** (2021).
+
+**The construction.** Entries are leaves of a Merkle tree and the log periodically
+signs a tree head. Two proofs, each O(log n) hashes: **inclusion** — this entry is
+under this head — and **consistency** — the tree under this head is a prefix
+extension of the tree under that earlier head, so nothing committed before it was
+altered or removed. A client that has ever seen one head can check that the log is
+append-only without holding the log. Because an operator can still show different
+heads to different clients, deployments add **gossip** and **witness cosigning**: a
+set of witnesses countersign the heads they have seen, and a head without enough
+cosignatures is not accepted.
+
+Three things this settles about `reg/chain.py` and `reg/commit.py`. Only the first
+is comfortable.
+
+**1. `reg` solves a solved problem with the 1998 structure rather than the 2009
+one.** A hash chain is verified by walking every record; a tree is verified by
+exhibiting a logarithmic number of hashes. For an artifact opened whole by one
+auditor, the walk is fine and the tree buys nothing. It stops being fine the moment
+an auditor is handed *part* of an artifact — a chain cannot prove a record's
+membership without the records around it, and a tree can. Whether this project is
+ever asked for a partial disclosure is a question nobody has put to it; if it is,
+the answer in the literature is a tree.
+
+**2. The truncation attack has a structural fix that needs no trusted server at
+write time.** `chain.py`'s header says what defeats truncation is "an external
+commitment to the final chain hash", and §14 repeats it. That is correct and it is
+narrower than what is known: a consistency proof against **any** previously
+published head detects the removal of anything committed before it, and the
+append-only property is *proved* to the verifier rather than assumed from a count
+that carries no MAC. The gap between `reg` and the state of the art here is not the
+commitment — `reg/commit.py` commits both heads at close — it is that the
+commitment supports no inclusion proof and is held by a party the operator chose.
+
+**3. `--witness` is witness cosigning with one witness, inside the operator.**
+[`docs/limitations.md`](limitations.md) §6 already says the independence is only as
+good as the site. This line of work supplies the name for what is missing: a split
+view is detected by parties who **compare** heads with each other, and a single
+witness on the operator's payroll compares nothing. Stated this way the gap is
+located rather than merely admitted — `reg` is not missing a timestamp, it is
+missing a gossip set, and RFC 3161 (which `commit.py` and the README already name)
+is the weaker of the two things it could adopt.
+
+### What `reg` does that a transparency log does not
+
+- **Content.** CT logs opaque certificates and asserts nothing about what they
+  mean; it is content-indifferent in exactly the way §14 finds Schneier–Kelsey to
+  be, and the way §16 finds a bag to be. Every question Claim 2 answers is a
+  question about what a record *says*.
+- **Two writers with typed roles.** A CT log has one appender. The policy /
+  enforcement split has no analogue in it.
+- **Offline verification.** Every property CT offers costs a network call: the
+  SCT, the monitors, the gossip. `reg`'s claim is a file that verifies years later
+  with no service still running and no call to anyone. That is not a better
+  design — it is the other end of a trade, and CT is what the other end looks
+  like.
+- **Three-valued verification**, again, and again as software-engineering
+  discipline rather than as a contribution.
+
+### What a transparency log does that `reg` does not
+
+Everything in the construction above — proofs rather than a walk, a log operated by
+someone with no relationship to the party writing entries, split-view detection,
+and a signed statement about *when*. And the sociological half, which is the part
+worth stating carefully because this repository has a sentence that skips it:
+
+> `docs/limitations.md` §6 says a transparency log "would additionally make a
+> *withheld* artifact detectable". **It would, conditionally.** A log makes a
+> withheld entry detectable to a party who independently knows the entry should
+> exist — in CT, the domain owner who knows which certificates they asked for.
+> Nothing in the log supplies that expectation. For `reg` the equivalent is
+> somebody who knows a shift ran and can therefore notice that no artifact was
+> committed for it, which is an operational arrangement and not a property of the
+> data structure.
+
+That sentence is **not edited here**; issue #104 records the finding and leaves the
+claim to whoever owns §6.
+
+### Contribution, or different setting?
+
+**Neither, and this one has no consolation.** §14 established that `reg`'s chain is
+a reimplementation of a 1998 construction; §18 establishes that the 1998
+construction was itself superseded for this problem, twice, in ways that address
+the exact limitation `chain.py` documents. What `reg` has is a *reason* — offline,
+air-gapped, one auditor, no service — and that reason is a design constraint the
+project chose, not a gap in the literature. Nothing about the chain is novel and
+nothing about it should be described as solving the append-only-log problem.
+
+**Action:** cite Crosby & Wallach and RFC 6962/9162 in `chain.py`'s header beside
+the truncation paragraph, as the structural answer this artifact does not use.
+Whether to adopt a tree is a Phase 6 design question and interacts with the forward
+security §14 opened — both are about what an auditor is given and when, and neither
+is decided here.
+
+---
+
+## 19. ISO 21448 (SOTIF) — the vocabulary Claim 3 has been paraphrasing since the first pass
+
+**ISO 21448:2022, *Road vehicles — Safety of the intended functionality*,**
+published 2022 after ISO/PAS 21448:2019.
+
+**Read from secondary sources, not from the clause text.** The standard is
+paywalled, the same status this file records for IEC 61784-3 and IEEE 7001. What
+follows is its scope and its vocabulary as the published literature and ISO's own
+scope statement describe them; **nothing below is a quotation**, and anything
+quoted in the writeup has to come from the standard itself. That is a different
+status from *not yet read*, which is what this file said for three passes and
+cannot say again: the shape of the standard, what it is for and what it asks are
+not behind the paywall, and an assessor reads "unread" as unfamiliarity with the
+one document that names this project's central problem.
+
+**What it is.** ISO 26262 covers hazards caused by **malfunctions** — a component
+fails and the system does something it was not built to do. 21448 covers the
+complementary case: hazards that arise with **no fault at all**, from functional
+insufficiencies of the intended function or from reasonably foreseeable misuse. A
+perception stack working exactly as built that does not see a person in low sun has
+not malfunctioned; it has met a **triggering condition** for a **performance
+limitation**. Its organising device is a partition of scenarios into four areas —
+known and not hazardous, known and hazardous, **unknown and hazardous**, unknown
+and not hazardous — and the work of the standard is to shrink the second and third
+until a stated **acceptance criterion** for residual risk is met.
+
+**The third area is [`docs/sufficiency.md`](sufficiency.md) §6 in longhand, without
+the name.** That document already writes:
+
+> A person nobody detected leaves an artifact that answers *no contact* with total
+> confidence.
+
+That is an unknown hazardous scenario produced by a performance limitation,
+described from the evidence side rather than the validation side.
+[`docs/lossiness.md`](lossiness.md) *Unanswerable* #2 states the same thing about
+the artifact. The vocabulary — functional insufficiency, performance limitation,
+triggering condition, acceptance criterion — is the language an automotive assessor
+would read Claim 3 in, and it costs this project nothing to use it.
+
+### What `reg` does that 21448 does not
+
+**21448 is a development-time argument.** It says what must be analysed, validated
+and argued before release, and nothing about what a system must **record while
+running** so that the argument can be checked afterwards. That is the same gap §1
+records from the mandate side and §12 from the transparency-standard side, arriving
+now from a third direction: the analysis is specified, the evidence that it held in
+the field is not.
+
+What `reg` retains against that gap is narrower than it is tempting to say, so it
+is worth saying exactly. **`reg` cannot evidence a triggering condition.** It holds
+no perceptual input and by construction never will — the envelope takes a
+`ProprioState`, and `tests/test_layer_boundary.py` fails if that erodes. What it
+retains is the **dependence**: per edge and therefore per answer, whether the
+answer rested on the uncertifiable perceiver. That tells an investigator which
+sentences of a report would have to be re-examined if a triggering condition were
+later established from some other source. It does not tell them a triggering
+condition occurred.
+
+### What 21448 does that `reg` does not
+
+- **An acceptance criterion.** 21448 asks for a quantified residual-risk target and
+  an argument that meets it. `reg` has no notion of *enough*;
+  [`docs/sufficiency.md`](sufficiency.md) §7 already says the project attempts no
+  perception assurance case.
+- **Reasonably foreseeable misuse**, for which this artifact has no
+  representation at all.
+- **A domain that matches.** 21448 is road vehicles. The manipulator standards
+  (ISO 10218, ISO/TS 15066) have no SOTIF analogue, so borrowing the vocabulary is
+  borrowing across domains and should be labelled as such wherever it is used.
+
+### The mapping that must not be drawn
+
+**Layer A / Layer B is not SOTIF's four areas, and the resemblance is a trap.**
+SOTIF partitions **scenarios**, by whether they are known and whether they are
+hazardous. `reg` partitions **claims**, by which evidence they rest on. A Layer A
+verdict is not "Area 1", and the tempting correspondence — Layer B ≈ areas 3 and
+4 — is wrong in a way that would mislead an assessor: the layer tag is about the
+*provenance* of an answer and says nothing whatever about whether the scenario that
+produced it was anticipated. A Layer B answer in a thoroughly known scenario is
+still Layer B. Adopting the vocabulary means adopting the words for the perception
+problem, not the taxonomy.
+
+### Contribution, or different setting?
+
+**Neither: a lens.** 21448 is not prior art for anything `reg` built; it is the
+name for the problem Claim 3 is about, and the reason to enter it is that an
+assessor who knows the name will notice its absence.
+
+**Action:** adopt SOTIF's vocabulary in `docs/sufficiency.md` where Area 3 is
+currently in longhand, and add ISO 21448 to the standards baseline in `plan.md` and
+the README. **Not done in this pass** — outside issue #104's affected areas.
+
+---
+
+## 20. §14's action list, discharged
+
+The second observation of the review that prompted this pass was not about a body
+of work. It was that §14 ends in an instruction and the instruction had not been
+carried out — so the module whose header describes a known attack as though this
+project had found it kept describing it that way for five days after the file
+saying that is not acceptable was committed.
+
+| §14 ordered | Where | Status |
+|---|---|---|
+| Cite Schneier–Kelsey 1998/1999 wherever the chain is introduced | `README.md`, honesty note | **done** (#104) |
+| " | `docs/plan.md` Phase 6 | **done** (#104) |
+| " | `reg/chain.py` module header | **done** (#104) |
+| Cite Ma & Tsudik 2008 beside the truncation paragraph | `reg/chain.py` module header | **done** (#104) |
+| Record the missing forward security as a named, deliberate absence, with the verifier-holds-the-key asymmetry | `docs/limitations.md` | **done** (#104), §7 |
+
+Two things were added that §14 did not order and §18 did: the truncation paragraph
+also names the history tree and Certificate Transparency as the structural answer,
+because citing the attack and not its published fix reproduces the same defect one
+level down.
+
+**And the mechanism, which is the part that matters.** An action list in a survey
+file is prose, and this repository's rule is that a check must be able to fail.
+`tests/test_prior_art.py` now asserts each of the citations above against the
+source of the file it was ordered into, asserts that SOTIF is not described as
+unread, and — the half that makes it a check rather than a decoration — is fed the
+pre-#104 text of each file and required to say **no**.
+
+---
+
+## What this pass did not disturb
+
+**§6's hedge stands, for the fifth and sixth searches.** None of the four retains a
+graph for post-hoc audit:
+
+| Read | Does it retain a graph for post-hoc audit? |
+|---|---|
+| rosbag2 / MCAP (§16) | No. A time-ordered message stream with embedded schemas; no relationships, and the horizon is hours to days. |
+| SOTER (§17) | No. It retains nothing at all; the switch is a control decision. |
+| Transparency logs (§18) | No. An append-only log of opaque entries, indifferent to what an entry means. |
+| ISO 21448 (§19) | No. Not an artifact — a development-time argument. |
+
+**No claim in `plan.md` is edited by this pass.** Claim 1's arithmetic is untouched;
+§16 changes the *name of the incumbent* in the prose around it and argues one
+figure's direction without measuring it. Claim 2 is untouched. Claim 3 gains a
+vocabulary and no competitor — 21448 asks a different question about a different
+partition (§19). Claim 4 is untouched by §17, which occupies the runtime half and
+not the record, and by §18, which strengthens §14's existing conclusion that
+nothing about the chain is novel rather than adding a new one.
+
+**Two positioning risks are recorded rather than fixed**, both per the rule that a
+survey does not edit the claims it bears on:
+
+- Any sentence implying that bounding a learned policy at runtime in robotics is
+  this project's move is leaning on ground SOTER occupied in 2019 (§17).
+- `docs/limitations.md` §6's "would additionally make a *withheld* artifact
+  detectable" is conditional on an independent expectation the data structure does
+  not supply (§18).
+
+## Changes this pass makes to the plan
+
+| # | Change | Where |
+|---|---|---|
+| 16 | Name rosbag2/MCAP as the incumbent wherever the retention comparison is introduced; state that the horizon, not the size, is the difference | `sensor-baseline.md`, README, `plan.md` Claim 1 (**not done** — outside #104) |
+| 17 | Cite SOTER and SOTER-on-ROS as the robotics implementation of Simplex/F3269, beside the citations already in the header | `reg/enforce.py`, `plan.md` Phase 4 (**not done** — outside #104) |
+| 18 | Cite the history tree and CT beside the truncation paragraph as the structural answer this artifact does not use | `reg/chain.py` header (**done**) |
+| 19 | Adopt SOTIF's vocabulary where Area 3 is written in longhand; add ISO 21448 to the standards baseline | `docs/sufficiency.md`, `plan.md`, README (**not done** — outside #104) |
+| 14 | The third pass's four citations and the forward-security entry | README, `plan.md` Phase 6, `chain.py`, `limitations.md` (**done** — §20) |
+
+## Still open after this pass
+
+- **A measured MCAP bag of the same nine-float stream.** §16 argues the incumbent
+  is larger than the gzipped CSV and does not measure it. Until it is measured the
+  argument stays in this file and out of every document that publishes a figure.
+- **The clause text of ISO 21448.** Paywalled, like IEC 61784-3 and IEEE
+  7001-2021. §19 is entered from secondary sources and says so.
+- **Whether the chain becomes a tree.** §18 names the structure that fixes the
+  truncation limit and the partial-disclosure limit at once. It is a Phase 6
+  design question, it interacts with the forward-security question §14 opened, and
+  neither is decided in a survey.
+- **Whether a witness set replaces a witness.** `--witness` is cosigning with
+  N = 1 inside the operator (§18). Raising N is an operational change, not an
+  encoding one, and the air-gap claim survives it.
+- **Whether SOTIF's areas belong in `docs/sufficiency.md` at all**, given §19's
+  warning that the two partitions are on different axes. Adopting the vocabulary
+  is safe; adopting the taxonomy is not, and the document has to say which it did.

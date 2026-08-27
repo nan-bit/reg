@@ -736,6 +736,9 @@ def _records(csv: Path, scn, tmp_path: Path) -> AttestationRecords:
         replan_interval_s=FIXTURE_REPLAN_S,
         declaration_horizon_s=FIXTURE_HORIZON_S,
         watchdog_period_s=FIXTURE_WATCHDOG_S,
+        # The grid `_build` hands `graph.build` below, not the module default:
+        # one run, one discretisation (issue #106).
+        substep_dt=_FAST["substep_dt"],
     )
 
 

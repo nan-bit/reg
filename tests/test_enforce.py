@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import math
 import pathlib
 from collections import Counter
 
@@ -108,6 +109,15 @@ LIMITS: Limits = DEMO_WORLD.limits
 WATCHDOG_S = 1.0
 T_START = 0.0
 HORIZON_S = 0.5
+
+#: The integration grid this file's enforcers compute their overclaim bound on,
+#: seconds. Stated here for the reason the two above are (issue #106):
+#: `Enforcer` refuses to invent one, and a test that reached for
+#: `reg.envelope.SUBSTEP_DT` would be asserting against whatever that constant
+#: happens to be rather than against a grid this file chose. 0.02 is the grid the
+#: shipped builds run at, so the bounds these tests compare against are the ones
+#: a real artifact carries.
+SUBSTEP_DT_S = 0.02
 
 #: How much room a synthetic declared envelope leaves around the body it is
 #: built from, metres. Stated here rather than in `reg.enforce`: a test fixture
@@ -199,6 +209,7 @@ def enforcer(
     policy_key=POLICY_KEY,
     watchdog_period_s: float = WATCHDOG_S,
     t_start: float = T_START,
+    substep_dt: float = SUBSTEP_DT_S,
     id_prefix: str = "fixture",
 ) -> Enforcer:
     return Enforcer(
@@ -207,6 +218,7 @@ def enforcer(
         policy_key=policy_key,
         watchdog_period_s=watchdog_period_s,
         t_start=t_start,
+        substep_dt=substep_dt,
         id_prefix=id_prefix,
     )
 
@@ -758,7 +770,9 @@ def test_the_horizon_bound_is_never_worse_than_the_workspace_disc() -> None:
         for qd in ((0.0, 0.0), (2.0, 2.5), (-2.0, -2.5)):
             for window in (0.05, 0.5, 5.0):
                 state = proprio(q, 0.0, qd)
-                assert horizon_bound(state, LIMITS, window) <= disc + 1e-12
+                assert (
+                    horizon_bound(state, LIMITS, window, SUBSTEP_DT_S) <= disc + 1e-12
+                )
 
 
 def test_horizon_excess_is_never_less_than_envelope_excess() -> None:
@@ -766,9 +780,9 @@ def test_horizon_excess_is_never_less_than_envelope_excess() -> None:
     region = shapely.from_wkb(reachable_looking_declaration())
     for q in (Q_EXTENDED, Q_FOLDED, Q_HOME):
         state = proprio(q, 0.0)
-        assert horizon_excess(region, state, LIMITS, HORIZON_S) >= envelope_excess(
-            region, LIMITS
-        ) - 1e-12
+        assert horizon_excess(
+            region, state, LIMITS, HORIZON_S, SUBSTEP_DT_S
+        ) >= envelope_excess(region, LIMITS) - 1e-12
 
 
 def test_an_extended_arm_leaves_the_static_bound_exactly_where_it_was() -> None:
@@ -779,9 +793,9 @@ def test_an_extended_arm_leaves_the_static_bound_exactly_where_it_was() -> None:
     they are measuring.
     """
     for window in (0.02, 0.5, 5.0):
-        assert horizon_bound(AT_EXTENDED, LIMITS, window) == pytest.approx(
-            computed_bound(LIMITS), abs=1e-9
-        )
+        assert horizon_bound(
+            AT_EXTENDED, LIMITS, window, SUBSTEP_DT_S
+        ) == pytest.approx(computed_bound(LIMITS), abs=1e-9)
 
 
 def test_offer_refuses_a_state_that_is_not_proprioception() -> None:
@@ -1153,6 +1167,7 @@ def test_the_watchdog_period_and_t_start_have_no_default() -> None:
             key=ENFORCEMENT_KEY,
             policy_key=POLICY_KEY,
             t_start=0.0,
+            substep_dt=SUBSTEP_DT_S,
             id_prefix="x",
         )
     with pytest.raises(TypeError, match="t_start"):
@@ -1161,6 +1176,7 @@ def test_the_watchdog_period_and_t_start_have_no_default() -> None:
             key=ENFORCEMENT_KEY,
             policy_key=POLICY_KEY,
             watchdog_period_s=1.0,
+            substep_dt=SUBSTEP_DT_S,
             id_prefix="x",
         )
     with pytest.raises(EnforcementError, match="strictly positive"):
@@ -1175,6 +1191,7 @@ def test_the_enforcer_refuses_keys_of_the_wrong_role() -> None:
             policy_key=POLICY_KEY,
             watchdog_period_s=1.0,
             t_start=0.0,
+            substep_dt=SUBSTEP_DT_S,
             id_prefix="x",
         )
     with pytest.raises(EnforcementError, match="policy Key or None"):
@@ -1184,8 +1201,405 @@ def test_the_enforcer_refuses_keys_of_the_wrong_role() -> None:
             policy_key=ENFORCEMENT_KEY,
             watchdog_period_s=1.0,
             t_start=0.0,
+            substep_dt=SUBSTEP_DT_S,
             id_prefix="x",
         )
+
+
+# ==========================================================================
+# ISSUE #106. Two findings about the same function, and they pull opposite ways.
+#
+#   (2) `horizon_bound` took the module's `SUBSTEP_DT` while the build passed its
+#       own, so an artifact built at `--substep-dt 0.05` had its enforcement
+#       bound computed on a *finer* grid than the trajectories it was checking.
+#       Fixed: the grid is a required argument all the way down, and the run
+#       states it once.
+#
+#   (1) A state whose `|qd|` exceeds `qd_max` — by a rad/s or by one ulp — makes
+#       the bound uncomputable, and `offer` raises rather than emitting a
+#       verdict. Kept, and the tests below pin the reasons rather than the
+#       behaviour alone, because a bare `pytest.raises` would read as an
+#       oversight nobody had looked at.
+# ==========================================================================
+
+
+def test_substep_dt_has_no_default_anywhere_the_bound_is_computed() -> None:
+    """A bound taken on a grid nobody named is #68's defect in another place.
+
+    Signatures, not just call behaviour: a default reintroduced on any of the
+    three would let the enforcement bound and the artifact's geometry drift
+    apart again without a single call site changing.
+    """
+    import inspect
+
+    for fn in (reg.enforce.horizon_bound, reg.enforce.horizon_excess):
+        param = inspect.signature(fn).parameters["substep_dt"]
+        assert param.default is inspect.Parameter.empty, (
+            f"{fn.__name__} has a default substep_dt of {param.default!r}. The "
+            "bound would then be computed on a grid the artifact never records."
+        )
+    init = inspect.signature(Enforcer.__init__).parameters["substep_dt"]
+    assert init.default is inspect.Parameter.empty
+
+    with pytest.raises(TypeError, match="substep_dt"):
+        Enforcer(  # type: ignore[call-arg]
+            LIMITS,
+            key=ENFORCEMENT_KEY,
+            policy_key=POLICY_KEY,
+            watchdog_period_s=1.0,
+            t_start=0.0,
+            id_prefix="x",
+        )
+    with pytest.raises(TypeError):
+        horizon_bound(AT_EXTENDED, LIMITS, HORIZON_S)  # type: ignore[call-arg]
+
+
+def test_a_grid_with_no_steps_in_it_is_refused_rather_than_replaced() -> None:
+    """THE NEGATIVE. Feed the check the condition it guards against.
+
+    Zero and negative are not a coarser grid, they are no grid; the soundness
+    argument is stated over a positive step and there is nothing to fall back
+    to that would not be an invented default.
+    """
+    for bad in (0.0, -0.02):
+        with pytest.raises(EnforcementError, match="strictly positive"):
+            enforcer(substep_dt=bad)
+        with pytest.raises(EnforcementError, match="strictly positive"):
+            horizon_bound(AT_EXTENDED, LIMITS, HORIZON_S, bad)
+    with pytest.raises(EnforcementError, match="substep_dt"):
+        horizon_bound(AT_EXTENDED, LIMITS, HORIZON_S, float("nan"))
+
+
+def test_the_enforcer_computes_its_bound_on_the_grid_it_was_given() -> None:
+    """The plumbing, asserted at the one place it was broken.
+
+    A spy on `outer_envelope` rather than on the returned number: the bound is
+    floored by the workspace disc, so at many poses two grids give the *same*
+    metre value and an assertion on the result alone would pass while the
+    argument was still being dropped.
+    """
+    seen: list[float] = []
+    real = reg.enforce.outer_envelope
+
+    def spy(state, limits, horizon, substep_dt):
+        seen.append(substep_dt)
+        return real(state, limits, horizon, substep_dt)
+
+    for grid in (0.02, 0.05):
+        seen.clear()
+        original = reg.enforce.outer_envelope
+        reg.enforce.outer_envelope = spy
+        try:
+            e = enforcer(substep_dt=grid)
+            assert e.substep_dt == grid
+            e.offer(declaration(envelope=reachable_looking_declaration()), AT_EXTENDED)
+        finally:
+            reg.enforce.outer_envelope = original
+        assert seen == [grid], (
+            f"the enforcer was built with substep_dt={grid} and the bound was "
+            f"computed on {seen}. Two numbers in one run disagreeing about the "
+            "discretisation they describe is exactly issue #106."
+        )
+
+
+def test_substep_dt_widens_the_reachable_joint_box_it_enters_through() -> None:
+    """The direction the parameter actually has, on the term that actually has it.
+
+    `substep_dt` reaches the bound through one place —
+    `reg.envelope.reachable_joint_box` raises the initial speed by half a step
+    of acceleration so the box covers the *discrete* trajectory as well as the
+    continuous one — and there it is monotone: a coarser grid can only widen the
+    box. That is what makes the old behaviour a defect rather than a wash. An
+    enforcer on the module's 0.02 grid was bounding a run integrated at 0.05
+    with a box built for a finer discretisation than the one the artifact
+    records.
+
+    **The radial projection of the outer set is not monotone, and that is not a
+    contradiction.** `reg.envelope._ancestor_grid` picks its sampling resolution
+    from the box it is given, so a wider box can be swept on a differently
+    spaced grid and come out with a radius up to about 3.6 mm *smaller* — a
+    discretisation artefact of the polygon construction, measured over the poses
+    below, against genuine widenings of up to 1.1 cm. Each grid's bound is sound
+    for its own trajectories, which is the property that matters; "coarser is
+    always looser" is not true of the radius and is deliberately not asserted
+    here. Issue #106.
+    """
+    from reg.envelope import reachable_joint_box
+
+    strictly_wider = 0
+    for q in (Q_EXTENDED, Q_FOLDED, Q_HOME, Q_FAR, Q_IN_BOX):
+        for qd in ((0.0, 0.0), (2.0, 2.5), (-2.0, -2.5)):
+            for window in (0.05, 0.2, 0.5):
+                state = proprio(q, 0.0, qd)
+                lo_fine, hi_fine = reachable_joint_box(state, LIMITS, window, 0.02)
+                lo_coarse, hi_coarse = reachable_joint_box(state, LIMITS, window, 0.05)
+                assert np.all(lo_coarse <= lo_fine + 1e-15), (
+                    f"q={q} qd={qd} window={window}: the coarser grid's box does "
+                    "not contain the finer one's, so the term that covers the "
+                    "discretisation is not covering it."
+                )
+                assert np.all(hi_coarse >= hi_fine - 1e-15)
+                strictly_wider += bool(
+                    np.any(hi_coarse - hi_fine > 1e-12)
+                    or np.any(lo_fine - lo_coarse > 1e-12)
+                )
+    assert strictly_wider, (
+        "no box was widened at all, so this test would pass on code that "
+        "ignored substep_dt entirely."
+    )
+
+
+def test_the_grid_changes_the_bound_by_more_than_rounding() -> None:
+    """Non-vacuity for the whole of finding (2): the parameter is not decorative.
+
+    If the two grids gave the same metre value everywhere, computing the bound
+    on one and the trajectories on the other would be an inconsistency nobody
+    could observe, and threading the argument through would be ceremony. They do
+    not: over the poses below the bounds differ by up to about a centimetre,
+    which is the resolution `docs/lossiness.md` advertises for distances.
+    """
+    spread = 0.0
+    for q in (Q_FOLDED, Q_HOME, Q_FAR, Q_IN_BOX):
+        for window in (0.05, 0.2, 0.5):
+            state = proprio(q, 0.0)
+            fine = horizon_bound(state, LIMITS, window, 0.02)
+            coarse = horizon_bound(state, LIMITS, window, 0.05)
+            spread = max(spread, abs(coarse - fine))
+    assert spread > 1e-3, (
+        f"the two grids agree to {spread} m everywhere tested, so this file "
+        "cannot tell which one a bound was computed on."
+    )
+
+
+#: The three identity flags as argv. Required with no default (issue #83), so a
+#: CLI test that omitted them would exercise that refusal instead of the grid.
+_IDENTITY_ARGV = [
+    "--run-start",
+    "2026-08-21T09:00:00Z",
+    "--unit-id",
+    "unit-test-arm-1",
+    "--operator-id",
+    "op-test",
+]
+
+
+def _held_stream(path: pathlib.Path, n_frames: int) -> pathlib.Path:
+    """A stream in which nothing moves, written through the real codec.
+
+    Short and static on purpose: this fixture is about which `substep_dt` the
+    two producers were given, not about what the arm did, and a full scenario
+    would spend minutes computing envelopes to say the same thing. The
+    provenance block names a scenario `reg.graph` can resolve, because a build
+    refuses a stream whose world it cannot look up rather than guessing one.
+    """
+    from reg.stream import write_frames
+
+    frames = [
+        StateFrame(
+            t=i * 0.05,
+            q=np.asarray(Q_EXTENDED, dtype=float),
+            qd=np.zeros(2),
+            human_pos=np.array([2.0, 0.0]),
+            human_vel=np.zeros(2),
+            objects=(),
+        )
+        for i in range(n_frames)
+    ]
+    return write_frames(
+        frames,
+        path,
+        comments=["reg-sim provenance v1", "scenario=contact", "seed=0"],
+    )
+
+
+def test_the_artifact_and_its_enforcement_bound_share_one_substep_dt(
+    tmp_path: pathlib.Path,
+) -> None:
+    """THE ACCEPTANCE CRITERION, end to end and through the CLI.
+
+    `--substep-dt` is stated once and has to reach both producers: the geometry
+    pass in `reg.graph` and the overclaim bound in `reg.enforce`. Both are
+    spied on, and both are checked against what the artifact itself records as
+    the grid it was built on — reading the number back out of the file rather
+    than comparing two constants the test wrote, because the artifact is what a
+    later reader has.
+
+    A grid deliberately not equal to `reg.envelope.SUBSTEP_DT`: on the module
+    default this test would pass on the code that had the defect.
+    """
+    from reg import graph, store
+    from reg.envelope import SUBSTEP_DT as _MODULE_DEFAULT
+
+    grid = 0.05
+    assert grid != _MODULE_DEFAULT
+
+    from reg.chain import write_keyring
+
+    csv = _held_stream(tmp_path / "held.csv", 8)
+    out = tmp_path / "held.sqlite"
+    keyring_path = write_keyring(KEYRING, tmp_path / "keyring.json")
+
+    build_grids: list[float] = []
+    enforce_grids: list[float] = []
+
+    def spy(sink, real):
+        def wrapped(state, limits, horizon, substep_dt):
+            sink.append(substep_dt)
+            return real(state, limits, horizon, substep_dt)
+
+        return wrapped
+
+    graph_real, enforce_real = graph.outer_envelope, reg.enforce.outer_envelope
+    graph.outer_envelope = spy(build_grids, graph_real)
+    reg.enforce.outer_envelope = spy(enforce_grids, enforce_real)
+    try:
+        code = graph.main(
+            [
+                "build",
+                str(csv),
+                "--out",
+                str(out),
+                "--horizon",
+                "0.1",
+                "--n-samples",
+                "4",
+                "--substep-dt",
+                str(grid),
+                "--keyring",
+                str(keyring_path),
+                "--replan-interval",
+                str(FIXTURE_REPLAN_S),
+                "--declaration-horizon",
+                str(FIXTURE_HORIZON_S),
+                "--watchdog-period",
+                str(FIXTURE_WATCHDOG_S),
+                *_IDENTITY_ARGV,
+            ]
+        )
+    finally:
+        graph.outer_envelope = graph_real
+        reg.enforce.outer_envelope = enforce_real
+
+    assert code == 0
+    conn = store.connect(out)
+    try:
+        recorded = float(store.all_meta(conn)[graph.META_SUBSTEP_DT])
+        assert store.read_verdicts(conn), (
+            "no verdicts, so enforcement never ran and this test would assert "
+            "nothing about the bound."
+        )
+    finally:
+        conn.close()
+
+    assert enforce_grids, "the overclaim bound was never computed"
+    assert build_grids, "no envelope was built"
+    assert set(build_grids) == set(enforce_grids) == {recorded} == {grid}, (
+        f"the artifact records substep_dt={recorded}, the geometry pass used "
+        f"{sorted(set(build_grids))} and the enforcement bound used "
+        f"{sorted(set(enforce_grids))}. One run, one discretisation (#106)."
+    )
+
+
+# --- (1): an out-of-limits state aborts, and here is why -------------------
+
+
+def _one_ulp_over_the_velocity_limit() -> ProprioState:
+    """At rest but for one joint, whose velocity is the smallest float above `qd_max`.
+
+    The original trigger was the piecewise-linear interpolant producing
+    2.5000000000000004 against a 2.5 limit; #96 clips it away, so the condition
+    is reproduced here on purpose rather than waited for.
+    """
+    qd = np.zeros(len(LIMITS.qd_max))
+    qd[-1] = math.nextafter(float(LIMITS.qd_max[-1]), math.inf)
+    return ProprioState(t=0.0, q=np.asarray(Q_EXTENDED, dtype=float), qd=qd)
+
+
+def test_a_state_exactly_at_the_velocity_limit_is_a_bound_like_any_other() -> None:
+    """POSITIVE CONTROL, and it is the boundary case, not a comfortable interior one.
+
+    Without this the refusal below could be a check that rejects fast states
+    generally rather than impossible ones.
+    """
+    qd = np.zeros(len(LIMITS.qd_max))
+    qd[-1] = float(LIMITS.qd_max[-1])
+    at_limit = ProprioState(t=0.0, q=np.asarray(Q_EXTENDED, dtype=float), qd=qd)
+    radius = horizon_bound(at_limit, LIMITS, HORIZON_S, SUBSTEP_DT_S)
+    assert 0.0 < radius <= computed_bound(LIMITS) + 1e-12
+    assert enforcer().offer(declaration(), at_limit) is None
+
+
+def test_a_state_over_its_own_velocity_limit_is_refused_and_says_which_joint() -> None:
+    """THE NEGATIVE. One ulp over is over: there is no tolerance band here.
+
+    A bound integrated from a velocity the robot cannot have is a bound for a
+    different robot, and `reg.envelope` refuses to produce one. What this
+    asserts beyond the raise is that the message names the joint and the limit —
+    an abort whose reason nobody can read is the failure mode issue #106 opens
+    with.
+    """
+    over = _one_ulp_over_the_velocity_limit()
+    with pytest.raises(EnforcementError) as excinfo:
+        horizon_bound(over, LIMITS, HORIZON_S, SUBSTEP_DT_S)
+    message = str(excinfo.value)
+    assert "qd_max" in message and "joint" in message, message
+    assert "issue #106" in message, (
+        "the abort has to point at the decision that made it an abort, or the "
+        "next reader files the same issue again. Got: " + message
+    )
+
+
+def test_an_out_of_limits_state_leaves_the_verdict_chain_untouched() -> None:
+    """The decision, asserted as a decision: no verdict, and nothing half-emitted.
+
+    If this ever becomes a verdict the assertions here are the ones that have to
+    change, which is the point of writing them down: the enforcer emits nothing,
+    its chain head is where it was, and the caller is the one holding the
+    problem.
+    """
+    e = enforcer()
+    assert e.offer(declaration(seq=0), AT_EXTENDED) is None
+    head_before = e.head_hash
+    count_before = len(e.verdicts)
+
+    with pytest.raises(EnforcementError, match="could not be computed"):
+        e.offer(declaration(seq=1, t_issued=0.1), _one_ulp_over_the_velocity_limit())
+
+    assert e.head_hash == head_before
+    assert len(e.verdicts) == count_before
+    assert not e.is_passivated, (
+        "an unevaluable input is not a fault of the policy, so it must not "
+        "passivate the enforcer the way the nine faults do."
+    )
+
+
+def test_an_out_of_limits_state_is_refused_by_the_envelope_pass_too() -> None:
+    """Reason 3 for keeping it a raise, checked rather than asserted in a comment.
+
+    `reg.graph._observe` computes `compute_envelope` for every frame, so a run
+    holding this state produces no artifact whatever `offer` returns. A verdict
+    here would change which exception the operator sees and nothing else — and
+    if that ever stops being true, this test fails and the decision in
+    `reg/enforce.py`'s header is due for another look.
+    """
+    over = _one_ulp_over_the_velocity_limit()
+    with pytest.raises(ValueError, match="qd_max"):
+        compute_envelope(over, LIMITS, horizon=0.1, n_samples=4, seed=0, substep_dt=0.05)
+
+
+def test_no_fault_in_the_taxonomy_names_an_unevaluable_input() -> None:
+    """Reason 1, and the thing that would have to change first.
+
+    The nine are about what the *policy* did. A verdict must name one of them
+    (`Verdict.__post_init__` refuses a tenth), so emitting one for a state the
+    stream and the limits table disagree about would be a signed accusation
+    against a party that did nothing. This test is a tripwire on that argument:
+    add a fault for an unevaluable input and it fails, which is the moment to
+    revisit `offer`.
+    """
+    assert len(FAULTS) == 9
+    assert not [f for f in FAULTS if "evaluate" in f or "limit" in f]
+    assert "COULD_NOT_EVALUATE" not in OUTCOMES
 
 
 # ==========================================================================
@@ -1312,6 +1726,7 @@ def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
         policy_key=POLICY_KEY,
         watchdog_period_s=FIXTURE_WATCHDOG_S,
         t_start=0.0,
+        substep_dt=SUBSTEP_DT_S,
         id_prefix=scenario.name,
     )
     refusals: list[Verdict] = []
@@ -1766,6 +2181,7 @@ def test_an_acknowledged_passivation_makes_the_same_declaration_lawful() -> None
         policy_key=POLICY_KEY,
         watchdog_period_s=FIXTURE_WATCHDOG_S,
         t_start=0.0,
+        substep_dt=SUBSTEP_DT_S,
         id_prefix=scenario.name,
     )
     acknowledged = False

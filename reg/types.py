@@ -108,9 +108,10 @@ class Limits:
     geometry. It is not: it is the radius `reg.enforce.computed_bound` VETOes a
     declaration against, the half-width `reg.envelope` dilates the centreline
     union by, and the bound that fixes the sampling step (`h_j * reach[j] <=
-    link_radius`). Every figure this repository published was measured against a
-    5 cm half-width no call site had chosen. The value did not change when the
-    default went; what changed is that each caller now states it.
+    link_radius`). Most call sites already stated it — the default covered the
+    remainder, and a figure measured against a value a caller never chose is
+    indistinguishable downstream from one it did. The value did not change when
+    the default went; what changed is that the distinction is no longer possible.
     """
 
     q_min: np.ndarray

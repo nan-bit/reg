@@ -1,10 +1,41 @@
 # Reachability Evidence Graph — prototype plan
 
-**Status:** brainstorm, v2 · captured 2026-08-18 · not yet reconciled against `prior-art.md`
+**Status:** the source document for `reg`, and the source of every figure the
+README publishes · captured 2026-08-18 and amended in place since, each
+substantive change carrying its own date and issue number where it sits ·
+reconciled against [`prior-art.md`](prior-art.md) through its four passes, except
+for the **seven** items named below · keep current
 
-This is the source document for `reg`. It is a brainstorm, not a specification:
-where it and `docs/prior-art.md` disagree, prior art wins and this file gets
-edited. Phases are cut when research shows they reinvent something with a name.
+Where this file and [`docs/prior-art.md`](prior-art.md) disagree, **prior art
+wins and this file gets edited**, and phases are cut when research shows they
+reinvent something with a name. That rule has not changed; what has changed is
+that it has been exercised four times, and most of what those passes ordered into
+this file is now in it — DSSAD and EU AI Act Art. 12 in the standards baseline;
+Simplex / ASTM F3269 named for what Phase 4 already was, and ARMTD / ARMOUR for
+the envelope machinery, with the novelty claim they take dropped; Claim 1
+restated as a retention rate and Claim 2 as answer-agreement; Schneier–Kelsey
+cited where Phase 6 introduces the chain (issue #104); ConSerts where Claim 3
+states its contribution; rosbag2/MCAP priced against Claim 1's baseline (issue
+#117). So this is not a brainstorm and has not been one since the first pass ran.
+It is still not a *specification*: nothing here is normative over `prior-art.md`,
+and a phase that has not been built says so in its own section.
+
+**What is unreconciled is these seven, and nothing else is meant by the word.**
+Each is a change a pass ordered into *this* file, and this file has not made:
+
+| From | Ordered here | Not done |
+|---|---|---|
+| §1 | Rewrite *The gap this addresses* around DSSAD, in the mandate-versus-proposal form | The section still ends on "the unoccupied space"; the distinction reached the standards table and not the argument |
+| §5 | Deviation 1: PROFIsafe's CRC seed is the **Codename**, a configured per-device value | It still reads "a known value", which is the looser claim §5 corrected |
+| §6 | Align Phase 5's naming with Hydra / Kimera | Phase 5 names neither |
+| §11 | Cite the ethical black box in Phase 10 as the proposal this project is an instance of | Cited in `README.md`, not here |
+| §12 | Add IEEE 7001-2021 to the standards baseline, claiming no investigator level | Absent here, and everywhere else in the repository |
+| §17 | Cite SOTER beside Phase 4's Simplex / F3269 citation | Absent |
+| §19 | Adopt ISO 21448 (SOTIF)'s vocabulary where Claim 3 is written in longhand | Absent |
+
+That table is a check, not a note: `tests/test_doc_status_headers.py` fails if an
+item listed here has since landed in the body, and fails if one is dropped from
+the list while still missing from it.
 
 ---
 

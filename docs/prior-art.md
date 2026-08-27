@@ -303,15 +303,31 @@ written: it is the reason no further encoding work is worth doing.
 
 ## 8. Time-series compression is the baseline `reg` was actually competing with
 
-`reg.bench` compares the SQLite artifact against a **gzipped nine-float CSV**.
+`reg.bench` compares the SQLite artifact against a **gzipped copy of the
+simulator's raw state CSV** — for the priced `declared_violation` fixture, **24
+columns, 19 of them Layer B** (`reg.stream.expected_header(2, 3)`: the human's
+pose and velocity and each obstacle's id, kind and pose, beside the five
+proprioceptive columns `reg.bench.proprioceptive_columns` returns).
 That is not a naive baseline — it is close to the state of the art for this data
 shape. Facebook's **Gorilla** (VLDB 2015) compresses a 16-byte `(timestamp,
 value)` pair to **1.37 bytes per point** in production, via delta-of-delta
 timestamps and XOR'd values; 96% of timestamps compress to a single bit.
 VictoriaMetrics and RedisTimeSeries report the same order.
 
-Gzip on columnar floats gets within reach of that (~21 B/frame for nine values,
-so ~2.3 B/value). So the measured comparison was **a relational store with
+**What that 1.37 is and is not being compared against.** Until 2026-08-27 this
+section put it beside the published **~21 B/frame** and divided that by a column
+count of 9 the stream never had, to get ~2.3 B/value. Both halves were wrong:
+the priced fixture's stream is 24 columns, and most of the ones the old count
+left out are entity state no time-series compressor is benchmarked on, so a
+per-point ratio taken over the whole stream compares two different things. The
+slice a float codec is actually the incumbent for is the proprioceptive one, and
+on the same fixture and seed it comes to **3,053 B gzipped over 251 frames =
+12.2 B/frame**, ~2.4 B per recorded value — against Gorilla's 1.37, and still
+not a clean like-for-like, because a Gorilla point carries its own timestamp
+while `t` here is shared across a frame's four joint values. The published ~21
+B/frame does not move; it is the full 24-column stream and is quoted as that.
+
+So the measured comparison was **a relational store with
 B-tree indexes and 64-character content hashes against a purpose-built float
 codec, at storing floats.** `reg` does not store floats; it stores relationships,
 verdicts and provenance. Losing that comparison is not evidence about the thesis.
@@ -1005,9 +1021,10 @@ Issue #104 is where that was discharged (§20), and
 What the pass costs, up front:
 
 - **§16 names the incumbent.** Every retention comparison this project publishes
-  was against a gzipped nine-float CSV. What practitioners actually retain is a
-  **rosbag2/MCAP** bag, and a reader who runs one was never told this file knew
-  the name. The arithmetic does not move; the honesty of the framing does.
+  was against a gzipped copy of the simulator's own raw state CSV — 24 columns
+  for the priced fixture, 19 of them Layer B. What practitioners actually retain
+  is a **rosbag2/MCAP** bag, and a reader who runs one was never told this file
+  knew the name. The arithmetic does not move; the honesty of the framing does.
 - **§17 takes "Simplex, applied to a learned policy, in robotics".** SOTER did
   that in 2019, with a switching rule derived from a reachability check, a
   composition proof and a flying drone. §3 said "it *is* the Simplex
@@ -1101,17 +1118,28 @@ settled that a purpose-built float codec beats a relational store at storing
 floats and that the contest was never the claim. Adding a third float container to
 that comparison buys nothing.
 
-It does, however, sharpen one figure's direction. The `~40x larger` comparison is
-against a **gzipped copy of this project's own nine-float stream at
+It does, however, sharpen one figure's direction. The `~40x larger` comparison
+is against a **gzipped copy of this project's own raw state stream at
 `reg.stream.FLOAT_PRECISION`** — text, quantised to the artifact's stated
-resolution before it is compressed. A bag of the same nine floats carries CDR
-doubles with all 52 mantissa bits, a per-message record header and two timestamps,
-under a general-purpose compressor that does no better on float noise than gzip
-does (§8's Gorilla citation is the same observation from the other side). So the
-incumbent is very probably **larger** than the baseline this project chose to lose
-against, and the `~40x` is against the most favourable possible comparator rather
-than the real one. **That is argued, not measured** — it is in "Still open" below,
-and no published figure is edited on the strength of an argument.
+resolution before it is compressed, and **24 columns wide for the priced
+fixture, 19 of them Layer B**. A bag carries the joint states out of it as CDR
+doubles with all 52 mantissa bits, a per-message record header and two
+timestamps, under a general-purpose compressor that does no better on float
+noise than gzip does (§8's Gorilla citation is the same observation from the
+other side). So the incumbent is very probably **larger** than the baseline this
+project chose to lose against, and the `~40x` is against the most favourable
+possible comparator rather than the real one. **That is argued, not measured** —
+it is in "Still open" below, and no published figure is edited on the strength
+of an argument.
+
+**And the two sides do not carry the same content, which is the part to keep
+hold of.** A `/joint_states` bag holds the five proprioceptive columns; the
+gzipped CSV in the `~40x` holds all 24, the human's ground-truth pose and
+velocity included. `docs/sensor-baseline.md`'s incumbent section (issue #117)
+prices the encoding like-for-like on the proprioceptive slice alone and gets
+**2.51x**, so the bag is dearer per unit of the *same* content — but a bag
+priced against the full stream would also be carrying less of the world. Neither
+number is a licence to say the incumbent is 2.51x the `~40x` baseline.
 
 **Action:** name rosbag2/MCAP as the incumbent wherever the retention comparison
 is introduced. **Partly done, and not by this pass.** `docs/sensor-baseline.md`
@@ -1482,7 +1510,9 @@ survey does not edit the claims it bears on:
 
 ## Still open after this pass
 
-- **A measured MCAP bag of the same nine-float stream.** §16 argues the incumbent
+- **A measured MCAP bag of the proprioceptive slice of the same stream** — a real
+  `mcap` writer with real `zstd`, against the projection issue #117 computed from
+  the specification. §16 argues the incumbent
   is larger than the gzipped CSV and does not measure it. Until it is measured the
   argument stays in this file and out of every document that publishes a figure.
 - **The clause text of ISO 21448.** Paywalled, like IEC 61784-3 and IEEE

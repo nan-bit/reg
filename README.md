@@ -139,6 +139,20 @@ no call to anyone. Both are documented and deliberately unimplemented
 witness records `commitment: none` in so many words — silence never reads as
 commitment.
 
+**The artifact contains personal data, and this project has not addressed that.**
+Every other limitation on this page bounds what the artifact can *answer*. This
+one bounds whether it may be *kept*. Per shift it records the robot's proximity
+to an entity whose `kind` is `human`, contact and closest-approach occurrences
+naming that entity with a wall-clock datum, and `meta[operator_id]` beside
+`meta[run_start_utc]` — which together select a shift, and a shift resolves
+against any roster to a person. Retained six months and handed to an assessor,
+that is processing of personal data in an employment context. The minimisation is
+real and in the schema, not in a policy: no column here names anybody. The
+obligations that remain are named and not discharged, and the AI Act's six-month
+period is expressly subordinate to data-protection law — so for that half of the
+artifact it may be a ceiling rather than the floor Claim 1 prices against
+([`docs/limitations.md` §8](docs/limitations.md)).
+
 Two smaller admissions in the same spirit:
 
 - The keyring is a JSON file of two hex keys. There is no PKI, no key rotation

@@ -330,24 +330,26 @@ one. It is not, and saying so is the point.
 
 This section was originally motivated by a refutation: `docs/plan.md` Claim 1's
 original form — the graph is orders of magnitude smaller than the stream — was
-measured against a gzipped proprioception CSV and came out 14x *worse* (issue
-#30). That refutation has since been withdrawn; the CSV was never the baseline
-the claim was about. The sensor-log baseline is stated in the README and in the
-original plan — both predate the benchmark by hours on 2026-08-18, and the plan's
-own limitations section already flagged the terabytes/day figure as "imported
-context, not a result". The CSV was a substitute this simulator forced, not a
-restatement of the claim. But the question it provoked is the durable part and it
-outlived its own premise: *how coarse can the evidence get before it stops
-answering the question?* The resolution levels below are what answer it, and
-they turn out to be **where the compression argument actually lives** — a
-measured **264 GB** per robot per six months at occurrence resolution against a
-projected 182.5 TB of sensor log, i.e. ~691x (`docs/plan.md` Claim 1; measured
-2026-08-20 at seed 0, and the sensor rate is an assumption with a sourced range
-and a sensitivity table, [`sensor-baseline.md`](sensor-baseline.md)). It lives
-there **less comfortably than the provisional 18.9 GB suggested**: that figure
-was measured before the artifact carried any Layer A record (issue #59), and the
-record layer does not coarsen, so the coarsest level now clears two orders of
-magnitude against the published sensor assumption rather than three.
+measured against a gzipped copy of the simulator's own raw state CSV — 24
+columns for the priced fixture, 19 of them Layer B, not the proprioception this
+line called it — and came out 14x *worse* (issue #30). That refutation has since
+been withdrawn; the CSV was never the baseline the claim was about. The
+sensor-log baseline is stated in the README and in the original plan — both
+predate the benchmark by hours on 2026-08-18, and the plan's own limitations
+section already flagged the terabytes/day figure as "imported context, not a
+result". The CSV was a substitute this simulator forced, not a restatement of
+the claim. But the question it provoked is the durable part and it outlived its
+own premise: *how coarse can the evidence get before it stops answering the
+question?* The resolution levels below are what answer it, and they turn out to
+be **where the compression argument actually lives** — a measured **264 GB** per
+robot per six months at occurrence resolution against a projected 182.5 TB of
+sensor log, i.e. ~691x (`docs/plan.md` Claim 1; measured 2026-08-20 at seed 0,
+and the sensor rate is an assumption with a sourced range and a sensitivity
+table, [`sensor-baseline.md`](sensor-baseline.md)). It lives there **less
+comfortably than the provisional 18.9 GB suggested**: that figure was measured
+before the artifact carried any Layer A record (issue #59), and the record layer
+does not coarsen, so the coarsest level now clears two orders of magnitude
+against the published sensor assumption rather than three.
 
 The coarsest level is not invented here. UN R157's **DSSAD** is the only mandated
 evidence recorder for autonomy that exists, and it stores **occurrences**: an

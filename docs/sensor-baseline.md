@@ -24,9 +24,19 @@ publishes them.
 
 `docs/plan.md` Claim 1 compares the artifact against a raw sensor log at
 **1 TB/day**. `reg` has no sensors. Nothing in this repository measures, or can
-measure, that figure — the simulator emits a nine-float proprioception stream and
-that is the whole of its input. Every comparison against a sensor log is therefore
-a **projection**, and this document is what it is projected from.
+measure, that figure — the simulator emits its own state stream and that is the
+whole of its input. That stream is **not** proprioception: for the fixture the
+benchmark prices it is **24 columns and 19 of them are Layer B**
+(`reg.stream.expected_header(2, 3)`) — `human_x`, `human_y`, `human_vx`,
+`human_vy` and each obstacle's `id`, `kind`, `x`, `y`, `r`, beside the five
+proprioceptive columns `reg.bench.proprioceptive_columns` returns. Simulator
+ground truth for a person is exactly the Layer B content this document projects
+rather than measures, so the baseline is small *and* carries the entity state a
+real system would have to perceive; see
+[The Layer B asymmetry](#the-layer-b-asymmetry).
+
+Every comparison against a sensor log is therefore a **projection**, and this
+document is what it is projected from.
 
 The benchmark enforces the distinction in code rather than in prose:
 `--sensor-multiplier` has **no default**. Omit it and the report prints the

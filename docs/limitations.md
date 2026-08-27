@@ -53,11 +53,13 @@ Two consequences worth being precise about, because they are not the same:
 
 **What a claim would need instead.** Retaining every polygon — which is what this
 project did until issue #28 measured the artifact at 20–30x *larger* than a gzipped
-CSV of the stream it replaced — or an exact, versioned geometry kernel whose output
-is specified rather than implementation-defined. Neither is in scope for a
-prototype. The mitigation actually taken is to name the dependency: every artifact
-records `reg_version` and the retention rule, and this section is the statement that
-`reg_version` alone is not sufficient — **the shapely and GEOS versions that built
+CSV of the stream it replaced (24 columns for the priced fixture, 19 of them
+Layer B — not proprioception, whatever this comparison was called before issue
+#123) — or an exact, versioned geometry kernel whose output is specified rather
+than implementation-defined. Neither is in scope for a prototype. The mitigation
+actually taken is to name the dependency: every artifact records `reg_version`
+and the retention rule, and this section is the statement that `reg_version`
+alone is not sufficient — **the shapely and GEOS versions that built
 an artifact are not currently recorded in it, and recording them would let a future
 reader know whether to trust a recomputation rather than having to assume.** That is
 a small, obvious follow-up and it is deliberately not smuggled in here.

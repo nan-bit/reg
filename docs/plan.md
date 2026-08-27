@@ -67,7 +67,8 @@ representation you can retain, export, and hand to an assessor or insurer.
 > **Amended twice on 2026-08-19; read the second amendment. Re-measured
 > 2026-08-20.** The clause "orders of magnitude smaller" was struck that morning,
 > because the benchmark showed the graph is ~13x *larger* per frame than a
-> gzipped proprioception stream — **measured on an artifact holding no Layer A**;
+> gzipped copy of the simulator's raw state stream, 24 columns and 19 of them
+> Layer B — **measured on an artifact holding no Layer A**;
 > the artifact this project ships carries the record stream and is ~40x larger,
 > which is the figure Claim 1 publishes. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
@@ -197,15 +198,16 @@ about a budget.
 
 > **Reframed 2026-08-19, and this reframing is a correction to a correction.**
 > The section below first recorded Claim 1 as *refuted*, on a benchmark that
-> compared the artifact against a gzipped nine-float proprioception CSV. That
+> compared the artifact against a gzipped copy of the simulator's own raw state
+> CSV — 24 columns for the priced fixture, 19 of them Layer B. That
 > comparison was never the claim. It was the only baseline this simulator can
 > produce, and treating "the only thing measurable" as "the thing being claimed"
 > is the error — the same error the project exists to warn about, committed in its
 > own success criterion.
 >
-> **Nobody has ever chosen between retaining a nine-float stream and retaining a
-> scene graph.** That stream is ~21 B/frame gzipped — 3.8 MB/hour, ~90 MB/day at
-> 50 Hz — and it answers no audit question. (This line read "about 3.8 MB/day"
+> **Nobody has ever chosen between retaining this simulator's state stream and
+> retaining a scene graph.** That stream is ~21 B/frame gzipped — 3.8 MB/hour,
+> ~90 MB/day at 50 Hz — and it answers no audit question. (This line read "about 3.8 MB/day"
 > until 2026-08-20; that was the hourly figure with the wrong unit on it, caught
 > when every retention number here was re-measured. The argument is unaffected:
 > 90 MB/day is still four orders below the sensor assumption.) The economic
@@ -643,14 +645,32 @@ set out to show, and the gap between it and the table is the finding.
 
 #### Why it lost — three things the measurement exposed (2026-08-19)
 
-**1. The baseline was never the thesis.** This document argues from *terabytes/day
-of raw sensor logs* — cameras, LiDAR, tactile, IMU. What `reg.bench` measures
-against is a nine-float proprioception CSV. Gzipped, that lands at ~21 B/frame,
-which is roughly where purpose-built time-series compression lives (Gorilla
-reports **1.37 bytes per point** in production, `docs/prior-art.md` §8). The
-comparison was a relational artifact with indexes and content hashes against a
-float compressor doing what float compressors are for. It was unwinnable, and
-losing it says nothing about the thesis.
+**1. The baseline was never the thesis.** This document argues from
+*terabytes/day of raw sensor logs* — cameras, LiDAR, tactile, IMU. What
+`reg.bench` measures against is the simulator's own raw state CSV, which for the
+priced `declared_violation` fixture is **24 columns, 19 of them Layer B** — the
+human's pose and velocity and each obstacle's id, kind and pose, beside the five
+proprioceptive columns `t`, `q_0`, `q_1`, `qd_0`, `qd_1`
+(`reg.stream.expected_header(2, 3)`, `reg.bench.proprioceptive_columns`).
+Gzipped, that whole stream lands at ~21 B/frame. The comparison was a relational
+artifact with indexes and content hashes against a float compressor doing what
+float compressors are for. It was unwinnable, and losing it says nothing about
+the thesis.
+
+*What ~21 B/frame may and may not be compared against.* It is the full
+24-column stream, so it is not a per-point figure and does not sit beside one.
+Until 2026-08-27 this paragraph placed it next to Gorilla's **1.37 bytes per
+point** (`docs/prior-art.md` §8) as though the two were the same measurement;
+they are not, because most of those 24 columns are entity state no time-series
+compressor is benchmarked on. The like-for-like slice, measured on the same
+fixture and the same seed, is the five proprioceptive columns alone: **3,053 B
+gzipped over 251 frames = 12.2 B/frame**, ~2.4 B per recorded value. That is the
+number to put beside Gorilla — and even it is not a clean comparison, since a
+Gorilla *point* is a (timestamp, value) pair while `t` here is shared across the
+four joint values in a frame. Both figures come from
+`python -m reg.sim --scenario declared_violation --seed 0`, the second through
+`reg.bench.gzip_bytes_of_columns` over `reg.bench.proprioceptive_columns`;
+~21 B/frame is unchanged and is what the retention arithmetic above uses.
 
 **2. The number that is actually about retention is absolute, and we have it.**
 At 30,000 frames / 600 s **at 50 Hz** the artifact is 7.89 MB, i.e. **47.3

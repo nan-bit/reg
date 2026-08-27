@@ -18,7 +18,12 @@ from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 
 
 def two_link(link_radius: float = 0.05) -> Limits:
-    """A two-link unit arm. Every bound stated; nothing defaulted."""
+    """A two-link unit arm, every bound stated.
+
+    `link_radius` is this fixture's one knob — 0.05 m unless a test needs a
+    different half-width — and it is stated here, in the file that uses it.
+    `Limits` itself defaults nothing since issue #115.
+    """
     return Limits(
         q_min=np.array([-np.pi, -np.pi]),
         q_max=np.array([np.pi, np.pi]),

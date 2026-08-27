@@ -128,6 +128,7 @@ def test_limits_reject_a_per_joint_mismatch() -> None:
             qdd_max=np.array([10.0]),
             link_lengths=np.array([0.5, 0.4]),  # but two links
             source=LimitSource.PROPRIOCEPTIVE,
+            link_radius=0.05,
         )
 
 
@@ -146,6 +147,41 @@ def test_limits_cannot_be_built_without_saying_where_they_came_from() -> None:
     """
     with pytest.raises(TypeError, match="source"):
         Limits(**_BOUNDS)  # type: ignore[call-arg]
+
+
+def test_limits_cannot_be_built_without_a_link_radius() -> None:
+    """Negative test: the same argument, applied to the field that had a default.
+
+    `link_radius` carried `0.05` until issue #115, which is the one number on
+    `Limits` no call site had ever chosen. It is the body's half-width, the
+    bound that fixes the sampling step, and the term added to
+    `sum(link_lengths)` in the disc `reg.enforce` tests a declaration against —
+    so the caller who never considered it produced the same object, and the same
+    verdicts, as the caller who considered it and concluded 5 cm. The value did
+    not move; the fiat did.
+    """
+    without_radius = {k: v for k, v in _BOUNDS.items() if k != "link_radius"}
+    with pytest.raises(TypeError, match="link_radius"):
+        Limits(  # type: ignore[call-arg]
+            **without_radius, source=LimitSource.PROPRIOCEPTIVE
+        )
+
+
+def test_no_field_of_limits_has_a_default() -> None:
+    """The invariant behind both negative tests above, stated once.
+
+    Naming the two fields individually would not catch the third one somebody
+    adds with a plausible number attached. Every field on `Limits` is either a
+    property of the robot or the provenance of one, and there is no value for
+    any of them that a caller can be assumed to have meant.
+    """
+    defaulted = [
+        f.name
+        for f in dataclasses.fields(Limits)
+        if f.default is not dataclasses.MISSING
+        or f.default_factory is not dataclasses.MISSING
+    ]
+    assert defaulted == []
 
 
 @pytest.mark.parametrize("bad", ["proprioceptive", None, 0, True])

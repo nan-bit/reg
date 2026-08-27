@@ -102,6 +102,15 @@ class Limits:
     `qdd_max` is an acceleration bound standing in for a torque limit. This is
     deliberate — see docs/plan.md, Phase 1. There is no dynamics model here and
     there should not be one.
+
+    **No field here has a default, and that is the point.** `link_radius` had
+    one — `0.05` — until issue #115, on the unstated argument that it was only
+    geometry. It is not: it is the radius `reg.enforce.computed_bound` VETOes a
+    declaration against, the half-width `reg.envelope` dilates the centreline
+    union by, and the bound that fixes the sampling step (`h_j * reach[j] <=
+    link_radius`). Every figure this repository published was measured against a
+    5 cm half-width no call site had chosen. The value did not change when the
+    default went; what changed is that each caller now states it.
     """
 
     q_min: np.ndarray
@@ -109,12 +118,16 @@ class Limits:
     qd_max: np.ndarray
     qdd_max: np.ndarray
     link_lengths: np.ndarray
-    #: Required, and deliberately placed ahead of the one field that has a
-    #: default: giving `source` a default of its own would restore exactly the
-    #: fiat this field exists to remove, and the caller who did not think about
-    #: provenance would be indistinguishable from the one who did.
+    #: Required: giving `source` a default would restore exactly the fiat this
+    #: field exists to remove, and the caller who did not think about provenance
+    #: would be indistinguishable from the one who did.
     source: LimitSource
-    link_radius: float = 0.05
+    #: Required for the same reason (issue #115). The body's half-width, the
+    #: sampling bound, and the term added to `sum(link_lengths)` in the disc a
+    #: declaration is tested against — a caller who did not choose it would be
+    #: indistinguishable from one who did, and the artifact would record the
+    #: invented number as a stated one.
+    link_radius: float
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, LimitSource):

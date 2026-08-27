@@ -390,9 +390,14 @@ to the operator: an **RFC 3161** timestamp token, or inclusion in an append-only
 **transparency log** (which would additionally make a *withheld* artifact
 detectable — §8 and §9 of [`lossiness.md`](lossiness.md) Cannot answer). Both are
 documented and deliberately unimplemented for one reason: each needs a network
-call at artifact close, and the README claims air-gapped operation. `reg/commit.py`
-is built as an interface — `(ChainHeads) -> Commitment` — precisely so that
-dropping the air-gap claim makes either one an adapter rather than a rewrite.
+call at artifact close, and this artifact is required to be checkable years later
+with no service still running and no call to anyone. That requirement is not a
+constraint the design works around — it is the reason the design exists. An
+assessor certifying what happened needs a record whose integrity does not rest on
+infrastructure belonging to the party being assessed, and the telemetry these
+sites already emit runs on exactly that infrastructure. `reg/commit.py` is built
+as an interface — `(ChainHeads) -> Commitment` — precisely so that a deployment
+prepared to take the dependency gets an adapter rather than a rewrite.
 Until then the supportable claim is exactly: **the records were not edited, and a
 second party at the same site saw the heads.**
 

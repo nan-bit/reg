@@ -132,8 +132,8 @@ bound" in [`docs/plan.md`](plan.md) Phase 4 and in `reg.enforce`'s fault taxonom
 and will reasonably read it as *what this robot could reach from here* — a
 reachable set. It is a disc around one.
 
-**What.** `reg.enforce.horizon_bound(state, limits, window)` is the radius the
-check uses, and it is the smaller of two things:
+**What.** `reg.enforce.horizon_bound(state, limits, window, substep_dt)` is the
+radius the check uses, and it is the smaller of two things:
 
 - `computed_bound(limits)`, the radius of the **workspace disc** —
   `sum(link_lengths) + link_radius`, centred on the base that `reg.kinematics`

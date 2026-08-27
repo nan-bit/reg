@@ -62,7 +62,7 @@ THE TWO ENVELOPE FAULTS DIFFER IN DIRECTION
 | fault | test | why the direction matters |
 |---|---|---|
 | declaration/action mismatch | commanded body polygon ⊄ `declared_envelope` | exact: both are polygons, and the comparison is at the resolution the artifact commits to |
-| envelope overclaim | `declared_envelope` ⊄ `horizon_bound(state, limits, window)` | needs a bound that is sound in the **conservative** direction |
+| envelope overclaim | `declared_envelope` ⊄ `horizon_bound(state, limits, window, substep_dt)` | needs a bound that is sound in the **conservative** direction |
 
 **The resolution the mismatch test is performed at, and why it is not a widened
 tolerance.** Both sides are polygons the artifact commits to at
@@ -104,8 +104,8 @@ smaller:
                                     the link chain, with no horizon and no
                                     sampling involved.
 
-    horizon_bound(state, limits, w) the radial projection of
-                                    `reg.envelope.outer_envelope` — the
+    horizon_bound(state, limits,    the radial projection of
+                  w, substep_dt)    `reg.envelope.outer_envelope` — the
                                     horizon-limited **outer** reachable set, the
                                     joint box pushed through the kinematics as an
                                     interval (issue #82). Floored by the disc, so
@@ -116,6 +116,25 @@ inside them is ever falsely accused, and the minimum of two sound bounds is
 sound. The containment test is exact rather than approximate — a polygon lies
 inside a disc iff all of its vertices do, because a disc is convex — so no
 polygonal rendering of a circle enters the comparison.
+
+**`substep_dt` is in the second signature, and it has no default (issue #106).**
+The outer set's soundness argument is not about the continuous system alone: it
+covers the trajectories a caller actually integrates, on a *stated* grid, and
+`reg.envelope.reachable_joint_box` carries an extra term for exactly that.
+Until #106 this function took `reg.envelope.SUBSTEP_DT` while `reg.graph` passed
+the build's, so an artifact built with `--substep-dt 0.05` had its enforcement
+bound computed on a **finer** grid than the trajectories it was checking.
+
+That is not the harmless direction, which is the part worth spelling out. The
+*joint box* is monotone in `substep_dt`, so a finer grid gives a smaller box —
+but the radius of the polygon built from it is not, because
+`reg.envelope._ancestor_grid` picks its sampling resolution from the box it is
+given. Measured over the poses in `tests/test_enforce.py`, the finer grid's bound
+comes out up to 3.6 mm *tighter* and up to 1.1 cm looser than the coarser one's,
+against an artifact that advertises 1 cm on distances. A bound tighter than the
+run warrants is the direction that manufactures false VETOs. So the `Enforcer` is
+told the run's grid at construction and passes it down, and the build hands the
+same number to `reg.envelope` and to here — one run, one discretisation.
 
 **What the second bound closed, and what is still open.** The disc alone has no
 `q`, no `qd` and no horizon in it, so `envelope_overclaim` fired only on a
@@ -131,6 +150,48 @@ as its area and radius, and using it for *containment* here is a decision issue
 #82 leaves open rather than an oversight: measured against the fixtures, the
 polygon test re-labels three of the five fault runs as overclaims, which changes
 what a fault in the nine-fault taxonomy means. That is not a refactor.
+
+A STATE OUTSIDE ITS OWN LIMITS ABORTS. IT DOES NOT BECOME A VERDICT (ISSUE #106)
+-------------------------------------------------------------------------------
+`offer` raises `EnforcementError` when the state it is handed reports a `|qd|`
+above `limits.qd_max` — by a whole rad/s or by one ulp — because the outer
+reachable set cannot be integrated from a velocity the robot cannot have. That
+looks like this project's own rule pointed the wrong way: a could-not-evaluate is
+supposed to end up *in the artifact*, and raising ends the run with no record at
+the one moment a record is most wanted. The decision is that it stays a raise,
+and the three reasons are worth stating because the intuition really does point
+the other way.
+
+**1. There is no true verdict to emit.** `FAULTS` is closed at nine and
+`Verdict.__post_init__` refuses a tenth, deliberately: "a fault nothing
+recognises is a fault nothing can query for". None of the nine names this
+condition, and reusing one — `envelope_overclaim`, say — would put a *signed*
+accusation in the chain about something the policy did not do. Enforcement's
+records are attributions; a wrong one is worse than a missing one.
+
+**2. It is not a finding about the robot at all.** `EnforcementError`'s own
+docstring draws this line: a verdict is a finding about the robot, an
+`EnforcementError` is a finding about the caller. A state contradicting its own
+`Limits` is a disagreement between two Layer A inputs — the stream and the
+limits table — and enforcement cannot know which of the two is wrong. Absorbing
+it would mean picking one silently, which is the invented-default failure in
+another costume.
+
+**3. No artifact could say so anyway, and making one is a different change.**
+`reg.envelope.compute_envelope` refuses the identical state, for the reason
+`_check_state_within_limits` gives, and `reg.graph._observe` calls it for every
+frame. So a run holding an out-of-limits frame produces no artifact whatever
+`offer` returns; a verdict here would change which exception the operator sees
+and nothing else. `tests/test_enforce.py::
+test_an_out_of_limits_state_is_refused_by_the_envelope_pass_too` pins that, so
+the reason this decision rests on is checked rather than asserted.
+
+**What would change the answer**, stated so this is revisable rather than
+settled: a could-not-evaluate *outcome* in `OUTCOMES`, or a tenth fault naming
+an unevaluable input — either of which is a change to docs/plan.md's taxonomy and
+to every reader of it, and neither of which is this issue. Until then the caller
+catches `EnforcementError` and reports it; `reg.graph`'s CLI does exactly that,
+and writes no artifact.
 
 ESCALATION FAILURE, DEFINED HERE
 --------------------------------
@@ -158,11 +219,14 @@ policy cannot clear its own fault — the gate would otherwise be decorative.
 
 NO DEFAULTS
 -----------
-`watchdog_period_s` and `t_start` are required arguments with no default.
-docs/plan.md fixes neither a watchdog period nor an epoch, and
-`reg.declare.emit_declarations` already refuses to invent `replan_interval_s` for
-the same reason: a plausible invented number is indistinguishable downstream from
-a stated one, and this one decides whether the watchdog ever fires.
+`watchdog_period_s`, `t_start` and `substep_dt` are required arguments with no
+default. docs/plan.md fixes neither a watchdog period nor an epoch nor an
+integration grid, and `reg.declare.emit_declarations` already refuses to invent
+`replan_interval_s` for the same reason: a plausible invented number is
+indistinguishable downstream from a stated one. The first decides whether the
+watchdog ever fires; the third decides which discretisation the bound is sound
+over, and a bound computed on a grid nobody named is the same defect class as a
+figure measured at a rate nobody named (issues #68, #106).
 """
 
 from __future__ import annotations
@@ -628,14 +692,16 @@ def computed_bound(limits: Limits) -> float:
     return float(lengths.sum() + radius)
 
 
-def horizon_bound(state: ProprioState, limits: Limits, horizon: float) -> float:
+def horizon_bound(
+    state: ProprioState, limits: Limits, horizon: float, substep_dt: float
+) -> float:
     """Radius of the bound for **this instant and this horizon**, metres (#82).
 
     `min(computed_bound(limits), outer_radius(outer_envelope(state, limits,
-    horizon)))` — the radial projection of the horizon-limited outer reachable
-    set, floored by the workspace disc so it can never be worse than the bound it
-    tightens. Both terms are sound in the conservative direction, and the minimum
-    of two sound bounds is sound.
+    horizon, substep_dt)))` — the radial projection of the horizon-limited outer
+    reachable set, floored by the workspace disc so it can never be worse than
+    the bound it tightens. Both terms are sound in the conservative direction,
+    and the minimum of two sound bounds is sound.
 
     **What this buys, and what it does not.** `computed_bound` has no `q`, no
     `qd` and no horizon in it, so it fires only on a declaration exceeding the
@@ -661,12 +727,23 @@ def horizon_bound(state: ProprioState, limits: Limits, horizon: float) -> float:
         horizon: seconds the bound covers. Required, no default — a bound
             enforcement VETOes on must not be computed over a window nobody
             stated.
+        substep_dt: the integration grid the run's trajectories are on, seconds.
+            **Required, no default** (issue #106). The outer set carries a term
+            that makes it cover a *discrete* trajectory as well as the continuous
+            system, and that term is a function of this number
+            (`reg.envelope.reachable_joint_box`). Taking the module default while
+            the artifact's geometry was integrated on a different grid is
+            conservative in direction and still puts two numbers in one file that
+            disagree about the discretisation they describe. The caller states
+            the run's grid; nothing here guesses it.
 
     Raises:
-        EnforcementError: `state` is not a `ProprioState`, or the outer set
-            cannot be computed. Each is a could-not-evaluate, and falling back to
-            the looser disc without saying so would let a failed computation read
-            as a weaker check that ran.
+        EnforcementError: `state` is not a `ProprioState`, `substep_dt` is not a
+            positive finite number, or the outer set cannot be computed. Each is
+            a could-not-evaluate, and falling back to the looser disc without
+            saying so would let a failed computation read as a weaker check that
+            ran. See the module header for why the third stays a raise rather
+            than becoming a verdict (issue #106).
     """
     if not isinstance(state, ProprioState):
         raise EnforcementError(
@@ -675,13 +752,32 @@ def horizon_bound(state: ProprioState, limits: Limits, horizon: float) -> float:
             "what the robot knows about itself. If you hold a StateFrame, call "
             ".proprio()."
         )
+    substep_dt = _finite(substep_dt, "substep_dt")
+    if substep_dt <= 0.0:
+        raise EnforcementError(
+            f"substep_dt must be strictly positive, got {substep_dt}. It is the "
+            "grid the outer set's soundness argument is stated over, and there "
+            "is no bound at all on a grid with no steps in it."
+        )
     try:
-        region = outer_envelope(state, limits, horizon)
+        region = outer_envelope(state, limits, horizon, substep_dt)
     except (TypeError, ValueError) as exc:
+        # ABORTS, DOES NOT BECOME A VERDICT — issue #106, argued in full in the
+        # module header. The commonest way here is a state whose `|qd|` exceeds
+        # `limits.qd_max`, and the three reasons in short: no fault in the closed
+        # nine names it, so any verdict emitted would be a signed accusation
+        # about something the policy did not do; it is a disagreement between two
+        # Layer A inputs (the stream and the limits table) rather than a finding
+        # about the robot, and enforcement cannot know which of the two is wrong;
+        # and `reg.envelope.compute_envelope` refuses the same state, so the run
+        # produces no artifact for a verdict to appear in either way.
         raise EnforcementError(
             f"the horizon-limited outer reachable set could not be computed: "
             f"{exc}. That is a could-not-evaluate; silently falling back to the "
-            "workspace disc would report a check that ran when it did not."
+            "workspace disc would report a check that ran when it did not. It "
+            "is raised rather than recorded as a verdict because none of the "
+            f"nine faults {list(FAULTS)} names this condition and a verdict must "
+            "name one — see reg/enforce.py's header, issue #106."
         ) from None
     return min(computed_bound(limits), outer_radius(region))
 
@@ -736,7 +832,11 @@ def envelope_excess(region: BaseGeometry, limits: Limits) -> float:
 
 
 def horizon_excess(
-    region: BaseGeometry, state: ProprioState, limits: Limits, horizon: float
+    region: BaseGeometry,
+    state: ProprioState,
+    limits: Limits,
+    horizon: float,
+    substep_dt: float,
 ) -> float:
     """How far a declared region reaches beyond `horizon_bound`, metres (#82).
 
@@ -745,11 +845,14 @@ def horizon_excess(
     every declaration the static check refused this one refuses too, and the
     fault only ever gains cases.
 
+    `substep_dt` is required and has no default for the reason `horizon_bound`
+    gives (issue #106): it is passed straight through to the bound.
+
     Raises:
         EnforcementError: as `envelope_excess` and `horizon_bound`.
     """
     return _furthest_vertex(region, "horizon_excess") - horizon_bound(
-        state, limits, horizon
+        state, limits, horizon, substep_dt
     )
 
 
@@ -896,6 +999,13 @@ class Enforcer:
             watchdog is measured from here until the first declaration arrives,
             and a run assumed to start at zero would have a watchdog that fired
             or did not for a reason nobody stated.
+        substep_dt: the integration grid this run's trajectories are on, seconds.
+            **Required, no default** (issue #106). It is a property of the run
+            rather than of one declaration, which is why it is stated here and
+            not on `offer`: the overclaim bound has to cover the trajectories the
+            artifact records, and those are integrated on the grid the build was
+            given. An enforcer that took the module default would compute its
+            bound on a grid the rest of the artifact never mentions.
         id_prefix: prefix for the deterministic record ids, normally the scenario
             name. Same inputs, same ids, same MACs.
 
@@ -911,6 +1021,7 @@ class Enforcer:
         policy_key: Key | None,
         watchdog_period_s: float,
         t_start: float,
+        substep_dt: float,
         id_prefix: str,
     ) -> None:
         if not isinstance(limits, Limits):
@@ -939,12 +1050,21 @@ class Enforcer:
                 "instant enforcement starts, which is a safe state manufactured "
                 "by the configuration rather than observed in the run."
             )
+        substep_dt = _finite(substep_dt, "substep_dt")
+        if substep_dt <= 0.0:
+            raise EnforcementError(
+                f"substep_dt must be strictly positive, got {substep_dt}. It is "
+                "the grid the overclaim bound's soundness argument is stated "
+                "over, and there is no bound at all on a grid with no steps in "
+                "it (issue #106)."
+            )
         _check_id(id_prefix, "id_prefix")
 
         self._limits = limits
         self._key = key
         self._policy_key = policy_key
         self._watchdog_period_s = watchdog_period_s
+        self._substep_dt = substep_dt
         self._id_prefix = id_prefix
         self._bound = computed_bound(limits)
 
@@ -1011,6 +1131,17 @@ class Enforcer:
         return self._bound
 
     @property
+    def substep_dt(self) -> float:
+        """The integration grid the overclaim bound is computed on, seconds.
+
+        Readable so that a caller can assert it against the grid the artifact
+        records its geometry on (`reg.graph.META_SUBSTEP_DT`) — the two being one
+        number is the point of issue #106, and a property is how a test says so
+        without reaching into a private attribute.
+        """
+        return self._substep_dt
+
+    @property
     def escalated(self) -> bool:
         """Whether an `escalate` declaration was received since passivating."""
         return self._escalated
@@ -1063,10 +1194,21 @@ class Enforcer:
             adjudication is what a verdict is a record of.
 
         Raises:
-            EnforcementError: `declaration` or `state` is of the wrong type, or
+            EnforcementError: `declaration` or `state` is of the wrong type,
                 `state` is *after* `t_issued` — the declaration's window has
                 already left that pose, so a bound integrated forward from it
-                would not cover the start of the interval being claimed.
+                would not cover the start of the interval being claimed — or the
+                bound could not be computed at all, which is most often a `state`
+                whose `|qd|` is above `limits.qd_max`.
+
+                **That last one aborts the run rather than producing a verdict,
+                and issue #106 is the decision to leave it that way.** The
+                argument is in the module header; in one line, none of the nine
+                faults names an unevaluable input, a verdict has to name one, and
+                `reg.envelope.compute_envelope` refuses the identical state — so
+                the run produces no artifact for a verdict to appear in whatever
+                this returns. A caller wanting the run to survive it must catch
+                this, as `reg.graph`'s CLI does.
         """
         if not isinstance(declaration, Declaration):
             raise EnforcementError(
@@ -1143,7 +1285,7 @@ class Enforcer:
         # case; stretched when the state is older, so the bound still covers the
         # whole of the interval being claimed.
         window = declaration.t_issued + declaration.horizon - state_t
-        radius = horizon_bound(state, self._limits, window)
+        radius = horizon_bound(state, self._limits, window, self._substep_dt)
         # `horizon_excess` spelled out, so the bound is computed once and can be
         # named in the reason: an operator reading a VETO has to be able to see
         # which of the two bounds refused the declaration and by how much.

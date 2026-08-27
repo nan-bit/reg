@@ -2711,6 +2711,7 @@ def attestation_from_stream(
     replan_interval_s: float,
     declaration_horizon_s: float,
     watchdog_period_s: float,
+    substep_dt: float,
 ) -> AttestationRecords:
     """Run the scripted policy and the enforcer over a stream, and return both.
 
@@ -2741,11 +2742,26 @@ def attestation_from_stream(
         replan_interval_s, declaration_horizon_s, watchdog_period_s: stated by
             the caller and never invented. docs/plan.md fixes none of the three,
             and each decides how much of the taxonomy can fire at all.
+        substep_dt: the envelope integration grid, seconds. **Required, no
+            default** (issue #106), and it must be the same number the caller
+            gives `build` — the enforcer's overclaim bound has to cover the
+            trajectories the artifact stores geometry for, and an enforcement
+            bound taken on a finer grid than the build's is two numbers in one
+            file disagreeing about the discretisation they describe. `main`
+            passes `--substep-dt` to both; `tests/test_enforce.py::
+            test_the_artifact_and_its_enforcement_bound_share_one_substep_dt`
+            is what keeps that true.
 
     Raises:
         GraphBuildError: a declaration was issued at an instant no frame carries,
             so it could never be offered. That is a producer this module does not
             understand, and dropping it would silently shorten the chain.
+        EnforcementError: the overclaim bound could not be computed for a frame —
+            most often a state whose `|qd|` is above `limits.qd_max`. It
+            propagates: `reg.enforce` raises rather than emitting a verdict for
+            an unevaluable input (issue #106), and this run writes no artifact
+            either way, because `reg.envelope.compute_envelope` refuses the same
+            state in the geometry pass below.
     """
     from reg.chain import load_keyring
     from reg.declare import emit_declarations
@@ -2806,6 +2822,12 @@ def attestation_from_stream(
         # before the run would fire it on the first action of a stream that
         # simply does not begin at the epoch.
         t_start=float(states[0].t),
+        # The build's grid, not the module default (issue #106). The overclaim
+        # bound covers the discrete trajectories, and those are integrated at
+        # whatever `build` was given; taking `reg.envelope.SUBSTEP_DT` here would
+        # compute one of the artifact's two numbers on a grid the artifact does
+        # not record.
+        substep_dt=substep_dt,
         id_prefix=scenario.name,
     )
 
@@ -3118,6 +3140,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 replan_interval_s=args.replan_interval,
                 declaration_horizon_s=args.declaration_horizon,
                 watchdog_period_s=args.watchdog_period,
+                # The same `--substep-dt` the build below is given, and the same
+                # object: one grid per run (issue #106).
+                substep_dt=args.substep_dt,
             )
             if args.witness is not None:
                 witness = load_witness(args.witness)

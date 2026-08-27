@@ -971,6 +971,10 @@ def _attested_build(tmp: Path, name: str) -> tuple[Path, Path]:
         replan_interval_s=CHAIN_REPLAN_S,
         declaration_horizon_s=CHAIN_HORIZON_S,
         watchdog_period_s=CHAIN_WATCHDOG_S,
+        # The same 0.05 the `graph.build` below is given. Spelled out for the
+        # reason that build spells its parameters out, and it must match it:
+        # one run, one discretisation (issue #106).
+        substep_dt=0.05,
     )
     out = tmp / f"{name}.sqlite"
     # The envelope parameters are spelled out rather than taken from `_FAST`,

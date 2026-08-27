@@ -3402,6 +3402,10 @@ def run_resolution_curve(
         replan_interval_s=replan_interval_s,
         declaration_horizon_s=declaration_horizon_s,
         watchdog_period_s=watchdog_period_s,
+        # The grid `_measure` builds on just below, not the module default
+        # (issue #106): the curve would otherwise price an enforcement bound
+        # taken on a discretisation none of its rows names.
+        substep_dt=substep_dt,
     )
 
     result = _measure(

@@ -783,13 +783,13 @@ constraint layer supplied by the same party as the policy has common-cause
 failure with it; widening that import is never a refactor.
 
 **What the independent check actually checks, stated plainly.**
-`horizon_bound(state, limits, window)` is the radius a declared region is tested
-against, and it is the smaller of two sound bounds: the workspace disc
-`sum(link_lengths) + link_radius`, which reads no `q`, no `q̇` and no horizon; and
-the radial projection of `reg.envelope.outer_envelope`, a horizon-limited **outer**
-reachable set — the joint box pushed through the forward kinematics as an interval
-— which reads all three. Both over-cover, so nothing inside is ever falsely
-accused.
+`horizon_bound(state, limits, window, substep_dt)` is the radius a declared
+region is tested against, and it is the smaller of two sound bounds: the
+workspace disc `sum(link_lengths) + link_radius`, which reads no `q`, no `q̇`
+and no horizon; and the radial projection of `reg.envelope.outer_envelope`, a
+horizon-limited **outer** reachable set — the joint box pushed through the
+forward kinematics as an interval — which reads all three. Both over-cover, so
+nothing inside is ever falsely accused.
 
 It is **still incomplete, and in a way that is now sayable in one line**: the bound
 is a radius, so it detects an overclaim that reaches *further than the robot can*
@@ -1018,7 +1018,7 @@ failure with it.
 is *not* `compute_envelope` from Phase 2 — that is an under-approximation, and
 vetoing against something that under-covers the reachable set would produce false
 VETOs on truthful policies. It is `reg.enforce.horizon_bound(state, limits,
-window)`, the smaller of two bounds that each over-cover:
+window, substep_dt)`, the smaller of two bounds that each over-cover:
 
 - `computed_bound(limits)`, the radius of the **workspace disc**,
   `sum(link_lengths) + link_radius`, base at the origin. It takes `Limits`, a

@@ -60,20 +60,21 @@ that independence is the mechanism, not a style preference, and
 asserts it against the source. Widening that import is never a refactor.
 
 *What the bound is, so nobody reads more into "its own" than is there.*
-`horizon_bound(state, limits, window)` is the radius a declared region is tested
-against: the **smaller** of `computed_bound(limits)` — the workspace disc,
-`sum(link_lengths) + link_radius`, base at the origin, no `q`, no `qd`, no horizon
-— and the radial projection of `reg.envelope.outer_envelope`, a horizon-limited
-**outer** reachable set (issue #82). Both over-cover, and the minimum of two sound
-bounds is sound, so nothing inside is ever falsely accused. It is still
-**incomplete, radially now rather than entirely**: it detects a declaration
-reaching further than the robot can get in the window, and not one pointing where
-the robot cannot turn in time. The polygon that would catch the second is computed
-and retained as `outer_area_m2` / `outer_radius_m` per envelope; using it for
-containment re-labels three of the five fault fixtures, which changes what a fault
-in the taxonomy means, so it is an open decision and not a tightening anyone
-should take unilaterally. See `docs/limitations.md` §2 and §3. The independence is
-real and full-strength; the *capability* is the part that is limited.
+`horizon_bound(state, limits, window, substep_dt)` is the radius a declared
+region is tested against: the **smaller** of `computed_bound(limits)` — the
+workspace disc, `sum(link_lengths) + link_radius`, base at the origin, no `q`,
+no `qd`, no horizon — and the radial projection of `reg.envelope.outer_envelope`,
+a horizon-limited **outer** reachable set (issue #82). Both over-cover, and the
+minimum of two sound bounds is sound, so nothing inside is ever falsely accused.
+It is still **incomplete, radially now rather than entirely**: it detects a
+declaration reaching further than the robot can get in the window, and not one
+pointing where the robot cannot turn in time. The polygon that would catch the
+second is computed and retained as `outer_area_m2` / `outer_radius_m` per
+envelope; using it for containment re-labels three of the five fault fixtures,
+which changes what a fault in the taxonomy means, so it is an open decision and
+not a tightening anyone should take unilaterally. See `docs/limitations.md` §2
+and §3. The independence is real and full-strength; the *capability* is the part
+that is limited.
 
 *`Enforcer.offer` takes the state, and it is required.* The tighter bound is a
 function of where the arm is and how fast it is moving, so `offer(declaration,

@@ -100,8 +100,10 @@ Layer A question can be unanswerable at a coarse level: the occurrence view hold
 **zero** edge rows, so nothing about the envelope survives into it and the
 reachability question dies there despite being certifiable. A Layer B question can
 be perfectly answerable at the coarsest level: *did the robot contact the human*
-is answered from a DSSAD-shaped occurrence flag at 60.29 MB/h — a figure **at a
-50 Hz control rate**, and **linear in it** — and is still only as strong as
+is answered from a DSSAD-shaped occurrence flag in a level costing 60.29 MB/h —
+a figure **at a 50 Hz control rate**, which the level's attestation stream and
+not its occurrence flags is what buys (98.5% of its rows are records,
+[`plan.md`](plan.md) Claim 1, issue #116) — and is still only as strong as
 whatever said where the human was.
 
 The three levels are defined in [`docs/lossiness.md`](lossiness.md), *The three
@@ -130,11 +132,13 @@ with `python -m reg.bench --resolution`:
 | `transition` | 0.01 s | 2,494,464 | **149.72 MB/h** | 5,870 | 9,724 | 0 | 3,120 |
 | `per-frame` | 0.01 s | 3,624,960 | **217.57 MB/h** | 5,870 | 18,428 | 0 | 3,120 |
 
-The rate is in the column heading because the column is **linear in it**:
+The rate is in the column heading because the column **moves with it**:
 enforcement emits one verdict and one chain record per commanded action and no
-resolution level coarsens them, so a real 1 kHz manipulator pays twenty times
-these figures. The curve at four control rates is in
-[`plan.md`](plan.md), *The control rate*.
+resolution level coarsens them. The *record layer* is linear in the rate; the
+*file* is not, and a real 1 kHz manipulator pays **15.8x** these figures at the
+occurrence level rather than the twenty times a linear reading gives — measured,
+with the bytes attributed table by table, in [`plan.md`](plan.md), *The control
+rate*, which is also where the curve at four control rates is.
 
 **5 of the 9 supported questions are priced**, shown below as eight columns:
 `min_separation`, `time_of_closest_approach` and `did_contact_occur` are scalar

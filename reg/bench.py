@@ -140,6 +140,7 @@ import io
 import hashlib
 import math
 import multiprocessing
+import re
 import shutil
 import sqlite3
 import struct
@@ -147,7 +148,7 @@ import statistics
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -206,6 +207,7 @@ __all__ = [
     "AGREE",
     "BASE_CONTROL_RATE_HZ",
     "BENCH_IDENTITY",
+    "BYTES_PER_HOUR_EXTRAPOLATION",
     "CLAIM_1_SUCCESS_RATIO",
     "COULD_NOT_EVALUATE",
     "DISAGREE",
@@ -272,6 +274,7 @@ __all__ = [
     "run_scenario",
     "run_scenarios",
     "sensor_projection_bytes",
+    "sublinearity_shortfall",
     "table_bytes",
 ]
 
@@ -449,6 +452,33 @@ RESOLUTION_FRAME_COUNT = 3_000
 #: quotes for retention and a literal 3600 in the middle of an arithmetic
 #: expression is the kind of number nobody checks.
 SECONDS_PER_HOUR = 3_600.0
+
+#: **What `bytes/hour` is, and therefore what it overstates** (issue #116).
+#:
+#: One string, referenced by every report shape that prints a `bytes/hour`
+#: figure, because until issue #116 the resolution table disclosed this and the
+#: control-rate ladder — the shape whose most-quoted number is a *ratio* between
+#: two of these figures — did not. A caveat that travels with one rendering of a
+#: number and not another is a caveat a reader can be shown the number without.
+#: `tests/test_bench.py::test_every_report_shape_that_prints_bytes_per_hour_
+#: discloses_the_extrapolation` reads this module's own source and fails on a
+#: shape that prints the figure without naming this constant.
+#:
+#: **The figure itself does not move**, and issue #116 says why not: removing the
+#: fixed term would mean fitting `size = fixed + per-frame x frames` across run
+#: lengths and evaluating the fit, which is the extrapolation this file refuses
+#: everywhere else (rule 5). What is published is the measurement; what is
+#: disclosed is what the measurement includes.
+BYTES_PER_HOUR_EXTRAPOLATION = (
+    "**`bytes/hour` extrapolates a run shorter than an hour, fixed cost and "
+    "all.** It is `size x 3600 / run seconds`, so the artifact's *fixed* "
+    "schema-and-index cost is scaled to an hour alongside its per-frame cost "
+    "and the figure **overstates** the hourly rate — by most at the smallest "
+    "levels, where that fixed cost is the largest share of the file. Separating "
+    "the two terms means fitting `size = fixed + per-frame x frames` across run "
+    "lengths, which is a different study (`--scaling`) and an extrapolation "
+    "besides, so no figure here has the fixed term removed."
+)
 
 # --------------------------------------------------------------------------
 # THE CONTROL RATE (issue #68).
@@ -1980,6 +2010,21 @@ class ResolutionPoint:
     #: on its own rather than one only the curve can assemble.
     run_seconds: float
     checks: tuple[LevelCheck, ...]
+    #: Bytes per table in *this level's view*, from `table_bytes`, or `None`
+    #: where this SQLite build cannot attribute them (issue #116).
+    #:
+    #: **Why a level needs its own attribution.** The control-rate ladder's
+    #: headline is that the occurrence level costs 15.8x as much per robot-hour
+    #: for a 20x rate increase, and until this field existed the repository could
+    #: not say why: the row counts are public and the *bytes behind them* were
+    #: not, so the sublinearity was attributed in prose to a term nobody had
+    #: measured. This is the measurement that settles it — the tables that do not
+    #: move with the rate, in bytes, at each rung.
+    #:
+    #: `None` is a could-not-evaluate and the report says so rather than
+    #: estimating: an estimate of where the bytes went is exactly as convincing
+    #: as an estimate of how many there are.
+    tables: dict[str, int] | None
 
     @property
     def lost(self) -> tuple[str, ...]:
@@ -3409,6 +3454,11 @@ def run_resolution_curve(
                     )
                     for query in RESOLUTION_QUERIES
                 ),
+                # Attributed on the view, not on the build (issue #116). The
+                # build's own breakdown is a different measurement — it holds
+                # every row the level discards — and the question the ladder
+                # asks is which of *this level's* bytes the control rate moves.
+                tables=table_bytes(view),
             )
         )
 
@@ -4077,6 +4127,36 @@ def _bytes_per_hour_text(value: float) -> str:
     return f"{value:,.0f} B/h"
 
 
+def _bytes_per_hour_disclosure(run_seconds: float) -> list[str]:
+    """`BYTES_PER_HOUR_EXTRAPOLATION`, with the run length it was extrapolated
+    from, as markdown lines.
+
+    The run length belongs *in* the disclosure: "extrapolated" is a property of
+    the arithmetic, but how much it overstates by is a property of this run, and
+    a reader who is not told the denominator cannot tell a 60-second fixture from
+    a 60-minute one.
+    """
+    return [
+        "",
+        BYTES_PER_HOUR_EXTRAPOLATION,
+        f"The run it is extrapolated from is **{run_seconds:,.2f} s** of robot "
+        f"time, which is {run_seconds / SECONDS_PER_HOUR:.4f} of an hour.",
+        "",
+    ]
+
+
+def _bytes_per_hour_disclosure_line(run_seconds: float) -> str:
+    """The same disclosure for the stderr summary: one line, no markdown.
+
+    The console shape prints the same figures the report does, so it carries the
+    same caveat. Rendering it from `BYTES_PER_HOUR_EXTRAPOLATION` rather than
+    restating it is what stops the two drifting into saying different things
+    about one number.
+    """
+    plain = re.sub(r"[*`]", "", BYTES_PER_HOUR_EXTRAPOLATION)
+    return f"{' '.join(plain.split())} Run: {run_seconds:,.2f} s of robot time."
+
+
 def _lost_text(point: ResolutionPoint) -> str:
     """The "what you lose" cell: named questions, or the fact that there are none.
 
@@ -4332,11 +4412,13 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
                 "**control rate**",
                 f"**{_rate_text(1.0 / curve.frame_period_s)}** "
                 f"(dt = {curve.frame_period_s:g} s)",
-                "**every byte count below is linear in this** (issue #68): "
+                "**every byte count below moves with this** (issue #68): "
                 "enforcement emits one verdict and one chain record per "
-                "commanded action, and no resolution level coarsens them. A real "
-                "manipulator loop runs at 1 kHz; `--control-rate-hz` measures the "
-                "ladder",
+                "commanded action, and no resolution level coarsens them. The "
+                "*record layer* is linear in the rate; the *file* is not, and "
+                "`--control-rate-hz` measures how far apart those two are "
+                "rather than leaving a reader to assume they coincide (issue "
+                "#116). A real manipulator loop runs at 1 kHz",
             ),
             (
                 "envelope samples",
@@ -4437,13 +4519,10 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
         "",
         "`bytes/hour` is the retention figure, and it is what this table quotes",
         "instead of a compression ratio: `docs/plan.md` Claim 1 forbids a ratio",
-        "against the stream while the measured one is below 1. It is the file",
-        f"size over {curve.run_seconds:,.1f} s of robot time, scaled to an hour,",
-        "which scales the artifact's *fixed* schema-and-index cost by the same",
-        "factor as its per-frame cost — so at this run length it **overstates**",
-        "the hourly rate, and by more for the smaller levels, where the fixed",
-        "cost is most of the file.",
-        "",
+        "against the stream while the measured one is below 1.",
+    ]
+    lines += _bytes_per_hour_disclosure(curve.run_seconds)
+    lines += [
         "`COULD-NOT-EVALUATE` never resolves to `AGREE`: a level that cannot",
         "answer a question has not agreed with it. A level that is small and",
         "answers correctly is the result; a level that is small and answers",
@@ -4518,14 +4597,241 @@ def _resolution_section(curve: ResolutionCurve) -> list[str]:
     return lines
 
 
+def sublinearity_shortfall(
+    low_tables: Mapping[str, int],
+    high_tables: Mapping[str, int],
+    rate_multiple_x: float,
+) -> tuple[dict[str, float], float]:
+    """Per table: what growing with the rate would have cost, minus what it cost.
+
+    **An identity, not a model** (issue #116). If every table had grown by
+    `rate_multiple_x` the artifact would be that multiple of its low-rate size;
+    it is not, and the difference is the sublinearity. This decomposes that
+    difference over the tables, and the entries sum to it exactly — so the
+    largest contributor is *read off* rather than nominated, and no threshold
+    decides which tables count as fixed.
+
+    A negative entry is a table that grew **faster** than the rate. A negative
+    total means the artifact did, in which case there is no sublinearity in
+    these two points to explain, which is a measurement and not an error.
+
+    Args:
+        low_tables, high_tables: `table_bytes` of one level at the two rates.
+        rate_multiple_x: the high rate over the low one. Passed in rather than
+            derived here, because this function knows nothing about rates — it
+            would take the same shape for run length or any other multiple.
+
+    Returns:
+        `(per table, total)`, over the union of the two tables' labels.
+    """
+    if not math.isfinite(rate_multiple_x) or rate_multiple_x <= 0.0:
+        raise BenchError(
+            f"the rate multiple is {rate_multiple_x}; a shortfall against a "
+            "non-positive or non-finite multiple is not a quantity. Two "
+            "measured rates give a positive multiple by construction."
+        )
+    labels = [*low_tables, *[k for k in high_tables if k not in low_tables]]
+    shortfall = {
+        label: rate_multiple_x * float(low_tables.get(label, 0))
+        - float(high_tables.get(label, 0))
+        for label in labels
+    }
+    total = rate_multiple_x * float(sum(low_tables.values())) - float(
+        sum(high_tables.values())
+    )
+    return shortfall, total
+
+
+def _sublinearity_attribution(
+    ordered: Sequence[ControlRatePoint], level: str
+) -> list[str]:
+    """Why the bytes grow **more slowly than the rate** — measured, or not stated.
+
+    **The defect this exists to close (issue #116).** The ladder's most-quoted
+    result is that the occurrence level costs ~15.8x as much per robot-hour for a
+    20x increase in control rate, and the cause published beside it was "the
+    scene rows and the fixed schema-and-index cost do not scale". Both halves of
+    that are true and neither is large enough: at the base rate the level's
+    non-record rows are a few dozen of over three thousand, and the empty
+    schema-and-index floor is a couple of percent of the file. A cause that
+    cannot account for the effect is worse than no cause, because it reads as
+    settled.
+
+    **What is actually reported here.** `dbstat`, per table, at each rung of the
+    ladder, and then one exact identity over it: what each table *would* hold if
+    it had grown by the rate multiple, minus what it does hold. Those
+    differences sum to the whole gap between the growth the rate implies and the
+    growth measured, with no remainder — so the sublinearity is *attributed*
+    rather than accounted for, and the largest contributor is read off a column
+    rather than nominated.
+
+    **No threshold anywhere in it.** Splitting the tables into "scales" and
+    "does not scale" would need one — how close to 1.0x counts as fixed — and a
+    threshold invented here would decide the answer it is supposed to report
+    (CLAUDE.md, "never invent a default"). The identity needs none: a table that
+    was assumed fixed and is not simply contributes less.
+
+    **Could-not-evaluate never resolves to an explanation.** Without `dbstat`
+    there is no attribution, and the section then says the cause is not
+    established rather than repeating a plausible one — which is precisely the
+    failure being repaired.
+    """
+    low, high = ordered[0], ordered[-1]
+    low_point, high_point = low.level(level), high.level(level)
+    lines = [
+        "",
+        f"#### Where the `{level}` bytes are, and which of them the rate moves",
+        "",
+        "Bytes per table in the level's own view, from SQLite's own `dbstat`, at",
+        "each measured rate. **This is the answer to why the growth is",
+        "sublinear**, and it is a measurement rather than an account of one.",
+        "",
+    ]
+    if low_point.tables is None or high_point.tables is None:
+        return lines + [
+            "**Could not be attributed.** This SQLite build has no `dbstat` "
+            "virtual table, so where the bytes are cannot be measured here. "
+            "That is a could-not-evaluate: **the cause of the sublinearity is "
+            "not stated in this report**, and no plausible one is substituted "
+            "for it. Re-run on a SQLite built with `SQLITE_ENABLE_DBSTAT_VTAB`.",
+        ]
+
+    labels = (*_TABLE_LABELS, INDEX_LABEL)
+    rows = []
+    for label in labels:
+        first = low_point.tables.get(label, 0)
+        last = high_point.tables.get(label, 0)
+        rows.append(
+            (
+                f"`{label}`",
+                *[
+                    _int_text(p.level(level).tables.get(label, 0))
+                    if p.level(level).tables is not None
+                    else COULD_NOT_EVALUATE
+                    for p in ordered
+                ],
+                _ratio_text(last / first) if first > 0 else COULD_NOT_EVALUATE,
+            )
+        )
+    lines += _table(
+        (
+            "table",
+            *[_rate_text(p.rate_hz) for p in ordered],
+            f"x, {_rate_text(low.rate_hz)} -> {_rate_text(high.rate_hz)}",
+        ),
+        rows,
+    )
+
+    # THE ARITHMETIC, AND WHY IT IS THIS ARITHMETIC. The obvious move is to
+    # split the tables into "scales" and "does not scale" and take a ratio of
+    # each part. That needs a threshold — how close to 1.0x counts as "does not
+    # scale" — and a threshold invented here would decide the answer (CLAUDE.md,
+    # "never invent a default"). What follows instead is an exact identity: if
+    # every table had grown by the rate multiple the file would be `rate_x`
+    # times its low-rate size, and the difference between that and what was
+    # measured decomposes, table by table, with no remainder and no parameter.
+    attributed_low = sum(low_point.tables.values())
+    attributed_high = sum(high_point.tables.values())
+    rate_x = high.rate_hz / low.rate_hz
+    shortfall, total_shortfall = sublinearity_shortfall(
+        low_point.tables, high_point.tables, rate_x
+    )
+    if attributed_low <= 0 or total_shortfall <= 0.0:
+        return lines + [
+            "",
+            "**There is no shortfall to attribute.** Scaled by the rate "
+            f"multiple ({_ratio_text(rate_x)}), the attributed bytes at "
+            f"{_rate_text(low.rate_hz)} come to "
+            f"{_int_text(round(rate_x * attributed_low))} B and the measurement "
+            f"at {_rate_text(high.rate_hz)} is {_int_text(attributed_high)} B — "
+            "so the file grew at least as fast as the rate did, and the "
+            "sublinearity this subsection exists to explain is not present in "
+            "these two points. That is a measurement, not an error.",
+        ]
+
+    ranked = sorted(shortfall.items(), key=lambda kv: kv[1], reverse=True)
+    lines += [
+        "",
+        f"The rate multiple is {_ratio_text(rate_x)}, so a table that scaled "
+        f"with the rate would hold {_ratio_text(rate_x)} its "
+        f"{_rate_text(low.rate_hz)} bytes. What each holds instead, and where "
+        "the difference between that and the whole file's growth comes from:",
+        "",
+    ]
+    lines += _table(
+        (
+            "table",
+            f"if it grew {_ratio_text(rate_x)}",
+            f"measured at {_rate_text(high.rate_hz)}",
+            "shortfall B",
+            "share of the shortfall",
+        ),
+        [
+            *[
+                (
+                    f"`{label}`",
+                    _int_text(round(rate_x * low_point.tables.get(label, 0))),
+                    _int_text(high_point.tables.get(label, 0)),
+                    _int_text(round(value)),
+                    f"{100.0 * value / total_shortfall:.1f}%",
+                )
+                for label, value in ranked
+            ],
+            (
+                "**attributed total**",
+                f"**{_int_text(round(rate_x * attributed_low))}**",
+                f"**{_int_text(attributed_high)}**",
+                f"**{_int_text(round(total_shortfall))}**",
+                "**100.0%**",
+            ),
+        ],
+    )
+
+    top_label, top_value = ranked[0]
+    size_x = high_point.size_bytes / low_point.size_bytes
+    return lines + [
+        "",
+        f"**The file grew {_ratio_text(size_x)} — attributed bytes "
+        f"{_ratio_text(attributed_high / attributed_low)}, the difference "
+        "being SQLite's free pages, which belong to no table — for a "
+        f"{_ratio_text(rate_x)} rate increase, and `{top_label}` is "
+        f"{100.0 * top_value / total_shortfall:.1f}% of the difference.** The "
+        "second table is an identity, not a model: every table's entry is what "
+        "it would hold if it had grown with the rate, minus what it does hold, "
+        "and the column sums to the whole difference with no remainder. A "
+        "negative entry is a table that grew *faster* than the rate.",
+        "",
+        f"`{INDEX_LABEL}` is "
+        f"{_int_text(low_point.tables.get(INDEX_LABEL, 0))} B at "
+        f"{_rate_text(low.rate_hz)} and "
+        f"{_int_text(high_point.tables.get(INDEX_LABEL, 0))} B at "
+        f"{_rate_text(high.rate_hz)}, contributing "
+        f"{100.0 * shortfall[INDEX_LABEL] / total_shortfall:.1f}% of the "
+        "difference. **It is not the artifact's fixed cost** — most of it is "
+        "indexes over rows, which arrive with the rows — and a reader reaching "
+        "for 'the fixed schema-and-index cost does not scale' as the "
+        "explanation should read that number first (issue #116).",
+        "",
+        "**What this does not license.** It is an attribution at two measured "
+        "rates, not a model: no term is fitted, and every number above is a "
+        "difference between two runs that happened. A third rate is a rate "
+        "somebody has to run.",
+    ]
+
+
 def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
     """How the three retention figures move with the control rate (issue #68).
 
     The finding this section exists to make impossible to miss: the headline
-    retention figure is **linear in a parameter no document named**, and the
+    retention figure **moves with a parameter no document named**, and the
     value this simulator runs at is not the value a manipulator runs at. So the
     table is the same three levels at every measured rate, in bytes/hour, with
     the multiple between the lowest and highest **measured** rates beside them.
+
+    It moves *sublinearly*, and since issue #116 this section says why with a
+    measurement rather than with a plausible sentence: `_sublinearity_attribution`
+    puts SQLite's own per-table byte counts at every rung beside each other, and
+    the cause is read off them.
 
     Nothing is fitted. The multiple is arithmetic between two rows that were both
     run; the rates in between that were also run are printed as themselves, and a
@@ -4544,11 +4850,14 @@ def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
         "",
         "## What the control rate costs",
         "",
-        "**The retention figure is linear in a parameter that went unstated for",
+        "**The retention figure moves with a parameter that went unstated for",
         "three milestones** (issue #68). Enforcement emits one verdict and one",
         "chain record **per commanded action**, no resolution level coarsens",
         "either, and since issue #59 those records are the *majority* of the",
-        "occurrence level's rows. So every bytes/hour figure this project",
+        "occurrence level's rows. The record layer is therefore linear in the",
+        "rate; the **file is not**, and the last subsection here attributes the",
+        "difference table by table rather than asserting a cause for it (issue",
+        "#116). So every bytes/hour figure this project",
         f"publishes is a figure at **{_rate_text(BASE_CONTROL_RATE_HZ)}**, which",
         "is what `reg.scenarios.DEFAULT_DT` runs at. A real manipulator control",
         "loop runs at 1 kHz.",
@@ -4583,6 +4892,12 @@ def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
         "### The retention figure at each measured rate",
         "",
     ]
+    # The disclosure goes **above** this table and not in a footnote (issue
+    # #116). Every cell below is a `bytes/hour` figure and the last column is a
+    # ratio between two of them, so this is the shape most able to mislead: the
+    # fixed term is carried at both ends of that ratio and is a different share
+    # of the file at each.
+    lines += _bytes_per_hour_disclosure(lowest.run_seconds)
 
     lines += _table(
         (
@@ -4685,8 +5000,14 @@ def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
         "**One verdict per commanded action.** The verdict count tracks the frame",
         "count exactly, and the declaration count tracks the replan interval, which",
         "is a wall-clock period and therefore does *not* move with the rate. That",
-        "asymmetry is the mechanism: the declarations are the same records at every",
-        "rate and the verdicts are not.",
+        "asymmetry is why the *rows* grow the way they do: the declarations are the",
+        "same records at every rate and the verdicts are not. It is **not** on its",
+        "own why the bytes grow more slowly than the rate — rows are not equal in",
+        "size, and the table below is where that is measured rather than asserted.",
+        "",
+    ]
+    lines += _sublinearity_attribution(ordered, OCCURRENCE_LEVEL)
+    lines += [
         "",
         f"**Between {_rate_text(lowest.rate_hz)} and "
         f"{_rate_text(highest.rate_hz)} the occurrence level — the one",
@@ -5768,6 +6089,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"set priced, {total - priced} excluded with a stated reason",
             file=sys.stderr,
         )
+        # The console is a report shape too, and it prints the same figures the
+        # markdown does (issue #116). One line, once, above the lines that carry
+        # the figures — a caveat that only the file gets is a caveat the person
+        # reading the terminal never sees.
+        print(
+            f"resolution: {_bytes_per_hour_disclosure_line(resolution.run_seconds)}",
+            file=sys.stderr,
+        )
         for point in resolution.points:
             print(
                 f"resolution: {point.level}: {point.size_bytes} B "
@@ -5775,6 +6104,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{point.verdict}; loses {_lost_text(point)}",
                 file=sys.stderr,
             )
+    if control_rates:
+        print(
+            "control rate: "
+            + _bytes_per_hour_disclosure_line(
+                min(p.run_seconds for p in control_rates)
+            ),
+            file=sys.stderr,
+        )
     for rate_point in control_rates:
         for point in rate_point.curve.points:
             print(

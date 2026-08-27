@@ -249,7 +249,7 @@ Per robot, from the measured resolution curve:
 
 | retained at | per robot, 6 months | fleet of 100 |
 |---|---|---|
-| **occurrence (±1 s, DSSAD-shaped)** | **264 GB** | 26.4 TB |
+| **occurrence (±1 s) — 98.5% attestation records** | **264 GB** | 26.4 TB |
 | transition (10 ms) | 656 GB | 65.6 TB |
 | per-frame (10 ms) | 953 GB | 95.3 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
@@ -257,11 +257,30 @@ Per robot, from the measured resolution curve:
 Each is the measured `bytes/hour` for that level — 60.29, 149.72 and
 217.57 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
 one of those three figures is a figure at 50 Hz**, which is what
-`reg.scenarios.DEFAULT_DT` runs at, and all three are **linear in that rate**:
-enforcement emits one verdict and one chain record per commanded action and no
-resolution level coarsens them. A real manipulator control loop runs at 1 kHz.
-That is measured, not asserted — see *The control rate* below and
-[`sensor-baseline.md`](sensor-baseline.md).
+`reg.scenarios.DEFAULT_DT` runs at, and every one of them **moves with that
+rate**: enforcement emits one verdict and one chain record per commanded action
+and no resolution level coarsens them. The *record layer* is linear in the rate;
+the *file* is not, and by how much is measured below rather than assumed. A real
+manipulator control loop runs at 1 kHz. That is measured, not asserted — see
+*The control rate* below and [`sensor-baseline.md`](sensor-baseline.md).
+
+And each is an **extrapolation from a 59.98-second run** in one respect that is
+worth stating where the figure is: `bytes/hour` is `size x 3600 / run seconds`,
+so the artifact's fixed schema-and-index cost is scaled to an hour alongside its
+per-frame cost, and the hourly rate is therefore an **over**statement — by most
+at the coarsest level, where that fixed cost is the largest share of the file.
+The figures are published as measured rather than with the fixed term netted
+out, because separating the two terms means fitting `size = fixed + per-frame x
+frames` across run lengths and evaluating the fit, which is the extrapolation
+`reg.bench` refuses everywhere else. `reg.bench` now carries this sentence in
+**every** report shape that prints a `bytes/hour` figure — the resolution table,
+the control-rate ladder and the console summary — rather than in one of the
+three (issue #116).
+
+**The first row's label changed in issue #116 and its figures did not.** What
+the coarsest level actually holds, why it is no longer called *DSSAD-shaped*,
+and the two labels that were rejected instead are below, under *What the
+coarsest level actually holds*.
 
 At occurrence resolution the artifact is **~691x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
@@ -282,6 +301,55 @@ resolution the only mandated evidence recorder in existence operates at (UN R157
 DSSAD, ±1.0 s). The finer levels are weaker again: transition clears two orders
 only above ~0.36 TB/day and per-frame only above ~0.52 TB/day.
 
+#### What the coarsest level actually holds, and what it is therefore called
+
+**The first row's label was `occurrence (±1 s, DSSAD-shaped)` and it described
+1.3% of the level** (issue #116). Measured on the artifact it prices — one
+execution of the command in the blockquote above:
+
+| the coarsest level, by node row | rows | share |
+|---|---|---|
+| verdicts — one per commanded action | 3,000 | 94.8% |
+| declarations — one per replan interval | 120 | 3.8% |
+| **attestation records together**, each carrying its chain record | **3,120** | **98.5%** |
+| occurrences — the DSSAD-shaped part | 42 | 1.3% |
+| entities — an occurrence naming an entity the file does not hold is not a record of anything | 4 | 0.1% |
+| **total** | **3,166** | |
+
+A reader who took *DSSAD-shaped* at face value concluded that this is a
+DSSAD-equivalent event recorder priced at 264 GB. It is not. It is a **per-action
+attestation record** with an occurrence layer attached, and 264 GB is
+overwhelmingly the price of the attestation. Nothing in the *measurement* was
+wrong — the figure reproduces to the byte — and nothing about it moved when the
+label did.
+
+**Replacing that label is a positioning decision, not a wording fix**, so the
+alternatives and the choice are recorded here rather than settled by whichever
+phrase read best:
+
+| candidate label | what it claims this artifact is | verdict |
+|---|---|---|
+| *occurrence (±1 s, DSSAD-shaped)* | a mandated-style event recorder operating at DSSAD's quantum | **rejected.** True of 1.3% of the rows and of 100% of the reader's impression. It also claims a lineage the artifact does not have: `R157SWIN` is not implemented ([`prior-art.md` §9](prior-art.md)), so this is not a DSSAD even at the level it borrows a quantum from |
+| *occurrence (±1 s)* | a timestamp resolution, and nothing about contents | **rejected.** Accurate and empty. Silence about what the level holds is what let the first label stand for three milestones |
+| **occurrence (±1 s) — 98.5% attestation records** | a per-action attestation record whose coarsest view keeps a DSSAD-**aligned** occurrence layer | **chosen.** It states the composition, which is the thing a reader gets wrong, and it keeps the quantum's provenance where it belongs — on the quantum |
+
+**What the choice commits this project to.** That Claim 1 is a claim about
+retaining **attestation**, not about retaining events cheaply. Two consequences,
+both stated rather than left to be discovered:
+
+1. **The comparison against DSSAD is a comparison of resolution, not of
+   contents.** UN R157's DSSAD is why ±1 s is the coarsest quantum this project
+   prices (*The control rate* below, [`lossiness.md`](lossiness.md) *Level 1*);
+   it is not a claim that `reg` at this level is a DSSAD, or that a DSSAD would
+   cost 264 GB. A recorder holding this level's 42 occurrence rows and none of
+   its 3,120 records would be a far smaller file, and this project has not
+   measured one.
+2. **The lever on the 264 GB is the attestation cadence**, not the occurrence
+   vocabulary. Declaring per behaviour segment rather than per control step
+   would cut the term that dominates; it is a design change to what the artifact
+   attests, it is held open, and *The control rate* below says so again where it
+   bites hardest.
+
 #### The control rate — and it is not two orders at 1 kHz
 
 > **Measured 2026-08-21 (issue #68).** `python -m reg.bench --control-rate-hz
@@ -292,11 +360,13 @@ only above ~0.36 TB/day and per-frame only above ~0.52 TB/day.
 > comparable to it. Measured points only — nothing here is fitted or
 > extrapolated.
 
-Every retention figure in this section is a figure **at 50 Hz**, and it is
-**linear in that rate**, because enforcement emits one verdict and one chain
-record per commanded action and no resolution level coarsens them. The
+Every retention figure in this section is a figure **at 50 Hz** and every one of
+them **moves with that rate**, because enforcement emits one verdict and one
+chain record per commanded action and no resolution level coarsens them. The
 declaration count does not move with the rate at all — the policy replans on a
-wall-clock interval — so the verdicts are the whole of the growth. A real
+wall-clock interval — so the verdicts are the whole of the growth **in rows**.
+The growth in *bytes* is slower than that, and *Why the growth is sublinear*
+below is where the difference is attributed rather than asserted. A real
 manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
@@ -353,15 +423,78 @@ at a 50 Hz control rate and one at 1 kHz — the first pinned, the second a manu
 measurement at a rate above the artifact's time base
 ([`limitations.md`](limitations.md) §5).* Both are measured; which one applies
 is a property of the robot, not of this argument. The growth is **sublinear** —
-15.8x for a 20x rate increase — because the scene rows and the fixed
-schema-and-index cost do not scale with the rate; only the record layer does,
-and at 1 kHz it is 60,101 of the occurrence level's 60,572 node rows.
+15.8x for a 20x rate increase — and the record layer is what does scale: at
+1 kHz it is 60,101 of the occurrence level's 60,572 node rows, against 3,120 of
+3,166 at 50 Hz. *Why* the bytes grow more slowly than the rows is measured in
+*Why the growth is sublinear* below, and was stated wrongly here until issue
+#116.
 
 **What is not done here.** Declaring per behaviour segment rather than per
 control step would cut the term that scales, and it is the dominant lever: the
 verdict layer is essentially all of the growth. It is a design change to the
 attestation cadence, held pending its own decision, and issue #68 explicitly
 does not take it.
+
+#### Why the growth is sublinear, and why the cause given here was wrong
+
+**What this document said for three milestones:** *the scene rows and the fixed
+schema-and-index cost do not scale with the rate.* Both clauses are true. Neither
+term is anywhere near large enough to turn a 20x rate increase into 15.8x, and
+the term that is large enough was not named at all (issue #116). The 15.8x is a
+measurement and it has not moved; what follows replaces the account of it.
+
+Bytes per table, from SQLite's own `dbstat`, on the **50 Hz** rung of the ladder
+above — which is the published curve, so this attributes the very artifact
+Claim 1 prices:
+
+| table, coarsest level at 50 Hz | bytes | share of the level |
+|---|---|---|
+| `verdict` | 551,936 | 54.9% |
+| `declaration` | 185,344 | 18.5% |
+| `indexes + schema` | 129,024 | 12.8% |
+| `node` | 112,640 | 11.2% |
+| `meta` | 10,240 | 1.0% |
+| `occurrence` | 9,216 | 0.9% |
+| `entity` | 3,072 | 0.3% |
+| `envelope`, `robot_config`, `edge` — one empty page each | 3,072 | 0.3% |
+| **file** | **1,004,544** | |
+
+1. **The scene rows are 5,120 B**, 0.5% of the level: `entity`, `envelope` and
+   `robot_config` together, two of the three being a single empty page at this
+   level. Half a percent of a file cannot account for a fifth of its growth.
+2. **`indexes + schema` is not the artifact's fixed cost.** It is 129,024 B
+   here and most of it is indexes *over rows*, which arrive with the rows and
+   leave with them. The genuinely fixed part is the schema: an artifact created
+   and never written to is **26,624 B** — `reg.store.create(path,
+   record_tables=True)`, ten tables and their indexes at `reg.store.PAGE_SIZE` —
+   which is 2.6% of this level.
+3. **The mass the control rate does not move is the `declaration` table**, at
+   185,344 B and 18.5% of the level. The fixture's policy replans on a
+   **wall-clock** interval, so it emits the same 120 declarations at every rung
+   of the ladder — `tests/test_bench.py` asserts exactly that, because a
+   declaration count that started tracking the frame clock would invalidate the
+   study — and a declaration row is fat: ~1,545 B against a verdict row's
+   ~184 B, because it carries the declared region as a polygon. Twenty times the
+   control rate buys twenty times the verdicts and **no** further declarations.
+   An 18.5% share at 50 Hz is a share of about 1% at 1 kHz, and that dilution is
+   where the difference between 20x and 15.8x goes.
+
+**The two terms this document named come to 31,744 B, 3.2% of the level; the
+term it did not name is 185,344 B, 18.5%.** The stated cause is smaller than the
+one that carries the effect by a factor of **5.8**. Issue #116 estimated the miss
+at ~15x, reading it off *row* counts; measured in bytes it is 5.8x against the
+term that actually carries it. Same direction, same conclusion, and now an
+arithmetic anybody can re-run.
+
+**And it is no longer this document's job to be right about it.** `reg.bench`
+prints the whole attribution at **every** rung of any ladder it is asked for,
+and an exact identity over it — what each table would hold had it grown with the
+rate, minus what it holds, summing to the difference with no remainder — under
+*Where the `occurrence` bytes are, and which of them the rate moves*. The cause
+is read off a column instead of being asserted in prose. On a SQLite build
+without `dbstat` the report states that the cause **could not be established**
+and substitutes nothing for it, which is the failure mode this subsection is
+repairing, made unavailable.
 
 **And the finer levels stop answering before they stop being affordable.** At
 250 Hz and 1 kHz the transition and per-frame levels return `DISAGREE` on

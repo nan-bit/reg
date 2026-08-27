@@ -364,7 +364,19 @@ still answers the supported questions within the tolerances above. The fine laye
 is not deleted to make the coarse number better — a single coarse artifact would
 not be a measurement.
 
-### Level 1 — occurrence (DSSAD-aligned, ±1.0 s by default)
+### Level 1 — occurrence (±1.0 s by default; a DSSAD-aligned *quantum*, not a DSSAD)
+
+**Read the second `Retains` below before pricing this level.** The heading used
+to read *occurrence (DSSAD-aligned, ±1.0 s by default)* and the retention table
+in [`plan.md`](plan.md) Claim 1 used to call the level *DSSAD-shaped*. What is
+DSSAD-aligned is the **timestamp quantum** and the occurrence vocabulary that
+sits at it; measured on the published fixture, that part is 42 of the level's
+3,166 node rows, and the record layer — which no level coarsens — is 3,120 of
+them. Level 1 is an attestation record whose event layer is DSSAD-aligned, and
+not an event log with some attestation attached. The positioning decision, its
+two rejected alternatives and what it commits the project to are recorded in
+[`plan.md`](plan.md) Claim 1, *What the coarsest level actually holds*
+(issue #116).
 
 **Retains.** One row per semantically material event, from a fixed vocabulary
 (`reg.store.OCCURRENCE_SPECS`): `run_began`, `run_ended`, `envelope_entered`,
@@ -382,6 +394,19 @@ nothing in this prototype has a policy version to bind (issue #109,
 provenance stay, because an occurrence naming an entity the file does not contain
 is not a record of anything. The rule itself is written into `meta` under
 `occurrence_retention`.
+
+**Retains — and this is the larger half of the level.** Every `Declaration`,
+every `Verdict` and the chain record each of them carries survives here **in
+full**: no resolution level coarsens a record, which is what issue #59
+established and what the byte counts have reflected since. Coarsening the
+timestamps coarsens the *event* layer and leaves the *attestation* layer exactly
+where it was. On the published fixture — `long_run` at 3,000 frames, 50 Hz,
+`python -m reg.bench --resolution --seed 0` — that is 3,000 verdicts and 120
+declarations against 42 occurrences and 4 entities: **98.5% of the level's node
+rows are records**. What a reader buys at ±1.0 s is the attestation stream at
+full per-action density, with an event layer at DSSAD's quantum beside it; what
+they do not buy is a cheap event log, and the price of the level is dominated by
+the half of it this paragraph describes rather than the half above.
 
 **Discards.** Every interval, every metric between events, every timestamp digit
 finer than the stated resolution, and the order of two events inside one quantum.

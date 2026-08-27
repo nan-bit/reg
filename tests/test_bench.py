@@ -1742,6 +1742,11 @@ def _level(level: str, **overrides) -> bench.ResolutionPoint:
             bench.LevelCheck(query=q.name, verdict=AGREE, detail="0.1 vs 0.1")
             for q in bench.RESOLUTION_QUERIES
         ),
+        # `None` unless a test overrides it: the render tests are about the
+        # *shape* of the report, and a hand-written byte attribution here would
+        # be a made-up measurement in every one of them. The shapes that use it
+        # take it explicitly (issue #116).
+        "tables": None,
     }
     fields.update(overrides)
     return bench.ResolutionPoint(**fields)  # type: ignore[arg-type]
@@ -2808,7 +2813,10 @@ def test_the_resolution_table_states_the_control_rate_it_was_measured_at(
     report = render([], sensor_multiplier=None, resolution=curve, **_RENDER_ARGS)
     assert "control rate" in report
     assert bench._rate_text(1.0 / curve.frame_period_s) in report
-    assert "linear in this" in report
+    # "moves with this", not "linear in this": the record layer is linear in the
+    # rate and the file is not, and the ladder measures the gap (issue #116).
+    assert "moves with this" in report
+    assert "linear in this" not in report
 
 
 def test_a_ladder_with_one_point_is_not_a_section(rate_ladder) -> None:
@@ -3389,3 +3397,305 @@ def test_nothing_in_the_benchmark_reads_results_in_completion_order() -> None:
         "rule 2). Results go back to their submission index before anything "
         "renders them."
     )
+
+
+# ==========================================================================
+# `bytes/hour` EXTRAPOLATES A SHORT RUN, AND EVERY SHAPE THAT PRINTS IT HAS TO
+# SAY SO (issue #116).
+#
+# `bytes_per_hour` is `size * 3600 / run_seconds`, so the artifact's fixed
+# schema-and-index cost is scaled to an hour alongside its per-frame cost. The
+# resolution table disclosed that; the control-rate ladder — whose most-quoted
+# number is a *ratio* between two of these figures, with the fixed term carried
+# at both ends and a different share of the file at each — did not, and neither
+# did the console summary. One disclosure travelling with one rendering of a
+# number is a disclosure a reader can be shown the number without.
+#
+# The check is over this module's own AST rather than over a rendered report,
+# because a rendered report only exercises the shapes a test happened to build.
+# The shape added next milestone is inside this check on the day it is written.
+# ==========================================================================
+
+#: The one function that turns a figure into text. Everything that prints a
+#: `bytes/hour` figure goes through it, which is what makes "every shape" a
+#: question the AST can answer.
+_FIGURE_RENDERER = "_bytes_per_hour_text"
+
+#: The constant carrying the disclosure. A shape is compliant if it names this,
+#: or calls a helper that does.
+_DISCLOSURE = "BYTES_PER_HOUR_EXTRAPOLATION"
+
+
+def _names_used(node: ast.AST) -> set[str]:
+    """Every identifier mentioned anywhere inside `node`."""
+    return {
+        child.id if isinstance(child, ast.Name) else child.attr
+        for child in ast.walk(node)
+        if isinstance(child, (ast.Name, ast.Attribute))
+    }
+
+
+def bytes_per_hour_disclosure_verdict(source: str) -> tuple[str, list[str]]:
+    """Verdict on whether every shape printing `bytes/hour` discloses what it is.
+
+    A **shape** is a top-level function whose body renders a `bytes/hour` figure.
+    It is compliant if it names `BYTES_PER_HOUR_EXTRAPOLATION` itself or calls a
+    function that does — one level of indirection, which is what lets the two
+    disclosure helpers exist without every caller restating the sentence.
+
+    Three-valued, and the third is not a pass: a source with nothing that prints
+    the figure comes back `COULD-NOT-EVALUATE`, because renaming the renderer is
+    otherwise a way to make this check find nothing and go green.
+
+    Returns the verdict and the names of the offending shapes.
+    """
+    tree = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    disclosing = {
+        name
+        for name, node in functions.items()
+        if _DISCLOSURE in _names_used(node)
+    }
+    shapes = {
+        name: node
+        for name, node in functions.items()
+        if _FIGURE_RENDERER in _names_used(node) and name != _FIGURE_RENDERER
+    }
+    if not shapes:
+        return COULD_NOT_EVALUATE, []
+    missing = sorted(
+        name
+        for name, node in shapes.items()
+        if not (_names_used(node) & (disclosing | {_DISCLOSURE}))
+    )
+    return (DISAGREE if missing else AGREE), missing
+
+
+#: The report shapes that print a `bytes/hour` figure today. Pinned for the
+#: reason every roster in this repository is pinned: the check above is
+#: satisfied by a source with no shapes in it, so on its own it would go green
+#: if the figure stopped being published at all. A gain is fine and belongs
+#: here once it discloses; a loss means a publication site disappeared.
+BYTES_PER_HOUR_SHAPES = frozenset(
+    {"_resolution_section", "_control_rate_section", "main"}
+)
+
+
+def test_every_report_shape_that_prints_bytes_per_hour_discloses_the_extrapolation() -> None:
+    """**THE TEST THIS HALF OF ISSUE #116 EXISTS FOR.**"""
+    source = Path(bench.__file__).read_text(encoding="utf-8")
+    verdict, missing = bytes_per_hour_disclosure_verdict(source)
+    assert verdict == AGREE, (
+        f"reg.bench renders a bytes/hour figure in {missing} without naming "
+        f"{_DISCLOSURE}. That figure scales the artifact's fixed "
+        "schema-and-index cost to an hour along with its per-frame cost; a "
+        "shape that prints it without saying so publishes an extrapolation as "
+        "a measurement (issue #116)."
+    )
+
+
+def test_the_shapes_that_print_the_figure_are_the_ones_expected() -> None:
+    """Silence is not a pass at the corpus level either."""
+    source = Path(bench.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    shapes = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and _FIGURE_RENDERER in _names_used(node)
+        and node.name != _FIGURE_RENDERER
+    }
+    assert shapes == set(BYTES_PER_HOUR_SHAPES), (
+        "the set of report shapes printing a bytes/hour figure has moved: "
+        f"gained {sorted(shapes - BYTES_PER_HOUR_SHAPES)}, lost "
+        f"{sorted(BYTES_PER_HOUR_SHAPES - shapes)}. A gain needs adding here "
+        "and needs to carry the disclosure; a loss means the figure is no "
+        "longer published where the check above expects it."
+    )
+
+
+def test_a_shape_that_prints_the_figure_with_no_disclosure_is_caught() -> None:
+    """**The negative test.** The exact shape issue #116 was filed about: a
+    figure printed, correctly, with nothing saying what it extrapolates."""
+    verdict, missing = bytes_per_hour_disclosure_verdict(
+        "def _some_new_section(point):\n"
+        "    return [_bytes_per_hour_text(point.bytes_per_hour)]\n"
+    )
+    assert verdict == DISAGREE
+    assert missing == ["_some_new_section"]
+
+
+def test_a_source_that_prints_no_figure_is_not_a_pass() -> None:
+    """Renaming the renderer must not be a way to go green."""
+    verdict, missing = bytes_per_hour_disclosure_verdict(
+        "def _some_new_section(point):\n    return [str(point.size_bytes)]\n"
+    )
+    assert verdict == COULD_NOT_EVALUATE
+    assert missing == []
+
+
+def test_the_disclosure_line_says_the_same_thing_as_the_markdown() -> None:
+    """The console shape renders the constant rather than restating it, so the
+    two cannot drift into saying different things about one number."""
+    line = bench._bytes_per_hour_disclosure_line(59.98)
+    assert "extrapolates" in line and "overstates" in line
+    assert "59.98 s" in line
+    assert "*" not in line and "`" not in line, (
+        "the console disclosure carries markdown emphasis; it is printed to a "
+        "terminal, not rendered."
+    )
+
+
+def test_the_control_rate_ladder_discloses_the_extrapolation(rate_ladder) -> None:
+    """The shape that was missing it, in a rendered report."""
+    report = render([], sensor_multiplier=None, control_rates=rate_ladder, **_RENDER_ARGS)
+    section = report.split("## What the control rate costs", 1)[1]
+    assert "extrapolates a run shorter than an hour" in section
+    assert f"{rate_ladder[0].run_seconds:,.2f} s" in section
+
+
+# ==========================================================================
+# WHY THE BYTES GROW MORE SLOWLY THAN THE RATE (issue #116).
+#
+# The ladder's most-quoted result is that the occurrence level costs ~15.8x as
+# much per robot-hour for a 20x rate increase, and the cause published beside it
+# was a term far too small to produce it. The repair is not a better sentence:
+# it is `dbstat`, per table, at each rung, and the arithmetic that follows.
+# ==========================================================================
+
+
+def _has_dbstat(ladder) -> bool:
+    return all(
+        point.level(level).tables is not None
+        for point in ladder
+        for level in bench.RESOLUTION_LEVELS
+    )
+
+
+def test_every_level_carries_its_own_byte_attribution(rate_ladder) -> None:
+    """The measurement exists, per level, and sums to the file it describes.
+
+    `dbstat`'s per-table bytes sum to the file size less its free pages, so the
+    attribution is an attribution rather than a sample: it may be smaller than
+    the file and may never be larger.
+    """
+    if not _has_dbstat(rate_ladder):
+        pytest.skip("this SQLite build has no dbstat virtual table")
+    for point in rate_ladder:
+        for level in bench.RESOLUTION_LEVELS:
+            tables = point.level(level).tables
+            assert set(tables) <= {*bench._TABLE_LABELS, bench.INDEX_LABEL}
+            attributed = sum(tables.values())
+            assert 0 < attributed <= point.level(level).size_bytes
+
+
+def test_the_report_attributes_the_sublinearity_rather_than_asserting_it(
+    rate_ladder,
+) -> None:
+    """**THE TEST THE OTHER HALF OF ISSUE #116 EXISTS FOR.**
+
+    The section must name the tables the rate does not move, in bytes, and the
+    ratio the rest grew by. Asserted as shape and as arithmetic — the fixture's
+    two rates are 30 frames apart and which tables happen to freeze there is not
+    a property worth pinning.
+    """
+    if not _has_dbstat(rate_ladder):
+        pytest.skip("this SQLite build has no dbstat virtual table")
+    report = render([], sensor_multiplier=None, control_rates=rate_ladder, **_RENDER_ARGS)
+    section = report.split("#### Where the `occurrence` bytes are", 1)[1]
+    assert "Could not be attributed" not in section
+    assert "share of the shortfall" in section
+    assert "is an identity, not a model" in section
+    assert f"`{bench.INDEX_LABEL}`" in section
+
+
+def test_without_dbstat_the_cause_is_a_could_not_evaluate_and_not_a_story(
+    rate_ladder,
+) -> None:
+    """**The negative test.** Feed it the condition it guards against: an
+    artifact whose bytes cannot be attributed. The section must say the cause
+    is not established, and must not fall back to the plausible one."""
+    blinded = tuple(
+        dataclasses.replace(
+            point,
+            curve=dataclasses.replace(
+                point.curve,
+                points=tuple(
+                    dataclasses.replace(level_point, tables=None)
+                    for level_point in point.curve.points
+                ),
+            ),
+        )
+        for point in rate_ladder
+    )
+    report = render([], sensor_multiplier=None, control_rates=blinded, **_RENDER_ARGS)
+    section = report.split("#### Where the `occurrence` bytes are", 1)[1]
+    assert "Could not be attributed" in section
+    assert "the cause of the sublinearity is not stated in this report" in section
+    assert "share of the shortfall" not in section
+
+
+def test_the_shortfall_is_an_identity_on_a_hand_worked_example() -> None:
+    """The arithmetic, on numbers a reader can check by eye.
+
+    Two tables, a 10x rate increase, one table that grew with the rate and one
+    that did not move at all. The entries sum to the total by construction and
+    that is the property: a decomposition with a remainder would let the largest
+    contributor be whatever the remainder was hiding.
+    """
+    per_table, total = bench.sublinearity_shortfall(
+        {"scales": 100, "does not": 100}, {"scales": 1_000, "does not": 100}, 10.0
+    )
+    assert per_table == {"scales": 0.0, "does not": 900.0}
+    assert total == pytest.approx(900.0)
+    assert sum(per_table.values()) == pytest.approx(total)
+
+
+def test_a_table_that_grew_faster_than_the_rate_is_a_negative_contribution() -> None:
+    """Sublinearity is not assumed. A table that outgrew the rate reduces the
+    gap rather than being clipped to zero, and a whole artifact that outgrew it
+    comes back with a non-positive total."""
+    per_table, total = bench.sublinearity_shortfall(
+        {"greedy": 100}, {"greedy": 3_000}, 10.0
+    )
+    assert per_table["greedy"] == pytest.approx(-2_000.0)
+    assert total == pytest.approx(-2_000.0)
+
+
+def test_the_shortfall_refuses_a_multiple_that_is_not_one() -> None:
+    """A ratio against a non-positive multiple is not a quantity."""
+    for bad in (0.0, -2.0, float("nan"), float("inf")):
+        with pytest.raises(BenchError, match="rate multiple"):
+            bench.sublinearity_shortfall({"a": 1}, {"a": 2}, bad)
+
+
+def test_an_artifact_that_outgrew_the_rate_reports_no_shortfall(rate_ladder) -> None:
+    """**The other negative test.** The section must not narrate a sublinearity
+    that is not in the numbers: feed it a high-rate artifact that grew faster
+    than the rate and it has to say there is nothing to attribute."""
+    if not _has_dbstat(rate_ladder):
+        pytest.skip("this SQLite build has no dbstat virtual table")
+    inflated = list(rate_ladder)
+    high = inflated[-1]
+    inflated[-1] = dataclasses.replace(
+        high,
+        curve=dataclasses.replace(
+            high.curve,
+            points=tuple(
+                dataclasses.replace(
+                    p, tables={k: v * 10_000 for k, v in p.tables.items()}
+                )
+                for p in high.curve.points
+            ),
+        ),
+    )
+    report = render(
+        [], sensor_multiplier=None, control_rates=tuple(inflated), **_RENDER_ARGS
+    )
+    section = report.split("#### Where the `occurrence` bytes are", 1)[1]
+    assert "There is no shortfall to attribute" in section
+    assert "share of the shortfall" not in section

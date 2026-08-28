@@ -1351,18 +1351,12 @@ black-channel pattern buys.
 ### Repo
 
 - `README.md` — thesis in 3 paragraphs, four claims, headline compression number,
-  the incident report output, one GIF, how to run
+  the incident report output, how to run
 - `docs/standards.md` — the baseline table above, with the two deliberate deviations
 - `docs/lossiness.md`
 - `docs/sufficiency.md`
 - `docs/limitations.md` — inner-approximation sampling, 2D only, ground-truth
   perception, no dynamics, scripted policy, both keys in one process
-
-### GIF
-
-Robot moving, computed envelope overlaid, declared envelope in a second color,
-human entering and leaving, and a visible CLAMP event where the two envelopes
-diverge. That single image is the whole argument.
 
 ### For ernan.dev
 
@@ -1388,7 +1382,7 @@ Lead paragraph, roughly:
 > retention window and self-contained enough to check with no service still
 > running.
 
-Then: the headline compression number. The incident report block. The GIF. Link to
+Then: the headline compression number. The incident report block. Link to
 repo. A short "what this doesn't do" section — that one earns more credibility than
 anything else on the page.
 

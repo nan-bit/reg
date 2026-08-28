@@ -1,8 +1,8 @@
 """Single-frame rendering: the robot, its computed envelope, and the scene.
 
-This is the still frame the Phase 10 GIF is built from (docs/plan.md: "that
-single image is the whole argument"). Static matplotlib only — no UI, no
-animation, no interactivity, and none should arrive here.
+This is where the visual argument stops: Phase 10's animated version is
+descoped, and the still frame is the deliverable. Static matplotlib only — no UI,
+no animation, no interactivity, and none should arrive here.
 
 THE RENDERING CONVENTION, AND WHY IT IS NOT COSMETIC
 ---------------------------------------------------

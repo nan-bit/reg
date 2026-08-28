@@ -302,10 +302,10 @@ the `Declaration` record and the scripted policy that emits it
 can fail, and the query API in full (`reg/query.py`): the four scene questions,
 the four attestation questions, and `incident_report()` above them.
 
-**Not built.** The write-up — [`docs/plan.md`](docs/plan.md) Phase 10. It is
-drafted and lives outside this repository. The GIF that phase also listed is
-**descoped** rather than pending; `reg/viz.py` renders the still frame and that is
-where the visual argument stops.
+**Published.** The write-up — [`docs/plan.md`](docs/plan.md) Phase 10 — is at
+[ernan.dev/projects/reg](https://ernan.dev/projects/reg). The GIF that phase also
+listed is **descoped** rather than pending; `reg/viz.py` renders the still frame and
+that is where the visual argument stops, so nothing in Phase 10 is outstanding.
 
 Nothing on this page is illustrated by a placeholder. A plausible one would be
 indistinguishable from a measured result to every later reader, and that

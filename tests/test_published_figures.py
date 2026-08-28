@@ -24,7 +24,7 @@ schema, the envelope parameters and the float precision, and which no document
 quotes as a fact.
 
 The three retention figures are the other case. `docs/plan.md` Claim 1 quotes
-them as a purchasing decision (263 GB per robot per six months),
+them as a purchasing decision (264 GB per robot per six months),
 `docs/sufficiency.md` prices its question set against them and
 `docs/sensor-baseline.md` derives a sensitivity table from them. **A figure whose
 entire claim is that it is reproducible is a figure for which the pin is the

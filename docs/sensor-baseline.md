@@ -129,14 +129,14 @@ are where.
 | sensor rate | log at 6 months | vs occurrence (264 GB) | vs transition (656 GB) | vs per-frame (953 GB) |
 |---|---|---|---|---|
 | 0.1 TB/day | 18.2 TB | 69x | 28x | 19x |
-| 0.5 TB/day | 91.2 TB | 347x | 139x | 96x |
+| 0.5 TB/day | 91.2 TB | 346x | 139x | 96x |
 | **1 TB/day (published)** | **182.5 TB** | **691x** | **278x** | **192x** |
-| 5 TB/day | 912.5 TB | 3,470x | 1,394x | 959x |
-| 21.3 TB/day (cited max) | 3,887 TB | 14,780x | 5,938x | 4,084x |
+| 5 TB/day | 912.5 TB | 3,456x | 1,391x | 958x |
+| 21.3 TB/day (cited max) | 3,887 TB | 14,724x | 5,926x | 4,079x |
 
 **What survives the whole range and what does not.** The crossovers are
 **derived, not measured** — `threshold_TB_per_day = size_GB * 10^orders / 1000 /
-182.5`, so occurrence at two orders is `263 * 100 / 1000 / 182.5 = 0.144` — and
+182.5`, so occurrence at two orders is `264 * 100 / 1000 / 182.5 = 0.145` — and
 they are recomputed from the sizes above rather than carried over:
 
 | level | clears 2 orders above | clears 3 orders above |

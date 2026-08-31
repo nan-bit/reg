@@ -18,8 +18,15 @@ pip install -e ".[dev]"
 pytest                      # the whole suite; CI runs exactly this
 ```
 
-Layout: `reg/` is the package, `tests/` mirrors it, `docs/` holds the argument,
-`runs/` and `bench/` hold generated output and are not committed.
+Layout: `reg/` is the package, `docs/` holds the argument, `runs/` and `bench/`
+hold generated output and are not committed. `tests/` mirrors `reg/` — a new
+module gets `tests/test_<module>.py` — with four named exceptions: `sim.py`,
+`store.py`, `types.py` and `world.py` are verified through the tests of their
+consumers rather than through a mirrored file, because for those a mirrored file
+would say less about where they are actually checked, not more.
+`tests/test_layout.py` holds that list, says where each one is verified, and
+fails if a module appears with neither a mirrored test nor an entry. It is not a
+place to park a new module.
 
 **Do not add dependencies.** Only `shapely` is load-bearing — polygon union and
 intersection is the actual math. No `networkx`, no `pyarrow`, no PyBullet, no

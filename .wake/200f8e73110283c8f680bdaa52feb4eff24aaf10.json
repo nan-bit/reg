@@ -1,0 +1,77 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "132-unknown",
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "eaf289cefe596c5e8df2b1ec2f74ec429cefdf5a20bef552bf8e37dc2366b16f",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "960f19c63a08d9879833efb15609aaed20813014e4293cd54146a1017a1af791",
+        "concluded": "23c8c35b78ef599fd0168364d8e68e0a6aadefcaf3ca6e658a2965dcee55b954",
+        "coverage": "dd4ee88ff40d66e55c9c8eba6ab1a21fde3c8156af02412c2c0e6d5c98faddfa",
+        "declared": "c3b415be4aa0039277d8b65906f7975261b9050b7ac4acc676d6ba85a648ef06",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "dbb1ded63bc70732626c5dfe6c7f50ced3d560e970f30b15335ac290358748f6",
+        "out_of_scope": "ffd1b4abc1152ec2e2472cdd94566fd33f6a1131a19e9dadd4395f6303a5e7cf",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676"
+      },
+      "head": "b603c673eb6ec97726924b594b22199c3c85ef040e5e9bf8a2271bbf43151371",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "200f8e73110283c8f680bdaa52feb4eff24aaf10",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "CLAUDE.md",
+        "tests/test_harness_pointer.py"
+      ],
+      "edge_kinds": [
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "CLAUDE.md",
+        "tests/test_harness_pointer.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 47
+      },
+      "changed_unreadable": [
+        "CLAUDE.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 1
+      },
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [
+        "CLAUDE.md"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 132,
+    "out_of_scope": [
+      "tests/test_harness_pointer.py"
+    ],
+    "prev": [],
+    "verdict": "out-of-scope"
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "200f8e73110283c8f680bdaa52feb4eff24aaf10"
+      },
+      "name": "auto/issue-132"
+    }
+  ]
+}

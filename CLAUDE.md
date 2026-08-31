@@ -130,7 +130,18 @@ When a phase's success criterion is met, stop; do not gold-plate.
 
 ## How the runner works
 
-See [`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner) — the harness
-lives in its own repo and is installed on the worker host, not vendored here. This
-repo's only harness-facing files are `.runner.conf` and
-`.github/workflows/epic-advance.yml`.
+See [`nan-bit/wake-runner`](https://github.com/nan-bit/wake-runner) — the harness
+lives in its own repo and is installed on the worker host, not vendored here. It
+is what writes unattended changes in this repository, and `.runner.conf` pins the
+version of it that does.
+[`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner) is the archived
+predecessor: older commit messages and issues here name it, and none of them mean
+the harness running now.
+
+This repo's only harness-facing files are `.runner.conf` and
+`.github/workflows/epic-advance.yml`. `.wake/` is not a third one — it is not
+configuration at all, but output: the harness writes a record of each attempt
+there, on the branch that attempt is working on. Do not hand-edit those records
+and do not delete them, including the ones left by an earlier attempt at the
+issue you are on. What a record holds is wake-runner's to document; this file
+saying it too is how the two drift apart.

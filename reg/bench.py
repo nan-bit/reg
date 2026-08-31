@@ -931,6 +931,73 @@ def agreement(
     return AGREE if abs(graph_answer - csv_answer) <= tolerance else DISAGREE
 
 
+@dataclass(frozen=True)
+class ColumnRule:
+    """One rule of the stream-column classifier: a name, a layer, and a reason.
+
+    `pattern` is matched against the whole column name (`re.fullmatch`), so
+    `q_\\d+` classifies `q_0` and refuses `q_base` rather than absorbing it.
+    """
+
+    pattern: str
+    layer: str
+    what: str
+
+    def matches(self, column: str) -> bool:
+        return re.fullmatch(self.pattern, column) is not None
+
+
+#: The whole rule set, in one place and as data (issue #137). Adding a column to
+#: `reg.stream.expected_header` means adding a rule here; it does not mean
+#: editing a predicate, and it cannot mean doing nothing.
+#:
+#: This list is the classifier's entire vocabulary and every column of a stream
+#: must be in it. Until issue #137 the classifier was `c == "t" or
+#: c.startswith(("q_", "qd_"))` and everything else fell through to Layer B *by
+#: omission* — so there was no column it could not classify, because the default
+#: was itself a classification. A column nobody had thought about (a mobile
+#: base's pose is the live case) would have been counted as though it described
+#: the world, moving the Layer A / Layer B split that Claim 1's like-for-like
+#: comparison is computed over, and nothing would have gone red because the
+#: function still returned an answer.
+COLUMN_RULES: tuple[ColumnRule, ...] = (
+    ColumnRule(r"t", LAYER_A, "the time base"),
+    ColumnRule(r"q_\d+", LAYER_A, "a joint angle"),
+    ColumnRule(r"qd_\d+", LAYER_A, "a joint velocity"),
+    ColumnRule(
+        r"human_(?:x|y|vx|vy)",
+        LAYER_B,
+        "the human's ground-truth pose or velocity",
+    ),
+    ColumnRule(
+        r"obs_\d+_(?:id|kind|x|y|r)",
+        LAYER_B,
+        "an obstacle's identity, kind or pose",
+    ),
+)
+
+
+def column_layer(column: str) -> str:
+    """`LAYER_A` or `LAYER_B` for one stream column, or a refusal.
+
+    The refusal is the third state. A classifier whose fall-through is a class
+    has no could-not-evaluate, and a column it has never seen would be counted
+    as Layer B with the same confidence as one it has a rule for.
+    """
+    for rule in COLUMN_RULES:
+        if rule.matches(column):
+            return rule.layer
+    raise BenchError(
+        f"stream column {column!r} matches no rule in "
+        f"reg.bench.COLUMN_RULES, so which side of the Layer A / Layer B "
+        "boundary it falls on is not known. It is not assumed to describe the "
+        "world: the split is what the incumbent comparison is computed over, "
+        "and a wrong split is a figure nothing goes red about. Add a rule "
+        f"naming the layer. Known patterns: "
+        f"{[rule.pattern for rule in COLUMN_RULES]}."
+    )
+
+
 def proprioceptive_columns(header: Sequence[str]) -> list[str]:
     """`t` and the per-joint `q`/`qd` columns, in header order.
 
@@ -938,8 +1005,29 @@ def proprioceptive_columns(header: Sequence[str]) -> list[str]:
     every obstacle's pose — and none of it is proprioception. Naming the subset
     explicitly is what keeps the incumbent comparison like-for-like on both
     sides; see `docs/sensor-baseline.md`, *The Layer B asymmetry*.
+
+    Every column of `header` must match a rule in `COLUMN_RULES`; one that does
+    not is refused by name rather than counted as Layer B by omission. See
+    `column_layer`.
     """
-    return [c for c in header if c == "t" or c.startswith(("q_", "qd_"))]
+    unknown = [
+        column
+        for column in header
+        if not any(rule.matches(column) for rule in COLUMN_RULES)
+    ]
+    if unknown:
+        # Named all at once rather than one exception per column: a schema that
+        # grew usually grew by a block, and reporting the first of five sends
+        # someone round the loop five times.
+        raise BenchError(
+            f"header carries {len(unknown)} column(s) with no rule in "
+            f"reg.bench.COLUMN_RULES: {unknown}. The Layer A / Layer B split "
+            "of this header cannot be computed, and it is not computed as if "
+            "they were Layer B — that would move the column split Claim 1's "
+            "comparison is measured over without anything saying so. Add a "
+            f"rule naming the layer of each. Header: {list(header)!r}"
+        )
+    return [c for c in header if column_layer(c) == LAYER_A]
 
 
 def mcap_joint_states_bytes(path: str | Path) -> int:

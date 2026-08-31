@@ -53,6 +53,7 @@ from shapely.ops import unary_union
 from reg import bench, graph, query, scenarios, store
 from reg.bench import (
     AGREE,
+    COLUMN_RULES,
     COULD_NOT_EVALUATE,
     DISAGREE,
     MET,
@@ -65,10 +66,12 @@ from reg.bench import (
     Timing,
     agreement,
     claim_verdict,
+    column_layer,
     compression_ratio,
     crossover,
     gzip_bytes,
     min_separation_from_graph,
+    proprioceptive_columns,
     render,
     run_scaling_point,
     run_scenario,
@@ -77,6 +80,7 @@ from reg.bench import (
 from reg.envelope import compute_envelope
 from reg.kinematics import link_polygons
 from reg.scenarios import SCENARIOS, long_run, scenario
+from reg.stream import expected_header
 from reg.tolerances import DISTANCE_TOL_M, simplify_geometry
 
 #: Coarse but legal: 4 samples is exactly the corner count for the two-link demo
@@ -277,6 +281,119 @@ def test_gzipping_an_empty_file_is_refused(tmp_path: Path) -> None:
     empty.write_bytes(b"")
     with pytest.raises(BenchError, match="empty"):
         gzip_bytes(empty)
+
+
+# --------------------------------------------------------------------------
+# The Layer A / Layer B column split, and the column it has no rule for.
+#
+# `proprioceptive_columns` decides which columns of the raw stream the incumbent
+# comparison is priced over. Before issue #137 its rule was `c == "t" or
+# c.startswith(("q_", "qd_"))` and every other column fell through to Layer B —
+# so there was no header it could refuse, because the fall-through *was* a
+# classification. These tests are in two halves: the split it computes today
+# does not move, and a column it has no rule for is refused by name.
+# --------------------------------------------------------------------------
+
+#: The fixture Claim 1's published figures are priced on: two joints, three
+#: obstacles, 24 columns, five of them proprioceptive.
+PRICED_HEADER = expected_header(2, 3)
+
+
+def test_every_column_of_the_priced_header_is_classifiable() -> None:
+    """The 24 columns of the priced fixture all have a rule, so no published
+    figure moves. If this fails the rule set lost a rule, not the schema."""
+    assert len(PRICED_HEADER) == 24
+    for column in PRICED_HEADER:
+        assert column_layer(column) in {query.LAYER_A, query.LAYER_B}
+
+
+def test_the_split_is_the_one_the_published_figures_were_measured_over() -> None:
+    """Five proprioceptive columns, 19 Layer B, in header order — the split
+    `docs/sensor-baseline.md` and the README quote. The rule set replaced a
+    predicate; it must not have replaced the answer."""
+    prop = proprioceptive_columns(PRICED_HEADER)
+    assert prop == ["t", "q_0", "q_1", "qd_0", "qd_1"]
+    assert len([c for c in PRICED_HEADER if c not in prop]) == 19
+
+
+@pytest.mark.parametrize(
+    ("n_joints", "n_obstacles"), [(0, 0), (1, 0), (2, 3), (6, 1), (7, 12)]
+)
+def test_the_rule_set_covers_the_schema_at_every_shape(
+    n_joints: int, n_obstacles: int
+) -> None:
+    """The rule set is checked against `reg.stream.expected_header` rather than
+    against a copy of it, so a column added to the schema fails here — which is
+    the whole point of the refusal being possible at all."""
+    header = expected_header(n_joints, n_obstacles)
+    prop = proprioceptive_columns(header)
+    assert len(prop) == 1 + 2 * n_joints
+    assert set(prop) <= set(header)
+
+
+def test_each_column_is_matched_by_exactly_one_rule() -> None:
+    """Two rules matching one column would make the answer depend on their order
+    in the tuple, which is not a property anyone editing the data would check."""
+    for column in expected_header(3, 2):
+        matched = [rule for rule in COLUMN_RULES if rule.matches(column)]
+        assert len(matched) == 1, f"{column!r} matched {len(matched)} rules"
+
+
+def test_every_rule_names_a_layer_and_says_what_the_column_is() -> None:
+    """The rule set is data, so the data has to be well-formed: a rule with an
+    empty `what` is a rule nobody can review."""
+    assert COLUMN_RULES
+    for rule in COLUMN_RULES:
+        assert rule.layer in {query.LAYER_A, query.LAYER_B}
+        assert rule.what.strip()
+
+
+# --- the negative half: a column with no rule -------------------------------
+
+
+def test_a_header_with_an_unknown_column_is_refused() -> None:
+    """**The negative test.** A mobile base's pose column is neither `q_` nor
+    `qd_`; under the old predicate it was counted as Layer B, silently moving
+    the split Claim 1's comparison is computed over."""
+    header = ["t", "q_0", "qd_0", "base_x", "human_x", "human_y", "human_vx", "human_vy"]
+    with pytest.raises(BenchError, match="base_x"):
+        proprioceptive_columns(header)
+
+
+def test_the_refusal_does_not_resolve_to_layer_b() -> None:
+    """The old behaviour is the thing being ruled out, so assert it directly:
+    the unknown column must not come back as a Layer B answer."""
+    with pytest.raises(BenchError):
+        proprioceptive_columns(["t", "odom_theta"])
+    with pytest.raises(BenchError, match="odom_theta"):
+        column_layer("odom_theta")
+
+
+def test_every_unknown_column_is_named_not_only_the_first() -> None:
+    """A schema usually grows by a block. Naming one of five sends whoever is
+    adding the rules round the loop five times."""
+    with pytest.raises(BenchError) as excinfo:
+        proprioceptive_columns(["t", "base_x", "base_y", "base_theta"])
+    message = str(excinfo.value)
+    for column in ("base_x", "base_y", "base_theta"):
+        assert column in message
+
+
+def test_a_prefix_of_a_known_column_is_not_absorbed_by_it() -> None:
+    """`q_base` is not a joint angle. The rules are full matches, because a
+    `startswith` rule counts anything beginning `q_` as proprioception — which
+    is the shape of the defect being fixed, one rule further in."""
+    for column in ("q_base", "qd_base", "q_", "human_z", "obs_0_vx", "tt"):
+        with pytest.raises(BenchError, match=re.escape(column)):
+            column_layer(column)
+
+
+def test_the_refusal_is_an_exception_and_not_a_sentinel() -> None:
+    """`BenchError` is what the rest of `reg.bench` refuses with. A sentinel
+    return value is a refusal a caller can ignore by accident."""
+    assert issubclass(BenchError, Exception)
+    with pytest.raises(BenchError):
+        proprioceptive_columns(["t", "q_0", "unknown_column"])
 
 
 # --------------------------------------------------------------------------

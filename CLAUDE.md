@@ -114,6 +114,58 @@ When a phase's success criterion is met, stop; do not gold-plate.
   says no.
 - **Prefer a smaller correct change** to a larger speculative one.
 
+## Queueing work for the writer
+
+Grooming is the whole job. The writer is good at doing a well-specified thing and
+has no way to ask what you meant, so an issue is the entire specification and the
+only one it gets.
+
+**An issue is queueable when it names three things.**
+
+1. **Acceptance criteria** — what must be true when it is done, in terms someone
+   other than the author can check.
+2. **`## Affected areas`** — the paths the change should touch, under that
+   heading.
+3. **The command that verifies it** — usually `pytest`. If the issue names a
+   command, that command is the definition of done.
+
+Then `gh issue edit N --add-label agent-ready`. The label *is* the queue; the
+writer polls every two minutes and claims one issue at a time.
+
+**The heading is parsed literally, and this is the part that fails quietly.** The
+writer looks for a markdown heading matching `affected areas`, case-insensitive,
+at any level — `## Affected areas` is the conventional form. It reads until the
+next heading. Write "Affected files:", or put the paths in a bullet with no
+heading above them, and the parse returns nothing: the verdict becomes
+`undeclared`, the scope check stops being a check, and nothing says so at the
+time. An issue that looks well-written and is not queueable is the failure mode
+this paragraph exists to prevent.
+
+Inside the section the parser is deliberately forgiving — backticks, stray
+punctuation and a bare filename all work — because a declaration that fails to
+match produces a false "this went out of scope", and a check that cries wolf gets
+switched off within a week. The generosity is about the *declaration*, never
+about the reach.
+
+**What the declaration is for.** After each attempt the writer computes what the
+change reached and compares it against these paths, then writes the result to
+`.wake/` on the branch. A reach outside the declaration is reported on the PR. So
+the section is not paperwork: it is the only thing that makes an out-of-scope edit
+visible, and an issue without one buys a record that can say nothing about scope.
+Declare where you expect the work to land — not the whole repository, and not one
+file when you know a test will follow.
+
+**Dependencies** go in the body as a `Depends-on: #12, #14` trailer, so a human
+reading the issue sees them. A tier does not flip to `agent-ready` until
+everything it depends on is closed.
+
+**Labels that mean a person decides:** `needs-human`, `blocked`, `epic`. The
+advance workflow never flips an issue carrying one.
+
+**Size it so a bad attempt is cheap.** The writer opens draft PRs and merges
+nothing, so the cost of a wrong attempt is a closed PR. Issues that are small,
+verifiable and independent are worth more than issues that are ambitious.
+
 ## Working unattended
 
 - One issue → one worktree → one branch → one **draft** PR. A human marks it

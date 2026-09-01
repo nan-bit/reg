@@ -22,6 +22,42 @@ been made there yet.
 
 ---
 
+# The entries at a glance
+
+Twenty entries across four passes. **This is an index, not a summary**: it gives
+each entry a name and a place and says nothing about what it concluded. The first
+cut of this table carried a fourth column of one-line verdicts, and four of the
+twenty were wrong — §1's collapsed the mandate/proposal distinction that §1 was
+amended on 2026-08-21 to draw, and §2's contradicted its own section outright.
+That is the hazard a summary of this file carries and a list of names does not:
+the distinctions here are load-bearing, several were arrived at by amendment, and
+nothing mechanical can check a paraphrase of one. Read the section.
+
+| § | Body of work | Pass |
+|---|---|---|
+| 1 | UNECE **DSSAD** under UN R157 | 1 · 2026-08-18 |
+| 2 | **EU AI Act Article 12** | 1 · 2026-08-18 |
+| 3 | **ASTM F3269** / Simplex | 1 · 2026-08-18 |
+| 4 | **ARMTD / ARMOUR** | 1 · 2026-08-18 |
+| 5 | **PROFIsafe** | 1 · 2026-08-18 |
+| 6 | **Scene graphs** (Hydra, Kimera) | 1 · 2026-08-18 |
+| 7 | **GSN** | 1 · 2026-08-18 |
+| 8 | **Time-series compression** | 2 · 2026-08-19 |
+| 9 | **DSSAD's data model** | 2 · 2026-08-19 |
+| 10 | **Intent attestation** | 2 · 2026-08-19 |
+| 11 | **The Ethical Black Box** (Winfield & Jirotka 2017) | 3 · 2026-08-21 |
+| 12 | **IEEE Std 7001-2021** | 3 · 2026-08-21 |
+| 13 | **ConSerts** and dynamic safety cases | 3 · 2026-08-21 |
+| 14 | **Schneier & Kelsey 1998** | 3 · 2026-08-21 |
+| 15 | *What the third pass did not disturb* | 3 · 2026-08-21 |
+| 16 | **rosbag2 / MCAP** | 4 · 2026-08-26 |
+| 17 | **SOTER** (2019) | 4 · 2026-08-26 |
+| 18 | **Transparency logs** (Crosby & Wallach; RFC 6962/9162) | 4 · 2026-08-26 |
+| 19 | **ISO 21448 (SOTIF)** | 4 · 2026-08-26 |
+| 20 | *§14's action list, discharged* | 4 · 2026-08-26 |
+
+---
+
 # First pass — 2026-08-18, before any code existed
 
 The purpose of this pass was to find where the plan reinvents something with a

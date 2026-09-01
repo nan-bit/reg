@@ -51,6 +51,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 CONVENTIONS = REPO / "CLAUDE.md"
+FRONT_PAGE = REPO / "README.md"
 
 AGREE = "AGREE"
 DISAGREE = "DISAGREE"
@@ -60,6 +61,13 @@ COULD_NOT_EVALUATE = "COULD-NOT-EVALUATE"
 #: heading rather than by line number so that reordering the file is not a
 #: failure and deleting the section is.
 HEADING = "How the runner works"
+
+#: The README's equivalent section. Issue #132 corrected `CLAUDE.md` and left
+#: this one saying "the harness itself is `nan-bit/issue-runner`" — the same
+#: defect, on the page more people read, surviving because the check below was
+#: scoped to one file. The predicates are properties of the paragraph, so
+#: pointing them at a second one costs nothing and closes the gap.
+README_HEADING = "How work happens"
 
 #: The harness that writes unattended changes in this repository today.
 HARNESS = "nan-bit/wake-runner"
@@ -91,15 +99,20 @@ repo's only harness-facing files are `.runner.conf` and
 # --- locating the section ---------------------------------------------------
 
 
-def section(text: str) -> str | None:
-    """The body of the "How the runner works" section, or `None` if absent.
+def section(text: str, heading: str = HEADING) -> str | None:
+    """The body of `heading`'s section, or `None` if absent.
 
     `None` is the COULD-NOT-EVALUATE input for every predicate below: a file
     that no longer has this section has not satisfied any of these criteria, and
     must not read as though it had.
+
+    `heading` is a parameter because the same defect had two sites. The
+    predicates below are properties of a *paragraph that points at the harness*,
+    not of `CLAUDE.md`, and the README carried the pre-#132 wording for five days
+    after `CLAUDE.md` was corrected — see `README_HEADING`.
     """
     match = re.search(
-        rf"^#+\s*{re.escape(HEADING)}\s*$(.*?)(?=^#+\s|\Z)",
+        rf"^#+\s*{re.escape(heading)}\s*$(.*?)(?=^#+\s|\Z)",
         text,
         re.MULTILINE | re.DOTALL,
     )
@@ -114,6 +127,11 @@ def normalise(text: str) -> str:
 @pytest.fixture(scope="module")
 def conventions() -> str:
     return CONVENTIONS.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def front_page() -> str:
+    return FRONT_PAGE.read_text(encoding="utf-8")
 
 
 # --- check 1: the harness that is actually running --------------------------
@@ -156,6 +174,41 @@ def test_the_pre_132_paragraph_is_caught(conventions: str) -> None:
     """**The negative**, and it is the file's own wording at 894bb1e. It links a
     real repository, so nothing but reading *which* one distinguishes it."""
     assert names_the_running_harness(section(PRE_132)) == DISAGREE
+
+
+def test_the_front_page_names_and_links_the_running_harness(front_page: str) -> None:
+    """The same check, on the page a reader arrives at first.
+
+    `CLAUDE.md` was corrected by issue #132 and the README was not, because this
+    file read one of them. The README is where someone who has never opened
+    `CLAUDE.md` learns what writes the code here, so it is the worse of the two
+    places to leave pointing at an archived repository.
+    """
+    assert names_the_running_harness(section(front_page, README_HEADING)) == AGREE, (
+        f"README.md's '{README_HEADING}' does not link {HARNESS} as the harness. "
+        f"It said {PREDECESSOR} was 'the harness itself' for as long as this "
+        "check was scoped to CLAUDE.md."
+    )
+
+
+def test_the_front_page_says_what_issue_runner_is(front_page: str) -> None:
+    """And the predecessor is placed there too, for the same reason it is placed
+    in `CLAUDE.md`: the name outlives the pointer, in commit messages and issues
+    that already shipped."""
+    assert predecessor_is_placed(section(front_page, README_HEADING)) == AGREE, (
+        f"README.md's '{README_HEADING}' does not say that {PREDECESSOR} is the "
+        "archived predecessor."
+    )
+
+
+def test_a_missing_front_page_section_is_could_not_evaluate() -> None:
+    """Deleting the section is not how either check goes green."""
+    assert names_the_running_harness(section("# reg\n\nNothing.\n", README_HEADING)) == (
+        COULD_NOT_EVALUATE
+    )
+    assert predecessor_is_placed(section("# reg\n\nNothing.\n", README_HEADING)) == (
+        COULD_NOT_EVALUATE
+    )
 
 
 def test_naming_the_harness_without_linking_it_is_caught() -> None:

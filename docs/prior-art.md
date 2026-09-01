@@ -2,9 +2,10 @@
 
 **Status:** **normative** where it disagrees with [`plan.md`](plan.md) — prior art
 wins and `plan.md` gets edited, which is the README's stated rule and this file's
-whole purpose · **four passes**: 2026-08-18 before Phase 1, 2026-08-19 after the
-benchmark appeared to refute Claim 1, and 2026-08-21 and 2026-08-26 each prompted
-by an outside reader · keep current
+whole purpose · **five passes**: 2026-08-18 before Phase 1, 2026-08-19 after the
+benchmark appeared to refute Claim 1, 2026-08-21 and 2026-08-26 each prompted
+by an outside reader, and 2026-09-01 before the mobile track's design is built on
+· keep current
 
 Each pass is kept whole and dated rather than folded into the one after it,
 because half of what this file records is *when* something was found: a citation
@@ -24,7 +25,7 @@ been made there yet.
 
 # The entries at a glance
 
-Twenty entries across four passes. **This is an index, not a summary**: it gives
+Twenty-five entries across five passes. **This is an index, not a summary**: it gives
 each entry a name and a place and says nothing about what it concluded. The first
 cut of this table carried a fourth column of one-line verdicts, and four of the
 twenty were wrong — §1's collapsed the mandate/proposal distinction that §1 was
@@ -55,6 +56,11 @@ nothing mechanical can check a paraphrase of one. Read the section.
 | 18 | **Transparency logs** (Crosby & Wallach; RFC 6962/9162) | 4 · 2026-08-26 |
 | 19 | **ISO 21448 (SOTIF)** | 4 · 2026-08-26 |
 | 20 | *§14's action list, discharged* | 4 · 2026-08-26 |
+| 21 | **Marvel & Bostelman** (NIST, IEEE ROSE 2013) | 5 · 2026-09-01 |
+| 22 | **ISO 3691-4** and **ANSI/A3 R15.08** | 5 · 2026-09-01 |
+| 23 | **RTD / REFINE** | 5 · 2026-09-01 |
+| 24 | **CORA** and zonotope reachability | 5 · 2026-09-01 |
+| 25 | **Set-theoretic localization** | 5 · 2026-09-01 |
 
 ---
 
@@ -1563,3 +1569,544 @@ survey does not edit the claims it bears on:
 - **Whether SOTIF's areas belong in `docs/sufficiency.md` at all**, given §19's
   warning that the two partitions are on different axes. Adopting the vocabulary
   is safe; adopting the taxonomy is not, and the document has to say which it did.
+
+---
+
+# Fifth pass — 2026-09-01, before the mobile track's design is built on
+
+The first four passes were prompted by a phase boundary, a benchmark, and two
+outside readers. This one is prompted by this repository's own rule:
+[`docs/mobile-base.md`](mobile-base.md) was written on 2026-08-31, it makes
+claims about mobile-robot safety practice and about reachable-set construction
+for nonholonomic vehicles, and this file — normative over `plan.md` — had an
+entry for none of it. The survey goes in **before** the design is built on, which
+is what the first pass's own header says it is for. Nothing in the mobile track
+is code yet, so this is the cheapest moment this pass will ever be available at.
+
+What the pass costs, up front:
+
+- **§21 dates a citation the design leans on.** Marvel & Bostelman's finding that
+  neither parent standard covers a mobile manipulator was true in 2013 and is not
+  now — ANSI/A3 R15.08 defines the category. The *unbounded work volume* half of
+  the citation survives untouched, because that is a property of the machine; the
+  *no standard covers this* half must not be repeated in 2026.
+- **§22 finds that the standards' answer to an unbounded work volume is the same
+  shape as this project's.** A speed-dependent **protective field in the vehicle
+  frame**, plus a guaranteed stop. `docs/mobile-base.md` §2 arrived at that split
+  independently and can stop presenting it as an analogy — and must simultaneously
+  stop short of the word, because *protective field* carries a conformance rating
+  nothing here has.
+- **§23 takes "refusal is what you do when the workspace is unbounded".** RTD's
+  answer is a **fail-safe manoeuvre** verified in advance and appended to every
+  plan. Refusal is still right *here*, for a reason `reg`'s architecture supplies;
+  §1 of the design document concluded it without recording that an alternative
+  exists.
+- **§24 costs nothing and corrects one sentence.** Conservative linearization is
+  what makes a nonlinear model analysable at all; the convexity §3 complains
+  about is the *zonotope representation*, and polynomial zonotopes are the same
+  tool's other one. The Minkowski sum §3 proposes is this literature's primitive.
+- **§25 is the one that changes what the project may say.** Set-theoretic
+  localization is the only candidate in this survey for making a room-frame pose
+  certifiable. It does not — and the reason generalises: **no localizer of any
+  kind can**, because the room frame is defined by things outside the robot. The
+  base pose is Layer B *structurally*, not for want of a better estimator.
+
+What survives, as in the third and fourth passes, is **retention** and
+**attribution**. It is the same pair each time, and none of the five retains
+anything.
+
+**A note on sources before the entries, because four of the five have a
+boundary.** The NIST paper's PDF did not extract and §21 is written from its
+abstract and from secondary sources. Both standards in §22 are paywalled and it
+is entered from secondary sources and vendor summaries, with **no clause number
+cited anywhere in it** — a clause number is exactly the thing that cannot be
+checked from a summary, and quoting one would be the defect §19 names rather than
+the one it avoids. §23 and §24 are from published preprints and tool
+documentation; no code was run. Each entry says this in its own first lines,
+because a reader who reaches one entry does not necessarily read this paragraph.
+
+---
+
+## 21. Marvel & Bostelman 2013 — the gap that was named, and has since been partly filled
+
+**Marvel, J.A. and Bostelman, R., *"Towards Mobile Manipulator Safety
+Standards,"* Proc. IEEE International Symposium on Robotic and Sensors
+Environments (ROSE), Washington DC, 2013.** NIST. Beside it, the same group's
+measurement line — Bostelman, Hong and Marvel, *"Survey of Research for
+Performance Measurement of Mobile Manipulators,"* J. Research of NIST, 2016.
+
+**Read from its abstract and from secondary sources; the paper PDF did not
+extract.** Nothing below is a quotation, and
+[`docs/mobile-base.md`](mobile-base.md) §1 already labels its use of the paper a
+paraphrase. That is the same status this file records for IEC 61784-3, IEEE 7001
+and ISO 21448, arrived at for a different reason — not a paywall, a file.
+
+**What it is.** A standards-gap analysis. A mobile manipulator is a manipulator
+on a driven base, and in 2013 it fell between two families that each assume away
+the other's problem: the industrial-robot standards (ANSI/RIA R15.06, ISO 10218)
+assume a **fixed, surveyable work volume** that a risk assessment can be written
+against, and the driverless-truck standards (ANSI/ITSDF B56.5, and the ISO 3691
+line) assume the vehicle's payload does not **reach**. Composed, the machine has
+a work volume that is effectively unbounded and not predictable in advance, and
+neither parent standard's safeguarding argument survives the composition. The
+paper argues for the category, for test methods, and for measurement.
+
+**What has changed since, and it is why this entry is dated rather than cited
+flat.** The gap is, in part, closed. **ANSI/A3 R15.08-1** (2020, requirements on
+the manufacturer) and **R15.08-2** (2023, on the integrator) define the
+*industrial mobile robot* as a category and distinguish types by whether a
+manipulator is fitted and whether it may operate while the platform is in motion
+(§22). So a 2013 citation for *no standard covers this* is a citation to a state
+of the world that has moved, and using it that way in 2026 is the same species of
+error as §1's "robotics has none" — a true sentence about a mandate, published as
+a sentence about the field. The citation for *the work volume is effectively
+unbounded* is unaffected, because that is a statement about the machine and not
+about who has written a document.
+
+### What `reg` does that the NIST paper does not
+
+- **It retains something.** The paper specifies no artifact, no record and no
+  format; it is an argument about which committee owns a machine and what would
+  have to be measured. Nothing in it survives the run it describes.
+- **It attributes.** No keys, no two parties, nothing to forge — the paper is not
+  in that business at all.
+- **It tags the dependence.** The whole of Claim 3 has no counterpart here.
+
+### What the NIST paper does that `reg` does not
+
+- **It treats the composed machine as the unit of analysis**, which is precisely
+  what this repository does not do: there is no base anywhere in the tree
+  ([`docs/mobile-base.md`](mobile-base.md) §4 checked, and found none).
+- **It is grounded in measurement.** NIST's mobile-manipulator work is artifacts,
+  ground truth and repeatability figures for real machines. `reg` has no notion of
+  a *measured* positioning performance at all; `Limits` are **declared**, and
+  `Limits.source` exists (issue #84) precisely because this project cannot
+  measure them and must record whose number it was given.
+- **It addresses a standards committee.** This project addresses an investigator
+  reading an artifact months later, which is a different reader with a different
+  question.
+
+**Action:** `docs/mobile-base.md` §1 keeps the paraphrase and gains the
+date-limit: the paper for the unbounded work volume, R15.08 for the composition.
+**Done in this pass**, and §6's summary row moves with it.
+
+---
+
+## 22. ISO 3691-4 and ANSI/A3 R15.08 — the standards that own the mobile case
+
+**ISO 3691-4, *Industrial trucks — Safety requirements and verification — Part 4:
+Driverless industrial trucks and their systems*** (first edition 2020, revised
+2023); **ANSI/A3 R15.08-1-2020** and **ANSI/A3 R15.08-2-2023, *Industrial Mobile
+Robots — Safety Requirements*** (A3, the Association for Advancing Automation,
+formerly RIA).
+
+**Both are paywalled. Entered from secondary sources and vendor summaries — the
+same status this file records for IEC 61784-3, IEEE 7001-2021 and ISO 21448.**
+Nothing below is a quotation and **no clause number appears anywhere in this
+entry**, deliberately: a clause number is the one thing a summary cannot support,
+and citing one would read as a full read of a document nobody here has opened.
+What is not behind the paywall is the shape of the safeguarding argument, which
+is what this entry is for.
+
+**What they are.** The safety case for a driverless vehicle is not built on
+knowing where the vehicle is. It is built on a **protective field**: a region,
+monitored by a safety-rated device — in practice a safety laser scanner — defined
+**in the vehicle's own frame**, sized so that the vehicle can come to a stop
+before anything detected in the field is reached. The field is **switched with
+speed and steering**, because the stopping distance is; the guaranteed action on a
+detection is a stop. R15.08 carries the same structure to a machine with a
+manipulator on it and takes on what the arm adds. Map-based pose estimation is a
+**navigation** function in this architecture, not a safety one: it runs on
+sensing that is not safety-rated, and nothing about the safeguarding argument
+depends on it being right.
+
+**The finding: this is the same object as the body-frame envelope, and
+`docs/mobile-base.md` §2 arrived at it independently.** A protective field is a
+**horizon-limited region in the vehicle frame, sized by what the vehicle can do
+before it stops**. That is `reg.envelope.outer_envelope(state, limits, window)`
+with the window set by the stopping time, and the split that document draws — a
+Layer A body-frame set and a Layer B pose — is not an analogy to safety practice.
+It is the partition safety practice already draws, for the same reason: the
+body-frame quantity is the one that can be argued about without trusting a
+perceiver. Two independent derivations agreeing is worth more to that document
+than the derivation was.
+
+**And the warning that arrives with it, which is the half a hurried reading would
+drop.** *Protective field* is a term of art with a **conformance meaning**: a
+field is the output of a rated device, at a stated performance level, validated
+by a stated procedure, in a system somebody assessed. `reg`'s envelope is a
+`shapely` polygon computed by unrated Python from a simulator, and calling it a
+protective field would claim the rating along with the noun. This is exactly the
+trap §12 records for IEEE 7001's investigator levels — *state that the project
+cannot be placed on that ladder, and claim no level* — arriving a second time
+from a second standard. The design document may say the body-frame set **is what
+a protective field is**; it may not say it is one.
+
+### What `reg` does that a protective field does not
+
+- **It is retained.** A field is evaluated continuously and **discarded
+  continuously**. A stop leaves a stop; nothing months later says what region was
+  being monitored at *t*, what was in it, or what the machine concluded. That is
+  §13.1's ConSerts finding — runtime evaluation, thrown away — reappearing in the
+  one place a regulator has actually mandated the evaluation.
+- **It attributes.** Two parties, two keys, a record neither can rewrite without
+  it showing. A scanner's output arrives on the authority of the machine that
+  holds it, which is §11's and §16's observation again.
+- **It says which claims rest on the perceiver.** In a compliant vehicle every
+  safety claim rests on the scanner, and the standards' answer is to **rate the
+  scanner** rather than to tag the claim. `reg` can rate nothing, and tags
+  instead. That is the whole trade Claim 3 makes, stated by a standard that made
+  the other choice.
+
+### What ISO 3691-4 does that `reg` does not
+
+- **Rating, validation and conformance.** Performance levels, verification
+  procedures, an assessment somebody signs. This project has none of that and
+  [`docs/sufficiency.md`](sufficiency.md) §7 already says it attempts no
+  assurance case.
+- **It covers the composition.** R15.08 has a category for a machine that
+  manipulates while it drives. `reg` has no base at all, and the design document's
+  build order (§7 there) puts one four tiers out.
+- **Stopping performance as a measured quantity.** The field is sized from a
+  measured stopping distance under stated conditions. `reg`'s `Limits` are
+  declared with a required `source` and never measured.
+- **It governs a real machine on a real floor.** Everything here is a simulator.
+
+**Action:** `docs/mobile-base.md` §2 names the body-frame set as *what a
+protective field is*, and carries the rating caveat in the same breath. **Done in
+this pass.** The same caveat belongs wherever this project states what it may
+claim — [`docs/sufficiency.md`](sufficiency.md) — and that is **not done**,
+outside issue #138's affected areas, the same way §11a records the README
+standards table.
+
+---
+
+## 23. RTD and REFINE — the answer to an unbounded workspace is a fail-safe manoeuvre, not a refusal
+
+**Kousik, S., Vaskov, S., Bu, F., Johnson-Roberson, M. and Vasudevan, R.,
+*"Bridging the Gap Between Safety and Real-Time Performance in Receding-Horizon
+Trajectory Design for Mobile Robots,"* International Journal of Robotics Research,
+2020 (arXiv:1809.06746)** — **RTD**. And **Liu, Shao, Lymburner, Qin, Kaushik,
+Trang, Wang, Ivanović, Tseng and Vasudevan, *"REFINE: Reachability-based
+Trajectory Design using Robust Feedback Linearization and Zonotopes"*** — the
+full-size-vehicle successor, read from its preprint.
+
+**Read from published preprints. No implementation was run**, and the venue and
+year of REFINE are not asserted here because the preprint is what was read.
+
+**This file already has the arm half of this line and not the ground-vehicle
+half.** §4 is ARMTD and ARMOUR, from the same group, and it is where Phase 2's
+novelty claim was given up. RTD is the sibling that does it for a **nonholonomic
+ground robot**, which is the case [`docs/mobile-base.md`](mobile-base.md) §3 is
+about. Missing it while citing ARMTD is the shape of omission a reviewer reads as
+having found one paper rather than a literature.
+
+**What it is.** Offline, RTD computes a forward reachable set of a
+**parameterized family of trajectories** — including the tracking error of the
+real system against the model, so the set covers what the machine does and not
+what the model does — and represents it as a polynomial level set. Online, it
+intersects that set with sensed obstacles to carve away the trajectory parameters
+that could collide, and optimizes over what remains. Every plan ends in a
+**fail-safe manoeuvre**, verified in the same offline set, so that if no parameter
+is safe at the next planning step the previously-verified stop executes. That
+construction is what buys the *not-at-fault* guarantee: the robot is never in a
+state from which it has no verified action. REFINE replaces the level sets with
+zonotope reachability under robust partial feedback linearization and runs it on a
+full-size vehicle.
+
+**What it says to `docs/mobile-base.md` §1, which is why this entry is not just
+another citation.** That section concludes that `computed_bound` must **refuse**
+for a mobile model, because an unbounded workspace is a could-not-evaluate and a
+plausible large number is worse than none. That conclusion stands. What the
+section does not record is that **the literature has a different answer to the
+same fact**, and it is not refusal: it is to stop needing a horizon-free bound at
+all, by carrying a verified stopping manoeuvre and re-verifying every step.
+
+`reg` cannot take that answer, and the reason is architectural rather than a
+preference. RTD's guarantee lives in a **planner** — the same party that chooses
+the trajectory proves the trajectory safe, which is the common-cause structure
+[`CLAUDE.md`](../CLAUDE.md) rule 3 exists to refuse. And `reg`'s enforcement layer
+VETOes a *declaration*; it commands nothing, and the one thing in the tree that
+resembles a fail-safe — passivation — is documented in the README as **not
+exercisable**, reaching no table, no edge type and no query. A project that cannot
+represent a stop cannot rest a bound on having one. Refusal is right here for
+`reg`'s reasons, and saying so is stronger than concluding it as though nothing
+else had been tried.
+
+**One thing it confirms.** RTD's set is horizon-limited and computed per planning
+step, which is exactly the status `horizon_bound`'s second term has. So §1's
+"every VETO rests on the outer envelope's soundness argument" is not a degraded
+position — it is the position this literature works from, and the pressure it puts
+on `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+is real rather than a symptom of having lost something.
+
+### What `reg` does that RTD does not
+
+- **It retains.** The forward reachable set and the safe parameter subset are
+  computed each step and discarded. Nothing afterwards says which family was
+  verified at *t*, against what, or what was left.
+- **It separates the two parties.** RTD's check is inside the planner. `reg`'s
+  bound is computed by `reg/enforce.py` from `Limits` and a `ProprioState`, and
+  the import boundary that keeps it from reading the policy's own reasoning is
+  asserted against the source.
+- **It tags the dependence.** RTD's offline set is obstacle-independent — that is
+  §4's finding, and it is why the split is not novel — but nothing in what RTD
+  leaves behind says which of its conclusions rested on the sensed obstacle set,
+  because it leaves nothing behind.
+
+### What RTD does that `reg` does not
+
+- **A sound over-approximation for a nonholonomic system, with tracking error
+  inside it.** `reg`'s outer envelope covers a fixed-base arm and models **no**
+  tracking error: the controller is assumed to follow the commanded trajectory.
+  For a driven base that assumption is the load-bearing one, and this is where the
+  literature says so.
+- **A fail-safe manoeuvre and a not-at-fault guarantee.** `reg` has no authority
+  to stop anything.
+- **Real time, online, on hardware.**
+- **The machinery.** Polynomial level sets and zonotope arithmetic. `reg` must not
+  build it — *no new dependencies* is a standing rule and an HJ solver is a stated
+  non-goal in [`plan.md`](plan.md) — so the cost is that the composed bound §3
+  proposes is loose, and it must be **published as loose**.
+
+**Action:** `docs/mobile-base.md` §1 records the fail-safe alternative beside its
+refusal, and why this project declines it. **Done in this pass.**
+
+---
+
+## 24. CORA and zonotope reachability for nonholonomic vehicles
+
+**Althoff, M., *CORA — COntinuous Reachability Analyzer*** (Technische Universität
+München; MATLAB), introduced in the ARCH workshop series (*"An Introduction to
+CORA 2015"*). The two techniques the design document leans on: **Althoff,
+Stursberg and Buss, *"Reachability Analysis of Nonlinear Systems with Uncertain
+Parameters using Conservative Linearization,"* CDC 2008**, and **Kochdumper and
+Althoff, *"Sparse Polynomial Zonotopes: A Novel Set Representation for
+Reachability Analysis,"* IEEE Transactions on Automatic Control, 2021.** The
+closest application to the mobile case is **Althoff and Dolan, *"Online
+Verification of Automated Road Vehicles Using Reachability Analysis,"* IEEE
+Transactions on Robotics, 2014.**
+
+**Read from published preprints and the tool's documentation. CORA was not run**,
+and no figure here is measured.
+
+**What it is.** Set-propagation reachability. A **zonotope** — a centre plus
+generator vectors — is closed under Minkowski sum and linear maps at low cost,
+which is what makes propagating one through a linear system cheap. Nonlinear
+dynamics are handled by linearizing about the current set and adding a
+**set-valued abstraction-error term** that over-approximates everything the
+linearization dropped; that is what *conservative linearization* names, and it is
+what makes a nonlinear model analysable at all. For a unicycle or Dubins model,
+uncertainty in heading **curves** the reachable set, and a zonotope — convex, and
+centrally symmetric — over-approximates a curved set loosely. **Polynomial**
+zonotopes represent the curvature directly and are much tighter. Online
+verification (Althoff & Dolan) is the same machinery used as a runtime checker
+rather than an offline proof, which is the use closest to this project's.
+
+**What this corrects in [`docs/mobile-base.md`](mobile-base.md) §3.** That
+section reads *"CORA's conservative linearization gives a large convex
+over-approximation of a Dubins car where polynomial zonotopes capture the
+non-convexity"*, which credits the looseness to the wrong mechanism and reads as
+though two tools were being named. Conservative linearization is not what makes
+the answer convex; the **representation** is, and polynomial zonotopes are the
+same tool's other representation. Small, and precisely the class of error this
+file exists to catch before it is quoted onward.
+
+**And one thing it adds, which is not a correction.** The construction §3
+proposes — a body-frame translation bound over the horizon, **Minkowski-summed**
+with the arm's own body-frame outer set — is this literature's primitive. Zonotopes
+exist in large part *because* Minkowski sum is exact and cheap on them; on a
+`shapely` polygon the same operation is a buffer, and the over-approximation error
+it introduces compounds with every step it is applied. So §3's "deliberately
+loose" is loose in a way this literature has a name and a cost model for, and the
+honest form of publishing it as loose is to say **what** the looseness is: a
+representation cost this project pays for not taking a dependency it has already
+refused.
+
+### What `reg` does that CORA does not
+
+- **It retains an artifact.** CORA is a library: it computes a set and returns it.
+  There is no record, no chain, no query, and nothing months later.
+- **It attributes and it tags.** Neither has a counterpart in a reachability
+  library, and neither should.
+- **It answers a question about a run that happened.** CORA answers a question
+  about a model.
+
+### What CORA does that `reg` does not
+
+- **Sound reachability for nonlinear and hybrid systems with uncertain parameters
+  and uncertain inputs, in continuous time, with a stated over-approximation
+  argument and a decade of benchmarks behind it.** `reg`'s `outer_envelope` is a
+  grid over the joint box plus a swept sector per link, with a hand-written
+  soundness argument for one class of trajectories and a `MAX_OUTER_GRID_CONFIGS`
+  guard that raises a could-not-evaluate when the enumeration gets too big. The
+  guard is honest; it is also the price of not having a set representation.
+- **Tightness.** Everything above is why the composed base-plus-arm bound will be
+  loose, and why *how* loose is not something this project can currently state.
+- **A representation that composes.** Minkowski sum, linear maps and intersection,
+  in one object, in any dimension.
+
+**Action:** `docs/mobile-base.md` §3's CORA sentence is corrected and the
+Minkowski-sum looseness is stated in this literature's terms. **Done in this
+pass.** What a tighter construction would buy still belongs in
+[`docs/limitations.md`](limitations.md) when the mobile track has code — **not
+done**, and outside issue #138's affected areas.
+
+---
+
+## 25. Set-theoretic localization — the one route that could have made the base pose certifiable, and does not
+
+**Jaulin, L., Kieffer, M., Didrit, O. and Walter, É., *Applied Interval
+Analysis*, Springer, 2001**; **Kieffer, Jaulin and Walter, *"Guaranteed recursive
+nonlinear state bounding using interval analysis,"* International Journal of
+Adaptive Control and Signal Processing, 2002**; **Jaulin, *"Robust set-membership
+state estimation; application to underwater robotics,"* Automatica, 2009.** The
+older set-membership line behind them: **Schweppe (1968)**, and **Milanese and
+Vicino** on bounded-error parameter estimation.
+
+**Read from published preprints and textbook summaries.**
+
+**What it is.** Estimation without probability. Given errors that are **bounded**
+rather than distributed — this sensor is wrong by at most ±e — the estimator
+returns a **set** guaranteed to contain the true state, computed by interval
+analysis and constraint propagation (SIVIA, and the contractor line that followed
+it). The output is a union of boxes rather than a mean and a covariance, and the
+guarantee has a specific form: *the true pose is in this set, or one of the stated
+hypotheses is false.* For robot localization the hypotheses are the sensor error
+bounds and a map of landmarks. It is robust to outliers in a way a Gaussian filter
+is not, because a measurement can be permitted to be wrong q times out of m
+without the guarantee collapsing.
+
+**Why it is in this pass at all.** [`docs/mobile-base.md`](mobile-base.md) §2
+puts the base pose in Layer B and §2.2 records the dead-reckoning nuance — a
+dead-reckoned pose is Layer A *relative to the last known pose*, with an error
+that grows without bound under slip, which is "Layer A with a validity horizon"
+and not a value this project's binary has. If any estimator could hand back a
+room-frame pose with a **characterized** failure mode, that nuance would become a
+decision rather than a note. This is the candidate. The pass has to say plainly
+whether it works.
+
+**It does not, and the reason generalises past this method.** The guarantee is
+conditional on two things: bounded-error hypotheses on the sensors, and a **map**.
+Both are exogenous — a model of the world, supplied by somebody, about things that
+are not the robot — so both are Layer B under this project's own definition, and a
+guarantee conditioned on a Layer B input is a Layer B guarantee. It is stronger
+and better-behaved than a probabilistic one, and it is still on the far side of
+the boundary.
+
+Which means the conclusion is not *this method is not good enough*. It is that
+**no localizer can be**, because a room-frame pose is a statement about the
+robot's relationship to things outside it, and the layer boundary is drawn at
+exactly that line. The base pose is Layer B **structurally**. `docs/mobile-base.md`
+§2 argues it from the safety-rating status of localization sensing — true, and a
+weaker argument, because it would be answered by someone building a safety-rated
+localizer. The structural argument would not be.
+
+**What it does change, and this is worth recording before Tier 3.** A set-valued
+pose composes with §3's construction directly: the room-frame envelope becomes the
+body-frame set **Minkowski-summed with the pose set**, rather than rigidly
+transformed by a point. That preserves the over-approximation across the frame
+change, which a point pose does not — and it is the same primitive §24 says this
+whole literature is built on. Today's Layer B tag is binary: it says the answer
+inherited the perceiver and says nothing about how wrong the answer can be. A
+set-valued pose is the shape in which that magnitude could be carried. Whether the
+tag should ever carry one is a types decision (Tier 2), it interacts with issue
+#84's deliberate refusal of a graded integrity attribute, and a survey does not
+take it.
+
+### What `reg` does that a bounded-error localizer does not
+
+- **It retains, attributes and tags.** An estimator returns a set and moves on;
+  nothing afterwards says what set it returned at *t* or under which hypotheses.
+- **It records the hypotheses as hypotheses.** The one thing this project is
+  actually built to do with a conditional guarantee is keep the condition attached
+  to the answer — which is §13.1's *retained conditionality*, the narrowed form of
+  the layer-tag contribution.
+
+### What a bounded-error localizer does that `reg` does not
+
+- **It bounds its own error.** Under stated hypotheses it returns a set that
+  provably contains the truth. `reg`'s Layer B tag carries no magnitude at all and
+  [`docs/limitations.md`](limitations.md) is where that is recorded.
+- **It works on exteroceptive data**, which `reg` by construction never holds —
+  the envelope takes a `ProprioState` and `tests/test_layer_boundary.py` fails if
+  that erodes.
+- **It localizes.** *Perception / vision / SLAM* is a binding non-goal in
+  [`plan.md`](plan.md), and nothing about this entry proposes changing that.
+
+**Action:** `docs/mobile-base.md` §2 states the pose's Layer B status as
+structural rather than estimator-limited, and §2.2 records the set-valued pose as
+what this literature would change. **Done in this pass.** The same restatement
+belongs in [`docs/sufficiency.md`](sufficiency.md) §5.1 when that document carries
+§2.1's shrink of the certifiable question set — **not done**, outside issue #138's
+affected areas, and it is Tier 1 of the design document's build order rather than
+this issue.
+
+---
+
+## What this pass did not disturb
+
+**§6's hedge stands, and this is the seventh search.** None of the five
+retains a graph for post-hoc audit:
+
+| Read | Does it retain a graph for post-hoc audit? |
+|---|---|
+| Marvel & Bostelman (§21) | No. A standards-gap analysis and a call for test methods; it specifies no artifact. |
+| ISO 3691-4 / R15.08 (§22) | No. A protective field is evaluated and discarded continuously; the standards specify performance and rating, not a record. |
+| RTD / REFINE (§23) | No. The reachable set and the safe parameter subset are recomputed every planning step and thrown away. |
+| CORA (§24) | No. A library that returns sets. |
+| Set-theoretic localization (§25) | No. An estimator. |
+
+**No claim in `plan.md` is edited by this pass, and no published figure moves.**
+All four claims are fixed-arm claims and the mobile track is exploratory and
+unbenchmarked, which [`docs/mobile-base.md`](mobile-base.md) §5 already says of
+itself. Claim 3 gains a second standard that made the opposite trade (§22) and no
+competitor.
+
+**Two positioning risks are recorded rather than fixed**, per the rule that a
+survey does not edit the claims it bears on:
+
+- Any sentence implying that a **horizon-limited region in the vehicle's own
+  frame** is this project's construction is leaning on ground ISO 3691-4 and
+  R15.08 have occupied since 2020 (§22) — and the word for it carries a rating
+  this project cannot claim.
+- Any sentence implying that refusal is the *only* principled response to an
+  unbounded workspace is leaning on RTD not existing (§23).
+
+## Changes this pass makes to the plan
+
+| # | Change | Where |
+|---|---|---|
+| 21 | Date-limit the Marvel & Bostelman citation — the unbounded work volume, not "neither standard covers it" — and name R15.08 as where the composition went | `docs/mobile-base.md` §1, §6 (**done**) |
+| 22 | Name the body-frame set as *what a protective field is*, with the conformance-rating caveat in the same breath | `docs/mobile-base.md` §2, §6 (**done**) |
+| 22a | The same caveat where the project states what it may claim | `docs/sufficiency.md` (**not done** — outside #138) |
+| 23 | Record the fail-safe manoeuvre as the literature's alternative to refusal, and why `reg` declines it | `docs/mobile-base.md` §1, §6 (**done**) |
+| 24 | Correct what conservative linearization names; state the Minkowski-sum looseness as the representation cost it is | `docs/mobile-base.md` §3, §6 (**done**) |
+| 25 | State the base pose's Layer B status as structural rather than estimator-limited; record the set-valued pose | `docs/mobile-base.md` §2, §2.2, §6 (**done**) |
+| 25a | The same restatement where the certifiable question set is defined | `docs/sufficiency.md` §5.1 (**not done** — outside #138, and Tier 1 of the design document's build order) |
+
+## Still open after this pass
+
+- **The clause text of ISO 3691-4 and of ANSI/A3 R15.08.** Paywalled, like IEC
+  61784-3, IEEE 7001-2021 and ISO 21448. §22 is entered from secondary sources and
+  vendor summaries, says so, and cites no clause number for that reason. What a
+  full read would most likely change is the type distinctions in R15.08, which the
+  next bullet depends on.
+- **The full text of Marvel & Bostelman 2013.** The abstract and secondary
+  sources are what §21 is written from; the PDF did not extract and obtaining it
+  remains outstanding. The date-limit finding is the part a full read would
+  sharpen.
+- **Whether R15.08's distinction between a platform that may manipulate while
+  moving and one that may not changes the composition in
+  [`docs/mobile-base.md`](mobile-base.md) §3.** If the two motions never overlap,
+  the base bound and the arm bound compose sequentially and the Minkowski sum is
+  unnecessarily loose. That is a design decision with a standards precedent behind
+  it and it is not taken here.
+- **How loose the composed bound actually is.** §24 says the looseness is a
+  representation cost with a cost model in the literature; nobody has computed it
+  for this construction, and until somebody does, "deliberately loose" is a
+  statement of intent rather than a number.
+- **Whether the Layer B tag ever carries a magnitude.** §25 says a set-valued pose
+  is the shape one would take. It collides with issue #84's deliberate refusal of a
+  graded scheme, it is a types decision rather than a survey one, and it should be
+  decided in the same change as the pose provenance enum or not at all.

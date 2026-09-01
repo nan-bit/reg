@@ -14,6 +14,11 @@ into; it asserts that no body of work in the survey is still described as
 unread; and it asserts that every entry says both of the things an entry is for
 — what the work does that `reg` does not, and what `reg` does that it does not.
 
+Issue #138 extends the roster rather than starting a file: the fifth pass's
+five bodies of work are held to the same both-directions standard as the four
+above, and — because four of the five have a source boundary — each is also
+required to say what it was read *from*.
+
 **Every predicate here is fed the pre-#104 text and required to say no.** A
 check that only ever sees the corrected wording proves nothing about whether it
 can fail, and the defect being guarded is an *absence*, which is the easiest
@@ -155,6 +160,25 @@ def still_open_bullets(text: str) -> list[str]:
         body = block.split("\n", 1)[1] if "\n" in block else ""
         bullets += [item for item in re.split(r"\n(?=- )", body) if item.startswith("- ")]
     return bullets
+
+
+#: A statement of what an entry was read *from*, in the forms this file uses.
+#: Deliberately a disjunction of phrasings rather than one wording: the check is
+#: on the presence of a boundary, never on how it is phrased. What it catches is
+#: an entry with **none** — which reads as a full read of whatever it cites, and
+#: is the defect `test_sotif_is_entered_with_the_status_of_its_reading_stated`
+#: guards for one standard and this guards for a pass with four of them.
+SOURCE_BOUNDARY = re.compile(
+    r"read from|entered from|paywall|secondary sources|did not extract"
+    r"|preprint|was not run|no implementation was run|not a quotation"
+    r"|nothing below is a quotation",
+    re.IGNORECASE,
+)
+
+
+def states_a_source_boundary(text: str) -> bool:
+    """Does this entry say what it was read from?"""
+    return SOURCE_BOUNDARY.search(normalise(text)) is not None
 
 
 def says_both_directions(text: str) -> bool:
@@ -322,17 +346,38 @@ def test_the_missing_forward_security_is_recorded_as_a_named_absence() -> None:
 #: heading. Listed rather than globbed on purpose: the point of the check is
 #: that these four specifically are present, and a roster derived from the
 #: file's own headings would agree with the file no matter what it said.
-REQUIRED_ENTRIES = {
+ENTRIES_ISSUE_104 = {
     "rosbag2 / MCAP": re.compile(r"rosbag2 and MCAP", re.IGNORECASE),
     "SOTER": re.compile(r"\bSOTER\b"),
     "transparency logs": re.compile(r"[Tt]ransparency logs"),
     "ISO 21448 (SOTIF)": re.compile(r"SOTIF"),
 }
 
+#: The fifth pass, issue #138 — the five bodies of work `docs/mobile-base.md`
+#: §6 names and this survey had no entry for while a design document was being
+#: written on top of them. Same standard as the four above, which is what that
+#: issue's acceptance criteria say: an entry that is not comparative in both
+#: directions is not an entry, at any pass number.
+ENTRIES_ISSUE_138 = {
+    "Marvel & Bostelman (NIST, ROSE 2013)": re.compile(r"Marvel"),
+    "ISO 3691-4 / ANSI/A3 R15.08": re.compile(r"3691-4"),
+    "RTD / REFINE": re.compile(r"\bRTD\b"),
+    "CORA": re.compile(r"\bCORA\b"),
+    "set-theoretic localization": re.compile(r"[Ss]et-theoretic localization"),
+}
+
+#: The fifth-pass entries whose source boundary is a **paywall**, which have to
+#: say the word rather than any boundary: an entry written from summaries that
+#: reads as though the standard had been opened is a different defect from
+#: leaving it unread, not a smaller one.
+PAYWALLED_IN_THE_FIFTH_PASS = {"ISO 3691-4 / ANSI/A3 R15.08"}
+
+REQUIRED_ENTRIES = {**ENTRIES_ISSUE_104, **ENTRIES_ISSUE_138}
+
 
 @pytest.mark.parametrize("item", sorted(REQUIRED_ENTRIES))
 def test_the_survey_has_an_entry_for_each_named_body_of_work(item: str) -> None:
-    """Issue #104's acceptance criterion, one item at a time."""
+    """Issue #104's acceptance criterion, and #138's, one item at a time."""
     entry = section(PRIOR_ART.read_text(encoding="utf-8"), REQUIRED_ENTRIES[item])
     assert entry.strip(), (
         f"docs/prior-art.md has no section for {item}. An external review "
@@ -344,6 +389,32 @@ def test_the_survey_has_an_entry_for_each_named_body_of_work(item: str) -> None:
         "what it does that reg does not, and what reg does that it does not. "
         'Issue #104: "Related work exists" is not an entry.'
     )
+
+
+@pytest.mark.parametrize("item", sorted(ENTRIES_ISSUE_138))
+def test_each_fifth_pass_entry_records_what_it_was_read_from(item: str) -> None:
+    """Issue #138: reading status is recorded per entry as a source boundary.
+
+    Four of the five have one — a paper whose PDF did not extract, two
+    paywalled standards, and two lines read from preprints with nothing run —
+    and an entry that carries no boundary reads as a full read of every
+    document it cites. That is the failure
+    `test_sotif_is_entered_with_the_status_of_its_reading_stated` guards for a
+    single standard; this is the same guard over a whole pass.
+    """
+    entry = section(PRIOR_ART.read_text(encoding="utf-8"), ENTRIES_ISSUE_138[item])
+    assert entry.strip(), f"docs/prior-art.md has no section for {item}"
+    assert verdict(entry, states_a_source_boundary(entry)) == AGREE, (
+        f"the {item} entry does not say what it was read from. An entry that "
+        "states no source boundary reads as a full read of everything it "
+        "cites, which is the claim docs/prior-art.md exists to prevent."
+    )
+    if item in PAYWALLED_IN_THE_FIFTH_PASS:
+        assert re.search(r"paywall", normalise(entry), re.IGNORECASE), (
+            f"the {item} entry does not say the clause text is paywalled. "
+            "Some other boundary is not that one: a reader has to know the "
+            "standard itself was not opened."
+        )
 
 
 def test_no_body_of_work_in_the_survey_is_still_described_as_unread() -> None:
@@ -517,6 +588,48 @@ def test_the_entry_check_rejects_related_work_exists() -> None:
     # One direction only is the commoner failure, and it must also fail.
     half = stub + "\n### What a bag does that `reg` does not\n\nReplay.\n"
     assert not says_both_directions(half)
+
+
+#: An entry written as though the standard had been opened: comparative in both
+#: directions, correct in outline, and silent about the fact that nobody here
+#: has read a clause of it. It even cites a requirement, which is the thing a
+#: summary cannot support.
+NO_SOURCE_BOUNDARY = """## 22. ISO 3691-4 and ANSI/A3 R15.08
+
+**ISO 3691-4** requires the protective field to be sized to the stopping
+distance of the truck at its current speed, and requires the field to be
+switched as that speed changes.
+
+### What `reg` does that a protective field does not
+
+It retains the evaluation.
+
+### What ISO 3691-4 does that `reg` does not
+
+It rates the device that produces the field.
+"""
+
+
+def test_the_source_boundary_check_rejects_an_entry_that_reads_as_a_full_read() -> None:
+    """The hard negative: the fixture passes the *other* check and still fails.
+
+    It is comparative in both directions, so the entry check clears it. What
+    it does not say is that nobody opened the standard — and it states a
+    requirement, which is exactly what a vendor summary cannot support. A
+    predicate that passed this would report the boundary as recorded.
+    """
+    assert says_both_directions(NO_SOURCE_BOUNDARY)
+    assert not states_a_source_boundary(NO_SOURCE_BOUNDARY)
+    assert verdict(
+        NO_SOURCE_BOUNDARY, states_a_source_boundary(NO_SOURCE_BOUNDARY)
+    ) == DISAGREE
+    # And a deleted entry is could-not-evaluate, not a pass.
+    assert verdict("", states_a_source_boundary("")) == COULD_NOT_EVALUATE
+    # A boundary is not satisfied by the file merely discussing reading status
+    # somewhere else: the predicate only ever sees one entry.
+    assert states_a_source_boundary(
+        NO_SOURCE_BOUNDARY + "\nBoth standards are paywalled.\n"
+    )
 
 
 def test_a_missing_section_is_could_not_evaluate_and_not_a_pass() -> None:

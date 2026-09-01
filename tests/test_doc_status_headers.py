@@ -529,7 +529,26 @@ def test_the_pre_issue_prior_art_header_claims_no_standing() -> None:
 
 
 def test_a_prior_art_header_with_a_stale_count_fails() -> None:
-    """Four passes, a header still saying three."""
-    stale = header_of(read(PRIOR_ART)).replace("four passes", "three passes")
-    assert stated_count(stale, "passes") == 3
-    assert stated_count(stale, "passes") != passes_in(body_of(read(PRIOR_ART)))
+    """A header still claiming the count the file had one pass ago.
+
+    Derived from the file's own count rather than written as a literal. The
+    fixture said *four passes, a header still saying three* until the fifth
+    pass landed (issue #138) and then failed — on the arithmetic, not on the
+    defect — which is a negative test that has to be edited every time the
+    thing it guards happens. The defect is the header lagging the body, and it
+    is the same defect at any number.
+    """
+    header, body = header_of(read(PRIOR_ART)), body_of(read(PRIOR_ART))
+    current = passes_in(body)
+    assert current >= 2, "a one-pass file has no stale count to construct"
+    assert stated_count(header, "passes") == current
+    word = {number: name for name, number in NUMBER_WORDS.items()}
+    stale = header.replace(
+        f"{word[current]} passes", f"{word[current - 1]} passes"
+    )
+    assert stale != header, (
+        "the header does not spell its count as a number word, so the stale "
+        "fixture could not be built — COULD-NOT-EVALUATE, not a pass"
+    )
+    assert stated_count(stale, "passes") == current - 1
+    assert stated_count(stale, "passes") != passes_in(body)

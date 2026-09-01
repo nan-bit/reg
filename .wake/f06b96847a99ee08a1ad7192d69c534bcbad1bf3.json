@@ -1,0 +1,84 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "138-1788288961556850444-2180476",
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "f54bdec0123415e4282a244b3a465411fd0af7cf5e72f5b31a40c13dd8961ab3",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "dec63932dd9dfbcce44e5e7380f77f7057e0e3e0f12850d4dffe174d55130446",
+        "concluded": "3a77f0ea601d47ac297a53752dba56b62680a28338588fa08f4552aa52b730e9",
+        "coverage": "2d030ac756a8235102ebd2fa98e0af3ff1cf5b1985c5fc8bb9e37a7f070c1aa4",
+        "declared": "06af95e2a144096271eb1c4de7ebb6d6ca87885760f942bef8eb4c1ca7a8b760",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "d6a4031733610bb080d0bfa794fcc9dbdcff74834aeaab7c6b927e21e9754037",
+        "out_of_scope": "e4ca12a83c62381780d0d05686fb8afd3d30d3ed93c9692a60fc22c423b32458",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676"
+      },
+      "head": "7588f4665c01c6f820bc4311b44c5b210826fa7b2ef28559049da094b3c026f1",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "f06b96847a99ee08a1ad7192d69c534bcbad1bf3",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/mobile-base.md",
+        "docs/prior-art.md",
+        "tests/test_doc_status_headers.py",
+        "tests/test_prior_art.py"
+      ],
+      "edge_kinds": [
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/mobile-base.md",
+        "docs/prior-art.md",
+        "tests/test_doc_status_headers.py",
+        "tests/test_prior_art.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 48
+      },
+      "changed_unreadable": [
+        "docs/mobile-base.md",
+        "docs/prior-art.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 2
+      },
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [
+        "docs/mobile-base.md",
+        "docs/prior-art.md"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 138,
+    "out_of_scope": [
+      "tests/test_doc_status_headers.py",
+      "tests/test_prior_art.py"
+    ],
+    "prev": [],
+    "verdict": "out-of-scope"
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "f06b96847a99ee08a1ad7192d69c534bcbad1bf3"
+      },
+      "name": "auto/issue-138"
+    }
+  ]
+}

@@ -3,7 +3,8 @@
 **Status:** normative for what this project may claim · written 2026-08-19 ·
 [`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable · written for
 Milestone 2, re-measured 2026-08-20 after Milestone 3, §7 reconciled against the
-measured tables 2026-08-21 · keep current
+measured tables 2026-08-21, §5.1's frame condition recorded 2026-09-01
+(issue #139) · keep current
 
 The mechanism this document argues from already exists. Every edge in the
 artifact carries a `layer` column, `A` or `B`, and so does every occurrence; the
@@ -70,7 +71,7 @@ uncertifiable and moves all assurance to the endpoints. Here it is applied twice
 the policy is one uncertifiable middle, and the perceiver is a second. The
 attestation questions route around both.
 
-Two honest bounds on that sentence, stated here rather than buried:
+Three honest bounds on that sentence, stated here rather than buried:
 
 - The asymmetry was a claim about **structure** only, when this was written in
   Milestone 2: `reg.declare` and `reg.chain` existed but no artifact carried a
@@ -83,6 +84,27 @@ Two honest bounds on that sentence, stated here rather than buried:
 - Layer A is certifiable *in the sense that its failure modes are characterizable*
   — not in the sense that this prototype has characterized them. §7 lists what a
   Layer A answer here still inherits.
+- **It is conditional on the base being bolted down, and until issue #139 nothing
+  in this document said so.** `reg/store.py` states the asymmetry in its
+  strongest form, beside the four attestation edge types: *"None of it needs to
+  know where anybody is standing."* That is exactly right about **anybody**, and
+  it is not the same sentence as *needs to know nothing about where anything is*.
+  A declaration names a **region** and a verdict names the bound it was tested
+  against, and a region is stated in a frame. For the arm this repository models
+  that frame is the room's for free — `reg.kinematics` begins its cumulative sums
+  at an explicit leading `0.0` and that literal *is* the base, a mounting fact
+  rather than a measurement. Give the robot a driven base and the two frames come
+  apart: a declaration made in room coordinates can be tested against a
+  body-frame bound only by way of the pose, and the pose is Layer B (§5.6). **A
+  mobile base is the first thing that would make a Layer A attestation edge
+  depend on a pose in the room** — and it would do it while naming no `Entity`,
+  so `test_layer_b_is_exactly_the_entity_naming_edges` would not see it, exactly
+  as it did not see the `Limits` taint issue #84 closed. What the attestation
+  half would lose is not its independence from *perception of other people*; it
+  is the free coincidence of the two frames that made the question moot. Nothing
+  in this repository is mobile, so the sentence above holds as written for the
+  artifact this document is about — it is now stated with the condition it was
+  always resting on.
 
 ## 3. Two axes, not one
 
@@ -194,7 +216,7 @@ not omitted, and it is not softened into a claim.
 
 | # | Question (query) | Layer, and the evidence for it | Minimum resolution, and the evidence for it | Claim strength |
 |---|---|---|---|---|
-| 1 | Could the robot have reached (x, y) at t? (`reg.graph.envelope_at`) | **A** — `HAS_ENVELOPE` is `EdgeSpec("A", "RobotConfig", "Envelope", …)`; it is the only Layer A edge type, and the only one naming no `Entity` | **transition** — the occurrence view holds **0 edges** (curve above) and, by the projection's own rule, no `envelope` and no `robot_config` rows either, so the question has no substrate there. Agreement at the transition level is **unmeasured, deliberately**: the only available ground truth is `reg.envelope` itself, and a check whose ground truth reruns the code under test cannot fail | **certifiable**, in the positive direction only |
+| 1 | Could the robot have reached (x, y) at t? (`reg.graph.envelope_at`) | **A** — `HAS_ENVELOPE` is `EdgeSpec("A", "RobotConfig", "Envelope", …)`; it is the only Layer A edge type, and the only one naming no `Entity` | **transition** — the occurrence view holds **0 edges** (curve above) and, by the projection's own rule, no `envelope` and no `robot_config` rows either, so the question has no substrate there. Agreement at the transition level is **unmeasured, deliberately**: the only available ground truth is `reg.envelope` itself, and a check whose ground truth reruns the code under test cannot fail | **certifiable**, in the positive direction only, and **for a fixed base**: the `(x, y)` is a room coordinate, which is a condition and not a notation (§5.6) |
 | 2 | Did the policy exceed its declared bound? (`violations(window)`) | **A** — [`docs/lossiness.md`](lossiness.md) supported-question set, query 6. No entity is named by a declaration or a verdict | **occurrence** — AGREE at every level. The record tables survive all three views intact, so this is the rare question the coarsest artifact answers in full | **certifiable**, and measured |
 | 3 | What did the policy declare at t? (`declared_bound(t)`) | **A** — same, query 5 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level states no declaration in force at t=30.0"), because the region a declaration names lives in the `edge` and `envelope` tables the occurrence view empties; transition and per-frame: AGREE | **certifiable**, and measured |
 | 4 | Was the record tampered with? (`verify_chain()`) | **A** — same, query 8. A hash chain and a MAC over records that name no entity | **occurrence** — AGREE at every level, walked under `measurement_keyring` over 3,120 chain records. Negative tests feed it a truncated chain, an altered record and a missing key | **certifiable**, and measured |
@@ -231,6 +253,22 @@ every edge naming an entity is tagged `B`.
 
 So the answer inherits nothing from perception. A perception stack that was wrong
 about every entity in the room changes no bit of this answer.
+
+**And that verdict is conditional on the base being bolted down — a fact about
+the mounting, not a property of the method.** The `(x, y)` in this question is a
+**room** coordinate, and it is answerable from proprioception alone only because
+the robot's own frame and the room's frame are the same frame here:
+`reg.kinematics` starts its cumulative sums at an explicit leading `0.0`, and
+that literal *is* the base. Nothing measured it, so nothing can be wrong about
+it. For a mobile robot where the base is comes from localization, the identical
+question is **Layer B**, and what survives in Layer A is the question posed
+against the robot's own base rather than against the room — *could the robot have
+reached a point 1.2 m ahead-left of its own base at t?* §5.6 states the split and
+what it costs; [`docs/limitations.md`](limitations.md) §9 records the condition
+against the present artifact and [`docs/mobile-base.md`](mobile-base.md) §2 works
+out the design. Nothing in this repository drives, so this row's verdict stands
+for the artifact this document describes — with the condition written down
+instead of inherited silently from the mounting.
 
 **What it does not license, and this is not a footnote.** The envelope whose
 geometry this answer is read off is a sampling-based *under*-approximation. "The
@@ -384,6 +422,71 @@ exception to "the layer never comes from the caller" — `open_edge` requires it
 be stated and `layer_of` refuses to answer for it — and the exception runs in the
 conservative direction: an omission is a refusal, never an `A`.
 
+### 5.6 The condition under §5.1: which frame the question is asked in
+
+The one question in §4 that names a coordinate is row 1, and the `(x, y)` in it
+is a **room** coordinate. This document has never had to say so. For an arm bolted to the floor the
+robot's frame and the room's frame are one frame, and *the base is at the origin*
+is free — a mounting fact, true without anybody sensing anything, and not the
+output of a process that has failure modes.
+
+Allow the base to drive and the two frames come apart. The envelope comes apart
+with them, and the split is the one this document already has:
+
+| | What it is | Layer | Why |
+|---|---|---|---|
+| **Body-frame reachable set** | where the robot can get *relative to its own base* within the horizon | **A** | computed from `q`, `q̇`, base velocities off wheel encoders, and actuation limits. Nothing outside the robot enters it, and `ProprioState` names nothing that is |
+| **Base pose** `(x, y, θ)` | where that region sits in the room | **B** | localization: map-based pose estimation on non-safety-rated sensing, or wheel odometry that drifts without bound under slip its encoders cannot observe. Exactly the status `human_pos` carries today |
+| **Room-frame envelope** | the body-frame set transformed by the pose | **B** | it inherits the pose, and therefore whatever supplied the pose |
+
+**The middle row is Layer B structurally, not for want of a better estimator.**
+The sensing-status argument — *nothing rated is producing this number* — is the
+weaker one, because it invites somebody to go and build the rated localizer. The
+argument that does not move is that a room-frame pose is a statement about the
+robot's relationship to things **outside** the robot: a map, landmarks, a frame
+somebody defined. That is where this project draws the boundary, and it is the
+same reason `SEPARATION` is Layer B in §5.5 despite being computed from the
+robot's own body. Even set-theoretic localization, which returns a set
+*guaranteed* to contain the true pose rather than a distribution over it, is
+guaranteed only under a map and bounded-error hypotheses, both exogenous — a
+guarantee conditioned on a Layer B input is a Layer B guarantee
+([`docs/prior-art.md`](prior-art.md) §25). No localizer of any kind moves the
+base pose to Layer A.
+
+**This is a loss, and stating it plainly is the point of this section.** Fewer
+questions are certifiable for a mobile robot than for a fixed arm — the same
+artifact, the same layer column, the same envelope code, and a strictly smaller
+Layer A question set:
+
+- Fixed arm — *could the robot have reached (x, y) at t?* is **Layer A**, and it
+  is §4's row 1, the flagship certifiable row of this document.
+- Mobile robot — the identical question, asked in room coordinates, is
+  **Layer B**. It is a conjunction with *the base was where the artifact says it
+  was*, and this project supplies no evidence for that conjunct any more than it
+  supplies one for where the human was.
+- The **Layer A survivor** is the question re-posed against the robot's own base:
+  *could the robot have reached a point 1.2 m ahead-left of its own base at t?*
+  That is answerable from proprioception alone, and it is a narrower question
+  than the one it replaces — it says what the machine could do and not where.
+
+A reader is entitled to ask why a project whose whole thesis is tagging evidence
+with the layer it depends on did not have this written down already. The answer
+is that **the fixed base hid the distinction by making the two frames one
+frame.** There was no pose to tag, no transform to attribute a layer to, and no
+line of code that had to mention which frame it was working in — so the
+coincidence read as an absence of the question rather than as an answer to it.
+That is the same shape as the two entries in §7 below: a dependency that arrives
+through a *value* or a *frame* rather than through a field name is one a
+field-name test cannot catch.
+
+**What this does not do.** It reclassifies nothing. Nothing in `reg/` models a
+robot pose, no figure in §3 is re-measured, no layer tag moves, and §5.1's
+verdict is correct for the artifact this document is normative over.
+[`docs/mobile-base.md`](mobile-base.md) is a design document with nothing built
+behind it, and [`docs/limitations.md`](limitations.md) §9 records the same
+condition against the present artifact. What changes here is what §5.1's verdict
+is understood to **rest on**, which is this document's job and not that one's.
+
 ---
 
 ## 6. What a real deployment changes
@@ -505,6 +608,24 @@ document's asymmetry lives.
   this way. It was rejected for **scope, not for correctness**: it rewrites this
   document, and this document is normative for what the project may claim, so it
   is a decision and not an implementation. *Issue #84.*
+- **Not that a reachability answer is Layer A whatever frame it is asked in.**
+  §5.6 is the whole argument; what belongs here is the part this document
+  declines to settle. The room-frame question is Layer B for a mobile robot and
+  the body-frame one is Layer A, and between them sits a case the project's tag
+  has no value for: a pose **dead-reckoned** from proprioception — `∫(v, ω) dt`
+  off the wheel encoders — needs no perceiver at all, but is Layer A only
+  *relative to a last known pose*, and its error grows with time and is unbounded
+  under slip an encoder cannot observe. That is **Layer A with a validity
+  horizon**, and this artifact has `A` and `B` and nothing else: the schema
+  carries `CHECK (layer IN ('A', 'B'))`, `store.layer_of` refuses a type it has
+  no rule for, and there is no third value to reach for. Recorded, not resolved.
+  When it is resolved, **issue #84's precedent is the shape it should take** — a
+  two-value provenance tag beside `LimitSource`, required with no default and
+  with no inference, the simplification stated out loud, and the drift horizon
+  recorded rather than modelled — and not the graded integrity attribute the
+  bullet above rejects for scope. Either way it is a change to this document
+  before it is a change to a type. *Recorded 2026-09-01, issue #139;
+  [`docs/mobile-base.md`](mobile-base.md) §2.2.*
 - **Not that the layer tag makes a Layer B answer safe to quote.** It makes it
   legibly conditional. Quoting a Layer B answer without its condition is the
   failure this document exists to prevent, which is why the strength column says
@@ -590,6 +711,10 @@ occurrence resolution 1.0 s.
   is standard practice, not a contribution** (ARMTD, ARMOUR), and the
   over-/under-approximation vocabulary this document uses. Also **§9**, DSSAD's
   data elements, which the occurrence level is shaped from.
+- [`docs/mobile-base.md`](mobile-base.md) — **the design behind §5.6**: what a
+  driven base does to the bound, to the layer boundary and to the geometry. A
+  design document with nothing built behind it; where it and this file touch what
+  may be claimed, this file is the normative one.
 - [`docs/plan.md`](plan.md) — **Phase 9**, the single-axis taxonomy this document
   supersedes with two; **Phases 3, 4 and 6**, which built the attestation records
   rows 2–4 rest on.

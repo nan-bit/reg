@@ -4,7 +4,9 @@
 2026-08-31 · **no code in this repository implements any of it** · normative for
 the mobile track only; where it touches what the project may claim, it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
-those files carry the change themselves · keep current
+those files carry the change themselves — **§2.1 and §2.2 now do**, carried into
+`sufficiency.md` §2, §5.1, §5.6 and §7 on 2026-09-01 (issue #139), and that file
+is the normative statement of them · keep current
 
 Every figure, every envelope and the bound enforcement VETOes on are computed for
 a planar arm with its base bolted to the origin. This document is what happens
@@ -161,6 +163,15 @@ fixed base hid the distinction by making the two frames the same frame. That is
 the kind of thing [`sufficiency.md`](sufficiency.md) exists to record, and it is
 the strongest thing to come out of this work.
 
+**It is recorded there now, and that copy is the normative one.**
+[`sufficiency.md`](sufficiency.md) §5.6 carries the three-row split and this
+subsection's loss, §5.1 states its own verdict as conditional on a fixed base and
+names the Layer A survivor, and §2 reconciles the paragraph below against
+`reg/store.py` (issue #139, 2026-09-01). Where the two files differ from here on,
+**`sufficiency.md` is right** — it is normative for what the project may claim
+and this is a design document. Nothing was reclassified in the move: no layer tag
+changed, no figure moved, and `ProprioState` was not touched.
+
 It also reaches somewhere the layer boundary has never had to reach.
 `reg/store.py` asserts of the four attestation edges that they are Layer A and
 that not one of them names an `Entity` — *"None of it needs to know where anybody
@@ -174,6 +185,9 @@ A dead-reckoned pose — `∫(v, ω) dt` from the last known pose — is derivab
 proprioception alone. But it is only Layer A *relative to that last pose*, and
 its error grows with time and is unbounded under slip. That is **Layer A with a
 validity horizon**, which is not a value this project's binary has.
+
+[`sufficiency.md`](sufficiency.md) §7 carries this as a bullet beside issue
+#84's two, on the same terms it is put here: recorded, not resolved.
 
 Issue #84 set the precedent for exactly this shape of problem: `Limits.source` is
 a two-value tag with the simplification stated out loud rather than a graded
@@ -332,12 +346,16 @@ PR.
 **Tier 0 — say what is true today.** The fixed base as a limitations entry; and
 `proprioceptive_columns` refusing an unclassifiable column (§5).
 
-**Tier 1 — the argument.** The fifth prior-art pass — **done**, 2026-09-01,
-[`prior-art.md`](prior-art.md) §21–§25 — then
+**Tier 1 — the argument. Done, 2026-09-01.** The fifth prior-art pass —
+[`prior-art.md`](prior-art.md) §21–§25, issue #138 — then
 [`sufficiency.md`](sufficiency.md) carrying §2.1's shrink of the certifiable
 question set, which the pass's §25 restates as a structural claim rather than a
-sensing-status one. *Everything downstream depends on the second one, and it is
-still outstanding.*
+sensing-status one: issue #139, landed in that file's §2, §5.1, §5.6 and §7.
+*Everything downstream depended on the second one and no longer waits on it.*
+Tier 2 still moves `sufficiency.md` again, because
+`test_propriostate_fields_are_exactly_the_allowed_set` requires it in the same
+commit as the first type change; what Tier 1 bought is that the argument is
+settled before a type moves, rather than in the same PR as one.
 
 **Tier 2 — types and the boundary.** Base velocity on `ProprioState`; a Layer B
 pose type; base actuation bounds on `Limits` under the existing no-default rule;

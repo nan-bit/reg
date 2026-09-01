@@ -1,0 +1,74 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "139-1788291957837487481-2180476",
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "49e91b4acc33d1c060ca3845bd678e746ba24506e3f44dc1a11e20eb9cca59c7",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "e10361d8d540c29a2cf03dfa90f47fe33400a544d5f9aaf784a1c2eaa450f051",
+        "concluded": "d572fbb6a837df1c30aaa4910fde3d1ce50d712811d92600f78fbb4080e7427b",
+        "coverage": "3eb4cf8f1105f8d3f9320a2fe7c0f90dbe41298bbce6ee46353ed243732f1562",
+        "declared": "dcd5dab28d1116769299f53320680686f1369859caaab59546eeec623689c4a0",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "8d27ba37c5d810106b55f3fd6cdb35842007e88754184bfc0e6035f9bcede633",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "verdict": "3c8f9b520d0036aa0d3e26eeae436f849d75e5292f4ef8b840115fea0144a53e"
+      },
+      "head": "ca0a07f89b98f59bd53ed98540e7c4d233b213033488c338839523f7505cb9c0",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "f8cbf40a4846688c7e1a924aaf6e0a1ac6f4396b",
+    "concluded": {
+      "analyzer": "none",
+      "changed": [
+        "docs/mobile-base.md",
+        "docs/sufficiency.md"
+      ],
+      "edge_kinds": [],
+      "granularity": "file",
+      "reach": [
+        "docs/mobile-base.md",
+        "docs/sufficiency.md"
+      ]
+    },
+    "coverage": {
+      "analyzed": {},
+      "changed_unreadable": [
+        "docs/mobile-base.md",
+        "docs/sufficiency.md"
+      ],
+      "reason": "no adapter configured for: md",
+      "unreadable": {
+        "md": 2
+      },
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [
+        "docs/mobile-base.md",
+        "docs/sufficiency.md",
+        "tests/test_prior_art.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 139,
+    "out_of_scope": [],
+    "prev": [],
+    "verdict": "in-scope-partial"
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "f8cbf40a4846688c7e1a924aaf6e0a1ac6f4396b"
+      },
+      "name": "auto/issue-139"
+    }
+  ]
+}

@@ -17,23 +17,48 @@ provenance is carried explicitly as `Limits.source` and the tests for it are the
 back half of this file: the mapping, the edge tag it produces end to end, and the
 two refusals — a `Limits` that does not say where it came from, and an artifact
 that does not either.
+
+THE PROVENANCE THAT DECIDES NO LAYER (issue #149)
+-------------------------------------------------
+`BasePose` and `PoseSource` are new, additive, and nothing constructs one yet.
+The precedent above is exactly what makes them dangerous: `Limits.source`
+*selects* a layer, so the obvious next move is a `pose_layer` doing the same —
+and it would hand back `A` for a dead-reckoned pose, which is a room-frame
+answer wearing a Layer A tag. A room-frame pose is Layer B **structurally**
+(docs/sufficiency.md §5.6), so the last section of this file asserts that no
+such mapping exists anywhere in `reg/`, that the one mapping which does exist
+refuses a pose, and that `ProprioState` cannot hold one. With no consumer
+behind the type, those tests are the whole contract.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import importlib
+import pkgutil
+import re
 import sqlite3
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
 from shapely.geometry import Point
 
+import reg
 from reg import graph, store
 from reg.identity import RunIdentity
 from reg.envelope import envelope_hash, envelope_layer
 from reg.stream import write_frames
-from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
+from reg.types import (
+    BasePose,
+    Limits,
+    LimitSource,
+    Obstacle,
+    PoseSource,
+    ProprioState,
+    StateFrame,
+)
 
 # Anything matching one of these in a Layer A structure means the world leaked in.
 WORLD_WORDS = ("human", "obstacle", "object", "entity", "goal", "target", "scene")
@@ -435,3 +460,178 @@ def test_an_envelope_edge_may_not_be_written_without_stating_its_layer(
             )
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------
+# The base pose: a provenance that records a horizon and decides no layer (#149)
+# --------------------------------------------------------------------------
+#
+# Nothing in `reg/` constructs a `BasePose` yet — issue #149 is purely additive
+# and the three issues after it wire it in. That makes this section the only
+# thing holding the contract: an unexercised type drifts, and the direction it
+# would drift in is known, because `Limits.source` sits ten lines above it and
+# *does* select a layer. These tests are the difference between "Layer B by
+# docstring" and "Layer B by something that fails".
+
+_POSE = {"x": 1.2, "y": -0.4, "theta": 0.3}
+
+
+def test_base_pose_cannot_be_built_without_saying_where_it_came_from() -> None:
+    """Negative test: no default, so omitting the provenance is a `TypeError`.
+
+    The `Limits.source` argument, applied unchanged: a default would make the
+    caller who never considered provenance produce the same object as the one
+    who considered it and concluded "dead reckoning", and nothing downstream
+    could tell those apart.
+    """
+    with pytest.raises(TypeError, match="source"):
+        BasePose(**_POSE)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("bad", ["localized", "dead_reckoned", None, 0, True])
+def test_base_pose_refuses_a_source_that_is_not_a_pose_source(bad: object) -> None:
+    """Negative test: the string that spells a value is not the value.
+
+    Same failure as `Limits.source` refusing `"proprioceptive"` — it looks right
+    in a repr and compares equal to no member — and `None`, which reads as
+    "unspecified" when unspecified is the state the field exists to forbid.
+    """
+    with pytest.raises(TypeError, match="PoseSource"):
+        BasePose(**_POSE, source=bad)  # type: ignore[arg-type]
+
+
+def test_no_field_of_base_pose_has_a_default() -> None:
+    """The invariant behind the negative test above, so a fourth field inherits it.
+
+    `Limits` carries the same assertion since issue #115. Naming `source` alone
+    would not catch the next field somebody adds with a plausible number
+    attached — and for a pose every plausible number is a place the robot was
+    not.
+    """
+    defaulted = [
+        f.name
+        for f in dataclasses.fields(BasePose)
+        if f.default is not dataclasses.MISSING
+        or f.default_factory is not dataclasses.MISSING
+    ]
+    assert defaulted == []
+
+
+def test_a_base_pose_is_frozen() -> None:
+    """A pose that can be edited after the fact is not evidence of where anything was."""
+    pose = BasePose(**_POSE, source=PoseSource.LOCALIZED)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        pose.x = 0.0  # type: ignore[misc]
+
+
+def test_pose_source_distinguishes_dead_reckoning_from_localization() -> None:
+    """The vocabulary itself: the two provenances with different failure modes.
+
+    They are not interchangeable and the enum exists so the record can tell them
+    apart — one drifts without bound under slip and is only meaningful relative
+    to a last known pose, the other inherits a map and an association. Both are
+    Layer B in the room; that is the next test's business.
+    """
+    assert {s.name for s in PoseSource} >= {"DEAD_RECKONED", "LOCALIZED"}
+    assert PoseSource.DEAD_RECKONED is not PoseSource.LOCALIZED
+
+
+def _reg_modules() -> list[ModuleType]:
+    """Every module in the package, imported, so an attribute scan can see it all."""
+    mods = [importlib.import_module("reg")]
+    for info in pkgutil.iter_modules(reg.__path__):
+        mods.append(importlib.import_module(f"reg.{info.name}"))
+    assert len(mods) > 1, (
+        "no modules found under reg/ — the scan below would then pass by "
+        "looking at nothing, which is a could-not-evaluate and not a pass."
+    )
+    return mods
+
+
+#: Anything whose name suggests it answers "which layer is this pose?".
+_POSE_LAYER_NAME = re.compile(r"(pose.*layer|layer.*pose)", re.IGNORECASE)
+
+
+def test_no_function_in_reg_maps_a_pose_provenance_to_a_layer() -> None:
+    """THE TEST THIS ISSUE IS ABOUT (#149). The mapping must not exist at all.
+
+    `reg.envelope.envelope_layer` and `_LAYER_BY_LIMIT_SOURCE` make writing a
+    `pose_layer` the obvious next move, and it would be wrong in a way no other
+    test here could see: `DEAD_RECKONED` is derivable from proprioception, so
+    the plausible mapping hands back `A` for it, and a room-frame pose tagged
+    `A` is precisely the mislabelling this whole mechanism exists to stop.
+    Both `PoseSource` values are Layer B (docs/sufficiency.md §5.6), so the
+    honest mapping is a constant — and a constant function is a fact for the
+    docstring, not an API somebody can be tempted to make interesting later.
+
+    Scanned two ways, because the wrong thing can arrive with an innocent name:
+    by name, and by shape — any container keyed on a `PoseSource` whose values
+    are layer tags.
+    """
+    offenders: list[str] = []
+    for module in _reg_modules():
+        for name, obj in vars(module).items():
+            if getattr(obj, "__module__", None) != module.__name__:
+                continue  # imported from elsewhere; scanned where it is defined
+            if callable(obj) and _POSE_LAYER_NAME.search(name):
+                offenders.append(f"{module.__name__}.{name}")
+    for module in _reg_modules():
+        for name, obj in vars(module).items():
+            if not isinstance(obj, dict) or not obj:
+                continue
+            keyed_on_pose = any(isinstance(k, PoseSource) for k in obj)
+            holds_layers = any(v in ("A", "B") for v in obj.values())
+            if keyed_on_pose and holds_layers:
+                offenders.append(f"{module.__name__}.{name}")
+    assert offenders == [], (
+        f"{offenders} maps a pose provenance to a layer. There is no such "
+        "mapping to write: a room-frame pose is Layer B structurally — it is a "
+        "statement about the robot's relationship to a map, landmarks or a "
+        "frame somebody defined — and no localizer moves it, including a "
+        "set-membership estimator returning a guaranteed containing set "
+        "(docs/sufficiency.md §5.6, docs/prior-art.md §25). `PoseSource` "
+        "records what the pose inherits and over what horizon, not whether it "
+        "is certifiable. If this needs to change, it changes what the project "
+        "may claim and sufficiency.md moves first."
+    )
+
+
+def test_the_limit_source_mapping_cannot_be_borrowed_for_a_pose() -> None:
+    """Negative test: the one layer mapping that exists refuses a `BasePose`.
+
+    Deleting `pose_layer` means nothing if `envelope_layer` will duck-type a
+    pose — it reads `.source` and both types have one. It does not: it checks
+    for a `Limits` and says so, so the absence asserted above cannot be worked
+    around by passing the pose to the function next door.
+    """
+    pose = BasePose(**_POSE, source=PoseSource.DEAD_RECKONED)
+    with pytest.raises(TypeError, match="envelope_layer takes a Limits"):
+        envelope_layer(pose)  # type: ignore[arg-type]
+
+
+def test_propriostate_cannot_hold_a_base_pose() -> None:
+    """The boundary this type is on the far side of, asserted with no consumer yet.
+
+    `ProprioState` may gain base *velocity*, which an encoder measures; it may
+    not gain base *pose*, which an encoder does not (docs/mobile-base.md §2).
+    Note that `x`, `y` and `theta` are not in `WORLD_WORDS` and never will be —
+    the word check cannot catch this one, so it is checked by type and by the
+    allowlist.
+
+    The allowlist is asserted here as well as in
+    `test_propriostate_fields_are_exactly_the_allowed_set` on purpose: issue
+    #149 is additive, and *nothing on Layer A moved* is half of what it claims.
+    """
+    annotations = {f.name: str(f.type) for f in dataclasses.fields(ProprioState)}
+    assert not any("BasePose" in t for t in annotations.values()), (
+        f"ProprioState fields {annotations} include a BasePose. A room-frame "
+        "pose in Layer A makes every envelope built from that state a Layer B "
+        "region wearing a Layer A tag — docs/sufficiency.md §5.6."
+    )
+    assert set(annotations) == {"t", "q", "qd"}
+    pose_fields = [
+        f.name
+        for f in dataclasses.fields(ProprioState)
+        if f.name.lower() in ("x", "y", "theta", "pose", "base_pose")
+    ]
+    assert pose_fields == []

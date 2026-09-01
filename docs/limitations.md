@@ -594,10 +594,12 @@ load-bearing *now*, because until they are stated, two things this project says
 read as properties of the method when they are properties of the mounting.
 
 **What.** `reg.kinematics` fixes the base at the origin — the explicit leading
-`0.0` in its cumulative sums *is* the base — and nothing in `reg/`, `tests/` or
-`docs/` models a robot pose at all. Every envelope, every published figure and
-the bound `reg/enforce.py` VETOes on is computed for a planar arm bolted down at
-the origin.
+`0.0` in its cumulative sums *is* the base — and nothing in `reg/` or `tests/`
+models a robot pose at all: no transform, no pose field, no frame to carry one.
+[`docs/mobile-base.md`](mobile-base.md) discusses a pose at length and models
+none, being a design document for work that is not built. Every envelope, every
+published figure and the bound `reg/enforce.py` VETOes on is computed for a
+planar arm bolted down at the origin.
 
 **The cost, first half: `computed_bound` is finite only because the base is
 bolted down.** `reg.enforce.computed_bound(limits)` is `sum(link_lengths) +
@@ -655,8 +657,10 @@ declared and no default, on the precedent `Limits.source` set (§4, issue #84),
 so that a room-frame envelope is visibly a perception-dependent object and a
 body-frame one is visibly not. Third, the fixtures and figures to go with it:
 Claim 1 stays a fixed-arm claim, [`docs/retention.md`](retention.md) says in its
-own header that its figures are fixed-base figures at 50 Hz, and nothing in this
-entry re-measures, retires or moves any of them. Until all three exist, the
+own header that the artifact side of every figure in it is measured on the
+fixed-base arm — and that the control rate is *not* a blanket condition in the
+same way, since its ladder measures four of them — and nothing in this entry
+re-measures, retires or moves any of them. Until all three exist, the
 supportable claim is exactly: **every reachability answer in this artifact is an
 answer about an arm whose base is a mounting fact, and the certifiability of the
 world-frame ones is inherited from that fact rather than from the method.**

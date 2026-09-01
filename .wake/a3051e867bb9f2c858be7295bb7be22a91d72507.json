@@ -1,0 +1,154 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "149-1788296201775366101-2180476",
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "4d6e14a1c7c9a4127bbbe5f4e8e956c3ce84da8d9808e7acf5215c5251685b76",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "7db9c211ca18e85b525466c277aad61dcf27c1a38ca92f19705f2eede3151051",
+        "concluded": "0465c794f0bd2ba282ff720d537c749c1349ed847faa4a105502ef21384a3138",
+        "coverage": "92443fb198742e8a952dc3a3946e26b85e630adc38b812a7b6f3463f71f86528",
+        "declared": "f2af5371ed984ff530d04a3925eb2a018c02a3e5d96ac0e35235a2b38db1c1fc",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "05ada863a4cf9660fd8c68e2295f1d35b2264815f5b605003d6625bd9e0492cf",
+        "out_of_scope": "a58ee587dcbf888e73dbafb63fb9e5e5f1fedf3dab7b694c0deffe9c0eefdd76",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676"
+      },
+      "head": "ab28d3e6cf0297786ca0ddfe2c8abff00d9d4212cf5a556451670f455599554a",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "a3051e867bb9f2c858be7295bb7be22a91d72507",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "reg/types.py",
+        "tests/test_layer_boundary.py"
+      ],
+      "edge_kinds": [
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "reg/bench.py",
+        "reg/chain.py",
+        "reg/commit.py",
+        "reg/declare.py",
+        "reg/enforce.py",
+        "reg/envelope.py",
+        "reg/graph.py",
+        "reg/kinematics.py",
+        "reg/query.py",
+        "reg/scenarios.py",
+        "reg/sim.py",
+        "reg/store.py",
+        "reg/stream.py",
+        "reg/types.py",
+        "reg/viz.py",
+        "reg/world.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_declare.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_kinematics.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_personal_data.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py",
+        "tests/test_sim_cli.py",
+        "tests/test_stream.py",
+        "tests/test_viz.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 48
+      },
+      "changed_unreadable": [],
+      "reason": "ok",
+      "unreadable": {},
+      "unresolved_edges": [
+        {
+          "at": "tests/test_layer_boundary.py:541",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:543",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "reg/types.py",
+        "tests/test_layer_boundary.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 149,
+    "out_of_scope": [
+      "reg/bench.py",
+      "reg/chain.py",
+      "reg/commit.py",
+      "reg/declare.py",
+      "reg/enforce.py",
+      "reg/envelope.py",
+      "reg/graph.py",
+      "reg/kinematics.py",
+      "reg/query.py",
+      "reg/scenarios.py",
+      "reg/sim.py",
+      "reg/store.py",
+      "reg/stream.py",
+      "reg/viz.py",
+      "reg/world.py",
+      "scripts/check_bench_determinism.py",
+      "tests/test_air_gap_framing.py",
+      "tests/test_baseline_stream_description.py",
+      "tests/test_bench.py",
+      "tests/test_bench_determinism.py",
+      "tests/test_chain.py",
+      "tests/test_commit.py",
+      "tests/test_declare.py",
+      "tests/test_enforce.py",
+      "tests/test_envelope.py",
+      "tests/test_graph.py",
+      "tests/test_incumbent_encoding.py",
+      "tests/test_kinematics.py",
+      "tests/test_personal_data.py",
+      "tests/test_published_figures.py",
+      "tests/test_query.py",
+      "tests/test_scenarios.py",
+      "tests/test_sim_cli.py",
+      "tests/test_stream.py",
+      "tests/test_viz.py"
+    ],
+    "prev": [],
+    "verdict": "out-of-scope"
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "a3051e867bb9f2c858be7295bb7be22a91d72507"
+      },
+      "name": "auto/issue-149"
+    }
+  ]
+}

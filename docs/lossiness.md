@@ -343,7 +343,7 @@ own premise: *how coarse can the evidence get before it stops answering the
 question?* The resolution levels below are what answer it, and they turn out to
 be **where the compression argument actually lives** — a measured **264 GB** per
 robot per six months at occurrence resolution against a projected 182.5 TB of
-sensor log, i.e. ~691x (`docs/plan.md` Claim 1; measured 2026-08-20 at seed 0,
+sensor log, i.e. ~691x ([`retention.md`](retention.md); measured 2026-08-20 at seed 0,
 and the sensor rate is an assumption with a sourced range and a sensitivity
 table, [`sensor-baseline.md`](sensor-baseline.md)). It lives there **less
 comfortably than the provisional 18.9 GB suggested**: that figure was measured
@@ -377,7 +377,7 @@ sits at it; measured on the published fixture, that part is 42 of the level's
 them. Level 1 is an attestation record whose event layer is DSSAD-aligned, and
 not an event log with some attestation attached. The positioning decision, its
 two rejected alternatives and what it commits the project to are recorded in
-[`plan.md`](plan.md) Claim 1, *What the coarsest level actually holds*
+[`retention.md`](retention.md), *What the coarsest level actually holds*
 (issue #116).
 
 **Retains.** One row per semantically material event, from a fixed vocabulary

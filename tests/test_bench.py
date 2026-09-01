@@ -2946,8 +2946,12 @@ DOCS = sorted(path.name for path in (REPO / "docs").glob("*.md"))
 #: The documents that carry an artifact-side retention figure today. Pinned so
 #: that deleting the figures — the one way a check of this shape is defeated
 #: without anything going red — moves a document out of this set and fails.
+# `retention.md` joined this set on 2026-08-31, when Claim 1's measurement record
+# was extracted into it. `plan.md` stayed: it leads with the derived six-month
+# total, so it publishes the `bytes/hour` that total is derived from, and a
+# document that quotes the figure has to name the rate it is linear in.
 DOCS_WITH_RETENTION_FIGURES = frozenset(
-    {"plan.md", "prior-art.md", "sensor-baseline.md", "sufficiency.md"}
+    {"plan.md", "retention.md", "prior-art.md", "sensor-baseline.md", "sufficiency.md"}
 )
 
 

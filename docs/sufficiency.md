@@ -103,7 +103,7 @@ be perfectly answerable at the coarsest level: *did the robot contact the human*
 is answered from a DSSAD-shaped occurrence flag in a level costing 60.29 MB/h —
 a figure **at a 50 Hz control rate**, which the level's attestation stream and
 not its occurrence flags is what buys (98.5% of its rows are records,
-[`plan.md`](plan.md) Claim 1, issue #116) — and is still only as strong as
+[`retention.md`](retention.md), issue #116) — and is still only as strong as
 whatever said where the human was.
 
 The three levels are defined in [`docs/lossiness.md`](lossiness.md), *The three
@@ -591,5 +591,7 @@ occurrence resolution 1.0 s.
   over-/under-approximation vocabulary this document uses. Also **§9**, DSSAD's
   data elements, which the occurrence level is shaped from.
 - [`docs/plan.md`](plan.md) — **Phase 9**, the single-axis taxonomy this document
-  supersedes with two; **Claim 1, "What replaces it"**, the resolution question;
-  **Phases 3, 4 and 6**, which built the attestation records rows 2–4 rest on.
+  supersedes with two; **Phases 3, 4 and 6**, which built the attestation records
+  rows 2–4 rest on.
+- [`docs/retention.md`](retention.md) — **What replaces it**, the resolution
+  question, and the measured curve this document prices its question set against.

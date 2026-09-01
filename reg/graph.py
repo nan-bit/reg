@@ -453,7 +453,7 @@ ENVELOPE_RETENTION = (
 META_ENVELOPE_RETENTION = "envelope_row_retention"
 
 # --------------------------------------------------------------------------
-# The occurrence layer (issue #35, docs/prior-art.md §9, docs/plan.md Claim 1
+# The occurrence layer (issue #35, docs/prior-art.md §9, docs/retention.md
 # "What replaces it"). A second, much coarser view of the same run, in the shape
 # UN R157's DSSAD mandates — and the reason it exists is that issue #30 measured
 # what the fine view costs: 51.5 MB/hour, ~14x larger per frame than a gzipped
@@ -1705,7 +1705,7 @@ def build(
             rounded to, in seconds. Defaults to DSSAD's stated ±1.0 s
             (`OCCURRENCE_TIME_RESOLUTION_S`) and is recorded in `meta` either
             way. It is an argument rather than a constant because measuring what
-            a resolution costs is the point of the layer (docs/plan.md Claim 1,
+            a resolution costs is the point of the layer (docs/retention.md,
             "What replaces it"); it does **not** touch the edge layer, whose
             resolution is `TIME_TOL_S` and is not a parameter of anything.
         records: the run's signed declarations and verdicts, or `None` for a

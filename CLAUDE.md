@@ -155,6 +155,17 @@ visible, and an issue without one buys a record that can say nothing about scope
 Declare where you expect the work to land — not the whole repository, and not one
 file when you know a test will follow.
 
+**Declare `tests/` whenever the work will need a test, which here is nearly
+always.** *Tests are the deliverable* is a rule of this repository, so an agent
+that adds one is following the repo; if the declaration named only the file being
+changed, the record then reports the test as out of scope. That has happened on
+three consecutive attempts, and every time the finding was correct and useless —
+it flagged the agent for obeying `CLAUDE.md`.
+
+A scope check that fires on the expected shape of the work teaches you to ignore
+it, which costs the findings you would have wanted. Declaring the test path is
+cheaper than learning to skim past the report.
+
 **Dependencies** go in the body as a `Depends-on: #12, #14` trailer, so a human
 reading the issue sees them. A tier does not flip to `agent-ready` until
 everything it depends on is closed.

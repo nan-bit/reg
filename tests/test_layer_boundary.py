@@ -552,6 +552,32 @@ def _reg_modules() -> list[ModuleType]:
 _POSE_LAYER_NAME = re.compile(r"(pose.*layer|layer.*pose)", re.IGNORECASE)
 
 
+def pose_layer_offenders(modules: list[ModuleType]) -> list[str]:
+    """Anything in `modules` that maps a pose provenance to a layer.
+
+    Taken out of the test so the negative below can drive it against a module
+    built to offend. A scan whose only input is the real package can be shown to
+    have *looked*, never to be able to *see* — and this is the check issue #149
+    exists for, so "it passes today" is not evidence about it.
+    """
+    offenders: list[str] = []
+    for module in modules:
+        for name, obj in vars(module).items():
+            if getattr(obj, "__module__", None) != module.__name__:
+                continue  # imported from elsewhere; scanned where it is defined
+            if callable(obj) and _POSE_LAYER_NAME.search(name):
+                offenders.append(f"{module.__name__}.{name}")
+    for module in modules:
+        for name, obj in vars(module).items():
+            if not isinstance(obj, dict) or not obj:
+                continue
+            keyed_on_pose = any(isinstance(k, PoseSource) for k in obj)
+            holds_layers = any(v in ("A", "B") for v in obj.values())
+            if keyed_on_pose and holds_layers:
+                offenders.append(f"{module.__name__}.{name}")
+    return offenders
+
+
 def test_no_function_in_reg_maps_a_pose_provenance_to_a_layer() -> None:
     """THE TEST THIS ISSUE IS ABOUT (#149). The mapping must not exist at all.
 
@@ -568,22 +594,7 @@ def test_no_function_in_reg_maps_a_pose_provenance_to_a_layer() -> None:
     by name, and by shape — any container keyed on a `PoseSource` whose values
     are layer tags.
     """
-    offenders: list[str] = []
-    for module in _reg_modules():
-        for name, obj in vars(module).items():
-            if getattr(obj, "__module__", None) != module.__name__:
-                continue  # imported from elsewhere; scanned where it is defined
-            if callable(obj) and _POSE_LAYER_NAME.search(name):
-                offenders.append(f"{module.__name__}.{name}")
-    for module in _reg_modules():
-        for name, obj in vars(module).items():
-            if not isinstance(obj, dict) or not obj:
-                continue
-            keyed_on_pose = any(isinstance(k, PoseSource) for k in obj)
-            holds_layers = any(v in ("A", "B") for v in obj.values())
-            if keyed_on_pose and holds_layers:
-                offenders.append(f"{module.__name__}.{name}")
-    assert offenders == [], (
+    assert pose_layer_offenders(_reg_modules()) == [], (
         f"{offenders} maps a pose provenance to a layer. There is no such "
         "mapping to write: a room-frame pose is Layer B structurally — it is a "
         "statement about the robot's relationship to a map, landmarks or a "
@@ -594,6 +605,67 @@ def test_no_function_in_reg_maps_a_pose_provenance_to_a_layer() -> None:
         "is certifiable. If this needs to change, it changes what the project "
         "may claim and sufficiency.md moves first."
     )
+
+
+def _module_that_offends(name: str) -> ModuleType:
+    """A module carrying both shapes the scan looks for.
+
+    Written the way somebody would actually write it, which is the point: a
+    `pose_layer` returning `A` for a dead-reckoned pose is not a silly mistake,
+    it is the reading `LimitSource` invites — dead reckoning *is* derivable from
+    proprioception. It is wrong because the pose it describes is in the room.
+    """
+    module = ModuleType(name)
+
+    def pose_layer(source: PoseSource) -> str:
+        return "A" if source is PoseSource.DEAD_RECKONED else "B"
+
+    pose_layer.__module__ = name
+    module.pose_layer = pose_layer  # type: ignore[attr-defined]
+    module._LAYER_BY_POSE_SOURCE = {  # type: ignore[attr-defined]
+        PoseSource.DEAD_RECKONED: "A",
+        PoseSource.LOCALIZED: "B",
+    }
+    return module
+
+
+def test_the_scan_catches_a_mapping_that_is_there() -> None:
+    """**THE NEGATIVE.** Fed a module that maps a pose provenance to a layer,
+    the scan must name it — by function and by table, since it looks both ways.
+
+    Without this the check above asserts an absence it has never been shown able
+    to detect: a mistyped `_POSE_LAYER_NAME`, or the dict condition inverted,
+    and it passes forever while the thing it guards walks in. `CLAUDE.md`: feed a
+    check the condition it guards against and assert it says no.
+    """
+    offenders = pose_layer_offenders([_module_that_offends("reg.fake_offender")])
+    assert "reg.fake_offender.pose_layer" in offenders, (
+        "the scan did not catch a function named `pose_layer` — the by-name "
+        "half is not working, so the absence it asserts is unproven."
+    )
+    assert "reg.fake_offender._LAYER_BY_POSE_SOURCE" in offenders, (
+        "the scan did not catch a dict keyed on PoseSource holding layer tags "
+        "— the by-shape half is not working, and that is the half that catches "
+        "the mapping arriving under an innocent name."
+    )
+
+
+def test_the_scan_does_not_fire_on_an_innocent_module() -> None:
+    """And it must not cry wolf. `envelope_layer` is a real layer mapping that
+    is entirely correct — it takes a `Limits` — and a scan that flagged it would
+    be switched off within a week."""
+    innocent = ModuleType("reg.fake_innocent")
+
+    def envelope_layer(limits: object) -> str:
+        return "A"
+
+    envelope_layer.__module__ = "reg.fake_innocent"
+    innocent.envelope_layer = envelope_layer  # type: ignore[attr-defined]
+    innocent._LAYER_BY_LIMIT_SOURCE = {  # type: ignore[attr-defined]
+        LimitSource.PROPRIOCEPTIVE: "A",
+        LimitSource.DERIVED: "B",
+    }
+    assert pose_layer_offenders([innocent]) == []
 
 
 def test_the_limit_source_mapping_cannot_be_borrowed_for_a_pose() -> None:

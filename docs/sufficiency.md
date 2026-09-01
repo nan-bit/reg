@@ -479,6 +479,29 @@ That is the same shape as the two entries in §7 below: a dependency that arrive
 through a *value* or a *frame* rather than through a field name is one a
 field-name test cannot catch.
 
+**And the body-frame set is *what a protective field is*, which is not a claim
+to be one.** The Layer A row above has a name in the mobile-robot standards:
+under ISO 3691-4 and ANSI/A3 R15.08 a **protective field** is the region a
+vehicle monitors to stop before contact, defined in the vehicle's own frame for
+the reason this section has just given. Saying the body-frame reachable set is
+the same *kind of object* is accurate and is worth saying, because it locates
+this project's Layer A against practice rather than against nothing.
+
+It is also a term of art with a **conformance meaning**: a protective field is
+the output of a rated device, at a stated performance level, validated by a
+stated procedure, in a system somebody assessed. `reg`'s envelope is a `shapely`
+polygon computed by unrated Python from a simulator, and calling it a protective
+field would claim the rating along with the noun. **This document claims no
+performance level, no rating and no validation**, on the same terms §7 already
+states for the word *certifiable*: it means the failure modes are
+characterizable from proprioception, not that anybody has characterized,
+assessed or rated them. That is the same trap §12 of
+[`docs/prior-art.md`](prior-art.md) records for IEEE 7001's investigator
+ladder — *state that the project cannot be placed on it, and claim no level* —
+arriving a second time from a second standard, and it is recorded here because
+this is the file that says what may be claimed
+([`prior-art.md`](prior-art.md) §22).
+
 **What this does not do.** It reclassifies nothing. Nothing in `reg/` models a
 robot pose, no figure in §3 is re-measured, no layer tag moves, and §5.1's
 verdict is correct for the artifact this document is normative over.

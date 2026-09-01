@@ -27,12 +27,19 @@ finding worth publishing.
 `reg.enforce.computed_bound` is `sum(link_lengths) + link_radius`, a disc centred
 on the base. It is finite **because the base is bolted down**. A driven base has
 an unbounded workspace: given enough time it reaches everywhere, so there is no
-horizon-free radius to compute. Marvel & Bostelman (NIST, IEEE ROSE 2013) make the
-same point the reason mobile manipulators do not inherit either parent standard:
-their work volume is described there as effectively unbounded and not
+horizon-free radius to compute. Marvel & Bostelman (NIST, IEEE ROSE 2013)
+describe the work volume of a mobile manipulator as effectively unbounded and not
 predictable in advance — which is precisely the property a horizon-free bound
 needs to *not* have. (Paraphrase, not quotation: §6 records that the paper was
 read from its abstract and from secondary sources.)
+
+**Cite that paper for the work volume and not for the standards gap.** The same
+2013 argument continues that a mobile manipulator inherits neither parent
+standard, and that half of it has since been overtaken: ANSI/A3 R15.08 defines the
+category, and ISO 3691-4 owns the driverless vehicle under it
+([`prior-art.md`](prior-art.md) §21 and §22). The unbounded work volume is a
+property of the machine and is unaffected; *nobody has written a standard for
+this* is a statement about 2013.
 
 That has three consequences, in increasing order of how easy they are to miss.
 
@@ -64,6 +71,21 @@ could-not-evaluate. `computed_bound` must say so for a mobile model rather than
 return a large plausible number — a bound nobody can justify is worse than no
 bound, because it VETOes and looks principled while doing it.
 
+**Refusal is right here, and it is not the only answer to the same fact.** The
+reachability literature stops needing a horizon-free bound instead: RTD carries a
+**fail-safe manoeuvre**, verified offline in the same reachable set as every
+trajectory it plans, so the robot is never in a state from which it has no
+verified action ([`prior-art.md`](prior-art.md) §23). `reg` cannot take that
+answer, for two reasons that are architectural rather than preferences. The
+guarantee lives in the *planner*, which is the common-cause structure
+[`CLAUDE.md`](../CLAUDE.md) rule 3 refuses; and this project's enforcement layer
+VETOes a declaration and commands nothing, while the one thing in the tree that
+resembles a fail-safe — passivation — reaches no table, no edge type and no query
+and is documented as not exercisable. A project that cannot represent a stop
+cannot rest a bound on having one. That is why `computed_bound` refuses, and it
+is a better sentence than concluding refusal as though nothing else had been
+tried.
+
 ## 2. The base pose is Layer B, so the envelope is a body-frame object
 
 For a fixed arm, *the base is at the origin* is free. It is a mounting fact, not
@@ -79,6 +101,19 @@ sensing and is a navigation function. The proprioceptive alternative — wheel
 odometry — drifts without bound and is defeated by slip that wheel encoders
 cannot observe. Neither route delivers a room-frame pose with characterized
 failure modes.
+
+**And the pose is Layer B for a stronger reason than that.** The paragraph above
+argues from what today's sensing is rated for, which is an argument a
+safety-rated localizer would answer. The structural argument does not move: a
+room-frame pose is a statement about the robot's relationship to things *outside*
+the robot — a map, landmarks, a frame somebody defined — and that is exactly
+where this project draws the layer boundary. Even set-theoretic localization,
+which returns a set **guaranteed** to contain the true pose rather than a
+distribution over it, is guaranteed only under bounded-error hypotheses and a
+map, both exogenous; a guarantee conditioned on a Layer B input is a Layer B
+guarantee ([`prior-art.md`](prior-art.md) §25). **No localizer of any kind moves
+the base pose to Layer A.** State it in that form, because the sensing-status
+form invites someone to go and build the localizer.
 
 So the envelope splits in two, and the split is exactly the project's existing
 one:
@@ -97,6 +132,19 @@ its failure message already states the remedy: widening Layer A is a decision
 about what the project can claim, and `sufficiency.md` moves in the same change.
 What `ProprioState` may gain is base **velocity**, which an encoder measures.
 What it may not gain is base **pose**, which an encoder does not.
+
+**The body-frame row is what a protective field is — and this document may not
+call it one.** ISO 3691-4 and R15.08 size a monitored region in the vehicle frame
+by what the vehicle can do before it stops, and switch it with speed: a
+horizon-limited body-frame reachable set, arrived at by a standards committee for
+the same reason it is arrived at here ([`prior-art.md`](prior-art.md) §22). Two
+independent derivations agreeing is worth more than the derivation was. But
+*protective field* is a term of art carrying a conformance meaning — a rated
+device, a stated performance level, a validation procedure, an assessment
+somebody signed — and `reg`'s envelope is a `shapely` polygon computed by unrated
+Python from a simulator. Say the body-frame set **is what a protective field is**;
+do not say it is one. That is the same refusal §12 of the survey records against
+IEEE 7001's investigator levels: name the ladder, claim no rung.
 
 ### 2.1 What this costs, stated as a loss
 
@@ -134,6 +182,17 @@ no default and no inference, and the drift horizon recorded rather than modelled
 Do not build a graded scheme here; that decision was already taken and its
 reasons have not changed.
 
+A second nuance of the same kind, recorded for the same reason. A set-theoretic
+localizer returns a **pose set**, not a point, and a set composes with §3's
+construction directly: the room-frame envelope becomes the body-frame set
+Minkowski-summed with the pose set instead of rigidly transformed by a point,
+which preserves the over-approximation across the frame change where a point does
+not ([`prior-art.md`](prior-art.md) §25). Today's Layer B tag is binary — it says
+the answer inherited the perceiver and says nothing about how wrong it can be —
+and a pose set is the shape in which a magnitude could be carried. It is the same
+collision with issue #84 as the paragraph above, so it gets the same treatment:
+recorded here, decided in the same change as the provenance enum or not at all.
+
 ## 3. The geometry stops being a disc
 
 A differential-drive base is nonholonomic — it cannot move sideways — so its
@@ -158,6 +217,20 @@ over-approximation of a Dubins car where polynomial zonotopes capture the
 non-convexity. `reg` must not build it: *no new dependencies* is a standing rule
 and *an HJ reachability solver* is a stated non-goal in
 [`plan.md`](plan.md).
+
+**What is loose, and why, in the terms that literature uses.** Conservative
+linearization is what makes a nonlinear model analysable at all — linearize, then
+add a set-valued abstraction-error term covering everything the linearization
+dropped. It is not what makes the answer convex; the **representation** is, and a
+zonotope is convex and centrally symmetric where the true set of a Dubins-like
+model curves. Polynomial zonotopes are the same tool's other representation and
+capture the curvature ([`prior-art.md`](prior-art.md) §24). The Minkowski sum
+proposed above is that literature's primitive — zonotopes exist partly because
+the operation is exact and cheap on them, and on a `shapely` polygon it is a
+buffer whose error compounds with every step. So the looseness this section
+promises to publish is a **representation cost**, paid for not taking a
+dependency this project has already refused, and *how much* it costs has not been
+computed for this construction by anyone.
 
 **This makes issue #82's open decision harder to defer.** The overclaim check is
 radial. For a nonholonomic base a radial bound is very weak — a robot that cannot
@@ -233,16 +306,19 @@ something would have to.
 
 ## 6. Prior art, and what it was read from
 
-Entered properly in [`prior-art.md`](prior-art.md) as a fifth pass; summarised
-here so this document stands on its own.
+Entered in [`prior-art.md`](prior-art.md) as the **fifth pass, 2026-09-01**,
+§21–§25; summarised here so this document stands on its own. **Where this table
+and the pass differ, the pass is right** — it is normative over `plan.md` and it
+is where the reasons are written down, and this table is a summary that has to
+move. Three rows below were moved by it.
 
 | Work | Bearing on this design | Read from |
 |---|---|---|
-| Marvel & Bostelman, *Towards Mobile Manipulator Safety Standards*, IEEE ROSE 2013 | The unbounded work volume, and why the fixed-arm and AGV standards do not compose | abstract and secondary sources; the paper PDF did not extract |
-| **ISO 3691-4**, **ANSI/A3 R15.08** | Safety is a protective field in the vehicle frame; localization is a navigation function | secondary sources and vendor summaries — both standards are **paywalled** |
-| **RTD** / **REFINE** (Kousik et al.) | The forward reachable set for ground robots, computed with zonotopes | published preprints |
-| **CORA** (Althoff) | Conservative linearization; a Dubins car's reachable set is non-convex and a zonotope over-approximates it loosely | published preprints |
-| Set-theoretic localization | Bounded-error pose sets as an alternative to a probabilistic estimate | published preprints |
+| Marvel & Bostelman, *Towards Mobile Manipulator Safety Standards*, IEEE ROSE 2013 (§21) | The unbounded work volume. **Not** *the fixed-arm and AGV standards do not compose*: that was true in 2013 and R15.08 has since defined the category, so the paper is cited for the machine and not for the gap | abstract and secondary sources; the paper PDF did not extract |
+| **ISO 3691-4**, **ANSI/A3 R15.08** (§22) | Safety is a speed-dependent protective field in the vehicle frame plus a guaranteed stop; localization is a navigation function. The field **is the same object** as §2's body-frame set — and the term carries a conformance rating this project may not claim | secondary sources and vendor summaries — both standards are **paywalled**, and the entry cites no clause number for that reason |
+| **RTD** / **REFINE** (Kousik et al.) (§23) | The forward reachable set for ground robots, computed with zonotopes and with tracking error inside it — and the **fail-safe manoeuvre** that is this literature's alternative to §1's refusal | published preprints; no implementation run |
+| **CORA** (Althoff) (§24) | Zonotopes are the representation and conservative linearization is what makes a nonlinear model analysable; the Minkowski sum §3 proposes is this literature's primitive and its looseness is a representation cost | published preprints and the tool documentation; CORA was not run |
+| Set-theoretic localization (§25) | Bounded-error pose sets — which do **not** make the pose Layer A, because the guarantee is conditional on a map and on bounded-error hypotheses, both exogenous. The pose is Layer B structurally, not for want of an estimator | published preprints and textbook summaries |
 
 The reading status is stated per row for the reason
 [`prior-art.md`](prior-art.md) states it everywhere: an entry that implies a full
@@ -256,9 +332,12 @@ PR.
 **Tier 0 — say what is true today.** The fixed base as a limitations entry; and
 `proprioceptive_columns` refusing an unclassifiable column (§5).
 
-**Tier 1 — the argument.** The fifth prior-art pass; then
+**Tier 1 — the argument.** The fifth prior-art pass — **done**, 2026-09-01,
+[`prior-art.md`](prior-art.md) §21–§25 — then
 [`sufficiency.md`](sufficiency.md) carrying §2.1's shrink of the certifiable
-question set. *Everything downstream depends on the second one.*
+question set, which the pass's §25 restates as a structural claim rather than a
+sensing-status one. *Everything downstream depends on the second one, and it is
+still outstanding.*
 
 **Tier 2 — types and the boundary.** Base velocity on `ProprioState`; a Layer B
 pose type; base actuation bounds on `Limits` under the existing no-default rule;

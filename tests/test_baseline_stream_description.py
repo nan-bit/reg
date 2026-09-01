@@ -91,9 +91,17 @@ LEGITIMATE_COUNTS = frozenset(
 
 # --- the corpus -------------------------------------------------------------
 
+#: `docs/README.md` is labelled distinctly from the front page. Both are
+#: `README.md` by basename, and this corpus is keyed on that name — so until the
+#: docs index was added on 2026-08-31 the two would have been indistinguishable
+#: here, and a roster comparing sets of names could not have said which of them
+#: gained or lost a figure.
 CORPUS: tuple[tuple[str, Path], ...] = (
     ("README.md", README),
-    *((path.name, path) for path in sorted(DOCS.glob("*.md"))),
+    *(
+        ("README.md (docs/)" if path.name == "README.md" else path.name, path)
+        for path in sorted(DOCS.glob("*.md"))
+    ),
 )
 
 #: The documents that name the baseline today. Pinned because every check below
@@ -106,6 +114,10 @@ DOCS_DESCRIBING_THE_BASELINE: frozenset[str] = frozenset(
         "lossiness.md",
         "plan.md",
         "prior-art.md",
+        # Claim 1's measurement record, extracted from `plan.md` on 2026-08-31.
+        # It introduces the baseline where it prices the artifact against it;
+        # `plan.md` still names it too, so both are here.
+        "retention.md",
         "sensor-baseline.md",
     }
 )

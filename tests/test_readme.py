@@ -14,6 +14,44 @@ the *prose around* a figure is honest; a reviewer still has to do that.
 The verdict is three-valued on purpose (docs/CONTRIBUTING.md, CLAUDE.md): a
 README with no figures in it at all is COULD-NOT-EVALUATE, not a pass, because
 silence is how a check of this shape would otherwise be defeated.
+
+**The chain gained a second link on 2026-08-31**, when Claim 1's measurement
+record was extracted into `docs/retention.md`. Containment against `plan.md`
+alone stopped being enough that day: `plan.md` became a document that *restates*
+figures measured elsewhere, so `README.md` ⊆ `plan.md` could hold while both
+drifted away from the measurement together. That was demonstrated, not assumed —
+setting both to `999 GB` while `retention.md` and `reg.bench` still said 264 left
+the whole suite green. So the second link closes it: **Claim 1's own figures must
+appear in `docs/retention.md`**, the document that publishes them.
+
+**What that does and does not buy, stated precisely, because the first version of
+this paragraph overstated it.** It said `README ⊆ plan ⊆ retention == code`. The
+last equality is false: `tests/test_published_figures.py` re-derives the
+`bytes/hour` tables and `sufficiency.md`'s counts, and nothing else — of Claim 1's
+eight figures, `264 GB`, `~691x`, `182.5 TB`, `1 TB`, `13x` and `~40x` are not
+re-derived by anything. So this chain keeps the three documents *consistent with
+each other*, which is what stops the drift demonstrated above; it does not anchor
+them to a measurement. The anchor is one table, and the totals are arithmetic
+over it stated in prose.
+
+Two further limits, so nobody reads more into a green run than is there:
+
+* **It is containment, not attribution.** `check` asks whether the token appears
+  anywhere in the target. Claim 1 could relabel the transition level's `656 GB`
+  as the occurrence headline and pass, because the token exists in
+  `retention.md`. For a section whose job is *restating* figures, mislabelling is
+  the live failure mode and this does not catch it.
+* **It sees eight tokens.** `FIGURE` matches sizes and ratios only, so `98.5%`,
+  `3,120`, `3,166` and `50 Hz` — the composition condition the same section calls
+  load-bearing — are outside it.
+
+Scoped to Claim 1's section rather than the whole of `plan.md`, because the other
+claims and the phases quote figures of their own that this record does not
+publish and should not have to. Note the transitivity is not airtight either:
+link 1 checks the README against the whole of `plan.md`, so a README figure
+satisfied out of Phase 8 would never reach link 2. It holds today because all
+seven README figures fall inside the Claim 1 span; that is a property of the
+current text, not of the check.
 """
 
 from __future__ import annotations
@@ -26,6 +64,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 PLAN = REPO / "docs" / "plan.md"
+RETENTION = REPO / "docs" / "retention.md"
 LOSSINESS = REPO / "docs" / "lossiness.md"
 
 # A retention size (`263 GB`) or a ratio (`694x`, `13x`). The tilde, the
@@ -74,6 +113,59 @@ def test_every_figure_on_the_front_page_is_published_in_the_plan() -> None:
         "or the front page is quoting a number nobody measured. Quote the "
         "plan's figures verbatim; do not re-derive or round them."
     )
+
+
+def claim_1(plan: str) -> str:
+    """`docs/plan.md`'s Claim 1 section, or `""` if it cannot be located.
+
+    Bounded by the next `###` heading, so it stops at Claim 2. Claim 1 has no
+    `###` subsections today; if it gained one the match would end there, which
+    would silently narrow this check — so a subsection under Claim 1 is a reason
+    to revisit this function, not a free addition. The empty string is the
+    COULD-NOT-EVALUATE input below: a plan whose Claim 1 cannot be found has not
+    satisfied this check, and deleting the heading is not a way to pass it.
+    """
+    match = re.search(
+        r"^###\s+Claim 1\b.*?(?=^###\s|\Z)", plan, re.MULTILINE | re.DOTALL
+    )
+    return match.group(0) if match else ""
+
+
+def test_every_figure_claim_1_quotes_is_published_in_the_retention_record() -> None:
+    """**The second link in the chain.** See the module docstring.
+
+    `plan.md` Claim 1 restates figures it does not measure. Without this, it and
+    `README.md` can drift away from `retention.md` together and stay green.
+    """
+    section = claim_1(PLAN.read_text())
+    assert section.strip(), (
+        "docs/plan.md has no `### Claim 1` section, so the figures it quotes "
+        "cannot be checked against the record that measures them. That is a "
+        "could-not-evaluate, not a pass."
+    )
+    verdict, missing = check(section, RETENTION.read_text())
+    assert verdict == AGREE, (
+        f"docs/plan.md Claim 1 quotes {missing}, which docs/retention.md does "
+        "not publish. Claim 1 restates figures; retention.md measures them and "
+        "tests/test_published_figures.py pins its tables against the code. A "
+        "figure here that is not there is one nothing re-derives."
+    )
+
+
+def test_a_plan_figure_absent_from_the_record_is_caught() -> None:
+    """**The negative.** The exact drift this was added for: a Claim 1 that has
+    been left behind by a re-measurement."""
+    verdict, missing = check(
+        "### Claim 1 — Retention\n\nThe artifact costs **999 GB** per robot.\n",
+        RETENTION.read_text(),
+    )
+    assert verdict == DISAGREE
+    assert missing == ["999 GB"]
+
+
+def test_a_claim_1_that_cannot_be_located_is_not_a_pass() -> None:
+    """Deleting the heading must not be a way to satisfy the check."""
+    assert claim_1("# A plan\n\nNo claims here.\n") == ""
 
 
 def test_the_front_page_still_quotes_a_retention_size_and_a_ratio() -> None:

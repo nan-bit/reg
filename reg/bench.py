@@ -411,7 +411,7 @@ SCALING_N_SAMPLES = 16
 # The resolution curve (issue #35). What replaced Claim 1 after issue #30
 # refuted it: not "is the graph smaller than the stream" — measured, no — but
 # "what does evidence cost per unit of resolution, and how coarse can it get
-# before it stops answering the question?" (docs/plan.md Claim 1, "What replaces
+# before it stops answering the question?" (docs/retention.md, "What replaces
 # it".)
 #
 # Three levels, and they are three **views of one build**. Not three builds: a

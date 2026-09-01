@@ -222,7 +222,7 @@ obvious it would look on a line through the ones that are. They are also a
 **manual measurement**: only the 50 Hz row is re-measured by
 `tests/test_published_figures.py` on every CI run, and the decision to leave the
 pin there rather than extend it to the ladder is recorded in
-[`plan.md`](plan.md), *The control rate*. And the 250 Hz and 1 kHz rows are above
+[`retention.md`](retention.md), *The control rate*. And the 250 Hz and 1 kHz rows are above
 `reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, so their artifacts cannot address
 every frame of the run they price ([`limitations.md`](limitations.md) §5).
 
@@ -253,7 +253,7 @@ quoted. Every finer level is worse: transition is ~21x and per-frame ~10x at
 1 kHz. Both of those rows are also above the 100 Hz the artifact's time base is
 declared valid at, so what they buy at per-frame resolution is bounded by
 [`limitations.md`](limitations.md) §5 as well as by the price
-([`plan.md`](plan.md), *The control rate*, has the same pairing).
+([`retention.md`](retention.md), *The control rate*, has the same pairing).
 
 **The sensor assumption was not adjusted to compensate.** It is the same
 1 TB/day it has been since this document was written, for the same sourced
@@ -427,7 +427,9 @@ is the rate their robot's constraint layer actually adjudicates at.
 
 ## See also
 
-- [`plan.md`](plan.md) Claim 1 — where the projection is quoted
+- [`retention.md`](retention.md) — where the projection is quoted, and every
+  artifact-side figure it is quoted against
+- [`plan.md`](plan.md) Claim 1 — the claim the projection serves
 - [`lossiness.md`](lossiness.md) — the three resolution levels being priced
 - [`prior-art.md`](prior-art.md) §8 — why the artifact loses to a float codec, and
   why that is not this comparison

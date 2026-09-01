@@ -23,9 +23,10 @@ still hold — for a *ratio*, which moves with every legitimate change to the
 schema, the envelope parameters and the float precision, and which no document
 quotes as a fact.
 
-The three retention figures are the other case. `docs/plan.md` Claim 1 quotes
-them as a purchasing decision (264 GB per robot per six months),
-`docs/sufficiency.md` prices its question set against them and
+The three retention figures are the other case. `docs/retention.md` publishes
+them and `docs/plan.md` Claim 1 quotes the headline as a purchasing decision
+(264 GB per robot per six months), `docs/sufficiency.md` prices its question set
+against them and
 `docs/sensor-baseline.md` derives a sensitivity table from them. **A figure whose
 entire claim is that it is reproducible is a figure for which the pin is the
 invariant**: the property under test is not "the artifact is 1,000,448 bytes", it
@@ -84,23 +85,24 @@ WHAT THIS DOES NOT COVER
   stands: the 1 kHz point alone is twenty times the frames of the fixture below,
   for rows that can only move when the 50 Hz row moves, since every one of them is
   the same curve at a different `dt`. What changed is that the documents now say
-  so where they quote it — `docs/plan.md`, *The control rate*, carries the
+  so where they quote it — `docs/retention.md`, *The control rate*, carries the
   decision, and the front page no longer leads with an unpinned figure.
 
 WHAT ISSUE #98 ADDED
 --------------------
 Two things, both at the bottom of this module and both free of any new build:
 
-* **The Layer-A-carrying comparison against the stream.** `docs/plan.md` published
+* **The Layer-A-carrying comparison against the stream.** The documents published
   `~13x larger than a gzipped copy of the stream` measured with `records=None` —
   the scaling ladder's parameterization — and `README.md` repeated it with no
   qualifier at all. The artifact the retention claim actually prices carries the
-  record stream and is `~41x`. That figure is now published in `docs/plan.md` and
-  pinned here against `curve.source`, which the fixture below already builds: the
-  comparison costs nothing to check and was wrong by a factor of three.
+  record stream and is `~41x`. That figure is now published in
+  `docs/retention.md` and pinned here against `curve.source`, which the fixture
+  below already builds: the comparison costs nothing to check and was wrong by a
+  factor of three.
 * **The condition on the `13x`.** A figure a reader can take away without its
   condition is the defect, not the arithmetic. Every table row and every paragraph
-  in `README.md` and `docs/plan.md` that quotes `13x` has to name the absence of
+  in every document that quotes `13x` has to name the absence of
   Layer A in that same unit of text — checked mechanically, three-valued, with the
   documents that quote it pinned so deleting the figure is not a way to pass.
 """
@@ -220,7 +222,7 @@ def published_figures(doc: str, text: str) -> tuple[Figure, ...]:
     * **level per row** (`docs/sufficiency.md`, *The measured curve*): the first
       cell names a level and the columns named in `ROW_TABLE_COLUMNS` carry its
       measurements.
-    * **level per column** (`docs/plan.md` and `docs/sensor-baseline.md`, the
+    * **level per column** (`docs/retention.md` and `docs/sensor-baseline.md`, the
       control-rate ladders): the header names the three levels and the row whose
       first cell names **only** the base control rate is the published curve.
       A row naming two rates — `x, 50 Hz -> 1 kHz` — is a comparison, not a
@@ -283,8 +285,10 @@ def published_figures(doc: str, text: str) -> tuple[Figure, ...]:
 #: table that quietly lost a row from reading as a table that never had it.
 PUBLICATION_SITES: frozenset[tuple[str, str]] = frozenset(
     {
-        # docs/plan.md, "The control rate" — its 50 Hz row is the published curve.
-        ("plan.md", "bytes/hour"),
+        # docs/retention.md, "The control rate" — its 50 Hz row is the published
+        # curve. This was `plan.md` until 2026-08-31, when Claim 1's measurement
+        # record moved to its own document; no figure changed in the move.
+        ("retention.md", "bytes/hour"),
         # docs/sensor-baseline.md, the same ladder beside the sensor assumption.
         ("sensor-baseline.md", "bytes/hour"),
         # docs/sufficiency.md, "The measured curve" — the full row per level.
@@ -646,7 +650,7 @@ def test_a_level_per_row_table_is_read_by_row() -> None:
 
 
 def test_a_level_per_column_table_is_read_at_the_base_rate_row_only() -> None:
-    """`docs/plan.md`'s shape. The other rows are measurements of other rates and
+    """`docs/retention.md`'s shape. The other rows are measurements of other rates and
     a pin that read them would fail on a table that is entirely correct."""
     figures = published_figures(
         "d.md",
@@ -705,7 +709,7 @@ def test_prose_that_is_not_a_table_yields_nothing() -> None:
 # --------------------------------------------------------------------------
 # THE LAYER-A-CARRYING COMPARISON AGAINST THE STREAM (issue #98).
 #
-# `docs/plan.md`'s scaling ladder answers "is the graph smaller than the stream
+# `docs/retention.md`'s scaling ladder answers "is the graph smaller than the stream
 # it replaces" with `0.08x`, i.e. ~13x larger — and it answers it for an artifact
 # built with `records=None`. That is the correct parameterization for a study
 # whose variable is run length, and the wrong number to quote as the cost of the
@@ -744,12 +748,18 @@ LAYER_A_COMPARISON_ROWS: tuple[str, ...] = (
 
 
 def plan_text() -> str:
-    """`docs/plan.md`, read at call time so no test holds a stale copy."""
-    return (DOCS / "plan.md").read_text(encoding="utf-8")
+    """`docs/retention.md`, read at call time so no test holds a stale copy.
+
+    `docs/plan.md` until 2026-08-31: Claim 1's measurement record moved to its
+    own document and `plan.md` kept the claim and a pointer. The name of this
+    helper is left alone because the callers below read as prose about Claim 1,
+    which is still where the claim lives.
+    """
+    return (DOCS / "retention.md").read_text(encoding="utf-8")
 
 
 def layer_a_comparison(text: str) -> dict[str, str]:
-    """The `label -> figure` table `docs/plan.md` publishes the comparison in.
+    """The `label -> figure` table `docs/retention.md` publishes the comparison in.
 
     Identified by its first header cell rather than by position: a table found by
     counting tables from the top of a document is a table that moves the first
@@ -810,7 +820,7 @@ def test_the_layer_a_comparison_is_the_one_the_code_measures(
     """
     published = layer_a_comparison(plan_text())
     assert published, (
-        "docs/plan.md publishes no Layer-A-carrying comparison table at all, so "
+        "docs/retention.md publishes no Layer-A-carrying comparison table at all, so "
         "this had nothing to compare. That is a could-not-evaluate — the figure "
         "it guards was wrong by a factor of three on the front page for months."
     )
@@ -830,7 +840,7 @@ def test_the_layer_a_comparison_publishes_every_row() -> None:
     """
     published = set(layer_a_comparison(plan_text()))
     assert published == set(LAYER_A_COMPARISON_ROWS), (
-        "the Layer-A-carrying comparison in docs/plan.md publishes "
+        "the Layer-A-carrying comparison in docs/retention.md publishes "
         f"{sorted(published)}; this pin covers {sorted(LAYER_A_COMPARISON_ROWS)}. "
         "A missing row is a figure that stopped being published, not a figure "
         "that agrees; a new one needs adding here and to "
@@ -901,7 +911,7 @@ def test_the_layer_a_parser_ignores_every_other_table() -> None:
 # --------------------------------------------------------------------------
 # THE CONDITION ON THE `13x` (issue #98).
 #
-# The arithmetic was never the defect. `docs/plan.md` measured 13x correctly and
+# The arithmetic was never the defect. The documents measured 13x correctly and
 # said, three sentences away, that the ladder holds no Layer A; `README.md` then
 # quoted the number with the condition left behind. **A figure a reader can take
 # away without its condition is the figure being wrong**, and no amount of
@@ -928,7 +938,9 @@ NO_LAYER_A = re.compile(r"no (?:record stream|layer\s+a|declaration)", re.IGNORE
 
 #: The documents that quote the figure today. Pinned because deleting it is the
 #: one way a check of this shape goes green without the condition being stated.
-DOCS_QUOTING_THE_13X: frozenset[str] = frozenset({"README.md", "plan.md"})
+DOCS_QUOTING_THE_13X: frozenset[str] = frozenset(
+    {"README.md", "plan.md", "retention.md"}
+)
 
 
 def _quotation_units(text: str) -> list[str]:
@@ -978,9 +990,17 @@ def condition_travels_with_the_13x(text: str) -> tuple[str, list[str]]:
     return (DISAGREE if missing else AGREE), missing
 
 
+#: `docs/README.md` is labelled distinctly from the front page. Both are
+#: `README.md` by basename, and this corpus is keyed on that name — so until the
+#: docs index was added on 2026-08-31 the two would have been indistinguishable
+#: here, and a roster comparing sets of names could not have said which of them
+#: gained or lost a figure.
 CORPUS_QUOTING_FIGURES: tuple[tuple[str, Path], ...] = (
     ("README.md", README),
-    *((path.name, path) for path in sorted(DOCS.glob("*.md"))),
+    *(
+        ("README.md (docs/)" if path.name == "README.md" else path.name, path)
+        for path in sorted(DOCS.glob("*.md"))
+    ),
 )
 
 
@@ -1095,7 +1115,8 @@ def test_the_rate_comparison_row_is_not_this_figure() -> None:
 # THE COARSEST LEVEL'S LABEL IS A CLAIM ABOUT COMPOSITION, SO IT IS PINNED TOO
 # (issue #116).
 #
-# `docs/plan.md` Claim 1's retention table named its first row
+# The retention table — `docs/plan.md` Claim 1's until 2026-08-31, now
+# `docs/retention.md`'s — named its first row
 # `occurrence (±1 s, DSSAD-shaped)` and priced it at 264 GB. The label described
 # 1.3% of the level: 3,120 of its 3,166 node rows are declarations and verdicts,
 # because no resolution level coarsens a record. Every figure in that table was
@@ -1166,10 +1187,10 @@ def test_the_coarsest_levels_label_is_the_composition_the_code_measures(
     """**THE TEST ISSUE #116's FIRST ACCEPTANCE CRITERION EXISTS FOR.**"""
     share = record_share_text(curve)
     verdict, problems = label_states_the_composition(
-        (DOCS / "plan.md").read_text(encoding="utf-8"), share
+        (DOCS / "retention.md").read_text(encoding="utf-8"), share
     )
     assert verdict == AGREE, (
-        "docs/plan.md Claim 1's retention table: "
+        "docs/retention.md's retention table: "
         + "; ".join(problems)
         + f". The measured composition is {share} — re-measure with "
         f"`{MEASURING_COMMAND}` and republish the label, or fix the change that "
@@ -1187,10 +1208,10 @@ def test_the_measured_composition_is_published_row_by_row(
     would still be a different artifact.
     """
     point = next(p for p in curve.points if p.level == bench.OCCURRENCE_LEVEL)
-    plan = (DOCS / "plan.md").read_text(encoding="utf-8")
+    plan = (DOCS / "retention.md").read_text(encoding="utf-8")
     for name, value in (("records", point.records), ("node rows", point.nodes)):
         assert bench._int_text(value) in plan, (
-            f"docs/plan.md does not publish the coarsest level's {name} count, "
+            f"docs/retention.md does not publish the coarsest level's {name} count, "
             f"which the code measures as {bench._int_text(value)}. The label on "
             "that level is a claim about composition; the counts behind it are "
             "what make the claim checkable."
@@ -1229,7 +1250,7 @@ def test_a_document_with_no_retention_table_is_not_a_pass() -> None:
 # THE BYTE ATTRIBUTION BEHIND THE SUBLINEARITY IS A PUBLISHED FIGURE TOO
 # (issue #116).
 #
-# `docs/plan.md` Claim 1, *Why the growth is sublinear*, replaces a stated cause
+# `docs/retention.md`, *Why the growth is sublinear*, replaces a stated cause
 # with a measured one: per-table bytes from `dbstat` on the coarsest level of the
 # published curve. That correction is only worth what its arithmetic is worth, so
 # the arithmetic is pinned the same way every other figure in this file is —
@@ -1246,7 +1267,7 @@ def test_a_document_with_no_retention_table_is_not_a_pass() -> None:
 # a table going green by omitting the label that moved.
 # ==========================================================================
 
-#: The header cell identifying the attribution table in `docs/plan.md`. Keyed on
+#: The header cell identifying the attribution table in `docs/retention.md`. Keyed on
 #: the header, like the retention table above, so no figure in it can key it.
 ATTRIBUTION_TABLE_HEADER = "table, coarsest level at 50 hz"
 
@@ -1347,16 +1368,16 @@ def test_the_published_byte_attribution_is_the_one_the_code_measures(
     point = next(p for p in curve.points if p.level == bench.OCCURRENCE_LEVEL)
     assert point.tables is not None, (
         "this SQLite build has no dbstat virtual table, so the attribution "
-        "docs/plan.md publishes cannot be checked here. That is a "
+        "docs/retention.md publishes cannot be checked here. That is a "
         "could-not-evaluate for the check, not a pass for the document."
     )
     verdict, problems = attribution_divergences(
-        (DOCS / "plan.md").read_text(encoding="utf-8"),
+        (DOCS / "retention.md").read_text(encoding="utf-8"),
         point.tables,
         point.size_bytes,
     )
     assert verdict == AGREE, (
-        "docs/plan.md Claim 1, *Why the growth is sublinear*, publishes a byte "
+        "docs/retention.md, *Why the growth is sublinear*, publishes a byte "
         "attribution that is not what the code measures:\n  "
         + "\n  ".join(problems)
         + f"\nRe-measure with `{MEASURING_COMMAND}` and republish, or fix the "
@@ -1397,3 +1418,165 @@ def test_a_document_with_no_attribution_table_is_not_a_pass() -> None:
     verdict, problems = attribution_divergences("nothing here", {"verdict": 1}, 1)
     assert verdict == COULD_NOT_EVALUATE
     assert problems == []
+
+
+# ==========================================================================
+# THE COVERAGE CLAIM IS ITSELF A PUBLISHED CLAIM, AND NOTHING PINNED IT
+#
+# Three review rounds on the 2026-08-31 restructure found the same defect three
+# times, in three different files: a document asserting that this module
+# re-derives *every* published figure. It does not, and this module has said so
+# since it was written — `WHAT THIS DOES NOT COVER`, above, names three
+# exclusions, of which the derived six-month totals are the ones a reader most
+# wants guaranteed. `264 GB` is not re-derived by anything.
+#
+# The figures have a pin. The sentence describing what that pin covers did not,
+# so it drifted the way the figures would have without one — and it drifted
+# towards *more* confidence, in `docs/README.md`, which is where a reader is told
+# what the checks are worth. That is the failure this repository documents at
+# length, committed against the check that documents it.
+#
+# So: a paragraph that cites this module as a guarantee may not also claim the
+# guarantee is universal. It has to name a carve-out, and the carve-outs are the
+# ones this module already lists. Three-valued, per CLAUDE.md: a repository where
+# no document cites the module at all is COULD-NOT-EVALUATE, because deleting the
+# sentences is otherwise how this check goes green.
+# ==========================================================================
+
+#: This module, as the documents name it when they lean on it.
+GUARANTEE = "test_published_figures"
+
+#: A claim that the guarantee is total. These are the phrasings that have
+#: actually appeared; each asserts *all figures* rather than a named subset.
+UNIVERSAL_COVERAGE = re.compile(
+    r"every (?:published )?figure|every one of (?:them|the figures)|"
+    r"all (?:of )?the (?:published )?figures",
+    re.IGNORECASE,
+)
+
+#: Naming any one of the module's own exclusions. A paragraph that both cites the
+#: guarantee and says what it does not reach is honest at whatever length it is
+#: written; the check is on the *absence* of any qualifier, never on wording.
+CARVE_OUT = re.compile(
+    r"\bnot\b|\bexcept\b|\bonly\b|\bsubset\b|\btables?\b|prose|"
+    r"six-month|derived total|finer rung|other than 50 ?Hz|sensor side",
+    re.IGNORECASE,
+)
+
+
+def guarantee_paragraphs(text: str) -> list[str]:
+    """Every paragraph that names this module. Blank-line separated."""
+    return [p for p in re.split(r"\n\s*\n", text) if GUARANTEE in p]
+
+
+def coverage_claim_is_qualified(text: str) -> tuple[str, list[str]]:
+    """Verdict on whether this document overstates what the pin covers.
+
+    COULD-NOT-EVALUATE when the document never cites the module — it has made no
+    claim to be wrong about. That is not a pass, and the roster test below is
+    what stops every document quietly becoming could-not-evaluate.
+    """
+    paragraphs = guarantee_paragraphs(text)
+    if not paragraphs:
+        return COULD_NOT_EVALUATE, []
+    problems = []
+    for paragraph in paragraphs:
+        # Per SENTENCE, not per paragraph. A markdown bullet list is one
+        # blank-line-separated block, so a paragraph-wide search finds a
+        # qualifier in a neighbouring bullet and clears a sentence that carries
+        # none — which is how the first cut of this check passed against the
+        # very sentence it was written for.
+        for sentence in re.split(r"(?<=[.!?])\s+", " ".join(paragraph.split())):
+            if UNIVERSAL_COVERAGE.search(sentence) and not CARVE_OUT.search(
+                sentence
+            ):
+                problems.append(sentence[:160])
+    return (DISAGREE if problems else AGREE), problems
+
+
+#: The documents that lean on this module today. Pinned for the reason every
+#: other roster here is: a document that stops citing the guarantee, and one that
+#: starts, are both worth a look.
+DOCS_CITING_THE_GUARANTEE: frozenset[str] = frozenset(
+    {"README.md", "README.md (docs/)", "retention.md", "sensor-baseline.md"}
+)
+
+
+def _guarantee_corpus() -> list[tuple[str, Path]]:
+    """`(label, path)` for the front page and every document under `docs/`.
+
+    `docs/README.md` is labelled distinctly. It shares a basename with the front
+    page, and two of this repository's name-keyed rosters cannot currently tell
+    them apart — a collision introduced the day the docs index was added.
+    """
+    return [("README.md", README)] + [
+        ("README.md (docs/)" if p.name == "README.md" else p.name, p)
+        for p in sorted(DOCS.glob("*.md"))
+    ]
+
+
+@pytest.mark.parametrize("label,path", _guarantee_corpus())
+def test_no_document_claims_this_module_covers_every_figure(
+    label: str, path: Path
+) -> None:
+    """**THE CHECK THE THIRD REVIEW ROUND ASKED FOR.**
+
+    Not "is the wording good" — that is prose about prose. It is: does a document
+    that cites this pin as its guarantee *also* say the guarantee is total, while
+    naming no exclusion at all.
+    """
+    verdict, problems = coverage_claim_is_qualified(
+        path.read_text(encoding="utf-8")
+    )
+    assert verdict != DISAGREE, (
+        f"{label} cites {GUARANTEE} and claims it covers every published "
+        "figure:\n  "
+        + "\n  ".join(problems)
+        + "\nIt does not. `WHAT THIS DOES NOT COVER` at the top of this module "
+        "names three exclusions, and the derived six-month totals — `264 GB`, "
+        "the figure the front page leads with — are among them. Name the subset "
+        "that is re-derived, or name what is not."
+    )
+
+
+def test_the_documents_citing_the_guarantee_are_the_ones_expected() -> None:
+    """Deleting the sentence is not how the check above goes green."""
+    citing = {
+        label
+        for label, path in _guarantee_corpus()
+        if guarantee_paragraphs(path.read_text(encoding="utf-8"))
+    }
+    assert citing == set(DOCS_CITING_THE_GUARANTEE), (
+        f"the set of documents citing {GUARANTEE} has moved: gained "
+        f"{sorted(citing - DOCS_CITING_THE_GUARANTEE)}, lost "
+        f"{sorted(DOCS_CITING_THE_GUARANTEE - citing)}. A gain needs adding "
+        "here and has to state the guarantee honestly; a loss means a document "
+        "stopped saying what makes its figures trustworthy."
+    )
+
+
+def test_the_overclaim_that_shipped_is_caught() -> None:
+    """**The negative**, and it is the exact sentence that shipped in
+    `docs/README.md` on 2026-08-31 and survived two review rounds."""
+    shipped = (
+        "Every published figure is re-derived from the code on each CI run by\n"
+        "`tests/test_published_figures.py`, so a stale one is a failing build."
+    )
+    verdict, problems = coverage_claim_is_qualified(shipped)
+    assert verdict == DISAGREE
+    assert len(problems) == 1
+
+
+def test_a_qualified_claim_passes() -> None:
+    """And the honest form of the same sentence must not be caught, or the check
+    is one nobody can satisfy without deleting the sentence."""
+    honest = (
+        "The `bytes/hour` tables are re-derived from the code on every CI run by\n"
+        "`tests/test_published_figures.py`. The six-month totals derived from\n"
+        "them are not."
+    )
+    assert coverage_claim_is_qualified(honest)[0] == AGREE
+
+
+def test_a_document_that_never_cites_the_module_is_not_a_pass() -> None:
+    assert coverage_claim_is_qualified("Nothing here.")[0] == COULD_NOT_EVALUATE

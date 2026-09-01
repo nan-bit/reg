@@ -1,0 +1,59 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "136-1788282628287528024-4082719",
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "19282810310c8e65928edc1258cf296403d704f7393c896b780d6dd6f9853745",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "315567c378192751d016e8e95b96c5f44ce88d8027b9d69bae4b60058838b96d",
+        "concluded": "b6429dbb35b2efe5e6607b67495cb864e982275f93366945069d2b3de2c673c1",
+        "coverage": "3bcfedbf4d7db342a5f12f449b96b9109bdaebeb7a162d21e35bfabe1a310669",
+        "declared": "936f4ce83ede70c27d43f8c3f6481cdb82f05d2b58875a7425fa42cbe95e2e27",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "36ebe205bcdfc499a25e6923f4450fa8d48196ceb4fa0ce077d9d8ec4a36926d",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "verdict": "9fb6079598834b5b5f278e474391050d7633b0d95407e8848fa20837887216b3"
+      },
+      "head": "d8bb30ebe3c372de8f69fd7b1063d04fc9aae8216d9555068735e1cc1d11e9d4",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "03e5968ea430d8a28219a55d75d2deae90096897",
+    "concluded": {
+      "analyzer": "unknown",
+      "changed": [],
+      "edge_kinds": [],
+      "granularity": "file",
+      "reach": []
+    },
+    "coverage": {
+      "analyzed": {},
+      "changed_unreadable": [],
+      "reason": "",
+      "unreadable": {},
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [],
+      "source": "issue-body:Affected areas",
+      "state": "undeclared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 136,
+    "out_of_scope": [],
+    "prev": [],
+    "verdict": "could-not-evaluate"
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "03e5968ea430d8a28219a55d75d2deae90096897"
+      },
+      "name": "auto/issue-136"
+    }
+  ]
+}

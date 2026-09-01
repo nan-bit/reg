@@ -578,3 +578,85 @@ caller-supplied input from a deployment that does not exist here, and a plausibl
 invented retention deadline would be indistinguishable downstream from a lawful
 one. What this section does is stop the artifact reading as though the question
 had been asked and answered.
+
+---
+
+## 9. Every result here is a fixed-base result, and two claims rest on that
+
+Added 2026-09-01 (issue #136). The eight entries above limit what the artifact
+can *answer* or whether it may be *kept*. Not one of them says that the robot
+cannot move. That is the largest scoping assumption in the repository, and it
+went unwritten for the reason such assumptions usually do: a fixed base was never
+chosen frame by frame, it is the frame everything else was written in, so no line
+of code ever had to mention it. [`docs/mobile-base.md`](mobile-base.md) is where
+the consequences are worked out in full. This entry states the two that are
+load-bearing *now*, because until they are stated, two things this project says
+read as properties of the method when they are properties of the mounting.
+
+**What.** `reg.kinematics` fixes the base at the origin — the explicit leading
+`0.0` in its cumulative sums *is* the base — and nothing in `reg/`, `tests/` or
+`docs/` models a robot pose at all. Every envelope, every published figure and
+the bound `reg/enforce.py` VETOes on is computed for a planar arm bolted down at
+the origin.
+
+**The cost, first half: `computed_bound` is finite only because the base is
+bolted down.** `reg.enforce.computed_bound(limits)` is `sum(link_lengths) +
+link_radius`, the radius of a workspace disc. §3 above calls it "the same scalar
+at every frame of every scenario", which is exactly right and is a fixed-base
+property: a driven base has an unbounded workspace — given enough time it reaches
+everywhere — so no horizon-free radius exists for it to compute. What inherits
+that is the description of the bound itself. `CLAUDE.md` rule 3 and §3 both
+describe `horizon_bound` as the **smaller of two sound bounds**, and the
+soundness of the first one is a trivial argument only while the disc is centred
+on something that stays put. Remove the mounting and the first term is not a
+looser bound, it is not a bound: every VETO would rest on `outer_envelope`'s
+soundness argument alone, and
+`tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+would stop being a good test and become the load-bearing one.
+[`docs/mobile-base.md`](mobile-base.md) §1 works that through, including the
+origin-centred disc intersected *inside* `outer_envelope` — the place where a
+moved base would produce an unsound bound that looks exactly like a sound one.
+
+**The cost, second half: world-frame reachability is Layer A only for a fixed
+base.** [`docs/sufficiency.md`](sufficiency.md) §5.1 rests the certifiability of
+*could the robot have reached (x, y) at t?* on "the answer inherits nothing from
+perception". That holds here, and it holds because *the base is at the origin* is
+a **mounting fact** rather than a measurement — free, and true without anybody
+sensing anything. For a mobile robot the same sentence is a **localization**
+output: map-based pose estimation runs on non-safety-rated sensing, and wheel
+odometry drifts without bound under slip its encoders cannot observe. So the
+identical question becomes Layer B, and what survives in Layer A is the
+body-frame version of it — *could the robot have reached a point 1.2 m
+ahead-left of its own base at t?* The fixed base hid the distinction by making
+the two frames the same frame, which is why a project whose whole thesis is
+tagging evidence with the layer it depends on did not already have this written
+down. [`docs/mobile-base.md`](mobile-base.md) §2 and §2.1 carry it.
+
+**What this half is, and is not.** It is a statement about the **present
+artifact**: the question is Layer A for the robot this repository models, and
+`sufficiency.md` §5.1 is correct as written. This entry does not reclassify it,
+does not move a layer tag, and changes no behaviour, no figure and no line of
+`docs/sufficiency.md`. Carrying §2.1's shrink of the certifiable question set
+into `sufficiency.md` is a separate decision, tracked separately — see
+[`docs/mobile-base.md`](mobile-base.md) §7, where it is Tier 1 and where
+everything downstream of it waits. What is recorded here is the narrower and
+immediately checkable thing: the Layer A status of world-frame reachability is
+**conditional on the base being fixed**, and nothing in the code says so, because
+there is no base-pose field for a condition to attach to.
+
+**What a claim would need in order not to inherit this.** A claim that is not
+about a bolted-down arm needs three things, none of which exists here. First, a
+bound that **refuses**: an unbounded workspace is a could-not-evaluate under
+`CLAUDE.md`'s *a check must be able to fail*, and `computed_bound` must say so
+for a mobile model rather than return a large plausible number — a bound nobody
+can justify is worse than no bound, because it VETOes while looking principled.
+Second, a base pose carried as an explicit **Layer B** input with its provenance
+declared and no default, on the precedent `Limits.source` set (§4, issue #84),
+so that a room-frame envelope is visibly a perception-dependent object and a
+body-frame one is visibly not. Third, the fixtures and figures to go with it:
+Claim 1 stays a fixed-arm claim, [`docs/retention.md`](retention.md) says in its
+own header that its figures are fixed-base figures at 50 Hz, and nothing in this
+entry re-measures, retires or moves any of them. Until all three exist, the
+supportable claim is exactly: **every reachability answer in this artifact is an
+answer about an arm whose base is a mounting fact, and the certifiability of the
+world-frame ones is inherited from that fact rather than from the method.**

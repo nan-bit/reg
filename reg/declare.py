@@ -69,7 +69,7 @@ from typing import ClassVar
 
 import numpy as np
 import shapely
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 from reg.chain import (
@@ -83,7 +83,12 @@ from reg.chain import (
     sign,
     verify,
 )
-from reg.kinematics import ORIGIN_FRAME, forward_kinematics, link_polygons
+from reg.kinematics import (
+    ORIGIN_FRAME,
+    BaseFrame,
+    forward_kinematics,
+    link_polygons,
+)
 from reg.types import Limits, ProprioState
 
 __all__ = [
@@ -463,22 +468,102 @@ def box_grid(box: Sequence[tuple[float, float]], limits: Limits) -> np.ndarray:
     return np.asarray(list(itertools.product(*axes)), dtype=float).reshape(total, -1)
 
 
-def declared_region(configs: np.ndarray | Sequence[Sequence[float]], limits: Limits) -> Polygon:
-    """The workspace polygon for a set of configurations: the union of the bodies.
+def _base_frames(
+    bases: BaseFrame | Sequence[BaseFrame], m: int, where: str
+) -> tuple[tuple[BaseFrame, ...], bool]:
+    """One frame per configuration, and whether the base moved across them.
+
+    A single `BaseFrame` is the statement *the base did not move over these
+    configurations* — a bolted-down arm, which is every robot in this
+    repository. A sequence of `m` frames is the only thing that can say it did,
+    and the two are different claims about the same robot, so the caller writes
+    which one it means.
+
+    Required at every call site with no default, on the rule `reg.kinematics`
+    already applies to its own `base` argument (issue #152) and `Limits` applies
+    to `link_radius`: a frame nobody stated must not be indistinguishable
+    downstream from one somebody did.
+    """
+    if isinstance(bases, BaseFrame):
+        return (bases,) * m, False
+    if not isinstance(bases, (tuple, list)):
+        raise DeclarationError(
+            f"{where}: bases must be a BaseFrame or a sequence of them, got "
+            f"{type(bases).__name__}. It is what each configuration's arm is "
+            "measured from; there is no frame to fall back on."
+        )
+    if len(bases) != m:
+        raise DeclarationError(
+            f"{where}: {len(bases)} base frames for {m} configurations. One "
+            "frame per configuration, or a single BaseFrame for a base that did "
+            "not move — a mismatch would silently pair configurations with the "
+            "wrong frames and place the arm where it never was."
+        )
+    for i, frame in enumerate(bases):
+        if not isinstance(frame, BaseFrame):
+            raise DeclarationError(
+                f"{where}: bases[{i}] is a {type(frame).__name__}, not a "
+                "BaseFrame. A `reg.types.BasePose` is refused here for the "
+                "reason `reg.kinematics._base_frame` gives: it has the same "
+                "three fields, it is a room-frame Layer B pose, and it would "
+                "duck-type through into a region tagged Layer A."
+            )
+    frames = tuple(bases)
+    return frames, any(frame != frames[0] for frame in frames[1:])
+
+
+def declared_region(
+    configs: np.ndarray | Sequence[Sequence[float]],
+    limits: Limits,
+    bases: BaseFrame | Sequence[BaseFrame],
+) -> Polygon | MultiPolygon:
+    """The workspace region for a set of configurations: the union of the bodies.
 
     Args:
         configs: `(m, n_joints)` joint configurations, radians. Either the poses
             the policy is about to occupy or `box_grid` of a box it is claiming.
         limits: the robot, for forward kinematics.
+        bases: the frame each configuration is measured from — a single
+            `BaseFrame` when the base did not move across them, or one per
+            configuration when it did. Required, no default; see `_base_frames`.
+            A bolted-down arm passes `ORIGIN_FRAME`.
 
     Returns:
-        A single `Polygon`. Connected by construction — every configuration's
-        first link contains the base — so a `MultiPolygon` here would mean the
-        geometry is wrong and is refused rather than reported.
+        A single `Polygon` when the union is connected, which for a base that
+        did not move is every case. A `MultiPolygon` when the base moved and the
+        union genuinely is not connected — see below.
 
     Raises:
-        DeclarationError: `configs` is empty or malformed, or the union is empty
-            or disconnected. Each is a could-not-evaluate, never a small region.
+        DeclarationError: `configs` or `bases` is empty or malformed, the union
+            is empty, or the union is disconnected under a base that did not
+            move. Each is a could-not-evaluate, never a small region.
+
+    WHY A DISCONNECTED UNION USED TO BE A FAULT, AND WHY IT IS NOT ALWAYS ONE
+    ------------------------------------------------------------------------
+    This function refused a `MultiPolygon` outright, on the argument that every
+    configuration's first link contains the base, so the union of any number of
+    them is connected by construction and a disconnected result means the grid
+    or the kinematics is wrong. **That argument is still exactly true, and it is
+    still enforced — it just turns out to have been an argument about the
+    base.** It holds because every first link contained *the same point*.
+
+    Move the base and the first links contain different points. A declaration
+    spanning an interval in which the vehicle drove is the union of the arm at
+    the start and the arm at the end, and those need not touch; the region that
+    is actually swept is then disconnected, and refusing it would be refusing a
+    correct bound and reporting a fault against a robot that has committed none.
+    So the refusal is conditioned on the base rather than dropped, and the
+    condition is on the *base* and not on a geometry tolerance: with one frame
+    the connectedness argument holds and its violation is still a failed
+    computation. docs/mobile-base.md §4 item 5, Tier 3.
+
+    **The record has not widened with it.** `envelope_wkb`, `_padded` and
+    `Declaration` still take a single `Polygon`, so a disconnected region cannot
+    be signed into the chain — loudly, at the boundary where the bytes are made,
+    which is a could-not-evaluate a reader can see. Widening the declared
+    envelope to a multi-part bound changes what every containment test in Phase 4
+    means and is the schema half of Tier 3, not something this function should
+    pre-empt by refusing early.
     """
     array = np.asarray(configs, dtype=float)
     if array.ndim != 2 or array.shape[0] == 0:
@@ -488,10 +573,11 @@ def declared_region(configs: np.ndarray | Sequence[Sequence[float]], limits: Lim
             "configuration is an empty bound, and every containment test against "
             "an empty bound passes vacuously."
         )
+    frames, base_moved = _base_frames(bases, array.shape[0], "declared_region")
 
     polygons: list[Polygon] = []
-    for config in array:
-        polygons.extend(link_polygons(config, limits, ORIGIN_FRAME))
+    for config, frame in zip(array, frames, strict=True):
+        polygons.extend(link_polygons(config, limits, frame))
 
     region = unary_union(polygons)
     if region.is_empty:
@@ -499,23 +585,38 @@ def declared_region(configs: np.ndarray | Sequence[Sequence[float]], limits: Lim
             "the declared region came out empty. That is a failed computation, "
             "not a policy that intends to occupy nowhere."
         )
-    if not isinstance(region, Polygon):
+    if not isinstance(region, (Polygon, MultiPolygon)):
         raise DeclarationError(
-            f"the declared region is a {type(region).__name__}, not a Polygon. "
-            "Every sampled configuration's first link contains the base, so the "
-            "union is connected by construction; a disconnected result means the "
-            "grid or the kinematics is wrong, and signing it would put that in "
-            "the record."
+            f"the declared region is a {type(region).__name__}. The union of a "
+            "set of link bodies is an area; anything else is a failed "
+            "computation and signing it would put that in the record."
+        )
+    if isinstance(region, MultiPolygon) and not base_moved:
+        raise DeclarationError(
+            "the declared region is a MultiPolygon under a base that did not "
+            "move. Every sampled configuration's first link contains that one "
+            "point, so the union is connected by construction; a disconnected "
+            "result means the grid or the kinematics is wrong, and signing it "
+            "would put that in the record. (A base that moves is the case this "
+            "argument does not cover, and it is accepted — pass one frame per "
+            "configuration to say so.)"
         )
     return region
 
 
-def _padded(region: Polygon, margin: float | None) -> Polygon:
+def _padded(region: Polygon | MultiPolygon, margin: float | None) -> Polygon:
     """`region` dilated by `margin`, or `region` itself when there is no margin.
 
     The dilation is the whole of what a padded claim is: no other part of the
     record changes, so a padded declaration is indistinguishable from an honest
     one to every reader except one that recomputes what the robot can reach.
+
+    A `MultiPolygon` — which `declared_region` returns only for a base that
+    moved — reaches the refusal below unless the dilation merged its parts, and
+    a merge is the same widening a margin always is, over the gap the vehicle
+    drove across. Neither is a bound this module invents: with no margin the
+    disconnected region arrives here unchanged and is refused, which is the
+    could-not-evaluate `declared_region` describes.
 
     Raises:
         DeclarationError: the dilation produced something that is not a single
@@ -540,21 +641,58 @@ def _padded(region: Polygon, margin: float | None) -> Polygon:
 # --------------------------------------------------------------------------
 
 
-def _classify(configs: np.ndarray, limits: Limits) -> str:
+def _extension(config: np.ndarray, limits: Limits, frame: BaseFrame) -> float:
+    """How far the end effector is from its own base, metres. **Body frame.**
+
+    A pure function of `config`: rigid links measured from `frame`, minus
+    `frame`'s own position, so translating or rotating the base moves both ends
+    of the subtraction and leaves this number alone. That invariance is the
+    whole point — it is what `reach` and `retract` are supposed to be about.
+
+    Written as a subtraction rather than as forward kinematics at the origin,
+    because kinematics at the origin is what this repository writes when it
+    means *the base is bolted there* (`grep ORIGIN_FRAME`), and this is not that
+    claim. At `ORIGIN_FRAME` the subtraction is the identity and the value is
+    bit-identical to the one this measured before.
+    """
+    tip = forward_kinematics(config, limits, frame)[-1][1]
+    return float(np.linalg.norm(tip - np.array([frame.x, frame.y])))
+
+
+def _classify(
+    configs: np.ndarray, limits: Limits, bases: BaseFrame | Sequence[BaseFrame]
+) -> str:
     """The `action_class` for one interval. Deliberately crude — see the header.
 
-    No tolerance anywhere: a configuration set that does not move at all is a
-    `hold`, and the reach comparison between the first and last configuration is
-    exact, with the tie going to `traverse`. A threshold here ("moved less than
-    x") would be an invented number in a field of the record, which is the one
-    place this project refuses to put one.
+    No tolerance anywhere: a configuration set that does not move at all under a
+    base that does not move either is a `hold`, and the extension comparison
+    between the first and last configuration is exact, with the tie going to
+    `traverse`. A threshold here ("moved less than x") would be an invented
+    number in a field of the record, which is the one place this project refuses
+    to put one.
+
+    WHY THE COMPARISON IS IN THE BODY FRAME
+    ---------------------------------------
+    This read `reach` versus `retract` off the end effector's distance from the
+    **origin**, and that measured arm extension for exactly as long as the base
+    sat at the origin — the two quantities were the same number, and the simpler
+    one was written down. Drive the base forward with a frozen arm and they come
+    apart: the distance from the origin grows while the arm extends by nothing,
+    so the interval is recorded as a `reach` the robot never made, and the
+    docstring above promises no tolerance anywhere to absorb it.
+
+    So the measurement is `_extension`, from the base rather than from the
+    origin, and base translation cannot enter it. Driving with a frozen arm is
+    then a `traverse` by the existing tie rule — the body moved and the arm's
+    extension did not — which is what `traverse` already meant for an arm
+    rotating about a fixed base. It is not a `hold`, because a `hold` is a robot
+    that is not moving, and this one is. docs/mobile-base.md §4 item 6, Tier 3.
     """
-    if np.array_equal(configs.min(axis=0), configs.max(axis=0)):
+    frames, base_moved = _base_frames(bases, configs.shape[0], "_classify")
+    if not base_moved and np.array_equal(configs.min(axis=0), configs.max(axis=0)):
         return "hold"
-    first = forward_kinematics(configs[0], limits, ORIGIN_FRAME)[-1][1]
-    last = forward_kinematics(configs[-1], limits, ORIGIN_FRAME)[-1][1]
-    start = float(np.linalg.norm(first))
-    end = float(np.linalg.norm(last))
+    start = _extension(configs[0], limits, frames[0])
+    end = _extension(configs[-1], limits, frames[-1])
     if end > start:
         return "reach"
     if end < start:
@@ -706,7 +844,10 @@ def emit_declarations(
     if declared_q_bounds is not None:
         box = _check_box(declared_q_bounds, limits, "declared_q_bounds")
         fixed_wkb = envelope_wkb(
-            _padded(declared_region(box_grid(box, limits), limits), declared_margin_m)
+            _padded(
+                declared_region(box_grid(box, limits), limits, ORIGIN_FRAME),
+                declared_margin_m,
+            )
         )
 
     declarations: list[Declaration] = []
@@ -720,7 +861,10 @@ def emit_declarations(
             fixed_wkb
             if fixed_wkb is not None
             else envelope_wkb(
-                _padded(declared_region(configs, limits), declared_margin_m)
+                _padded(
+                    declared_region(configs, limits, ORIGIN_FRAME),
+                    declared_margin_m,
+                )
             )
         )
 
@@ -729,7 +873,7 @@ def emit_declarations(
             seq=seq,
             t_issued=float(states[first].t),
             horizon=horizon_s,
-            action_class=_classify(configs, limits),
+            action_class=_classify(configs, limits, ORIGIN_FRAME),
             declared_envelope=wkb,
             prev_hash=prev_hash,
             mac=UNSIGNED_MAC,

@@ -781,7 +781,9 @@ def test_the_bound_is_not_the_sampled_envelope_so_honest_declarations_survive() 
     """
     scenario = SCENARIOS["declared_violation"]
     assert scenario.declared_q_bounds is not None
-    region = declared_region(box_grid(scenario.declared_q_bounds, LIMITS), LIMITS)
+    region = declared_region(
+        box_grid(scenario.declared_q_bounds, LIMITS), LIMITS, ORIGIN_FRAME
+    )
 
     first = next(iter(scenario.states(0))).proprio()
     sampled = compute_envelope(first, LIMITS, horizon=0.2, n_samples=64, seed=0)
@@ -889,7 +891,7 @@ def reachable_looking_declaration() -> bytes:
     from a standing fold, which is the claim `horizon_bound` is against.
     """
     box = ((-0.2, 0.2), (0.5, 2.6))
-    return envelope_wkb(declared_region(box_grid(box, LIMITS), LIMITS))
+    return envelope_wkb(declared_region(box_grid(box, LIMITS), LIMITS, ORIGIN_FRAME))
 
 
 def test_envelope_overclaim_fires_on_a_region_inside_the_workspace_disc() -> None:
@@ -1115,7 +1117,7 @@ def test_a_declaration_the_arm_can_reach_by_moving_is_accepted() -> None:
     """
     turning = proprio(Q_FOLDED, 0.0, qd=(2.0, 0.0))
     swept = declared_region(
-        box_grid(((-0.2, 1.0), (2.2, 2.6)), LIMITS), LIMITS
+        box_grid(((-0.2, 1.0), (2.2, 2.6)), LIMITS), LIMITS, ORIGIN_FRAME
     )
     assert enforcer().offer(declaration(envelope=envelope_wkb(swept)), turning) is None
 

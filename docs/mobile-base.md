@@ -1,10 +1,11 @@
 # The mobile base — what moving the robot does to the argument
 
 **Status:** a design document, and no longer entirely one · written 2026-08-31 ·
-**Tiers 1 and 2 have landed; §3's construction landed 2026-09-02 (issue #163)
-and §1's refusal landed 2026-09-02 (issue #164); §4's schema work and Tier 4's
-fixtures have not, and no robot in this repository moves** — the build order in
-§7 says per tier which is which, and it is the authority, not this line ·
+**Tiers 1 and 2 have landed; §3's construction landed 2026-09-02 (issue #163),
+§1's refusal landed 2026-09-02 (issue #164) and §4's two `declare.py` defects
+were fixed 2026-09-02 (issue #165); §4's schema work and Tier 4's fixtures have
+not, and no robot in this repository moves** — the build order in §7 says per
+tier which is which, and it is the authority, not this line ·
 normative for the mobile track only; where it touches what the project may
 claim, it defers to [`sufficiency.md`](sufficiency.md) and
 [`limitations.md`](limitations.md) until those files carry the change themselves
@@ -319,13 +320,29 @@ What breaks, worst first:
    radius **about an unstated centre** — today globally known, tomorrow
    meaningless. This is the decisive argument for putting the pose on the
    `robot_config` row, and it needs a `SCHEMA_VERSION` bump.
-5. `reg/declare.py` — `declared_region` *raises* on a disconnected union, on the
-   argument that every configuration's first link contains the base. A
-   declaration spanning base motion can be legitimately disconnected, so a
-   correct region would be refused.
-6. `reg/declare.py` — `_classify` reads `reach` versus `retract` off the end
-   effector's distance to the origin. A robot driving forward with a frozen arm
-   classifies as a `reach`, and there is no tolerance anywhere to absorb it.
+5. `reg/declare.py` — **fixed 2026-09-02, issue #165.** `declared_region`
+   *raised* on a disconnected union, on the argument that every configuration's
+   first link contains the base. A declaration spanning base motion can be
+   legitimately disconnected, so a correct region would be refused. The argument
+   was true and was an argument about the *base*: it holds because every first
+   link contained the same point. `declared_region` now takes the frame each
+   configuration is measured from — one `BaseFrame` for a base that did not move,
+   one per configuration when it did — and refuses a `MultiPolygon` only in the
+   first case, where a disconnected union is still a broken grid or broken
+   kinematics. The record did **not** widen with it: `envelope_wkb` and
+   `Declaration` still take a single `Polygon`, so a disconnected region is a
+   loud could-not-evaluate at the boundary where the bytes are made, and the
+   multi-part declared bound is part of the schema work below and not of this.
+6. `reg/declare.py` — **fixed 2026-09-02, issue #165.** `_classify` read `reach`
+   versus `retract` off the end effector's distance to the origin. A robot
+   driving forward with a frozen arm classified as a `reach`, and there is no
+   tolerance anywhere to absorb it. The comparison is now the end effector's
+   distance from **its own base**, which base translation and yaw cannot enter,
+   and the `hold` branch asks whether the base moved as well — driving with a
+   frozen arm is a `traverse`, which is what that class already meant for an arm
+   rotating about a fixed base. Every fixture is fixed-base and every published
+   classification is unchanged, asserted in
+   `tests/test_declare.py::test_every_fixture_classification_is_unchanged`.
 7. `reg/world.py` — the room-contains-origin check has to become a check that the
    base's whole *path* stays in the room, which a constructor that never sees a
    trajectory cannot perform. It moves to the scenario or the sim.
@@ -408,8 +425,11 @@ base states and a rewritten soundness argument — **done, 2026-09-02, issue
 `computed_bound` refusing and `horizon_bound` on the outer envelope alone —
 **done, 2026-09-02, issue #164**, and the normative statements are
 [`limitations.md`](limitations.md) §3 and §9 and
-[`../CLAUDE.md`](../CLAUDE.md) rule 3; the pose on `robot_config` with the schema
-bump; the two `declare.py` defects.
+[`../CLAUDE.md`](../CLAUDE.md) rule 3; the two `declare.py` defects — **done,
+2026-09-02, issue #165**, §4 items 5 and 6, and neither changed a classification
+or a declared envelope byte in any fixture, because for a base at one point the
+old measurement and the new one are the same number; the pose on `robot_config`
+with the schema bump, which is what is left of this tier.
 
 *The gap the previous entry recorded is closed, and the pin that recorded it was
 rewritten rather than deleted.* With the base in the outer set,

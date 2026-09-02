@@ -21,9 +21,10 @@ import dataclasses
 import numpy as np
 import pytest
 import shapely
-from shapely.geometry import Point, Polygon
+from shapely.geometry import MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
+import reg.declare
 from reg.chain import (
     GENESIS_HASH,
     HASH_HEX_LEN,
@@ -46,10 +47,10 @@ from reg.declare import (
     sign_declaration,
     verify_declaration,
 )
-from reg.kinematics import ORIGIN_FRAME, link_polygons
+from reg.kinematics import ORIGIN_FRAME, BaseFrame, forward_kinematics, link_polygons
 from reg.scenarios import SCENARIOS, Scenario
 from reg.tolerances import DISTANCE_TOL_M
-from reg.types import Limits, Obstacle, ProprioState, StateFrame
+from reg.types import BasePose, Limits, Obstacle, PoseSource, ProprioState, StateFrame
 from reg.world import DEMO_WORLD
 
 KEYRING = Keyring.from_material(
@@ -259,7 +260,7 @@ def test_the_enforcement_key_cannot_sign_a_declaration() -> None:
 
 def test_a_declared_region_covers_the_bodies_it_was_built_from() -> None:
     configs = np.array([[0.0, 0.0], [0.2, -0.1]])
-    region = declared_region(configs, LIMITS)
+    region = declared_region(configs, LIMITS, ORIGIN_FRAME)
     assert isinstance(region, Polygon)
     for config in configs:
         assert region.covers(unary_union(link_polygons(config, LIMITS, ORIGIN_FRAME)))
@@ -268,7 +269,128 @@ def test_a_declared_region_covers_the_bodies_it_was_built_from() -> None:
 def test_a_declared_region_needs_at_least_one_configuration() -> None:
     """NEGATIVE. An empty bound passes every containment test vacuously."""
     with pytest.raises(DeclarationError, match="non-empty"):
-        declared_region(np.zeros((0, 2)), LIMITS)
+        declared_region(np.zeros((0, 2)), LIMITS, ORIGIN_FRAME)
+
+
+# --------------------------------------------------------------------------
+# A base that moved. Nothing in this repository has one — every fixture states
+# four zero base bounds — so these build the frames explicitly, which is the
+# only way the seam docs/mobile-base.md §7 cut is exercised at all.
+# --------------------------------------------------------------------------
+
+#: Two frames far enough apart that the arm at one cannot touch the arm at the
+#: other: this arm reaches 0.9 m and its body 0.95 m. Not a tolerance — the
+#: distance is chosen so the disconnection is a fact about the geometry rather
+#: than a near miss.
+DRIVEN_BASES = (ORIGIN_FRAME, BaseFrame(x=3.0, y=0.0, theta=0.0))
+
+
+def broken_link_polygons(config, limits, base):  # type: ignore[no-untyped-def]
+    """Kinematics that has lost the base: two bodies, neither containing it.
+
+    This is the failure the `MultiPolygon` refusal is against, and there is no
+    honest way to produce it from `reg.kinematics` — every configuration's first
+    link contains the base, which is exactly the argument. So it is injected.
+    """
+    x = 10.0 * float(config[0])
+    return [Point(x, 0.0).buffer(0.1), Point(x + 5.0, 0.0).buffer(0.1)]
+
+
+def test_a_declared_region_spanning_a_moved_base_is_the_union_actually_swept() -> None:
+    """The vehicle drove, the two arms do not touch, and that region is correct.
+
+    docs/mobile-base.md §4 item 5: the connectedness argument was an argument
+    about the base being one point, and it does not survive the base moving. The
+    assertion is the region rather than the type alone — it covers the body at
+    each frame and claims nothing over the ground the vehicle drove across.
+    """
+    configs = np.array([[0.3, -0.4], [0.3, -0.4]])
+    region = declared_region(configs, LIMITS, DRIVEN_BASES)
+
+    assert isinstance(region, MultiPolygon)
+    assert len(region.geoms) == 2
+    for config, frame in zip(configs, DRIVEN_BASES, strict=True):
+        assert region.covers(unary_union(link_polygons(config, LIMITS, frame)))
+    # And nothing wider: the gap between the two poses is not part of the claim.
+    assert not region.intersects(Point(1.5, 0.0))
+    assert region.area == pytest.approx(
+        sum(
+            unary_union(link_polygons(config, LIMITS, frame)).area
+            for config, frame in zip(configs, DRIVEN_BASES, strict=True)
+        )
+    )
+
+
+def test_a_moved_base_whose_poses_do_overlap_is_still_one_polygon() -> None:
+    """The base moving is permission, not a mode: a connected union stays one."""
+    configs = np.array([[0.3, -0.4], [0.3, -0.4]])
+    nearby = (ORIGIN_FRAME, BaseFrame(x=0.1, y=0.0, theta=0.0))
+    assert isinstance(declared_region(configs, LIMITS, nearby), Polygon)
+
+
+def test_a_disconnected_region_is_refused_when_the_base_did_not_move(
+    monkeypatch,
+) -> None:
+    """NEGATIVE. The refusal is conditioned on the base, not dropped.
+
+    With one frame the connectedness argument still holds, so a disconnected
+    union is still a broken grid or broken kinematics and is still refused —
+    fed here the geometry it guards against. The same broken geometry under a
+    base that moved is accepted, which is what makes the distinction the *base*
+    rather than a property of the polygons.
+    """
+    monkeypatch.setattr(reg.declare, "link_polygons", broken_link_polygons)
+    one = np.zeros((1, 2))
+
+    with pytest.raises(DeclarationError, match="under a base that did not move"):
+        declared_region(one, LIMITS, ORIGIN_FRAME)
+    # A sequence of identical frames is the same statement, and is refused too.
+    with pytest.raises(DeclarationError, match="under a base that did not move"):
+        declared_region(one, LIMITS, (ORIGIN_FRAME,))
+
+    two = np.zeros((2, 2))
+    accepted = declared_region(two, LIMITS, DRIVEN_BASES)
+    assert isinstance(accepted, MultiPolygon)
+
+
+def test_a_disconnected_region_cannot_be_signed_into_the_record() -> None:
+    """NEGATIVE. The record did not widen with `declared_region`, and says so.
+
+    A multi-part declared bound changes what every containment test in Phase 4
+    means, so it is refused loudly where the bytes are made rather than absorbed
+    — a could-not-evaluate a reader can see, not a bound nobody can test.
+    """
+    region = declared_region(np.array([[0.3, -0.4], [0.3, -0.4]]), LIMITS, DRIVEN_BASES)
+    with pytest.raises(DeclarationError, match="takes a Polygon"):
+        envelope_wkb(region)
+    with pytest.raises(DeclarationError, match="not a single valid polygon|MultiPolygon"):
+        declaration(declared_envelope=shapely.to_wkb(region))
+
+
+@pytest.mark.parametrize(
+    ("bases", "match"),
+    [
+        (None, "must be a BaseFrame or a sequence"),
+        ("origin", "must be a BaseFrame or a sequence"),
+        ((ORIGIN_FRAME,), "1 base frames for 2 configurations"),
+        ((ORIGIN_FRAME, ORIGIN_FRAME, ORIGIN_FRAME), "3 base frames for 2"),
+        ((ORIGIN_FRAME, None), r"bases\[1\] is a NoneType"),
+        (
+            (ORIGIN_FRAME, BasePose(x=1.0, y=0.0, theta=0.0, source=PoseSource.LOCALIZED)),
+            r"bases\[1\] is a BasePose",
+        ),
+    ],
+)
+def test_a_base_frame_nobody_stated_is_refused(bases: object, match: str) -> None:
+    """NEGATIVE. No default frame, and no room-frame pose through the back door.
+
+    The last case is the one with teeth: a `BasePose` has `x`, `y` and `theta`
+    too, so anything structural would accept it and a Layer B room pose would
+    place a region tagged Layer A. `reg.kinematics._base_frame` refuses it for
+    the same reason, and this refuses it before the geometry is touched.
+    """
+    with pytest.raises(DeclarationError, match=match):
+        declared_region(np.zeros((2, 2)), LIMITS, bases)  # type: ignore[arg-type]
 
 
 def test_the_box_grid_resolution_is_derived_from_the_geometry() -> None:
@@ -486,6 +608,174 @@ def test_the_action_class_follows_the_motion() -> None:
     assert classes(lambda k: (0.0, 0.6 + 0.02 * k))[0] == "retract"
     # Rotating the whole arm about the base changes neither.
     assert classes(lambda k: (0.02 * k, 1.0))[0] == "traverse"
+
+
+def test_driving_the_base_is_not_reaching() -> None:
+    """NEGATIVE, docs/mobile-base.md §4 item 6. The arm did not extend at all.
+
+    The frozen arm is carried forward by the vehicle, so the end effector's
+    distance from the **origin** grows — asserted here, because that growth is
+    the defect, and a test that only checked the answer would still pass if the
+    measurement quietly went back to the origin. In the body frame the extension
+    is unchanged, which is a `traverse` by the existing tie rule.
+
+    It is not a `hold` either: a `hold` is a robot that is not moving, and this
+    one is. That is why the `hold` branch asks about the base as well.
+    """
+    frozen = np.array([[0.2, 0.6]] * 3)
+    driving = tuple(BaseFrame(x=0.4 * k, y=0.0, theta=0.0) for k in range(3))
+
+    from_origin = [
+        float(np.linalg.norm(forward_kinematics(q, LIMITS, frame)[-1][1]))
+        for q, frame in zip(frozen, driving, strict=True)
+    ]
+    assert from_origin[-1] > from_origin[0], (
+        "the fixture no longer drives the base away from the origin, so it no "
+        "longer exercises the defect"
+    )
+
+    assert reg.declare._classify(frozen, LIMITS, driving) == "traverse"
+    # The same frozen arm on a base that did not move is still a hold.
+    assert reg.declare._classify(frozen, LIMITS, ORIGIN_FRAME) == "hold"
+    assert reg.declare._classify(frozen, LIMITS, (driving[0],) * 3) == "hold"
+
+
+def test_the_extension_is_bit_identical_under_every_base_frame() -> None:
+    """**The test the first version of `_extension` needed and did not have.**
+
+    That version measured the tip in the room frame and subtracted the base
+    back, asserting in its docstring that translating or rotating the base
+    "moves both ends of the subtraction and leaves this number alone". True in
+    exact arithmetic; false in floating point, because a rotated base sends the
+    tip through `cos` and `sin` first. The classification compares extensions
+    exactly, so an ULP decided `traverse` against `retract` — and it tied on the
+    machine that wrote it and lost in CI.
+
+    An invariant a docstring claims and nothing checks is the defect. This
+    asserts bit-identity, not closeness: `assert_allclose` would have passed the
+    broken version, which is why it is `==` on the raw float.
+    """
+    config = np.array([0.2, 0.6])
+    reference = reg.declare._extension(config, LIMITS)
+    for frame in (
+        ORIGIN_FRAME,
+        BaseFrame(x=3.0, y=-2.0, theta=0.0),
+        BaseFrame(x=0.0, y=0.0, theta=0.5),
+        BaseFrame(x=-7.25, y=11.5, theta=2.3),
+    ):
+        # The signature no longer accepts a frame at all — that absence is the
+        # point — so the invariance is asserted where it can still be observed:
+        # the same configuration under any base is the same declared extension.
+        moved = np.array([[0.2, 0.6]] * 3)
+        assert reg.declare._classify(moved, LIMITS, frame) == "hold"
+        assert reg.declare._extension(config, LIMITS) == reference
+
+
+def test_base_rotation_does_not_enter_the_classification_either() -> None:
+    """Yaw moves the end effector in the room and changes no extension."""
+    frozen = np.array([[0.2, 0.6]] * 3)
+    turning = tuple(BaseFrame(x=0.0, y=0.0, theta=0.5 * k) for k in range(3))
+    assert reg.declare._classify(frozen, LIMITS, turning) == "traverse"
+
+
+@pytest.mark.parametrize(
+    ("configs", "base_x", "expected"),
+    [
+        (((0.0, 1.6), (0.0, 0.6)), -0.9, "reach"),
+        (((0.0, 0.6), (0.0, 1.6)), 2.0, "retract"),
+    ],
+)
+def test_the_arm_is_classified_by_its_own_extension_while_the_base_drives(
+    configs: tuple[tuple[float, float], ...], base_x: float, expected: str
+) -> None:
+    """The other half: base motion must not *mask* a real reach or retract.
+
+    The base drives far enough that the end effector's distance from the origin
+    moves the opposite way from the arm's own extension — so the measurement
+    this replaces would return the wrong one of the two, not merely a spurious
+    one. Asserted, so the fixture cannot decay into agreeing with both.
+    """
+    array = np.asarray(configs, dtype=float)
+    driving = (ORIGIN_FRAME, BaseFrame(x=base_x, y=0.0, theta=0.0))
+    from_origin = [
+        float(np.linalg.norm(forward_kinematics(q, LIMITS, frame)[-1][1]))
+        for q, frame in zip(array, driving, strict=True)
+    ]
+    assert (from_origin[-1] > from_origin[0]) is not (expected == "reach"), (
+        "the base no longer drives against the arm's own extension"
+    )
+    assert reg.declare._classify(array, LIMITS, driving) == expected
+
+
+#: Every fixture's `action_class` sequence, as this repository has published it.
+#: Recorded rather than derived, because the point of the entry is that the
+#: body-frame measurement did not move a single one of them: every fixture is a
+#: **fixed base** — four zero base bounds, asserted below — and for a base at
+#: one point the extension from the base and the distance from the origin are
+#: the same number. docs/mobile-base.md §5: no published figure moves.
+FIXTURE_ACTION_CLASSES: dict[str, tuple[str, ...]] = {
+    "approach_and_retreat": (
+        "reach", "reach", "reach", "reach", "reach", "reach",
+        "retract", "retract", "retract", "retract", "retract", "retract",
+        "hold",
+    ),
+    "near_miss": (
+        "reach", "reach", "reach", "reach", "reach",
+        "retract", "retract", "retract", "retract", "retract",
+        "hold",
+    ),
+    "contact": (
+        "reach", "reach", "reach", "reach", "reach", "reach",
+        "retract", "retract", "retract", "retract",
+        "hold",
+    ),
+    "static_bystander": (
+        "reach", "reach", "reach", "retract", "retract", "retract",
+        "reach", "reach", "reach", "retract", "retract", "retract",
+        "hold",
+    ),
+    "sustained_overlap": (
+        "retract", "retract", "retract", "retract", "retract", "retract",
+        "reach", "reach", "reach", "reach", "reach", "reach",
+        "hold",
+    ),
+    "declared_violation": (
+        "reach", "reach", "reach", "reach", "reach", "reach", "reach",
+        "retract", "retract", "retract",
+        "hold",
+    ),
+    "no_declaration": ("reach", "reach", "retract", "retract", "hold"),
+    "stale_declaration": (
+        "reach", "reach", "reach", "reach", "reach", "reach", "hold",
+    ),
+    "escalation_failure": (
+        "reach", "reach", "reach", "reach", "reach", "reach", "reach", "reach",
+        "hold",
+    ),
+    "envelope_overclaim": ("reach", "reach", "retract", "retract", "hold"),
+    "out_of_vocabulary_action": ("reach", "reach", "retract", "retract", "hold"),
+}
+
+
+def test_every_fixture_classification_is_unchanged(runs) -> None:
+    """Asserted rather than assumed — the whole claim of the change above.
+
+    The table is exhaustive over `SCENARIOS`, so a fixture added without a
+    recorded sequence fails here rather than being classified silently.
+    """
+    assert set(FIXTURE_ACTION_CLASSES) == set(SCENARIOS)
+    for name, (_states, declarations) in runs.items():
+        limits = SCENARIOS[name].world.limits
+        assert all(
+            float(getattr(limits, field)) == 0.0
+            for field in type(limits).BASE_BOUND_FIELDS
+        ), (
+            f"{name} has a base that can drive, so the table below is no longer "
+            "a table of fixed-base classifications"
+        )
+        assert tuple(d.action_class for d in declarations) == (
+            FIXTURE_ACTION_CLASSES[name]
+        ), name
 
 
 def test_the_scripted_policy_never_escalates(runs) -> None:

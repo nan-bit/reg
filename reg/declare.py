@@ -83,7 +83,7 @@ from reg.chain import (
     sign,
     verify,
 )
-from reg.kinematics import forward_kinematics, link_polygons
+from reg.kinematics import ORIGIN_FRAME, forward_kinematics, link_polygons
 from reg.types import Limits, ProprioState
 
 __all__ = [
@@ -491,7 +491,7 @@ def declared_region(configs: np.ndarray | Sequence[Sequence[float]], limits: Lim
 
     polygons: list[Polygon] = []
     for config in array:
-        polygons.extend(link_polygons(config, limits))
+        polygons.extend(link_polygons(config, limits, ORIGIN_FRAME))
 
     region = unary_union(polygons)
     if region.is_empty:
@@ -551,8 +551,10 @@ def _classify(configs: np.ndarray, limits: Limits) -> str:
     """
     if np.array_equal(configs.min(axis=0), configs.max(axis=0)):
         return "hold"
-    start = float(np.linalg.norm(forward_kinematics(configs[0], limits)[-1][1]))
-    end = float(np.linalg.norm(forward_kinematics(configs[-1], limits)[-1][1]))
+    first = forward_kinematics(configs[0], limits, ORIGIN_FRAME)[-1][1]
+    last = forward_kinematics(configs[-1], limits, ORIGIN_FRAME)[-1][1]
+    start = float(np.linalg.norm(first))
+    end = float(np.linalg.norm(last))
     if end > start:
         return "reach"
     if end < start:

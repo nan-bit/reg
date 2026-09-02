@@ -63,7 +63,7 @@ from matplotlib.path import Path as MplPath
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.polygon import orient
 
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.types import Limits, StateFrame
 from reg.world import World
 
@@ -392,7 +392,10 @@ def draw_frame(
 
     # The robot, on top and opaque.
     if limits is not None:
-        for i, body in enumerate(link_polygons(np.asarray(frame.q, dtype=float), limits)):
+        bodies = link_polygons(
+            np.asarray(frame.q, dtype=float), limits, ORIGIN_FRAME
+        )
+        for i, body in enumerate(bodies):
             patch = _polygon_patch(
                 body,
                 facecolor=COLOR_ROBOT,

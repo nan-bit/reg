@@ -46,7 +46,7 @@ from reg.declare import (
     sign_declaration,
     verify_declaration,
 )
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.scenarios import SCENARIOS, Scenario
 from reg.tolerances import DISTANCE_TOL_M
 from reg.types import Limits, Obstacle, ProprioState, StateFrame
@@ -115,7 +115,7 @@ def runs() -> dict[str, tuple[list[ProprioState], tuple[Declaration, ...]]]:
 
 
 def body_at(state: ProprioState, limits: Limits) -> Polygon:
-    return unary_union(link_polygons(state.q, limits))
+    return unary_union(link_polygons(state.q, limits, ORIGIN_FRAME))
 
 
 def open_at(declarations: tuple[Declaration, ...], t: float) -> Declaration:
@@ -262,7 +262,7 @@ def test_a_declared_region_covers_the_bodies_it_was_built_from() -> None:
     region = declared_region(configs, LIMITS)
     assert isinstance(region, Polygon)
     for config in configs:
-        assert region.covers(unary_union(link_polygons(config, LIMITS)))
+        assert region.covers(unary_union(link_polygons(config, LIMITS, ORIGIN_FRAME)))
 
 
 def test_a_declared_region_needs_at_least_one_configuration() -> None:
@@ -281,7 +281,7 @@ def test_the_box_grid_resolution_is_derived_from_the_geometry() -> None:
     grid = box_grid(((-0.4, 0.8), (0.0, 0.0)), LIMITS)
     assert grid.shape[1] == 2
     assert len(grid) > 2
-    bodies = [unary_union(link_polygons(config, LIMITS)) for config in grid]
+    bodies = [unary_union(link_polygons(config, LIMITS, ORIGIN_FRAME)) for config in grid]
     assert all(a.intersects(b) for a, b in zip(bodies, bodies[1:]))
     # A wider box is sampled at the same resolution, so it needs more of them.
     assert len(box_grid(((-0.8, 1.6), (0.0, 0.0)), LIMITS)) > len(grid)

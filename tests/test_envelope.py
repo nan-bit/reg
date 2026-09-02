@@ -43,7 +43,7 @@ from reg.envelope import (
     outer_radius,
     reachable_joint_box,
 )
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 
 # A two-link arm, stated here rather than imported from reg.world: these tests
@@ -73,7 +73,7 @@ N = 16
 
 def body(q: ProprioState | np.ndarray) -> Polygon:
     """The robot's body in one configuration, as a single geometry."""
-    return unary_union(link_polygons(q, LIMITS))
+    return unary_union(link_polygons(q, LIMITS, ORIGIN_FRAME))
 
 
 # --------------------------------------------------------------------------
@@ -453,7 +453,7 @@ def _swept_body(state: ProprioState, control, horizon: float) -> Polygon:
     """
     q = np.asarray(state.q, dtype=float).copy()
     qd = np.asarray(state.qd, dtype=float).copy()
-    polygons = list(link_polygons(q, LIMITS))
+    polygons = list(link_polygons(q, LIMITS, ORIGIN_FRAME))
     t = 0.0
     dt = SUBSTEP_DT
     while t < horizon - 1e-12:
@@ -462,7 +462,7 @@ def _swept_body(state: ProprioState, control, horizon: float) -> Polygon:
         q = q + np.clip(qd + 0.5 * u * step, -QD_MAX, QD_MAX) * step
         qd = np.clip(qd + u * step, -QD_MAX, QD_MAX)
         q = np.clip(q, LIMITS.q_min, LIMITS.q_max)
-        polygons.extend(link_polygons(q, LIMITS))
+        polygons.extend(link_polygons(q, LIMITS, ORIGIN_FRAME))
         t += step
     return unary_union(polygons)
 

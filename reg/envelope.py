@@ -81,7 +81,7 @@ from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from reg.kinematics import clamp_to_limits, link_polygons
+from reg.kinematics import ORIGIN_FRAME, clamp_to_limits, link_polygons
 from reg.types import Layer, Limits, LimitSource, ProprioState
 
 __all__ = [
@@ -325,7 +325,7 @@ def compute_envelope(
 
     # The current body, once: it belongs to every trajectory, and it is what
     # makes the union connected.
-    polys: list[Polygon] = list(link_polygons(q0, limits))
+    polys: list[Polygon] = list(link_polygons(q0, limits, ORIGIN_FRAME))
 
     for u in controls:
         q = q0.copy()
@@ -341,7 +341,7 @@ def compute_envelope(
             q = q + np.clip(qd + 0.5 * u * dt, -qd_max, qd_max) * dt
             qd = qd + u * dt
             q, qd = clamp_to_limits(q, qd, limits)
-            polys.extend(link_polygons(q, limits))
+            polys.extend(link_polygons(q, limits, ORIGIN_FRAME))
 
     region = unary_union(polys)
 

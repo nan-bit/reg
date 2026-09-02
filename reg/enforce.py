@@ -260,7 +260,7 @@ from reg.chain import (
 # thing it is checking. `tests/test_enforce.py` asserts this.
 from reg.declare import ACTION_CLASSES, Declaration
 from reg.envelope import HASH_COORD_PRECISION, outer_envelope, outer_radius
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.types import Limits, ProprioState
 
 __all__ = [
@@ -947,7 +947,7 @@ def body_polygon(state: ProprioState, limits: Limits) -> Polygon:
             "is the Layer A boundary: enforcement decides from what the robot "
             "knows about itself. If you hold a StateFrame, call .proprio()."
         )
-    region = unary_union(list(link_polygons(state.q, limits)))
+    region = unary_union(list(link_polygons(state.q, limits, ORIGIN_FRAME)))
     if region.is_empty:
         raise EnforcementError(
             "the robot body came out empty. That is a failed computation, not a "

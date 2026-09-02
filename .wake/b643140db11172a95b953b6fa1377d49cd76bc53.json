@@ -1,0 +1,174 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "163-1788366540555204980-3776354",
+    "authored_by": {
+      "agent": "unknown",
+      "agent_args": "",
+      "agent_version": "unknown",
+      "harness": "wake-runner",
+      "harness_version": "unknown",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "d48a5e0583a5580a4ccdf59a43ae3d945665e1fa794d6c39896513ff68c5184b",
+      "model": "unknown",
+      "model_source": "unestablished:no-verified-backend"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "1cd30670ebf868e47288d3052ebc16398c6e5c575da329bb390cedb67d08b982",
+        "authored_by": "c10958b0e5838eeeb70f45a97c471bf9d00ee933d8ae27dacf51d03a3a2b42bb",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "5dd34b49716ea73d6fbd2455a942921404931c82fc7ced3fc92ee3db1a219126",
+        "concluded": "b3c11d3acb2e7e1c2fb62b670993c2303f58b32ea6956d254423c64bc2c7d3e1",
+        "coverage": "d91ae90b515808850026074e8b430de8a58985a1fe3f67ac7e6b08a1e808a2c3",
+        "declared": "fb225afa0134b918790eb66b7886ec9458f0cfd8a352036daf3751f2cba33268",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "3d3286f7cd19074f04e514b0c6c237e757513fb32820698b790e1dec801d947a",
+        "out_of_scope": "69b8d1e0c5d4e11a3cdaf0bdc764ec8de9f5b40c9b67a1c6e3d191d04a9bfcb0",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676"
+      },
+      "head": "aaf324e908ca42b90574102ca6a114bc1fcba831aeccfdff4640286ee37f6ee8",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "b643140db11172a95b953b6fa1377d49cd76bc53",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/limitations.md",
+        "docs/mobile-base.md",
+        "reg/envelope.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_layer_boundary.py"
+      ],
+      "edge_kinds": [
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/limitations.md",
+        "docs/mobile-base.md",
+        "reg/bench.py",
+        "reg/chain.py",
+        "reg/commit.py",
+        "reg/declare.py",
+        "reg/enforce.py",
+        "reg/envelope.py",
+        "reg/graph.py",
+        "reg/query.py",
+        "reg/store.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_declare.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_personal_data.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py",
+        "tests/test_viz.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 48
+      },
+      "changed_unreadable": [
+        "docs/limitations.md",
+        "docs/mobile-base.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 2
+      },
+      "unresolved_edges": [
+        {
+          "at": "tests/test_layer_boundary.py:1143",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1145",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "docs/limitations.md",
+        "docs/mobile-base.md",
+        "reg/envelope.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 163,
+    "out_of_scope": [
+      "reg/bench.py",
+      "reg/chain.py",
+      "reg/commit.py",
+      "reg/declare.py",
+      "reg/enforce.py",
+      "reg/graph.py",
+      "reg/query.py",
+      "reg/store.py",
+      "scripts/check_bench_determinism.py",
+      "tests/test_air_gap_framing.py",
+      "tests/test_baseline_stream_description.py",
+      "tests/test_bench.py",
+      "tests/test_bench_determinism.py",
+      "tests/test_chain.py",
+      "tests/test_commit.py",
+      "tests/test_declare.py",
+      "tests/test_incumbent_encoding.py",
+      "tests/test_layer_boundary.py",
+      "tests/test_personal_data.py",
+      "tests/test_published_figures.py",
+      "tests/test_query.py",
+      "tests/test_scenarios.py",
+      "tests/test_viz.py"
+    ],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "out-of-scope"
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v3",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "b643140db11172a95b953b6fa1377d49cd76bc53"
+      },
+      "name": "auto/issue-163"
+    }
+  ]
+}

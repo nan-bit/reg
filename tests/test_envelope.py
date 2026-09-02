@@ -22,6 +22,8 @@ outside its own limits, a sample count too small to hold the corner controls, a
 from __future__ import annotations
 
 import ast
+import dataclasses
+import math
 import pathlib
 import subprocess
 import sys
@@ -29,22 +31,32 @@ import textwrap
 
 import numpy as np
 import pytest
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 import reg.envelope
 from reg.envelope import (
     HASH_COORD_PRECISION,
+    MAX_OUTER_GRID_CONFIGS,
     SUBSTEP_DT,
+    base_motion_bounds,
     compute_envelope,
     envelope_area,
     envelope_hash,
     outer_envelope,
+    outer_envelope_looseness,
     outer_radius,
     reachable_joint_box,
 )
 from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
-from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
+from reg.types import (
+    BaseVelocity,
+    Limits,
+    LimitSource,
+    Obstacle,
+    ProprioState,
+    StateFrame,
+)
 
 # A two-link arm, stated here rather than imported from reg.world: these tests
 # are about the envelope, and coupling them to a Layer B fixture would make a
@@ -441,7 +453,33 @@ SOUNDNESS_STATES = (
 )
 
 
-def _swept_body(state: ProprioState, control, horizon: float) -> Polygon:
+#: The same arm on a base that can drive (issue #163). Numbers a small AMR
+#: could plausibly carry, stated here rather than derived from anything: the
+#: point is that they are nonzero, and every assertion below is about the
+#: *difference* the base makes rather than about these values.
+MOBILE_LIMITS = dataclasses.replace(
+    LIMITS,
+    base_v_max=0.8,
+    base_a_max=1.5,
+    base_omega_max=1.2,
+    base_alpha_max=2.5,
+)
+
+
+def _mobile(state: ProprioState, vx: float, vy: float, omega: float) -> ProprioState:
+    """The same joint state on a base that is moving. Body frame, m/s and rad/s."""
+    return dataclasses.replace(
+        state, base_vel=BaseVelocity(vx=vx, vy=vy, omega=omega)
+    )
+
+
+def _swept_body(
+    state: ProprioState,
+    control,
+    horizon: float,
+    limits: Limits = LIMITS,
+    base_control=None,
+) -> Polygon:
     """The body swept by one control law, integrated exactly as the model is.
 
     The integrator is `compute_envelope`'s, restated here on purpose: the outer
@@ -450,21 +488,103 @@ def _swept_body(state: ProprioState, control, horizon: float) -> Polygon:
     `control(t)` returns the acceleration in force at `t`, so a control that
     switches sign inside the horizon — which no constant acceleration is — is
     expressible.
+
+    `base_control(t)` returns `(ax, ay, alpha)` — a **body-frame** translational
+    acceleration and a yaw acceleration — and drives the vehicle the arm is
+    bolted to (issue #163). It is integrated on the same midpoint rule as the
+    joints, for the same reason: that rule is what
+    `reg.envelope._displacement_bound`'s `substep_dt` term exists to cover, so a
+    test that advanced the base on its pre-step velocity would be probing a
+    trajectory the bound does not claim to hold for. `None` is a bolted-down
+    base, which is what every test before issue #163 assumed without saying so.
     """
+    qd_max = np.asarray(limits.qd_max, dtype=float)
     q = np.asarray(state.q, dtype=float).copy()
     qd = np.asarray(state.qd, dtype=float).copy()
-    polygons = list(link_polygons(q, LIMITS, ORIGIN_FRAME))
+
+    x, y, theta = 0.0, 0.0, 0.0
+    if base_control is None:
+        vx = vy = omega = 0.0
+    else:
+        assert state.base_vel is not None, (
+            "driving the base in a test whose state records no base velocity "
+            "would assert containment for a trajectory the bound is not "
+            "computed over"
+        )
+        vx, vy, omega = (
+            state.base_vel.vx,
+            state.base_vel.vy,
+            state.base_vel.omega,
+        )
+
+    def frame() -> BaseFrame:
+        return BaseFrame(x=x, y=y, theta=theta)
+
+    polygons = list(link_polygons(q, limits, frame()))
     t = 0.0
     dt = SUBSTEP_DT
     while t < horizon - 1e-12:
         step = min(dt, horizon - t)
         u = control(t)
-        q = q + np.clip(qd + 0.5 * u * step, -QD_MAX, QD_MAX) * step
-        qd = np.clip(qd + u * step, -QD_MAX, QD_MAX)
-        q = np.clip(q, LIMITS.q_min, LIMITS.q_max)
-        polygons.extend(link_polygons(q, LIMITS, ORIGIN_FRAME))
+        q = q + np.clip(qd + 0.5 * u * step, -qd_max, qd_max) * step
+        qd = np.clip(qd + u * step, -qd_max, qd_max)
+        q = np.clip(q, limits.q_min, limits.q_max)
+
+        if base_control is not None:
+            ax, ay, alpha = base_control(t)
+            # Yaw first, on the mid-step rate, then the heading it produces is
+            # what the body-frame velocity is resolved through.
+            omega_mid = float(
+                np.clip(omega + 0.5 * alpha * step, -limits.base_omega_max, limits.base_omega_max)
+            )
+            theta += omega_mid * step
+            omega = float(
+                np.clip(omega + alpha * step, -limits.base_omega_max, limits.base_omega_max)
+            )
+            # The translational velocity is a magnitude bound, so it is the
+            # *norm* that is clipped and not the components — `base_v_max` caps
+            # `hypot(vx, vy)` (reg.types.Limits).
+            mid_x, mid_y = vx + 0.5 * ax * step, vy + 0.5 * ay * step
+            mid_x, mid_y = _clip_norm(mid_x, mid_y, limits.base_v_max)
+            x += (mid_x * math.cos(theta) - mid_y * math.sin(theta)) * step
+            y += (mid_x * math.sin(theta) + mid_y * math.cos(theta)) * step
+            vx, vy = _clip_norm(vx + ax * step, vy + ay * step, limits.base_v_max)
+
+        polygons.extend(link_polygons(q, limits, frame()))
         t += step
     return unary_union(polygons)
+
+
+def _clip_norm(x: float, y: float, cap: float) -> tuple[float, float]:
+    """`(x, y)` scaled down to length `cap` if it is longer. Direction preserved."""
+    norm = math.hypot(x, y)
+    if norm <= cap or norm == 0.0:
+        return float(x), float(y)
+    return float(x) * cap / norm, float(y) * cap / norm
+
+
+def _bang_bang_base_controls(seed: int, n: int, limits: Limits = MOBILE_LIMITS):
+    """Saturated base accelerations with a fixed direction and a yaw sign.
+
+    The extremal controls for the vehicle, matching `_bang_bang_controls` for
+    the joints: a translational acceleration at `base_a_max` in a drawn
+    direction and a yaw acceleration at `±base_alpha_max`. Held constant through
+    the horizon rather than switched, because for the base the furthest points
+    are reached by driving straight and the bound is a magnitude bound in any
+    case — a switching base travels strictly less far.
+    """
+    rng = np.random.default_rng(seed)
+    for _ in range(n):
+        heading = float(rng.uniform(0.0, 2.0 * math.pi))
+        sign = float(rng.choice((-1.0, 1.0)))
+        ax = limits.base_a_max * math.cos(heading)
+        ay = limits.base_a_max * math.sin(heading)
+        alpha = sign * limits.base_alpha_max
+
+        def base_control(t: float, ax=ax, ay=ay, alpha=alpha):
+            return ax, ay, alpha
+
+        yield base_control
 
 
 def _bang_bang_controls(horizon: float, seed: int, n: int):
@@ -497,6 +617,14 @@ def test_no_bang_bang_trajectory_escapes_the_outer_envelope(horizon: float) -> N
     honoured, and the whole point of computing it is gone. Asserted as *exact*
     containment rather than within a tolerance: the construction is
     circumscribed at every step precisely so that no tolerance is needed here.
+
+    **The base is driven too since issue #163**, and that matters more than it
+    looks: `reg.enforce.computed_bound` is finite only because the base is
+    bolted down (docs/mobile-base.md §1), so the moment the mobile track lands
+    the workspace disc stops being available as a floor and this test becomes
+    the *only* thing holding every VETO up. The mobile half runs the same
+    joint-space bang-bang controls with the vehicle saturating its own
+    translational and yaw accelerations underneath them.
     """
     for seed, state in enumerate(SOUNDNESS_STATES):
         outer = outer_envelope(state, LIMITS, horizon, ORIGIN_FRAME)
@@ -509,6 +637,44 @@ def test_no_bang_bang_trajectory_escapes_the_outer_envelope(horizon: float) -> N
                 "overclaim verdict built on it is an accusation about a "
                 "declaration the robot could have kept."
             )
+
+
+@pytest.mark.parametrize("horizon", (0.05, 0.2, 0.5))
+def test_no_bang_bang_trajectory_escapes_the_outer_envelope_with_a_driven_base(
+    horizon: float,
+) -> None:
+    """The same criterion for a robot that drives (issue #163).
+
+    Joints saturated by `_bang_bang_controls` *and* the vehicle saturating
+    `base_a_max` in a drawn direction and `±base_alpha_max` in yaw, integrated
+    on the same midpoint rule the bound's `substep_dt` term is derived for. The
+    base starts at a range of velocities including the speed bound itself, so
+    the `min(|v0| + a*s, v_max)` cap in `base_motion_bounds` is exercised rather
+    than assumed.
+
+    A failure here means the Minkowski sum does not cover the vehicle — which is
+    the same silent unsoundness `outer_envelope`'s block comment names, one level
+    up: the region would still look exactly like a sound outer bound.
+    """
+    starts = ((0.0, 0.0, 0.0), (0.8, 0.0, 1.2), (-0.4, 0.3, -0.5), (0.0, 0.0, 1.2))
+    for seed, state in enumerate(SOUNDNESS_STATES):
+        for vx, vy, omega in starts:
+            mobile = _mobile(state, vx, vy, omega)
+            outer = outer_envelope(mobile, MOBILE_LIMITS, horizon, ORIGIN_FRAME)
+            joint_controls = list(_bang_bang_controls(horizon, seed=seed, n=6))
+            base_controls = list(_bang_bang_base_controls(seed=seed, n=6))
+            for control, base_control in zip(joint_controls, base_controls):
+                swept = _swept_body(
+                    mobile, control, horizon, MOBILE_LIMITS, base_control
+                )
+                escape = swept.difference(outer)
+                assert escape.is_empty, (
+                    f"q={state.q}, qd={state.qd}, base_vel=({vx}, {vy}, "
+                    f"{omega}), horizon={horizon}: a bang-bang trajectory left "
+                    f"{escape.area:.3e} m^2 of body outside the outer envelope "
+                    "of a driven base. The Minkowski sum does not cover the "
+                    "vehicle, so the bound is not an outer bound at all."
+                )
 
 
 def test_a_shrunk_outer_bound_does_not_survive_the_soundness_test() -> None:
@@ -530,6 +696,38 @@ def test_a_shrunk_outer_bound_does_not_survive_the_soundness_test() -> None:
         "no trajectory escaped a bound that had been eroded by a millimetre, so "
         "the soundness test above cannot distinguish an outer bound from a "
         "region that merely looks like one."
+    )
+
+
+def test_an_outer_bound_that_forgot_the_base_does_not_survive_the_mobile_test() -> None:
+    """The negative for the mobile half, and it is the one that would have shipped.
+
+    The failure this guards is not a subtly eroded polygon — it is the obvious
+    one: computing the arm's outer set and never reading the base's bounds at
+    all, which is exactly what this module did before issue #163 and which
+    produces a perfectly valid-looking region. Fed the *fixed-base* bound and a
+    driven base, some trajectory must escape. If none does, the mobile test
+    above would go on passing for a construction that ignores the vehicle.
+    """
+    horizon = 0.2
+    state = _mobile(SOUNDNESS_STATES[2], 0.8, 0.0, 0.0)
+    # The arm-only bound is computed from the arm-only `Limits`, and therefore
+    # from a state that records no base velocity — a driving state is refused
+    # against zero bounds, which is a separate and correct refusal.
+    arm_only = outer_envelope(SOUNDNESS_STATES[2], LIMITS, horizon, ORIGIN_FRAME)
+    escaped = any(
+        not _swept_body(state, control, horizon, MOBILE_LIMITS, base_control)
+        .difference(arm_only)
+        .is_empty
+        for control, base_control in zip(
+            _bang_bang_controls(horizon, seed=0, n=6),
+            _bang_bang_base_controls(seed=0, n=6),
+        )
+    )
+    assert escaped, (
+        "a driven base escaped no part of the arm-only outer bound, so the "
+        "mobile soundness test cannot tell a construction that reads the base "
+        "bounds from one that ignores them."
     )
 
 
@@ -823,6 +1021,16 @@ def test_the_outer_set_at_the_origin_is_bit_identical_to_before_the_base_moved(
     `reg.enforce.horizon_bound` VETOes on, are these two numbers. "Did not
     change" has to mean the bytes: a one-ulp drift in the intersected disc would
     move an area in its last digit and nothing else here would say so.
+
+    **This table now pins two changes, not one.** Issue #162 made the base an
+    argument; issue #163 put the vehicle's own motion into the set. The demo
+    world states `base_v_max = base_a_max = base_omega_max = base_alpha_max =
+    0.0`, so `reg.envelope.base_motion_bounds` returns `(0.0, 0.0)` and both new
+    terms are skipped rather than applied as zero — which is the difference
+    between these hex digits holding and drifting, because `buffer(0.0)` re-nodes
+    a ring in GEOS and does not return it unchanged. That makes this table the
+    regression guard for the whole mobile tier, and it is why it is checked with
+    `.hex()` rather than with `pytest.approx`.
     """
     state = _state_from_hex(q_hex, qd_hex)
     region = outer_envelope(
@@ -970,3 +1178,364 @@ def test_the_outer_set_cannot_be_computed_without_a_base() -> None:
         outer_envelope(STATIONARY, LIMITS, 0.2)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         outer_radius(Polygon([(0, 0), (1, 0), (1, 1)]))  # type: ignore[call-arg]
+
+
+# --------------------------------------------------------------------------
+# The base's own motion in the outer set (issue #163)
+#
+# `Limits` has carried `base_v_max`, `base_a_max`, `base_omega_max` and
+# `base_alpha_max` since issue #151 and nothing read them. They are read here
+# now, analytically and composed by Minkowski sum rather than by gridding, and
+# the tests below are in three groups:
+#
+#   * that a base which cannot move changes nothing — the regression guard for
+#     the whole tier, whose sharpest form is
+#     `test_the_outer_set_at_the_origin_is_bit_identical_to_before_the_base_moved`
+#     above, which this section does not duplicate;
+#   * that a base which can move makes the set strictly larger, and larger in
+#     the right place — a point the vehicle can reach and the arm alone cannot;
+#   * the refusals, because `base_vel is None` is a could-not-evaluate and must
+#     never resolve to a base standing still.
+#
+# The soundness of the enlarged set is not asserted here. It is asserted where
+# it belongs, in
+# `test_no_bang_bang_trajectory_escapes_the_outer_envelope_with_a_driven_base`
+# and its negative, against trajectories that actually drive.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("horizon", (0.05, 0.2, 0.5, 5.0))
+def test_a_base_that_cannot_move_contributes_exactly_zero(horizon: float) -> None:
+    """`(0.0, 0.0)` to the bit, at every horizon and from every state.
+
+    Not `approx`. The bit-identity of every published outer figure rests on
+    these two numbers being exactly zero so that `outer_envelope` skips both
+    terms; a value that were merely tiny would be applied, and `buffer(1e-18)`
+    is not the identity in GEOS.
+    """
+    for state in SOUNDNESS_STATES:
+        assert base_motion_bounds(state, LIMITS, horizon) == (0.0, 0.0), (
+            f"q={state.q}, horizon={horizon}: a base with all four bounds at "
+            "zero contributed something to the outer set."
+        )
+
+
+def test_a_base_that_cannot_move_needs_no_base_velocity() -> None:
+    """`base_vel=None` is fine for a bolted base and refused for a driven one.
+
+    Both halves matter. Every fixture in this repository records no base
+    velocity (`reg.graph` reconstructs states from `robot_config`, which has no
+    columns for one), so refusing `None` outright would refuse the entire
+    existing corpus. Accepting it for a robot that can drive would read "not
+    recorded" as "standing still", which is the could-not-evaluate resolving to
+    the permissive answer that `CLAUDE.md` forbids.
+    """
+    state = SOUNDNESS_STATES[2]
+    assert state.base_vel is None
+    assert base_motion_bounds(state, LIMITS, 0.2) == (0.0, 0.0)
+
+    with pytest.raises(ValueError, match="base_vel is None"):
+        base_motion_bounds(state, MOBILE_LIMITS, 0.2)
+    with pytest.raises(ValueError, match="base_vel is None"):
+        outer_envelope(state, MOBILE_LIMITS, 0.2, ORIGIN_FRAME)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("base_v_max", 0.8),
+        ("base_a_max", 1.5),
+        ("base_omega_max", 1.2),
+        ("base_alpha_max", 2.5),
+    ),
+)
+def test_any_one_nonzero_base_bound_is_enough_to_require_a_base_velocity(
+    field: str, value: float
+) -> None:
+    """Each of the four on its own, because "can the base move" is an `any`.
+
+    A robot that can only turn still moves the arm; a robot that can only
+    accelerate from rest still travels. Testing the four together would pass for
+    an implementation that read `base_v_max` and ignored the other three.
+    """
+    limits = dataclasses.replace(LIMITS, **{field: value})
+    with pytest.raises(ValueError, match="base_vel is None"):
+        base_motion_bounds(SOUNDNESS_STATES[0], limits, 0.2)
+
+
+def test_a_base_velocity_outside_its_own_limits_is_refused() -> None:
+    """The same refusal `_check_state_within_limits` makes for a joint.
+
+    The displacement bound integrates `min(|v0| + a*s, v_max)`, which is an
+    upper bound only while `|v0| <= v_max`. A state that violates its own limit
+    would therefore produce a bound that is too *small* — the one direction an
+    outer bound may not be wrong in — so it is a fault in whatever produced the
+    state and is reported as one.
+    """
+    state = SOUNDNESS_STATES[0]
+    with pytest.raises(ValueError, match="base_v_max"):
+        base_motion_bounds(_mobile(state, 0.9, 0.0, 0.0), MOBILE_LIMITS, 0.2)
+    # The norm, not the components: (0.6, 0.6) is under the bound on each axis
+    # and 0.85 m/s in total. `base_v_max` caps `hypot(vx, vy)`.
+    with pytest.raises(ValueError, match="base_v_max"):
+        base_motion_bounds(_mobile(state, 0.6, 0.6, 0.0), MOBILE_LIMITS, 0.2)
+    with pytest.raises(ValueError, match="base_omega_max"):
+        base_motion_bounds(_mobile(state, 0.0, 0.0, -1.3), MOBILE_LIMITS, 0.2)
+    # ...and the ones that are inside it are accepted, so the check above is
+    # discriminating rather than refusing everything.
+    assert base_motion_bounds(_mobile(state, 0.6, 0.5, 1.2), MOBILE_LIMITS, 0.2)
+
+
+def test_a_non_finite_base_velocity_is_refused_rather_than_propagated() -> None:
+    """NaN compares False against every bound, so it would reach the geometry."""
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="finite"):
+            base_motion_bounds(
+                _mobile(SOUNDNESS_STATES[0], bad, 0.0, 0.0), MOBILE_LIMITS, 0.2
+            )
+        with pytest.raises(ValueError, match="finite"):
+            base_motion_bounds(
+                _mobile(SOUNDNESS_STATES[0], 0.0, 0.0, bad), MOBILE_LIMITS, 0.2
+            )
+
+
+def test_the_base_bounds_are_the_integral_they_claim_to_be() -> None:
+    """The arithmetic, stated rather than eyeballed off a polygon.
+
+    Two regimes and the boundary between them. While the speed cap is slack the
+    bound is `|v0|*H + a*H^2/2` — with the `substep_dt/2` term
+    `reachable_joint_box` argues for, which is why the comparison carries it
+    explicitly rather than hiding it in a tolerance. Once the cap engages the
+    bound is strictly less than the uncapped parabola, which is the whole reason
+    the cap is in there: without it a 5 s horizon would report a base travelling
+    19 m under a bound of 0.8 m/s.
+    """
+    state = SOUNDNESS_STATES[0]
+    v0, h = 0.4, 0.05
+    v_max, a_max = MOBILE_LIMITS.base_v_max, MOBILE_LIMITS.base_a_max
+    speed = min(v0 + 0.5 * a_max * SUBSTEP_DT, v_max)
+    assert speed + a_max * h <= v_max, "this leg is meant to keep the cap slack"
+
+    d_trans, _ = base_motion_bounds(_mobile(state, v0, 0.0, 0.0), MOBILE_LIMITS, h)
+    assert d_trans == pytest.approx(speed * h + 0.5 * a_max * h**2, rel=1e-12)
+
+    # ...and the capped regime, against the parabola it must undercut and the
+    # constant-speed line it must not exceed.
+    long_h = 5.0
+    capped, _ = base_motion_bounds(
+        _mobile(state, v0, 0.0, 0.0), MOBILE_LIMITS, long_h
+    )
+    assert capped < speed * long_h + 0.5 * a_max * long_h**2
+    assert capped <= v_max * long_h
+
+
+def test_the_base_bounds_are_monotone_in_the_horizon() -> None:
+    """More time cannot mean less travel, in either the metres or the radians."""
+    state = _mobile(SOUNDNESS_STATES[2], 0.3, -0.2, 0.4)
+    trans = []
+    yaw = []
+    for h in (0.05, 0.1, 0.2, 0.4, 0.5, 1.0):
+        d_trans, d_yaw = base_motion_bounds(state, MOBILE_LIMITS, h)
+        trans.append(d_trans)
+        yaw.append(d_yaw)
+    assert trans == sorted(trans), f"translation bounds {trans} are not monotone"
+    assert yaw == sorted(yaw), f"yaw bounds {yaw} are not monotone"
+
+
+def test_a_driven_base_gives_a_strictly_larger_outer_set() -> None:
+    """**The positive half of the negative the issue asks for.**
+
+    Same arm, same state, same horizon; the only difference is four numbers on
+    `Limits` that were dead until issue #163. The fixed-base set must be a
+    strict subset — contained, and smaller in both area and radius. Anything
+    less means the base bounds are being read and discarded.
+    """
+    state = SOUNDNESS_STATES[2]
+    fixed = outer_envelope(state, LIMITS, 0.2, ORIGIN_FRAME)
+    driven = outer_envelope(
+        _mobile(state, 0.5, 0.0, 0.3), MOBILE_LIMITS, 0.2, ORIGIN_FRAME
+    )
+
+    assert fixed.difference(driven).is_empty, (
+        "the fixed-base outer set is not inside the driven one, so the two are "
+        "not bounds on the same arm."
+    )
+    assert envelope_area(driven) > envelope_area(fixed)
+    assert outer_radius(driven, ORIGIN_FRAME) > outer_radius(fixed, ORIGIN_FRAME)
+
+
+def test_a_point_the_base_can_reach_and_the_arm_cannot_is_inside_the_set() -> None:
+    """The negative the issue names, as a point rather than as an area.
+
+    A larger area is satisfied by a construction that dilates the arm's set by
+    something arbitrary. This asserts the enlargement is in the right *place*
+    and of the right *size*: a point straight ahead of the fully extended arm,
+    further out than the fixed-base workspace disc by most of the base's own
+    travel, is outside the fixed-base set and inside the driven one. And a point
+    beyond even the driven bound is outside both — otherwise this would pass for
+    a set that had simply been made enormous.
+    """
+    bolted = ProprioState(
+        t=0.0, q=np.array([0.0, 0.0]), qd=np.array([0.0, 0.0]), base_vel=None
+    )
+    state = _mobile(bolted, 0.8, 0.0, 0.0)
+    horizon = 0.5
+    fixed = outer_envelope(bolted, LIMITS, horizon, ORIGIN_FRAME)
+    driven = outer_envelope(state, MOBILE_LIMITS, horizon, ORIGIN_FRAME)
+    d_trans, _ = base_motion_bounds(state, MOBILE_LIMITS, horizon)
+    assert d_trans > 0.1, "the fixture is meant to let the base travel a long way"
+
+    disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
+    reachable_only_by_driving = Point(disc + 0.5 * d_trans, 0.0)
+    assert not fixed.contains(reachable_only_by_driving), (
+        "the point is inside the fixed-base set, so it does not distinguish the "
+        "two and this test proves nothing."
+    )
+    assert driven.contains(reachable_only_by_driving), (
+        "a point the vehicle can drive to is outside the outer set computed for "
+        "a vehicle that can drive."
+    )
+    assert not driven.contains(Point(disc + 2.0 * d_trans, 0.0)), (
+        "a point beyond the base's own travel is inside the set, so the "
+        "enlargement is not bounded by anything and the assertion above is "
+        "satisfied by an arbitrarily large region."
+    )
+
+
+def test_yaw_alone_enlarges_the_set_without_translating_it() -> None:
+    """The yaw term is separately load-bearing, so it is separately tested.
+
+    A base that can turn but not translate — `base_v_max = base_a_max = 0` —
+    still sweeps the arm through a wider arc. The set must grow, and it must
+    stay inside the *unchanged* workspace disc while doing it: turning on the
+    spot moves nothing further from the base, so a construction that folded the
+    yaw in as a translation would push the rim outside a disc that still holds.
+    """
+    state = _mobile(SOUNDNESS_STATES[1], 0.0, 0.0, 1.0)
+    turning = dataclasses.replace(
+        LIMITS, base_omega_max=1.2, base_alpha_max=2.5
+    )
+    assert turning.base_v_max == 0.0 and turning.base_a_max == 0.0
+
+    fixed = outer_envelope(SOUNDNESS_STATES[1], LIMITS, 0.5, ORIGIN_FRAME)
+    spun = outer_envelope(state, turning, 0.5, ORIGIN_FRAME)
+
+    assert envelope_area(spun) > envelope_area(fixed)
+    disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
+    assert outer_radius(spun, ORIGIN_FRAME) <= disc * 1.001, (
+        "a base that only turns pushed the outer set past the workspace disc, "
+        "so the yaw is being applied as a displacement rather than a rotation."
+    )
+
+
+def test_a_yaw_span_past_a_full_turn_is_capped_at_one() -> None:
+    """Exact, not conservative: the geometry depends on the angle modulo 2 pi.
+
+    Two bases that can both spin more than a full turn inside the horizon reach
+    the same set from the same pose, so the polygons must be *identical* and not
+    merely similar. It is also what keeps the ancestor grid finite — without the
+    cap, a fast enough yaw widens the first joint's interval until
+    `MAX_OUTER_GRID_CONFIGS` refuses a bound that is in fact a disc.
+    """
+    state_slow = _mobile(SOUNDNESS_STATES[0], 0.0, 0.0, 0.0)
+    slow = dataclasses.replace(LIMITS, base_omega_max=8.0, base_alpha_max=40.0)
+    fast = dataclasses.replace(LIMITS, base_omega_max=40.0, base_alpha_max=400.0)
+
+    a = outer_envelope(state_slow, slow, 1.0, ORIGIN_FRAME)
+    b = outer_envelope(state_slow, fast, 1.0, ORIGIN_FRAME)
+    assert base_motion_bounds(state_slow, slow, 1.0)[1] > 2.0 * math.pi
+    assert a.area.hex() == b.area.hex(), (
+        "two bases that can each spin more than a full turn returned different "
+        "outer sets, so the 2 pi cap is not exact."
+    )
+
+
+def test_the_grid_guard_is_not_raised_for_the_base() -> None:
+    """`MAX_OUTER_GRID_CONFIGS` stays where it was, and still refuses.
+
+    The construction is analytic precisely so that the guard does not have to
+    move (docs/mobile-base.md §3): three more gridded dimensions would trip it on
+    the first frame. Asserted as the constant's value, plus a fast-yawing base
+    at a long horizon evaluating rather than refusing — which is what the 2 pi
+    cap buys.
+    """
+    assert MAX_OUTER_GRID_CONFIGS == 50_000
+    state = _mobile(SOUNDNESS_STATES[0], 0.0, 0.0, 0.0)
+    quick = dataclasses.replace(
+        LIMITS, base_v_max=2.0, base_a_max=4.0, base_omega_max=20.0, base_alpha_max=100.0
+    )
+    assert isinstance(outer_envelope(state, quick, 2.0, ORIGIN_FRAME), Polygon)
+
+
+def test_the_looseness_a_caller_must_publish_changes_when_the_base_can_drive() -> None:
+    """The caveat is a value, not a docstring — `envelope_layer`'s shape.
+
+    A reader of a mobile artifact taking the outer area for an estimate of where
+    the robot can get is the failure this exists to stop, and it is not stopped
+    by anything written in a docstring they will not open. So the sentence is
+    returned, it differs between the two robots, and the mobile one names the
+    thing that makes it loose.
+    """
+    fixed = outer_envelope_looseness(LIMITS)
+    mobile = outer_envelope_looseness(MOBILE_LIMITS)
+
+    assert fixed != mobile, (
+        "the same sentence is published for a bolted-down arm and for a "
+        "vehicle, so it says nothing about the difference between them."
+    )
+    assert "nonholonomic" in mobile and "disc" in mobile.lower()
+    assert "nonholonomic" not in fixed, (
+        "the fixed-base sentence carries the mobile caveat, which would make it "
+        "wrong about the arm every artifact in this repository is built from."
+    )
+    # Both halves say the direction, because that is the part a reader acts on.
+    assert "outer approximation" in fixed and "outer approximation" in mobile
+
+    for field in Limits.BASE_BOUND_FIELDS:
+        one = dataclasses.replace(LIMITS, **{field: 1.0})
+        assert outer_envelope_looseness(one) == mobile, (
+            f"a base with only {field} nonzero published the fixed-base "
+            "sentence; the caveat has to fire on any of the four."
+        )
+
+    with pytest.raises(TypeError, match="Limits"):
+        outer_envelope_looseness(MOBILE_LIMITS.base_v_max)  # type: ignore[arg-type]
+
+
+def test_base_motion_bounds_refuse_a_state_frame_and_a_guessed_horizon() -> None:
+    """The Layer A boundary and the no-default rule, on the new entry point."""
+    frame = StateFrame(
+        t=0.0,
+        q=np.array([0.0, 0.0]),
+        qd=np.array([0.0, 0.0]),
+        human_pos=np.array([1.0, 1.0]),
+        human_vel=np.array([0.0, 0.0]),
+        base_vel=None,
+        base_pose=None,
+        objects=(Obstacle(entity_id="e", kind="crate", cx=1.0, cy=1.0, radius=0.2),),
+    )
+    with pytest.raises(TypeError, match="ProprioState"):
+        base_motion_bounds(frame, MOBILE_LIMITS, 0.2)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        base_motion_bounds(SOUNDNESS_STATES[0], LIMITS)  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="strictly positive"):
+        base_motion_bounds(SOUNDNESS_STATES[0], LIMITS, 0.0)
+
+
+def test_the_outer_set_of_a_driven_base_is_still_a_single_polygon() -> None:
+    """Connectedness survives the Minkowski sum, which is not automatic.
+
+    The union is connected by construction because consecutive links share a
+    joint; dilating a connected set keeps it connected, and intersecting with a
+    disc centred on the base does not cut it because every piece touches the
+    base. A `MultiPolygon` out of here is a could-not-evaluate that
+    `outer_envelope` refuses, and this is the case where it would first show up.
+    """
+    for horizon in (0.05, 0.5, 2.0):
+        region = outer_envelope(
+            _mobile(SOUNDNESS_STATES[3], 0.4, -0.3, 0.9),
+            MOBILE_LIMITS,
+            horizon,
+            ORIGIN_FRAME,
+        )
+        assert isinstance(region, Polygon) and region.is_valid

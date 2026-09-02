@@ -82,10 +82,23 @@ from reg.enforce import (
     verify_acknowledgment,
     verify_verdict,
 )
-from reg.envelope import HASH_COORD_PRECISION, compute_envelope, envelope_area
+from reg.envelope import (
+    HASH_COORD_PRECISION,
+    compute_envelope,
+    envelope_area,
+    outer_envelope,
+    outer_radius,
+)
 from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
 from reg.scenarios import SCENARIOS, Scenario
-from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
+from reg.types import (
+    BaseVelocity,
+    Limits,
+    LimitSource,
+    Obstacle,
+    ProprioState,
+    StateFrame,
+)
 from reg.world import DEMO_WORLD
 
 KEYRING = Keyring.from_material(
@@ -869,6 +882,82 @@ def test_the_horizon_bound_is_never_worse_than_the_workspace_disc() -> None:
                 assert (
                     horizon_bound(state, LIMITS, window, SUBSTEP_DT_S) <= disc + 1e-12
                 )
+
+
+#: The demo arm on a base that can drive. Not a fixture anything runs on —
+#: `reg.world.LIMITS` states four zeros and Tier 4 of docs/mobile-base.md §7 is
+#: where mobile scenarios arrive. It exists so the two tests below can ask what
+#: the *bound* does for a robot that moves, which is a question the fixtures
+#: cannot ask.
+MOBILE_LIMITS = dataclasses.replace(
+    LIMITS,
+    base_v_max=0.8,
+    base_a_max=1.5,
+    base_omega_max=1.2,
+    base_alpha_max=2.5,
+)
+
+
+def test_a_mobile_robot_with_no_recorded_base_velocity_aborts_rather_than_binds() -> None:
+    """A could-not-evaluate reaching the VETO path as a could-not-evaluate.
+
+    `ProprioState.base_vel is None` means *this state records no base velocity*,
+    and every state in this repository is one: `reg.graph` reconstructs frames
+    from `robot_config`, which has no columns for it. For a bolted-down base
+    that is fine — the vehicle cannot move, so there is nothing to record. For a
+    robot that can drive it is a hole, and since issue #163 the outer set says
+    so instead of computing a standing-still bound.
+
+    It arrives here as an `EnforcementError` rather than as a wider bound, which
+    is the rule issue #106 settled for this path: falling back to the workspace
+    disc would report a check that ran when it did not.
+    """
+    state = proprio(Q_EXTENDED, 0.0)
+    assert state.base_vel is None
+    with pytest.raises(EnforcementError) as excinfo:
+        horizon_bound(state, MOBILE_LIMITS, HORIZON_S, SUBSTEP_DT_S)
+    assert "base_vel" in str(excinfo.value), str(excinfo.value)
+
+    # The same state against the fixed-base limits is a bound like any other, so
+    # the refusal above is about the robot and not about the state.
+    assert horizon_bound(state, LIMITS, HORIZON_S, SUBSTEP_DT_S) > 0.0
+
+
+def test_the_horizon_bound_is_still_floored_by_a_fixed_base_disc() -> None:
+    """**A gap recorded, not a property asserted.** Issue #164 is what closes it.
+
+    Issue #163 put the vehicle's motion into `reg.envelope.outer_envelope`, and
+    that makes the outer term of `horizon_bound` grow with the base's bounds
+    while `computed_bound` — correctly — does not
+    (`test_the_computed_bound_does_not_read_the_base_bounds`). So for a robot
+    that drives, `min(computed_bound, outer_radius)` is pinned at the workspace
+    disc, and the workspace disc is finite **only because the base is bolted
+    down** (docs/mobile-base.md §1, docs/limitations.md §9). The minimum of a
+    sound bound and an unsound one is not a sound bound.
+
+    Nothing in this repository is affected: `reg.world.LIMITS` states four zeros
+    and the fixtures are fixed-base runs, so the floor is the floor it always
+    was. This asserts the shape of the gap — the outer term does exceed the disc
+    for a driven base, and the disc does win — so that #164's change to
+    `computed_bound` cannot land without a test in front of it going red and
+    saying which sentence stopped being true.
+    """
+    state = dataclasses.replace(
+        proprio(Q_EXTENDED, 0.0), base_vel=BaseVelocity(vx=0.8, vy=0.0, omega=0.0)
+    )
+    region = outer_envelope(state, MOBILE_LIMITS, HORIZON_S, ORIGIN_FRAME)
+    disc = computed_bound(MOBILE_LIMITS)
+
+    assert outer_radius(region, ORIGIN_FRAME) > disc, (
+        "the outer set of a driven base does not exceed the arm's workspace "
+        "disc, so either the base bounds are not being read or this fixture is "
+        "too slow to distinguish them."
+    )
+    assert horizon_bound(state, MOBILE_LIMITS, HORIZON_S, SUBSTEP_DT_S) == disc, (
+        "the floor is no longer the binding term for a driven base. If issue "
+        "#164 has landed, `computed_bound` should be refusing an unbounded "
+        "workspace and this test is what has to be rewritten, not the bound."
+    )
 
 
 def test_horizon_excess_is_never_less_than_envelope_excess() -> None:

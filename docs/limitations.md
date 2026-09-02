@@ -664,3 +664,74 @@ re-measures, retires or moves any of them. Until all three exist, the
 supportable claim is exactly: **every reachability answer in this artifact is an
 answer about an arm whose base is a mounting fact, and the certifiability of the
 world-frame ones is inherited from that fact rather than from the method.**
+
+---
+
+## 10. The base's contribution to the outer set is a disc, and a real base is not
+
+Added 2026-09-02 (issue #163). §9 states that every result here is a fixed-base
+result and that a driven base would leave every VETO resting on
+`reg.envelope.outer_envelope`. This entry is what the first half of that work
+actually bought and what it did not: the outer set now reads the base's four
+actuation bounds, and it composes them into the geometry as a **disc**, which is
+a much weaker description of a vehicle than it looks.
+
+**What.** `reg.envelope.outer_envelope` bounds the base's own motion over the
+horizon with two scalars — `base_motion_bounds(state, limits, horizon)` returns a
+translation bound in metres and a yaw bound in radians, each the integral
+`∫ min(|rate₀| + a·s, rate_max) ds` that the joint box is built from. The yaw
+folds into the first joint's angular interval, which is exact. The translation is
+**Minkowski-summed** with the arm's body-frame set — on a `shapely` polygon, one
+`buffer` — so the vehicle is modelled as *able to be anywhere within `d_trans`
+metres of where it started, in any direction*.
+
+That last clause is the limitation. A differential-drive base is **nonholonomic**:
+it cannot move sideways at all, so its true horizon-limited reachable set is a
+curved, non-convex, Dubins-shaped region, and the disc over-covers it by a wide
+margin. `docs/mobile-base.md` §3 works the geometry through and
+[`prior-art.md`](prior-art.md) §24 has the literature: a zonotope
+over-approximation of a Dubins car is already described as *large*, and it takes
+**polynomial** zonotopes to capture the curvature at all. So the disc is not
+merely loose — it is looser than the loosest thing that literature would publish.
+
+**The cost.** Sound, and useless in proportion to how fast the base can drive.
+Every VETO built on this bound errs in the permissive direction, so no truthful
+declaration is refused; what is lost is detection. At a 0.2 s horizon and 0.8 m/s
+the disc adds ~0.16 m of radius in every direction, and a declaration exceeding
+the arm's reach by less than that is no longer caught. The looseness compounds
+with §3's: that check is **radial**, and a radial bound is at its weakest exactly
+where a nonholonomic base is — a vehicle that cannot turn is nowhere near the rim
+of its own disc, so radial-plus-disc is close to no constraint on a base's
+heading at all. **How much this costs has not been computed for this construction
+by anyone**, here or elsewhere; it is a representation cost with no published
+figure attached, and this file does not invent one.
+
+**What it does not cost.** Nothing in this repository, today. `reg.world.LIMITS`
+states `base_v_max = base_a_max = base_omega_max = base_alpha_max = 0.0`, both
+terms are then exactly zero, and the outer set is bit-identical to the arm-only
+one — `tests/test_envelope.py::test_the_outer_set_at_the_origin_is_bit_identical_to_before_the_base_moved`
+compares the hex digits of the two retained scalars against the values computed
+before any of this existed. No published figure moves, and §9's statement that
+every result here is a fixed-base result is unchanged.
+
+**It must be published as loose, and it is.** `reg.envelope.outer_envelope_looseness(limits)`
+returns the sentence a caller reporting `outer_area_m2` or `outer_radius_m` has to
+carry with it, and it returns a *different* sentence when the base can drive —
+naming the disc and the nonholonomic gap. That is deliberately a value rather than
+a docstring: the reader who would take an outer area for an estimate of where the
+robot can get is reading an artifact, not this module. The same rule the layer tag
+follows (§4, issue #84): a property of the answer that is decided by the `Limits`
+it was computed from travels *with* the answer.
+
+**What a claim would need in order not to inherit this.** A reachable set for the
+vehicle rather than a bound on its displacement — RTD and REFINE compute exactly
+that for ground robots, with the tracking error inside it, and CORA's conservative
+linearization plus polynomial zonotopes is what makes the non-convexity
+representable ([`prior-art.md`](prior-art.md) §23, §24). `reg` may not build it:
+*no new dependencies* is a standing rule and *an HJ reachability solver* is a
+stated non-goal in [`plan.md`](plan.md). A `shapely` polygon has no zonotope
+arithmetic behind it, so every step of such a construction would be a buffer whose
+error compounds — which is how the disc got here in the first place. Until then
+the supportable claim is exactly: **the outer set contains everything a base
+within these actuation bounds could do, and it contains a great deal that a
+differential-drive base could not.**

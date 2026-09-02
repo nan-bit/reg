@@ -92,8 +92,8 @@ truthful policies, which is the "check that cries wolf" failure this project has
 an issue open about. Comparing against a bound that under-covers is the one way
 to get this check wrong, so it is not done.
 
-**The bound that is used, stated plainly.** Two bounds, and the check takes the
-smaller:
+**The bound that is used, stated plainly.** Two bounds, and **which of them
+exist is a property of the robot** (issue #164):
 
     computed_bound(limits)          the radius of the **workspace disc**,
                                     `sum(link_lengths) + link_radius`, centred on
@@ -102,20 +102,52 @@ smaller:
                                     every configuration, at every instant, lies
                                     within it — by the triangle inequality over
                                     the link chain, with no horizon and no
-                                    sampling involved.
+                                    sampling involved. **It exists only for a
+                                    base that cannot move**, and it refuses,
+                                    naming the field, for a `Limits` whose base
+                                    bounds are nonzero.
 
     horizon_bound(state, limits,    the radial projection of
                   w, substep_dt)    `reg.envelope.outer_envelope` — the
                                     horizon-limited **outer** reachable set, the
                                     joint box pushed through the kinematics as an
-                                    interval (issue #82). Floored by the disc, so
-                                    it is never the worse of the two.
+                                    interval (issue #82), Minkowski-summed with
+                                    the base's own motion since issue #163. For a
+                                    **fixed** base it is floored by the disc, so
+                                    it is never the worse of the two; for a
+                                    **driven** one there is no floor and this is
+                                    the whole bound.
 
 Both are sound in the conservative direction: they *over*-cover, so nothing
-inside them is ever falsely accused, and the minimum of two sound bounds is
-sound. The containment test is exact rather than approximate — a polygon lies
-inside a disc iff all of its vertices do, because a disc is convex — so no
-polygonal rendering of a circle enters the comparison.
+inside them is ever falsely accused, and for a fixed base the minimum of two
+sound bounds is sound. The containment test is exact rather than approximate — a
+polygon lies inside a disc iff all of its vertices do, because a disc is convex —
+so no polygonal rendering of a circle enters the comparison.
+
+**WHY THE FIRST ONE REFUSES RATHER THAN RETURNING A NUMBER (ISSUE #164).**
+`sum(link_lengths) + link_radius` is finite *because the base is bolted down*.
+Give the robot a driven base and there is no horizon-free radius at all: given
+enough time it reaches everywhere. An unbounded workspace is a
+could-not-evaluate under this project's *a check must be able to fail*, and the
+third state never resolves to the first — so `computed_bound` says so. A large
+plausible number would be strictly worse than nothing: it VETOes while looking
+principled, and a bound nobody can justify is the one failure mode a bound that
+VETOes must not have. docs/mobile-base.md §1, docs/limitations.md §3 and §9.
+
+**The literature's answer to the same fact is not refusal, and saying so is part
+of the argument.** RTD and REFINE (docs/prior-art.md §23) stop *needing* a
+horizon-free bound: every plan ends in a **fail-safe manoeuvre** verified offline
+in the same reachable set, and the set is re-verified each planning step, so the
+robot is never in a state with no verified action. `reg` cannot take that answer,
+for two structural reasons rather than preferences. RTD's guarantee lives inside
+the **planner** — the same party that chooses the trajectory proves it safe,
+which is the common-cause structure CLAUDE.md rule 3 exists to refuse. And this
+module VETOes a *declaration* and commands nothing; the one thing in the tree
+that resembles a fail-safe, passivation, reaches no table, no edge type and no
+query (issue #112), so a project that cannot represent a stop cannot rest a bound
+on having one. §23 also records the consolation: RTD's own set is horizon-limited
+and per-step, so resting on the outer envelope alone is **the position that
+literature works from**, not a degraded one.
 
 **`substep_dt` is in the second signature, and it has no default (issue #106).**
 The outer set's soundness argument is not about the continuous system alone: it
@@ -646,8 +678,27 @@ def verify_acknowledgment(ack: Acknowledgment, key: Key | None) -> MacCheck:
 # --------------------------------------------------------------------------
 
 
+def _driven_base_fields(limits: Limits) -> tuple[str, ...]:
+    """The base actuation bounds that are nonzero, in field order (issue #164).
+
+    Empty for a bolted-down base — `reg.world.LIMITS` states four zeros, and
+    `Limits` requires them rather than allowing them to be omitted, so "this
+    base does not move" is something a caller wrote down and not something read
+    off an absence. Non-empty for anything that can translate or turn.
+
+    Returned as the *names* rather than as a bool because the refusal in
+    `computed_bound` has to say which field made the workspace unbounded. "This
+    robot has a driven base" is not something a caller can act on;
+    `base_omega_max=1.2` is, and it is also how a caller who stated a datasheet
+    number by accident finds out.
+    """
+    return tuple(
+        name for name in Limits.BASE_BOUND_FIELDS if float(getattr(limits, name)) > 0.0
+    )
+
+
 def computed_bound(limits: Limits) -> float:
-    """Radius of the workspace disc, metres. The bound enforcement computes itself.
+    """Radius of the workspace disc, metres. **Only for a base that cannot move.**
 
     `sum(link_lengths) + link_radius`, centred on the base at the origin. Every
     point of the robot's body in every configuration lies within it: walking the
@@ -657,19 +708,52 @@ def computed_bound(limits: Limits) -> float:
 
     **Sound in the conservative direction.** It over-covers the true reachable
     set — by a lot, since it has no horizon in it — which is what makes it safe
-    to VETO on. It is the floor under `horizon_bound`, which tightens it with the
-    state and a window (issue #82) and can never be worse than it: an enforcer
-    with a state to work from uses the smaller of the two, and this one is what
-    remains true when the arm is extended and fast enough to reach the rim of the
-    workspace inside the window anyway.
+    to VETO on. It is the floor under `horizon_bound` *for a fixed base*, which
+    tightens it with the state and a window (issue #82) and can never be worse
+    than it: an enforcer with a state to work from uses the smaller of the two,
+    and this one is what remains true when the arm is extended and fast enough to
+    reach the rim of the workspace inside the window anyway.
+
+    **AND IT IS FINITE ONLY BECAUSE THE BASE IS BOLTED DOWN (ISSUE #164).** The
+    triangle-inequality argument above walks the link chain from a base point
+    that stays put. Let the base drive and the argument has no starting point:
+    the workspace is unbounded, because given enough time the robot reaches
+    everywhere. So this function **refuses** a `Limits` with any nonzero base
+    bound, naming the field, rather than returning the arm-only number — which
+    would be a bound over a set it does not contain — or a large plausible one,
+    which would VETO while looking principled. An unbounded workspace is a
+    could-not-evaluate, and the third state never resolves to the first. The
+    module header carries the argument in full, including why the reachability
+    literature's answer to the same fact is a fail-safe manoeuvre rather than a
+    refusal and why `reg` cannot take it (docs/prior-art.md §23,
+    docs/mobile-base.md §1).
 
     Raises:
-        EnforcementError: `limits` has a malformed link geometry. A bound derived
-            from a zero-length link or a non-finite radius is not a bound.
+        EnforcementError: `limits.base_v_max`, `base_a_max`, `base_omega_max` or
+            `base_alpha_max` is nonzero — there is no horizon-free bound for that
+            robot and this is the could-not-evaluate saying so — or `limits` has
+            a malformed link geometry. A bound derived from a zero-length link or
+            a non-finite radius is not a bound either.
     """
     if not isinstance(limits, Limits):
         raise EnforcementError(
             f"computed_bound takes a Limits, got {type(limits).__name__}."
+        )
+    driven = _driven_base_fields(limits)
+    if driven:
+        stated = ", ".join(f"{name}={float(getattr(limits, name))}" for name in driven)
+        raise EnforcementError(
+            f"there is no workspace disc for this robot: {stated}, so the base "
+            "can move and the workspace is unbounded — given enough time it "
+            "reaches everywhere. `sum(link_lengths) + link_radius` is finite "
+            "only because the base is bolted to the origin. That is a "
+            "could-not-evaluate, not a gap to fill: a large plausible radius "
+            "would VETO while looking principled, and a bound nobody can justify "
+            "is the one failure mode a bound that VETOes must not have. The "
+            "horizon-limited bound does exist for this robot — call "
+            "horizon_bound(state, limits, window, substep_dt), which rests on "
+            "reg.envelope.outer_envelope alone when the base can drive. "
+            "docs/mobile-base.md §1, docs/limitations.md §3 and §9, issue #164."
         )
     lengths = np.asarray(limits.link_lengths, dtype=float)
     if lengths.ndim != 1 or lengths.shape[0] == 0:
@@ -697,12 +781,31 @@ def horizon_bound(
 ) -> float:
     """Radius of the bound for **this instant and this horizon**, metres (#82).
 
-    `min(computed_bound(limits), outer_radius(outer_envelope(state, limits,
-    horizon, base, substep_dt), base))`, with `base` the `ORIGIN_FRAME` this
-    repository's arm is bolted to (issue #162) — the radial projection of the
-    horizon-limited outer reachable set, floored by the workspace disc so it can
-    never be worse than the bound it tightens. Both terms are sound in the
-    conservative direction, and the minimum of two sound bounds is sound.
+    The radial projection of `reg.envelope.outer_envelope(state, limits, horizon,
+    base, substep_dt)` — the horizon-limited outer reachable set — measured from
+    `base`, the `ORIGIN_FRAME` this repository's arm is bolted to (issue #162).
+    **How many terms the bound has is a property of the robot, and this is the
+    sentence issue #164 stopped being able to state unconditionally:**
+
+    * **Fixed base** — every `Limits` in this repository, four base bounds stated
+      as zeros. `min(computed_bound(limits), outer_radius(...))`: the outer set
+      floored by the workspace disc, so the tightening can never be worse than
+      the bound it tightens. Both terms over-cover, and the minimum of two sound
+      bounds is sound.
+    * **Driven base** — any nonzero base bound. `outer_radius(...)` **alone**.
+      There is no second term, because `computed_bound` refuses: the workspace
+      disc is finite only while the base is bolted down, and taking a minimum
+      with an arm-only disc would pin the bound at a radius the vehicle can drive
+      straight out of. The minimum of a sound bound and an unsound one is not a
+      sound bound.
+
+    **So for a driven base every VETO rests on `reg.envelope.outer_envelope`'s
+    soundness argument alone**, and
+    `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+    stops being a good test and becomes the load-bearing one. That set is
+    horizon-limited and per-step, which is the position the reachability
+    literature works from rather than a degraded one — see the module header and
+    docs/prior-art.md §23 for the fail-safe-manoeuvre answer `reg` cannot take.
 
     **What this buys, and what it does not.** `computed_bound` has no `q`, no
     `qd` and no horizon in it, so it fires only on a declaration exceeding the
@@ -743,8 +846,9 @@ def horizon_bound(
             positive finite number, or the outer set cannot be computed. Each is
             a could-not-evaluate, and falling back to the looser disc without
             saying so would let a failed computation read as a weaker check that
-            ran. See the module header for why the third stays a raise rather
-            than becoming a verdict (issue #106).
+            ran — and for a driven base there is no looser disc to fall back to
+            at all (issue #164). See the module header for why the third stays a
+            raise rather than becoming a verdict (issue #106).
     """
     if not isinstance(state, ProprioState):
         raise EnforcementError(
@@ -780,7 +884,16 @@ def horizon_bound(
             f"nine faults {list(FAULTS)} names this condition and a verdict must "
             "name one — see reg/enforce.py's header, issue #106."
         ) from None
-    return min(computed_bound(limits), outer_radius(region, ORIGIN_FRAME))
+    outer = outer_radius(region, ORIGIN_FRAME)
+    if _driven_base_fields(limits):
+        # No floor, and its absence is the whole of issue #164. `computed_bound`
+        # would refuse this `Limits`, and taking a `min` with the number it
+        # refuses to return — the arm-only disc — would pin the bound at a radius
+        # a driven base leaves in a second. The outer set already carries the
+        # vehicle's own motion (issue #163), so this term is sound on its own;
+        # what is gone is the *second* argument for it, not the bound.
+        return outer
+    return min(computed_bound(limits), outer)
 
 
 def _furthest_vertex(region: BaseGeometry, base: BaseFrame, fn: str) -> float:
@@ -842,10 +955,18 @@ def envelope_excess(region: BaseGeometry, limits: Limits) -> float:
     with no state to work from can compute. `horizon_excess` is the same test
     against the tighter, state-dependent bound.
 
+    **It exists only for a robot whose base cannot move**, because the bound it
+    measures against does (issue #164). The refusal propagates out of here rather
+    than being absorbed: there is no static half of this check for a vehicle, and
+    an excess of `0.0` returned in place of one would be the could-not-evaluate
+    resolving to a pass.
+
     Raises:
-        EnforcementError: the region is not a geometry, or is empty or invalid.
-            Each is a could-not-evaluate, and returning 0.0 ("fits") for any of
-            them would clear a bound nobody could read.
+        EnforcementError: the region is not a geometry, or is empty or invalid;
+            or `limits` describes a driven base, which has no workspace disc to
+            measure an excess against. Each is a could-not-evaluate, and
+            returning 0.0 ("fits") for any of them would clear a bound nobody
+            could read.
     """
     return _furthest_vertex(region, ORIGIN_FRAME, "envelope_excess") - computed_bound(
         limits
@@ -861,10 +982,13 @@ def horizon_excess(
 ) -> float:
     """How far a declared region reaches beyond `horizon_bound`, metres (#82).
 
-    Positive means overclaim. Never smaller than `envelope_excess` for the same
-    region, because `horizon_bound` is never larger than `computed_bound` — so
-    every declaration the static check refused this one refuses too, and the
-    fault only ever gains cases.
+    Positive means overclaim. For a fixed base it is never smaller than
+    `envelope_excess` for the same region, because `horizon_bound` is then
+    floored by `computed_bound` and so never larger than it — every declaration
+    the static check refused this one refuses too, and the fault only ever gains
+    cases. For a driven base the comparison has nothing to be made against:
+    `envelope_excess` refuses, and this is the only overclaim test there is
+    (issue #164).
 
     `substep_dt` is required and has no default for the reason `horizon_bound`
     gives (issue #106): it is passed straight through to the bound.
@@ -1006,6 +1130,15 @@ class Enforcer:
 
     Args:
         limits: the robot. The bound is computed from this and nothing else.
+            **A `Limits` with a driven base is refused here** (issue #164):
+            `computed_bound` has no workspace disc for one, and this class names
+            that disc in every `envelope_overclaim` reason it writes. Refusing to
+            construct is the could-not-evaluate — an enforcer that quietly
+            reported an arm-only disc for a vehicle would neither VETO honestly
+            nor clear honestly. The horizon-limited bound itself is available
+            for a driven base through `horizon_bound`; wiring an `Enforcer`
+            around it needs mobile fixtures and a base pose on `robot_config`,
+            which is docs/mobile-base.md §7 Tier 3's remainder and Tier 4.
         key: the **enforcement** key. Signs verdicts and acknowledgments;
             `reg.chain.sign` refuses any other role.
         policy_key: the key declarations are verified under, or `None` for "no
@@ -1087,6 +1220,8 @@ class Enforcer:
         self._watchdog_period_s = watchdog_period_s
         self._substep_dt = substep_dt
         self._id_prefix = id_prefix
+        # Refuses a driven base, and the refusal is deliberately not caught:
+        # issue #164. See the `limits` argument above.
         self._bound = computed_bound(limits)
 
         self._t_start = _finite(t_start, "t_start")

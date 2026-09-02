@@ -1,16 +1,19 @@
 # The mobile base — what moving the robot does to the argument
 
 **Status:** a design document, and no longer entirely one · written 2026-08-31 ·
-**Tiers 1 and 2 have landed and §3's construction landed 2026-09-02 (issue
-#163); §1's refusal, §4's schema work and Tier 4's fixtures have not, and no
-robot in this repository moves** — the build order in §7 says per tier which is
-which, and it is the authority, not this line · normative for the mobile track
-only; where it touches what the project may claim, it defers to
-[`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
-those files carry the change themselves — **§2.1 and §2.2 now do**, carried into
-`sufficiency.md` §2, §5.1, §5.6 and §7 on 2026-09-01 (issue #139), and **§3's
-looseness now does**, carried into `limitations.md` §10 on 2026-09-02 (issue
-#163); those files are the normative statement of them · keep current
+**Tiers 1 and 2 have landed; §3's construction landed 2026-09-02 (issue #163)
+and §1's refusal landed 2026-09-02 (issue #164); §4's schema work and Tier 4's
+fixtures have not, and no robot in this repository moves** — the build order in
+§7 says per tier which is which, and it is the authority, not this line ·
+normative for the mobile track only; where it touches what the project may
+claim, it defers to [`sufficiency.md`](sufficiency.md) and
+[`limitations.md`](limitations.md) until those files carry the change themselves
+— **§2.1 and §2.2 now do**, carried into `sufficiency.md` §2, §5.1, §5.6 and §7
+on 2026-09-01 (issue #139); **§3's looseness now does**, carried into
+`limitations.md` §10 on 2026-09-02 (issue #163); and **§1's refusal now does**,
+carried into `limitations.md` §3 and §9 and into
+[`../CLAUDE.md`](../CLAUDE.md) rule 3 on 2026-09-02 (issue #164); those files are
+the normative statement of them · keep current
 
 Every figure, every envelope and the bound enforcement VETOes on are computed for
 a planar arm with its base bolted to the origin. This document is what happens
@@ -29,6 +32,13 @@ finding worth publishing.
 ---
 
 ## 1. `computed_bound` stops existing
+
+**Built 2026-09-02, issue #164.** `reg.enforce.computed_bound` now refuses a
+`Limits` with any nonzero base bound, naming the field, and `horizon_bound` rests
+on `reg.envelope.outer_envelope` alone for that robot. The normative statements
+are [`limitations.md`](limitations.md) §3 and §9 and
+[`../CLAUDE.md`](../CLAUDE.md) rule 3, all three rewritten in the same change;
+what follows is the argument they were rewritten from, kept as written.
 
 `reg.enforce.computed_bound` is `sum(link_lengths) + link_radius`, a disc centred
 on the base. It is finite **because the base is bolted down**. A driven base has
@@ -49,16 +59,17 @@ this* is a statement about 2013.
 
 That has three consequences, in increasing order of how easy they are to miss.
 
-**The floor under `horizon_bound` goes.** `horizon_bound` is
+**The floor under `horizon_bound` goes.** `horizon_bound` was
 `min(computed_bound(limits), outer_radius(outer_envelope(state, limits, ...)))`.
-Today the first term is sound by a trivial argument and the second is a
-tightening. For a mobile robot the first term is gone and the second is the
+For a fixed base the first term is sound by a trivial argument and the second is
+a tightening. For a mobile robot the first term is gone and the second is the
 **only** bound — so every VETO rests on the outer envelope's soundness argument,
 and `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
 stops being a good test and becomes the load-bearing one.
-[`CLAUDE.md`](../CLAUDE.md) rule 3 describes the bound as the smaller of two
-sound bounds; for a mobile robot that sentence is false and has to be rewritten
-rather than amended.
+[`CLAUDE.md`](../CLAUDE.md) rule 3 described the bound as the smaller of two
+sound bounds; for a mobile robot that sentence is false, so it was rewritten
+rather than amended — it now names which case each term applies to, and
+[`limitations.md`](limitations.md) §3 carries the same split.
 
 **The disc is also used *inside* the outer envelope, and that is the easy one to
 miss.** `reg/envelope.py` ends `outer_envelope` on
@@ -394,18 +405,37 @@ the same commit as the first of these, because the test requires it.
 **Tier 3 — the envelope and the bound.** The body-frame outer envelope with the
 base states and a rewritten soundness argument — **done, 2026-09-02, issue
 #163**, and its looseness is [`limitations.md`](limitations.md) §10;
-`computed_bound` refusing; `horizon_bound` on the outer envelope alone; the pose
-on `robot_config` with the schema bump; the two `declare.py` defects.
+`computed_bound` refusing and `horizon_bound` on the outer envelope alone —
+**done, 2026-09-02, issue #164**, and the normative statements are
+[`limitations.md`](limitations.md) §3 and §9 and
+[`../CLAUDE.md`](../CLAUDE.md) rule 3; the pose on `robot_config` with the schema
+bump; the two `declare.py` defects.
 
-*The next one is load-bearing and is now visibly so.* With the base in the outer
-set, `horizon_bound` is `min(computed_bound, outer_radius)` where the first term
-is a fixed-base disc and the second grows with the vehicle — so for a mobile
-robot the minimum is pinned at a bound §1 says does not exist. Nothing in this
-repository is affected, because every fixture states four zeros;
+*The gap the previous entry recorded is closed, and the pin that recorded it was
+rewritten rather than deleted.* With the base in the outer set,
+`horizon_bound` was `min(computed_bound, outer_radius)` where the first term is a
+fixed-base disc and the second grows with the vehicle — so for a mobile robot the
+minimum was pinned at a bound §1 says does not exist.
 `tests/test_enforce.py::test_the_horizon_bound_is_still_floored_by_a_fixed_base_disc`
-records the gap and is written to go red when `computed_bound` starts refusing,
-so the next tier cannot land without a test in front of it naming which sentence
-stopped being true.
+recorded that and was written to go red when `computed_bound` started refusing;
+it did, and it is now
+`test_the_horizon_bound_rests_on_the_outer_envelope_alone_for_a_driven_base`,
+asserting the identity rather than the gap. The two Tier 2 pins in front of the
+same change —
+`test_the_demo_worlds_bound_is_the_workspace_disc_it_has_always_been` and
+`test_the_computed_bound_does_not_read_the_base_bounds` — went the same way: the
+first still holds, narrowed to the fixed-base half it was always true of, and the
+second is replaced by
+`test_the_computed_bound_refuses_a_robot_whose_base_can_drive`, parametrised over
+all four fields. Nothing in this repository changed behaviour: every fixture
+states four zeros, and no published figure moved.
+
+*What Tier 3's refusal does **not** buy.* `Enforcer` refuses to construct for a
+driven base, because it names the workspace disc in every `envelope_overclaim`
+reason it writes and there is no honest number to put there. The bound itself is
+available for one — `horizon_bound`, `horizon_excess` — so what is missing is the
+enforcer around it, and that needs the pose on `robot_config` (this tier) and
+mobile fixtures (Tier 4) before it means anything.
 
 **Tier 4 — fixtures.** Mobile scenarios beside the eleven arm fixtures.
 

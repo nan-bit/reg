@@ -68,12 +68,33 @@ asserts it against the source. Widening that import is never a refactor.
 
 *What the bound is, so nobody reads more into "its own" than is there.*
 `horizon_bound(state, limits, window, substep_dt)` is the radius a declared
-region is tested against: the **smaller** of `computed_bound(limits)` — the
-workspace disc, `sum(link_lengths) + link_radius`, base at the origin, no `q`,
-no `qd`, no horizon — and the radial projection of `reg.envelope.outer_envelope`,
-a horizon-limited **outer** reachable set (issue #82). Both over-cover, and the
-minimum of two sound bounds is sound, so nothing inside is ever falsely accused.
-It is still **incomplete, radially now rather than entirely**: it detects a
+region is tested against, and it is the radial projection of
+`reg.envelope.outer_envelope` — a horizon-limited **outer** reachable set (issue
+#82) that since issue #163 carries the base's own motion too. **How many terms
+it has is a property of the robot, not a constant** (issue #164):
+
+- **A base that cannot move** — every `Limits` in this repository, four base
+  bounds stated as zeros. The bound is the **smaller** of that projection and
+  `computed_bound(limits)`, the workspace disc `sum(link_lengths) +
+  link_radius`, base at the origin, no `q`, no `qd`, no horizon. Both
+  over-cover, and the minimum of two sound bounds is sound, so nothing inside is
+  ever falsely accused.
+- **A base that can drive** — any nonzero base bound. The projection **alone**.
+  `computed_bound` refuses, naming the field, because the workspace disc is
+  finite only while the base is bolted down: a driven base reaches everywhere
+  given enough time, so no horizon-free radius exists. That is a
+  could-not-evaluate under *a check must be able to fail*, and a large plausible
+  number would be worse than none — it VETOes while looking principled. So every
+  VETO for a mobile robot rests on `outer_envelope`'s soundness argument alone,
+  which is what makes
+  `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+  load-bearing rather than merely good. `docs/mobile-base.md` §1 and
+  `docs/prior-art.md` §23 carry the argument, including the answer the
+  reachability literature gives instead — a verified fail-safe manoeuvre, which
+  `reg` cannot take because that guarantee lives inside the planner and because
+  this project cannot represent a stop.
+
+Either way it is **incomplete, radially rather than entirely**: it detects a
 declaration reaching further than the robot can get in the window, and not one
 pointing where the robot cannot turn in time. The polygon that would catch the
 second is computed and retained as `outer_area_m2` / `outer_radius_m` per

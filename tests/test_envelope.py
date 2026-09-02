@@ -618,12 +618,14 @@ def test_no_bang_bang_trajectory_escapes_the_outer_envelope(horizon: float) -> N
     containment rather than within a tolerance: the construction is
     circumscribed at every step precisely so that no tolerance is needed here.
 
-    **The base is driven too since issue #163**, and that matters more than it
-    looks: `reg.enforce.computed_bound` is finite only because the base is
-    bolted down (docs/mobile-base.md §1), so the moment the mobile track lands
-    the workspace disc stops being available as a floor and this test becomes
-    the *only* thing holding every VETO up. The mobile half runs the same
-    joint-space bang-bang controls with the vehicle saturating its own
+    **The base is driven too since issue #163, and since issue #164 this test is
+    load-bearing rather than merely good.** `reg.enforce.computed_bound` is
+    finite only because the base is bolted down (docs/mobile-base.md §1), so it
+    now refuses a `Limits` whose base bounds are nonzero and
+    `reg.enforce.horizon_bound` rests on the outer envelope alone for that
+    robot: the workspace disc is no longer available as a floor, and this test
+    is the *only* thing holding every mobile VETO up. The mobile half runs the
+    same joint-space bang-bang controls with the vehicle saturating its own
     translational and yaw accelerations underneath them.
     """
     for seed, state in enumerate(SOUNDNESS_STATES):
@@ -752,11 +754,20 @@ def test_the_sampled_envelope_is_inside_the_outer_one() -> None:
 def test_the_outer_envelope_never_exceeds_the_workspace_disc() -> None:
     """It is floored by the bound it tightens, so it can never be the worse one.
 
+    **For a base that cannot move**, which `LIMITS` is and every fixture here is.
+    A driven base carries the disc with it — `outer_envelope` adds the vehicle's
+    translation to the disc's radius (issue #163) — and there is then no
+    `computed_bound` to compare against at all, because it refuses (issue #164).
+    So this is a fixed-base property asserted on a fixed-base robot, and the
+    arithmetic below is spelled out rather than called through `computed_bound`
+    for exactly that reason.
+
     Up to the rendering: the region is intersected with a *polygon* that
     circumscribes the disc, and a circumscribed polygon exceeds its circle by
     `1 / cos(pi / (4 * quad_segs)) - 1`, well under a tenth of a millimetre at
     the resolution used. `reg.enforce.horizon_bound` takes the exact minimum
-    with `computed_bound` on top of this, so no check ever sees even that much.
+    with `computed_bound` on top of this for such a robot, so no check ever sees
+    even that much.
     """
     disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
     for state in SOUNDNESS_STATES:

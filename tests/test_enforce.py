@@ -529,42 +529,104 @@ def test_offer_refuses_anything_that_is_not_a_declaration() -> None:
 
 
 def test_the_demo_worlds_bound_is_the_workspace_disc_it_has_always_been() -> None:
-    """`computed_bound` is unchanged by the base bounds on `Limits` (issue #151).
+    """`computed_bound` is unchanged for a base that states four zeros (#151, #164).
 
-    The base's actuation bounds joined `Limits` so that Tier 3 has something to
-    bound a base *with*. Tier 3 is where the bound itself changes, and it does
-    not change quietly: `computed_bound` refusing an unbounded workspace
-    (docs/mobile-base.md §1) re-labels what a VETO means, so it carries its own
-    reasoning and its own issue.
+    **Amended by issue #164, deliberately.** This pin was written in #151 so
+    that Tier 3's change to the bound could not arrive as a side effect of
+    somebody stating a mobile base's datasheet. Tier 3 has now landed and the
+    change it makes is a *refusal* — see
+    `test_the_computed_bound_refuses_a_robot_whose_base_can_drive` below — so
+    what this pin now holds is the other half of the same sentence: a bolted-down
+    robot gets exactly the disc it has always had, and nothing about the refusal
+    leaked into the case it does not apply to.
 
-    Until then this is the pin. The bound for the demo world is
-    `sum(link_lengths) + link_radius` and nothing else, stated as the arithmetic
-    rather than as a number, so it fails if either the fields it reads or the
-    formula moves.
+    Stated as the arithmetic rather than as a number, so it fails if either the
+    fields it reads or the formula moves. Every published figure is measured on
+    this `Limits`, which is why "no figure moves" is checkable here rather than
+    only in `tests/test_published_figures.py`.
     """
     assert computed_bound(LIMITS) == pytest.approx(
         float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius), abs=1e-12
     )
-
-
-def test_the_computed_bound_does_not_read_the_base_bounds() -> None:
-    """The negative half: a base that can drive does not widen the arm's disc.
-
-    A `computed_bound` that silently grew with `base_v_max` would be a bound
-    over a workspace that is unbounded given enough time — the failure
-    docs/mobile-base.md §1 calls the worst available here, because it VETOes and
-    looks principled while doing it. Today the disc is arm-only and this asserts
-    it, so the Tier 3 change cannot arrive as a side effect of somebody stating
-    a mobile base's datasheet.
-    """
-    mobile = dataclasses.replace(
-        LIMITS,
-        base_v_max=1.5,
-        base_a_max=2.0,
-        base_omega_max=3.0,
-        base_alpha_max=4.0,
+    assert all(
+        float(getattr(LIMITS, name)) == 0.0 for name in Limits.BASE_BOUND_FIELDS
+    ), (
+        "the demo world's base bounds are no longer four zeros, so the assertion "
+        "above is passing for a robot the disc is not true of."
     )
-    assert computed_bound(mobile) == computed_bound(LIMITS)
+
+
+@pytest.mark.parametrize("field", Limits.BASE_BOUND_FIELDS)
+def test_the_computed_bound_refuses_a_robot_whose_base_can_drive(field: str) -> None:
+    """The negative, and the whole of issue #164: no disc exists for a vehicle.
+
+    **This test replaces `test_the_computed_bound_does_not_read_the_base_bounds`,
+    which #151 wrote as the pin in front of exactly this change.** That test
+    asserted `computed_bound(mobile) == computed_bound(LIMITS)` — the arm-only
+    disc returned for a robot the disc is not true of. It was the right assertion
+    while the alternative on the table was a bound that *grew* with `base_v_max`,
+    which would have been a plausible number over an unbounded set. The answer
+    docs/mobile-base.md §1 argues for is neither: it is a refusal, because an
+    unbounded workspace is a could-not-evaluate and the third state never
+    resolves to the first.
+
+    Parametrised over the four fields one at a time, because a robot that can
+    only turn is as unbounded in *reach* as one that can drive — a base that
+    yaws carries the arm's whole workspace around with it — and because the
+    refusal has to **name** the field, which is what makes it actionable for
+    a caller who wrote a datasheet number down by accident.
+    """
+    mobile = dataclasses.replace(LIMITS, **{field: 1.5})
+    with pytest.raises(EnforcementError) as excinfo:
+        computed_bound(mobile)
+    message = str(excinfo.value)
+    assert field in message, (
+        f"the refusal does not name {field}, so a caller cannot tell which "
+        f"stated bound made the workspace unbounded. Got: {message}"
+    )
+    assert "1.5" in message, "the refusal does not state the value it read."
+
+    # And it is a refusal about *this robot*, not a function that stopped
+    # working: the same call on the bolted-down limits still returns the disc.
+    assert computed_bound(LIMITS) > 0.0
+
+
+def test_the_computed_bound_refusal_is_not_a_pass_at_any_call_site() -> None:
+    """The refusal reaches every caller as a could-not-evaluate, never as "it fits".
+
+    `computed_bound` has two callers that are not `horizon_bound`, and both of
+    them would be a silent clear if they absorbed the refusal:
+
+    * `envelope_excess` returns *metres beyond the bound*, so swallowing the
+      refusal into `0.0` would say a declaration fits a disc that does not exist.
+    * `Enforcer.__init__` computes the disc once and names it in every
+      `envelope_overclaim` reason it writes. An enforcer built anyway would
+      quote an arm-only number for a vehicle in a signed accusation.
+
+    Neither does. Both raise, which is `reg/enforce.py`'s three-valued vocabulary
+    for a finding about the caller rather than about the robot (module header,
+    issue #106).
+    """
+    region = shapely.from_wkb(HOME_WKB)
+    with pytest.raises(EnforcementError, match="base_v_max"):
+        envelope_excess(region, MOBILE_LIMITS)
+
+    with pytest.raises(EnforcementError, match="base_v_max"):
+        Enforcer(
+            MOBILE_LIMITS,
+            key=ENFORCEMENT_KEY,
+            policy_key=POLICY_KEY,
+            watchdog_period_s=WATCHDOG_S,
+            t_start=T_START,
+            substep_dt=SUBSTEP_DT_S,
+            id_prefix="fixture",
+        )
+
+    # The positive control: the identical calls against the bolted-down limits
+    # evaluate, so the refusals above are about the base bounds and not about
+    # the region, the keys or the parameters.
+    assert envelope_excess(region, LIMITS) < 0.0
+    assert enforcer().bound == pytest.approx(computed_bound(LIMITS), abs=1e-12)
 
 
 def test_the_computed_bound_contains_every_body_of_every_fixture() -> None:
@@ -923,41 +985,56 @@ def test_a_mobile_robot_with_no_recorded_base_velocity_aborts_rather_than_binds(
     assert horizon_bound(state, LIMITS, HORIZON_S, SUBSTEP_DT_S) > 0.0
 
 
-def test_the_horizon_bound_is_still_floored_by_a_fixed_base_disc() -> None:
-    """**A gap recorded, not a property asserted.** Issue #164 is what closes it.
+def test_the_horizon_bound_rests_on_the_outer_envelope_alone_for_a_driven_base() -> (
+    None
+):
+    """**The gap #163 recorded, closed by issue #164.** The floor is gone.
 
-    Issue #163 put the vehicle's motion into `reg.envelope.outer_envelope`, and
-    that makes the outer term of `horizon_bound` grow with the base's bounds
-    while `computed_bound` — correctly — does not
-    (`test_the_computed_bound_does_not_read_the_base_bounds`). So for a robot
-    that drives, `min(computed_bound, outer_radius)` is pinned at the workspace
-    disc, and the workspace disc is finite **only because the base is bolted
-    down** (docs/mobile-base.md §1, docs/limitations.md §9). The minimum of a
-    sound bound and an unsound one is not a sound bound.
+    This test is the rewrite of `test_the_horizon_bound_is_still_floored_by_a_
+    fixed_base_disc`, which #163 wrote to record a gap rather than to assert a
+    property: with the vehicle's motion in `reg.envelope.outer_envelope`, the
+    outer term grows with the base's bounds while the arm-only disc does not, so
+    `min(computed_bound, outer_radius)` was pinned at a radius a driven base
+    leaves in a second. The minimum of a sound bound and an unsound one is not a
+    sound bound.
 
-    Nothing in this repository is affected: `reg.world.LIMITS` states four zeros
-    and the fixtures are fixed-base runs, so the floor is the floor it always
-    was. This asserts the shape of the gap — the outer term does exceed the disc
-    for a driven base, and the disc does win — so that #164's change to
-    `computed_bound` cannot land without a test in front of it going red and
-    saying which sentence stopped being true.
+    What replaces it: for a driven base `horizon_bound` is `outer_radius` and
+    nothing else — asserted to the last bit rather than to a tolerance, because
+    "no second term" is an identity and not an approximation — and it exceeds the
+    arm-only disc, which is the number that used to win. So **every VETO for a
+    mobile robot now rests on `outer_envelope`'s soundness argument alone**, and
+    `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+    is what holds it up (docs/mobile-base.md §1).
     """
     state = dataclasses.replace(
         proprio(Q_EXTENDED, 0.0), base_vel=BaseVelocity(vx=0.8, vy=0.0, omega=0.0)
     )
-    region = outer_envelope(state, MOBILE_LIMITS, HORIZON_S, ORIGIN_FRAME)
-    disc = computed_bound(MOBILE_LIMITS)
+    region = outer_envelope(
+        state, MOBILE_LIMITS, HORIZON_S, ORIGIN_FRAME, SUBSTEP_DT_S
+    )
+    outer = outer_radius(region, ORIGIN_FRAME)
+    arm_only_disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
 
-    assert outer_radius(region, ORIGIN_FRAME) > disc, (
+    assert outer > arm_only_disc, (
         "the outer set of a driven base does not exceed the arm's workspace "
         "disc, so either the base bounds are not being read or this fixture is "
-        "too slow to distinguish them."
+        "too slow to distinguish them — and then the assertion below would pass "
+        "for the wrong reason."
     )
-    assert horizon_bound(state, MOBILE_LIMITS, HORIZON_S, SUBSTEP_DT_S) == disc, (
-        "the floor is no longer the binding term for a driven base. If issue "
-        "#164 has landed, `computed_bound` should be refusing an unbounded "
-        "workspace and this test is what has to be rewritten, not the bound."
+    assert horizon_bound(state, MOBILE_LIMITS, HORIZON_S, SUBSTEP_DT_S) == outer, (
+        "the horizon bound for a driven base is not the outer set's radius "
+        "exactly, so something is still flooring it — and the only floor "
+        "available is a disc that is finite because of a mounting this robot "
+        "does not have."
     )
+
+    # And the fixed-base case is untouched: two terms, and the smaller wins.
+    # A different state, because this one is driving and `LIMITS` states a base
+    # that cannot — which `outer_envelope` refuses, correctly, since #163.
+    bolted = proprio(Q_FOLDED, 0.0)
+    assert horizon_bound(
+        bolted, LIMITS, HORIZON_S, SUBSTEP_DT_S
+    ) < computed_bound(LIMITS)
 
 
 def test_horizon_excess_is_never_less_than_envelope_excess() -> None:

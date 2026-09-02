@@ -133,19 +133,46 @@ and will reasonably read it as *what this robot could reach from here* — a
 reachable set. It is a disc around one.
 
 **What.** `reg.enforce.horizon_bound(state, limits, window, substep_dt)` is the
-radius the check uses, and it is the smaller of two things:
+radius the check uses. It is always
+`outer_radius(outer_envelope(state, limits, window))`, the radial projection of
+the horizon-limited outer reachable set of §2 — which reads the state, the window
+and, since issue #163, the base's own actuation bounds. Whether there is a
+**second** term to take a minimum with is a property of the robot, and issue #164
+is where that stopped being a constant:
 
-- `computed_bound(limits)`, the radius of the **workspace disc** —
+- **A base that cannot move** — every `Limits` in this repository, and every
+  fixture and figure in it. The bound is the smaller of the projection and
+  `computed_bound(limits)`, the radius of the **workspace disc**,
   `sum(link_lengths) + link_radius`, centred on the base that `reg.kinematics`
-  fixes at the origin. Its argument is `Limits` alone, so it reads no `q`, no `qd`
-  and no horizon and is the same scalar at every frame of every scenario.
-- `outer_radius(outer_envelope(state, limits, window))`, the radial projection of
-  the horizon-limited outer reachable set of §2 — which does read the state and the
-  window.
+  fixes at the origin. Its argument is `Limits` alone, so it reads no `q`, no
+  `qd` and no horizon and is the same scalar at every frame of every scenario.
+  Both terms over-cover, and the minimum of two sound bounds is sound.
+- **A base that can drive** — any nonzero base bound. The projection alone,
+  because `computed_bound` **refuses**, naming the field. The disc is finite only
+  while the base is bolted down (§9): a driven base reaches everywhere given
+  enough time, so there is no horizon-free radius to compute, and an unbounded
+  workspace is a could-not-evaluate rather than a gap to fill with a large
+  plausible number that would VETO while looking principled. Taking a minimum
+  with the arm-only disc would have been worse than either — the minimum of a
+  sound bound and an unsound one is not a sound bound.
 
-The containment test against it is exact: a disc is convex, so a polygon lies
-inside it iff every vertex does, and no polygonal rendering of a circle enters the
-comparison.
+**So for a mobile robot every VETO rests on `outer_envelope`'s soundness
+argument alone**, and
+`tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
+becomes the load-bearing test rather than merely a good one.
+[`prior-art.md`](prior-art.md) §23 records both halves of what that costs: the
+literature's answer to an unbounded workspace is not refusal but a **verified
+fail-safe manoeuvre** re-verified each planning step — which `reg` cannot adopt,
+because that guarantee lives inside the planner (the common-cause structure
+[`../CLAUDE.md`](../CLAUDE.md) rule 3 refuses) and because passivation reaches no
+table, edge type or query, so this project cannot represent a stop to rest a
+bound on. And the consolation: RTD's own reachable set is horizon-limited and
+per-step, so resting on the outer envelope alone is the position that literature
+works from, not a degraded one.
+
+The containment test against the bound is exact: a disc is convex, so a polygon
+lies inside it iff every vertex does, and no polygonal rendering of a circle
+enters the comparison.
 
 **What issue #82 closed.** Before it, only the first bound existed, and
 `envelope_overclaim` therefore fired only on a declaration exceeding the **entire
@@ -602,22 +629,32 @@ published figure and the bound `reg/enforce.py` VETOes on is computed for a
 planar arm bolted down at the origin.
 
 **The cost, first half: `computed_bound` is finite only because the base is
-bolted down.** `reg.enforce.computed_bound(limits)` is `sum(link_lengths) +
-link_radius`, the radius of a workspace disc. §3 above calls it "the same scalar
-at every frame of every scenario", which is exactly right and is a fixed-base
-property: a driven base has an unbounded workspace — given enough time it reaches
-everywhere — so no horizon-free radius exists for it to compute. What inherits
-that is the description of the bound itself. `CLAUDE.md` rule 3 and §3 both
-describe `horizon_bound` as the **smaller of two sound bounds**, and the
+bolted down — and since issue #164 it says so.** `reg.enforce.computed_bound(limits)`
+is `sum(link_lengths) + link_radius`, the radius of a workspace disc. §3 above
+calls it "the same scalar at every frame of every scenario", which is exactly
+right and is a fixed-base property: a driven base has an unbounded workspace —
+given enough time it reaches everywhere — so no horizon-free radius exists for it
+to compute. What inherited that was the description of the bound itself, and
+that description has now been rewritten rather than amended. `CLAUDE.md` rule 3
+and §3 both described `horizon_bound` as the **smaller of two sound bounds**
+unconditionally; both now say which case each term applies to, because the
 soundness of the first one is a trivial argument only while the disc is centred
 on something that stays put. Remove the mounting and the first term is not a
-looser bound, it is not a bound: every VETO would rest on `outer_envelope`'s
-soundness argument alone, and
+looser bound, it is not a bound — so `computed_bound` refuses a `Limits` with any
+nonzero base bound, naming the field, and `horizon_bound` rests on
+`outer_envelope` alone for that robot.
 `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
-would stop being a good test and become the load-bearing one.
-[`docs/mobile-base.md`](mobile-base.md) §1 works that through, including the
-origin-centred disc intersected *inside* `outer_envelope` — the place where a
-moved base would produce an unsound bound that looks exactly like a sound one.
+is therefore the load-bearing test for every mobile VETO rather than merely a
+good one. [`docs/mobile-base.md`](mobile-base.md) §1 works that through,
+including the origin-centred disc intersected *inside* `outer_envelope` — the
+place where a moved base would produce an unsound bound that looks exactly like a
+sound one, which is why issue #163 added the base's translation to that disc's
+radius before this entry's refusal landed.
+
+**Nothing in this repository changed behaviour when it landed.**
+`reg.world.LIMITS` states four zeros, every fixture and every published figure is
+a fixed-base run, and a fixed-base `Limits` gets exactly the disc it always got.
+What changed is what the project may *claim* about a robot it does not ship.
 
 **The cost, second half: world-frame reachability is Layer A only for a fixed
 base.** [`docs/sufficiency.md`](sufficiency.md) §5.1 rests the certifiability of
@@ -647,23 +684,27 @@ immediately checkable thing: the Layer A status of world-frame reachability is
 there is no base-pose field for a condition to attach to.
 
 **What a claim would need in order not to inherit this.** A claim that is not
-about a bolted-down arm needs three things, none of which exists here. First, a
-bound that **refuses**: an unbounded workspace is a could-not-evaluate under
-`CLAUDE.md`'s *a check must be able to fail*, and `computed_bound` must say so
-for a mobile model rather than return a large plausible number — a bound nobody
-can justify is worse than no bound, because it VETOes while looking principled.
-Second, a base pose carried as an explicit **Layer B** input with its provenance
-declared and no default, on the precedent `Limits.source` set (§4, issue #84),
-so that a room-frame envelope is visibly a perception-dependent object and a
-body-frame one is visibly not. Third, the fixtures and figures to go with it:
-Claim 1 stays a fixed-arm claim, [`docs/retention.md`](retention.md) says in its
-own header that the artifact side of every figure in it is measured on the
-fixed-base arm — and that the control rate is *not* a blanket condition in the
-same way, since its ladder measures four of them — and nothing in this entry
-re-measures, retires or moves any of them. Until all three exist, the
-supportable claim is exactly: **every reachability answer in this artifact is an
-answer about an arm whose base is a mounting fact, and the certifiability of the
-world-frame ones is inherited from that fact rather than from the method.**
+about a bolted-down arm needs three things. The first now exists; the other two
+do not. First, a bound that **refuses**: an unbounded workspace is a
+could-not-evaluate under `CLAUDE.md`'s *a check must be able to fail*, and
+`computed_bound` must say so for a mobile model rather than return a large
+plausible number — a bound nobody can justify is worse than no bound, because
+it VETOes while looking principled. **Issue #164 built it**, and
+`horizon_bound` rests on the outer envelope alone for a driven base as a
+consequence; what that buys is a bound that is *honest* about a mobile robot,
+not a mobile robot this repository can run. Second, a base pose carried as an
+explicit **Layer B** input with its provenance declared and no default, on the
+precedent `Limits.source` set (§4, issue #84), so that a room-frame envelope is
+visibly a perception-dependent object and a body-frame one is visibly not.
+Third, the fixtures and figures to go with it: Claim 1 stays a fixed-arm claim,
+[`docs/retention.md`](retention.md) says in its own header that the artifact
+side of every figure in it is measured on the fixed-base arm — and that the
+control rate is *not* a blanket condition in the same way, since its ladder
+measures four of them — and nothing in this entry re-measures, retires or moves
+any of them. Until all three exist, the supportable claim is exactly: **every
+reachability answer in this artifact is an answer about an arm whose base is a
+mounting fact, and the certifiability of the world-frame ones is inherited from
+that fact rather than from the method.**
 
 ---
 

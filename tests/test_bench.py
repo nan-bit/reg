@@ -78,7 +78,7 @@ from reg.bench import (
     sensor_projection_bytes,
 )
 from reg.envelope import compute_envelope
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.scenarios import SCENARIOS, long_run, scenario
 from reg.stream import expected_header
 from reg.tolerances import DISTANCE_TOL_M, simplify_geometry
@@ -830,7 +830,7 @@ def test_the_person_enters_the_reachable_set_and_is_not_always_inside_it() -> No
     scn = long_run(300)
     frames = tuple(scn.states(0))
     distances = [
-        unary_union(link_polygons(f.proprio(), scn.world.limits)).distance(
+        unary_union(link_polygons(f.proprio(), scn.world.limits, ORIGIN_FRAME)).distance(
             scn.world.human_polygon(f.human_pos)
         )
         for f in frames

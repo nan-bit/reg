@@ -160,7 +160,7 @@ from reg import __version__, graph, store
 from reg.chain import KEY_BYTES, ROLES, Keyring, write_keyring
 from reg.envelope import SUBSTEP_DT
 from reg.identity import RunIdentity
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 
 # The query layer, imported by name rather than as a module (issue #37). Several
 # functions below take a `ResolutionQuery` parameter called `query`, and a module
@@ -1288,7 +1288,7 @@ def min_separation_from_csv(csv_path: str | Path, world: World) -> float | None:
     """
     best: float | None = None
     for frame in read_frames(csv_path):
-        body = unary_union(link_polygons(frame.proprio(), world.limits))
+        body = unary_union(link_polygons(frame.proprio(), world.limits, ORIGIN_FRAME))
         distance = float(body.distance(world.human_polygon(frame.human_pos)))
         best = distance if best is None else min(best, distance)
     return best
@@ -2669,7 +2669,7 @@ def ground_truth_from_csv(
 
     for frame in read_frames(csv_path):
         t = quantize_time(frame.t)
-        body = unary_union(link_polygons(frame.proprio(), world.limits))
+        body = unary_union(link_polygons(frame.proprio(), world.limits, ORIGIN_FRAME))
         human = world.human_polygon(frame.human_pos)
         distance = float(body.distance(human))
         timeline.append((t, distance))

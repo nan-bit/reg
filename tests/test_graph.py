@@ -91,7 +91,7 @@ from reg.graph import (
     build,
 )
 from reg.identity import RunIdentity
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.scenarios import SCENARIOS
 from reg.sim import provenance, simulate
 from reg.stream import read_frames, write_frames
@@ -467,7 +467,7 @@ def test_a_drift_inside_one_quantum_extends_the_edge(tmp_path: Path) -> None:
     """
     drift = 1e-5
     a, b = (2.0, 0.0), (2.0 + drift, 0.0)
-    body = unary_union(link_polygons(np.array(Q_HELD), LIMITS))
+    body = unary_union(link_polygons(np.array(Q_HELD), LIMITS, ORIGIN_FRAME))
     buckets = {
         distance_bucket(
             body.distance(simplify_geometry(Point(*xy).buffer(HUMAN_RADIUS)))
@@ -1519,7 +1519,7 @@ def test_the_separation_timeline_answers_every_frame_within_tolerance(
             "1 at a frame of the run it was built from; a row that should have "
             "been kept was dropped."
         )
-        body = unary_union(link_polygons(frame.proprio(), scn.world.limits))
+        body = unary_union(link_polygons(frame.proprio(), scn.world.limits, ORIGIN_FRAME))
         truth = float(body.distance(scn.world.human_polygon(frame.human_pos)))
         assert abs(float(covering[0]["min_distance"]) - truth) <= DISTANCE_TOL_M, (
             f"at t={t} the graph says {covering[0]['min_distance']} m and the raw "
@@ -1612,7 +1612,7 @@ def _timeline_error(csv: Path, out: Path, scn) -> tuple[float, float]:
 
     truth: list[tuple[float, float]] = []
     for frame in read_frames(csv):
-        body = unary_union(link_polygons(frame.proprio(), scn.world.limits))
+        body = unary_union(link_polygons(frame.proprio(), scn.world.limits, ORIGIN_FRAME))
         truth.append(
             (
                 float(frame.t),

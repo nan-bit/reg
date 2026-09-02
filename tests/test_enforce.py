@@ -83,7 +83,7 @@ from reg.enforce import (
     verify_verdict,
 )
 from reg.envelope import HASH_COORD_PRECISION, compute_envelope, envelope_area
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.scenarios import SCENARIOS, Scenario
 from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 from reg.world import DEMO_WORLD
@@ -163,7 +163,7 @@ def proprio(q: tuple[float, float], t: float, qd: tuple[float, float] = (0.0, 0.
 
 
 def body_at(q: tuple[float, float]) -> Polygon:
-    region = unary_union(list(link_polygons(np.asarray(q, dtype=float), LIMITS)))
+    region = unary_union(list(link_polygons(np.asarray(q, dtype=float), LIMITS, ORIGIN_FRAME)))
     assert isinstance(region, Polygon)
     return region
 

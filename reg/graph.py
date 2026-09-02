@@ -243,7 +243,7 @@ from reg.envelope import (
     outer_radius,
 )
 from reg.identity import IdentityError, RunIdentity
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.stream import FLOAT_PRECISION, read_comments, read_frames
 from reg.tolerances import (
     AREA_QUANT_SIGFIGS,
@@ -2125,7 +2125,7 @@ def _observe(
     # (GEOM_SIMPLIFY_TOL_M + DISTANCE_TOL_M/2 <= DISTANCE_TOL_M), and the entity
     # boundary is already spending it. Simplifying both would put reported
     # distances outside the 1 cm the artifact advertises.
-    body = unary_union(link_polygons(proprio, limits))
+    body = unary_union(link_polygons(proprio, limits, ORIGIN_FRAME))
 
     nodes = _FrameNodes(
         conn,

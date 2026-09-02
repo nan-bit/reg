@@ -2638,6 +2638,12 @@ def envelope_at(conn, t: float) -> BaseGeometry:
         t=t,
         q=_floats(config["q"], f"robot_config[{str(config_id)!r}].q"),
         qd=_floats(config["qd"], f"robot_config[{str(config_id)!r}].qd"),
+        # `robot_config` stores `q` and `qd` and nothing else, so this artifact
+        # records no base velocity. `None` says that; zero would say the base
+        # was standing still, which is a different claim and one no row here
+        # supports (issue #150; docs/mobile-base.md §4 item 4 puts the base on
+        # this row in Tier 3, with the schema bump that needs).
+        base_vel=None,
     )
     return simplify_geometry(
         compute_envelope(

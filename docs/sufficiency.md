@@ -4,7 +4,8 @@
 [`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable · written for
 Milestone 2, re-measured 2026-08-20 after Milestone 3, §7 reconciled against the
 measured tables 2026-08-21, §5.1's frame condition recorded 2026-09-01
-(issue #139) · keep current
+(issue #139), §5.7's widening of Layer A recorded 2026-09-02 (issue #150) ·
+keep current
 
 The mechanism this document argues from already exists. Every edge in the
 artifact carries a `layer` column, `A` or `B`, and so does every occurrence; the
@@ -502,13 +503,82 @@ arriving a second time from a second standard, and it is recorded here because
 this is the file that says what may be claimed
 ([`prior-art.md`](prior-art.md) §22).
 
-**What this does not do.** It reclassifies nothing. Nothing in `reg/` models a
-robot pose, no figure in §3 is re-measured, no layer tag moves, and §5.1's
+**What this does not do.** It reclassifies nothing. ~~Nothing in `reg/` models a
+robot pose~~, no figure in §3 is re-measured, no layer tag moves, and §5.1's
 verdict is correct for the artifact this document is normative over.
 [`docs/mobile-base.md`](mobile-base.md) is a design document with nothing built
 behind it, and [`docs/limitations.md`](limitations.md) §9 records the same
 condition against the present artifact. What changes here is what §5.1's verdict
 is understood to **rest on**, which is this document's job and not that one's.
+
+*Amended 2026-09-02, issue #150. The struck clause was true when this section
+was written and is not now: `reg.types.BasePose` exists (issue #149) and
+`StateFrame` carries one (issue #150). Everything else in the paragraph still
+holds, and §5.7 below is why — the type is Layer B, nothing constructs one, and
+no figure moved. The sentence is struck rather than deleted because what this
+document used to say is part of what it is for.*
+
+### 5.7 The widening: what Layer A gained, and what it did not
+
+§5.6 is an argument about frames. This is the one change to a **type** that
+argument has produced, recorded here because
+`tests/test_layer_boundary.py::test_propriostate_fields_are_exactly_the_allowed_set`
+will not let the two be separated: it pins `ProprioState`'s fields to an exact
+set and its failure message says *update `docs/sufficiency.md` in the same
+change or revert*. This is that update. *Issue #150, 2026-09-02;
+[`docs/mobile-base.md`](mobile-base.md) §7, Tier 2.*
+
+**What was added.** `ProprioState` held `{t, q, qd}` from the first commit in
+this repository. It now holds `base_vel` as well — a `BaseVelocity`, the base's
+**body-frame** linear velocity and yaw rate, the rates a wheel encoder measures.
+`StateFrame` gained the same field and, beside it, a `base_pose` holding the
+`BasePose` from issue #149. Neither field has a default; `None` means *this
+artifact records no base reading*, which is a could-not-evaluate and never a
+base that was found to be standing still.
+
+**Why the velocity is Layer A.** By §5.6's own test, and not by a new one. *This
+base is moving 0.4 m/s forward and turning at 0.2 rad/s* is a statement about
+the machine: it names no map, no landmark and no frame anybody defined, and it
+is the same kind of claim as `qd`, which this document has always counted as
+proprioception. The argument that admits `qd` admits this with nothing added to
+it.
+
+**Why the pose is not, and the form the reason has to take.** A room-frame pose
+is a statement about the robot's relationship to something *outside* the robot,
+and that is where the boundary is drawn — the structural argument in §5.6, not
+the sensing-status one. The distinction is load-bearing here rather than
+rhetorical. Argued from sensing status, *the pose is Layer B* is a claim about
+2026 that a rated localizer would answer, and the next person to read this
+paragraph would be entitled to add the field once one existed. Argued
+structurally, it does not move: no localizer of any kind — including a
+set-membership estimator returning a set *guaranteed* to contain the true pose,
+whose guarantee is still conditional on a map and on bounded-error hypotheses,
+both exogenous ([`prior-art.md`](prior-art.md) §25) — puts `(x, y, θ)` in the
+room on the Layer A side. So the pose lives on `StateFrame`, which is
+mixed-layer by construction, and `StateFrame.proprio()` drops it exactly as it
+drops `human_pos`.
+
+**The enforcement is an allowlist, because the word check cannot do this one.**
+`ProprioState` is kept clear of the world by *field name*, against
+`WORLD_WORDS` — `human`, `obstacle`, `entity` and their kind. None of `x`, `y`,
+`theta`, `base_x` or `base_pose` is in that list and none can be: a pose is not
+a thing in the world, it is the robot's relationship to one, so it arrives under
+names that read as innocent as `qd` does. The allowlist is the whole guard, and
+`tests/test_layer_boundary.py` feeds it a state built to offend — a pose spelled
+out as three floats, and a `BasePose` wearing an allowed field name — and
+requires it to refuse both. This is the third distinct way a dependency has got
+past a field-name test in this document: through a **value** (§7, `Limits`),
+through a **frame** (§5.6), and now through a **name that is not a world word**.
+
+**What it does not do.** Nothing reads `base_vel`. The envelope is still
+computed for a base bolted to the origin, `reg.enforce.computed_bound` is still
+finite because of it, no bound changed, no layer tag moved, and every figure in
+§3 and in [`retention.md`](retention.md) is the number it was — the raw stream
+schema deliberately did not grow a base column, because those bytes are the
+denominator of Claim 1 and a new column would also need a
+`reg.bench.COLUMN_RULES` entry naming its layer
+([`mobile-base.md`](mobile-base.md) §5). What moved is the **boundary**, which is
+the only thing this section is about. The geometry is Tier 3.
 
 ---
 

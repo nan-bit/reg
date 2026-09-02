@@ -97,7 +97,7 @@ def test_link_lengths_are_preserved_for_any_configuration() -> None:
 def test_accepts_a_propriostate_and_agrees_with_the_bare_array() -> None:
     limits = two_link()
     q = np.array([0.4, -0.9])
-    state = ProprioState(t=0.0, q=q, qd=np.array([0.0, 0.0]))
+    state = ProprioState(t=0.0, q=q, qd=np.array([0.0, 0.0]), base_vel=None)
 
     for from_state, from_array in zip(
         forward_kinematics(state, limits), forward_kinematics(q, limits)
@@ -230,6 +230,8 @@ def test_a_state_frame_cannot_be_passed_in_even_though_it_has_a_q() -> None:
         qd=np.array([0.0, 0.0]),
         human_pos=np.array([1.0, 1.0]),
         human_vel=np.array([0.0, 0.0]),
+        base_vel=None,
+        base_pose=None,
         objects=(Obstacle("obs_0", "box", 1.0, 1.0, 0.2),),
     )
     with pytest.raises(TypeError, match="Layer A"):
@@ -313,7 +315,7 @@ def test_clamp_is_idempotent() -> None:
 
 def test_clamp_accepts_a_propriostate() -> None:
     limits = two_link()
-    state = ProprioState(t=0.0, q=np.array([4.0, 0.0]), qd=np.array([0.0, 9.0]))
+    state = ProprioState(t=0.0, q=np.array([4.0, 0.0]), qd=np.array([0.0, 9.0]), base_vel=None)
     q, qd = clamp_to_limits(state, state, limits)
 
     np.testing.assert_allclose(q, [np.pi, 0.0])
@@ -363,6 +365,8 @@ def test_clamp_rejects_a_state_frame() -> None:
         qd=np.array([0.0, 0.0]),
         human_pos=np.array([1.0, 1.0]),
         human_vel=np.array([0.0, 0.0]),
+        base_vel=None,
+        base_pose=None,
     )
     with pytest.raises(TypeError, match="Layer A"):
         clamp_to_limits(frame, frame, two_link())  # type: ignore[arg-type]

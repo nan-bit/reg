@@ -371,7 +371,7 @@ def test_the_outer_bound_contains_the_body_it_promises_to(name: str) -> None:
     horizon = 0.2
     span = int(round(horizon / sc.dt))
     for i in range(0, len(got) - span, max(1, span // 2)):
-        state = ProprioState(t=got[i].t, q=got[i].q, qd=got[i].qd)
+        state = ProprioState(t=got[i].t, q=got[i].q, qd=got[i].qd, base_vel=None)
         outer = outer_envelope(state, sc.world.limits, horizon=horizon)
         for j in range(i, i + span + 1):
             body = unary_union(link_polygons(got[j].q, sc.world.limits))

@@ -29,6 +29,23 @@ answer wearing a Layer A tag. A room-frame pose is Layer B **structurally**
 such mapping exists anywhere in `reg/`, that the one mapping which does exist
 refuses a pose, and that `ProprioState` cannot hold one. With no consumer
 behind the type, those tests are the whole contract.
+
+THE ONE WIDENING OF LAYER A (issue #150)
+----------------------------------------
+`ProprioState` held `{t, q, qd}` from the beginning. It now holds `base_vel` as
+well — the base's *body-frame* velocity, which a wheel encoder measures — and
+that is a decision about what this project can claim rather than a refactor, so
+`LAYER_A_STATE_FIELDS` moved and `docs/sufficiency.md` §5.7 moved with it, in
+this commit, because `test_propriostate_fields_are_exactly_the_allowed_set` is
+written to make the two impossible to separate.
+
+The base's room-frame **pose** did not come with it, and the tests below are
+where that is enforced rather than asserted. It matters more here than anywhere
+else in this file because **the word check cannot see it**: `x`, `y`, `theta`,
+`base_x` and `base_pose` contain none of `WORLD_WORDS` and never will. So the
+allowlist is the whole guard, and an allowlist is exactly the kind of check that
+can rot into a tautology — which is why `layer_a_state_offenders` is a function
+this file also feeds a state built to offend, and requires it to say no.
 """
 
 from __future__ import annotations
@@ -52,6 +69,7 @@ from reg.envelope import envelope_hash, envelope_layer
 from reg.stream import write_frames
 from reg.types import (
     BasePose,
+    BaseVelocity,
     Limits,
     LimitSource,
     Obstacle,
@@ -110,14 +128,132 @@ def test_propriostate_cannot_see_the_world() -> None:
         )
 
 
+#: Everything Layer A is allowed to know, by name. Widened exactly once, in
+#: issue #150, to add `base_vel` — a body-frame rate off a wheel encoder, which
+#: names nothing outside the robot and is admitted on the argument that already
+#: admits `qd`. `docs/sufficiency.md` §5.7 is the record of that decision.
+LAYER_A_STATE_FIELDS = {"t", "q", "qd", "base_vel"}
+
+#: Names a room-frame pose would arrive under. None of these is in
+#: `WORLD_WORDS` and none can be — a pose is not a *thing in the world*, it is
+#: the robot's relationship to one — so this list and the allowlist are the only
+#: things standing between a `base_x` and Layer A.
+POSE_FIELD_NAMES = frozenset(
+    {"x", "y", "theta", "pose", "base_pose", "base_x", "base_y", "base_theta"}
+)
+
+
+def layer_a_state_offenders(state_type: type) -> list[str]:
+    """Fields of `state_type` that Layer A may not hold, with the reason.
+
+    A function rather than the body of one test, for the reason
+    `pose_layer_offenders` is one: an allowlist checked only against the type it
+    was written from can be shown to have *looked*, never to be able to *see*.
+    The negative below drives this against states built to offend.
+
+    Three ways in, because the dangerous one is not the obvious one:
+
+    * a field **typed** as a room-frame pose, which the allowlist alone would
+      wave through if somebody named it `base_vel`;
+    * a field **named** for a pose, which the word check cannot catch;
+    * anything else not on the allowlist, which is the catch-all that makes a
+      novel name fail rather than a known-bad one.
+    """
+    offenders: list[str] = []
+    for f in dataclasses.fields(state_type):
+        where = f"{state_type.__name__}.{f.name}"
+        if "BasePose" in str(f.type):
+            offenders.append(f"{where}: typed as a room-frame pose")
+        elif f.name.lower() in POSE_FIELD_NAMES:
+            offenders.append(f"{where}: named for a room-frame pose")
+        elif f.name not in LAYER_A_STATE_FIELDS:
+            offenders.append(f"{where}: not in LAYER_A_STATE_FIELDS")
+    return offenders
+
+
 def test_propriostate_fields_are_exactly_the_allowed_set() -> None:
     """Stricter than the word check: an allowlist, so a novel name still fails."""
     got = {f.name for f in dataclasses.fields(ProprioState)}
-    assert got == {"t", "q", "qd"}, (
+    assert got == LAYER_A_STATE_FIELDS, (
         f"ProprioState fields changed to {sorted(got)}. Widening Layer A is a "
         "decision about what this project can claim, not a refactor — update "
         "docs/sufficiency.md in the same change or revert."
     )
+    # Asserted through the function the negative below exercises, so that what
+    # passes here is the same code that has been shown able to fail.
+    assert layer_a_state_offenders(ProprioState) == []
+
+
+def test_the_allowlist_catches_a_pose_smuggled_into_layer_a() -> None:
+    """**THE NEGATIVE.** The word check cannot see a pose, so this must.
+
+    Both shapes issue #150 names, fed to the scan and required to come back
+    refused:
+
+    * `base_x`, `base_y`, `base_theta` — a pose spelled out as floats. Innocent
+      names, none of them in `WORLD_WORDS`, and three of them make a room-frame
+      pose that every envelope downstream would then be computed against.
+    * a `BasePose`-typed field wearing an allowed *name*. This is the one an
+      allowlist on its own lets through, and it is not a contrived case: it is
+      what a hurried edit to `proprio()` produces when the narrowing is
+      "simplified" into passing the frame's pose along under the velocity's
+      name.
+
+    Without this test the assertion above is an absence nobody has shown the
+    scan can detect: delete a branch of `layer_a_state_offenders` and it passes
+    forever while the thing it guards walks in.
+    """
+
+    @dataclasses.dataclass(frozen=True)
+    class SpelledOutPose:
+        t: float
+        q: np.ndarray
+        qd: np.ndarray
+        base_vel: object
+        base_x: float
+        base_y: float
+        base_theta: float
+
+    offenders = layer_a_state_offenders(SpelledOutPose)
+    assert [o.split(":")[0] for o in offenders] == [
+        "SpelledOutPose.base_x",
+        "SpelledOutPose.base_y",
+        "SpelledOutPose.base_theta",
+    ], f"a pose spelled out as floats was not caught: {offenders}"
+
+    @dataclasses.dataclass(frozen=True)
+    class PoseUnderAnAllowedName:
+        t: float
+        q: np.ndarray
+        qd: np.ndarray
+        base_vel: BasePose | None  # the name is on the allowlist; the type is not
+
+    offenders = layer_a_state_offenders(PoseUnderAnAllowedName)
+    assert offenders == [
+        "PoseUnderAnAllowedName.base_vel: typed as a room-frame pose"
+    ], (
+        "a BasePose-typed field passed the allowlist because its *name* was "
+        f"allowed: {offenders}. The name half of this check cannot catch the "
+        "type half, and this is the case where only the type is wrong."
+    )
+
+
+def test_the_allowlist_does_not_fire_on_the_field_it_was_widened_for() -> None:
+    """And it must not cry wolf: `base_vel` holding a `BaseVelocity` is fine.
+
+    The complement of the negative above. A scan that rejected the very field
+    issue #150 added would be switched off within a week, and the widening is
+    only meaningful if the type it admits actually gets through.
+    """
+
+    @dataclasses.dataclass(frozen=True)
+    class WithBaseVelocity:
+        t: float
+        q: np.ndarray
+        qd: np.ndarray
+        base_vel: BaseVelocity | None
+
+    assert layer_a_state_offenders(WithBaseVelocity) == []
 
 
 def test_proprio_narrows_a_frame_and_drops_layer_b() -> None:
@@ -127,6 +263,8 @@ def test_proprio_narrows_a_frame_and_drops_layer_b() -> None:
         qd=np.array([0.0, 0.0]),
         human_pos=np.array([1.0, 2.0]),
         human_vel=np.array([0.1, 0.0]),
+        base_vel=None,
+        base_pose=None,
         objects=(Obstacle("obs_0", "box", 1.0, 1.0, 0.2),),
     )
     p = frame.proprio()
@@ -136,9 +274,129 @@ def test_proprio_narrows_a_frame_and_drops_layer_b() -> None:
     assert not hasattr(p, "human_pos")
 
 
+def test_proprio_drops_the_base_pose() -> None:
+    """The same narrowing, for the field the word check cannot see (#150).
+
+    `human_pos` is caught twice over — by name, by the allowlist, and by this —
+    so it is the easy half. The base is the hard half, because the frame carries
+    *both* halves of it and they go opposite ways: the body-frame velocity is
+    Layer A and comes through, the room-frame pose is Layer B and must not.
+
+    A pose that survived this call would not raise anywhere. It would sit on a
+    `ProprioState`, be handed to `reg.envelope` with every other Layer A input,
+    and produce a region that is correct, useful, and tagged `A` while depending
+    on a localizer — the exact mislabelling `Limits.source` exists to stop,
+    arriving through a different door (docs/sufficiency.md §5.6).
+    """
+    frame = StateFrame(
+        t=0.5,
+        q=np.array([0.1, 0.2]),
+        qd=np.array([0.0, 0.0]),
+        human_pos=np.array([1.0, 2.0]),
+        human_vel=np.array([0.0, 0.0]),
+        base_vel=BaseVelocity(vx=0.4, vy=0.0, omega=0.2),
+        base_pose=BasePose(x=3.0, y=-1.0, theta=0.7, source=PoseSource.LOCALIZED),
+    )
+    narrowed = frame.proprio()
+
+    # Layer A comes through, unchanged. Without this half the test would pass
+    # for a `proprio()` that dropped the base entirely, which is a different
+    # (and wrong) answer to issue #150.
+    assert narrowed.base_vel == frame.base_vel
+
+    # Layer B does not, by any route: not as a field, not as an attribute, and
+    # not as a value hiding under another name.
+    assert not hasattr(narrowed, "base_pose")
+    assert "base_pose" not in {f.name for f in dataclasses.fields(narrowed)}
+    # `is not`, not `!=`: two of these fields are numpy arrays, so `==` would
+    # return an array and the assertion would be about a truth value nobody
+    # meant. Identity is also the stronger question here — the pose must not be
+    # reachable from the narrowed state at all, under any field's name.
+    assert all(
+        getattr(narrowed, f.name) is not frame.base_pose
+        for f in dataclasses.fields(narrowed)
+    )
+
+
+def test_a_base_velocity_is_frozen_and_has_no_defaults() -> None:
+    """The Layer A half of the base, on the same terms as `Limits` and `BasePose`.
+
+    It is admitted to Layer A, which is exactly why it gets the discipline the
+    rest of Layer A has rather than less of it: nothing here has a value a
+    caller can be assumed to have meant, and a rate that can be edited after the
+    fact is not evidence of how fast anything was going.
+    """
+    defaulted = [
+        f.name
+        for f in dataclasses.fields(BaseVelocity)
+        if f.default is not dataclasses.MISSING
+        or f.default_factory is not dataclasses.MISSING
+    ]
+    assert defaulted == []
+
+    vel = BaseVelocity(vx=0.4, vy=0.0, omega=0.2)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        vel.vx = 0.0  # type: ignore[misc]
+
+    # And it names nothing outside the robot — the check `ProprioState` itself
+    # gets, applied to the type that is now reachable from it.
+    for f in dataclasses.fields(BaseVelocity):
+        assert not any(w in f.name.lower() for w in WORLD_WORDS)
+
+
+@pytest.mark.parametrize(
+    "bad", [(0.4, 0.0, 0.2), [0.4, 0.0, 0.2], 0.4, "0.4,0.0,0.2"]
+)
+def test_a_state_refuses_a_base_velocity_that_is_not_one(bad: object) -> None:
+    """Negative test: `None` is the only way to say 'not recorded'.
+
+    A bare triple is the likely wrong thing to arrive here and it is the
+    dangerous one: it has the right three numbers in what looks like the right
+    order, and nothing downstream would ever check that `vy` and `omega` had not
+    been swapped — one is m/s and the other rad/s, and both are plausible.
+    """
+    with pytest.raises(TypeError, match="BaseVelocity"):
+        ProprioState(  # type: ignore[arg-type]
+            t=0.0, q=np.zeros(2), qd=np.zeros(2), base_vel=bad
+        )
+
+
+def test_a_state_cannot_be_built_without_saying_whether_it_records_a_base() -> None:
+    """Negative test: no default, so omitting `base_vel` is a `TypeError`.
+
+    The `Limits.source` argument once more. The tempting default here is `None`
+    itself — it reads as harmless, since it is what every fixed-base call site
+    passes. But then the caller who never considered the base produces the same
+    state as the one who considered it and recorded that this run has no base
+    reading, and the whole content of the widening is that those are different
+    facts about an artifact.
+    """
+    with pytest.raises(TypeError, match="base_vel"):
+        ProprioState(t=0.0, q=np.zeros(2), qd=np.zeros(2))  # type: ignore[call-arg]
+
+
+def test_a_frame_refuses_a_base_pose_that_is_not_one() -> None:
+    """Negative test, Layer B side: a bare triple carries no `PoseSource`.
+
+    The room-frame pose is the field with a provenance that must be stated
+    (issue #149), so the way it must not be possible to build one is by handing
+    `StateFrame` three floats and having them read as a pose nobody sourced.
+    """
+    with pytest.raises(TypeError, match="BasePose"):
+        StateFrame(
+            t=0.0,
+            q=np.zeros(2),
+            qd=np.zeros(2),
+            human_pos=np.zeros(2),
+            human_vel=np.zeros(2),
+            base_vel=None,
+            base_pose=(1.0, 2.0, 0.3),  # type: ignore[arg-type]
+        )
+
+
 def test_records_are_frozen() -> None:
     """An audit record that can be mutated after the fact is not evidence."""
-    p = ProprioState(t=0.0, q=np.array([0.0]), qd=np.array([0.0]))
+    p = ProprioState(t=0.0, q=np.array([0.0]), qd=np.array([0.0]), base_vel=None)
     with pytest.raises(dataclasses.FrozenInstanceError):
         p.t = 1.0  # type: ignore[misc]
 
@@ -269,6 +527,8 @@ def _stream(path: Path) -> Path:
             qd=np.array([0.0, 0.0]),
             human_pos=np.array([2.0, 0.0]),
             human_vel=np.array([0.0, 0.0]),
+            base_vel=None,
+            base_pose=None,
             objects=(Obstacle("obs_a", "crate", 1.6, 1.2, 0.25),),
         )
         for i in range(6)
@@ -686,6 +946,9 @@ def test_propriostate_cannot_hold_a_base_pose() -> None:
 
     `ProprioState` may gain base *velocity*, which an encoder measures; it may
     not gain base *pose*, which an encoder does not (docs/mobile-base.md §2).
+    Issue #150 took the first half of that and not the second, which is why the
+    allowlist below is `LAYER_A_STATE_FIELDS` and not the literal `{t, q, qd}`
+    this test was written against.
     Note that `x`, `y` and `theta` are not in `WORLD_WORDS` and never will be —
     the word check cannot catch this one, so it is checked by type and by the
     allowlist.
@@ -700,10 +963,10 @@ def test_propriostate_cannot_hold_a_base_pose() -> None:
         "pose in Layer A makes every envelope built from that state a Layer B "
         "region wearing a Layer A tag — docs/sufficiency.md §5.6."
     )
-    assert set(annotations) == {"t", "q", "qd"}
+    assert set(annotations) == LAYER_A_STATE_FIELDS
     pose_fields = [
         f.name
         for f in dataclasses.fields(ProprioState)
-        if f.name.lower() in ("x", "y", "theta", "pose", "base_pose")
+        if f.name.lower() in POSE_FIELD_NAMES
     ]
     assert pose_fields == []

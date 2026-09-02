@@ -157,6 +157,8 @@ def test_rendering_does_not_mutate_the_frame(tmp_path) -> None:
         qd=np.array([0.1, -0.2]),
         human_pos=np.array([1.1, 0.4]),
         human_vel=np.array([-0.3, 0.0]),
+        base_vel=None,
+        base_pose=None,
         objects=DEMO_WORLD.obstacles,
     )
     before = {
@@ -372,7 +374,7 @@ def test_a_non_geometry_envelope_is_refused() -> None:
 def test_a_propriostate_is_not_a_scene() -> None:
     """Layer A alone has no human and no objects; drawing it as a frame would
     produce a room with nobody in it and no way to tell that from the truth."""
-    state = ProprioState(t=0.0, q=np.array([0.1, 0.2]), qd=np.array([0.0, 0.0]))
+    state = ProprioState(t=0.0, q=np.array([0.1, 0.2]), qd=np.array([0.0, 0.0]), base_vel=None)
     with pytest.raises(TypeError, match="StateFrame"):
         draw_frame(new_axes(), state, None, DEMO_WORLD.limits, DEMO_WORLD)
 
@@ -399,6 +401,8 @@ def test_a_frame_whose_joints_do_not_match_the_limits_is_refused() -> None:
         qd=np.array([0.0]),
         human_pos=np.array([1.0, 0.0]),
         human_vel=np.array([0.0, 0.0]),
+        base_vel=None,
+        base_pose=None,
         objects=(Obstacle("obs_0", "box", 1.5, 1.5, 0.2),),
     )
     with pytest.raises(ValueError, match="entries but there are 2 links"):

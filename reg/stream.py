@@ -29,6 +29,17 @@ the human and the obstacles, which are Layer B. Nothing in Layer A reads it —
 the envelope takes `StateFrame.proprio()`. This module is a codec and makes no
 claim of its own.
 
+**This schema is a fixed-base schema and says so out loud.** `StateFrame` gained
+`base_vel` and `base_pose` in issue #150 and this format has columns for
+neither, which leaves the codec two honest options and one dishonest one. It
+reads absence as `None` — *not recorded* — and refuses to write a frame that
+carries either; what it must not do is write them nowhere and read them back as
+zeros, because that is a mobile run silently returning as a fixed-base one.
+Widening the schema is not free either: these bytes are the denominator of every
+compression figure Claim 1 quotes, and a new column needs a
+`reg.bench.COLUMN_RULES` entry naming its layer or the Layer A/Layer B column
+split moves without anything going red (docs/mobile-base.md §5).
+
 FAILURE POSTURE
 ---------------
 Every deviation from the schema raises `StreamFormatError`. A mis-parsed column
@@ -358,6 +369,15 @@ def _iter_frames(
                 qd=qd,
                 human_pos=human_pos,
                 human_vel=human_vel,
+                # This schema has no base columns, so a file written under it
+                # says nothing about the base — and `None` is that statement.
+                # Zeros would be an invented reading: they say the base was
+                # measured and found still, which is what a mobile stream would
+                # have to earn a column to claim. `_row` refuses to write a
+                # frame carrying either field for the same reason, so the round
+                # trip is exact rather than lossy in this direction (#150).
+                base_vel=None,
+                base_pose=None,
                 objects=tuple(objects),
             )
     finally:
@@ -395,6 +415,19 @@ def _row(frame: StateFrame, index: int, n_joints: int, n_obstacles: int) -> list
             f"{where}: human_pos has {len(frame.human_pos)} and human_vel has "
             f"{len(frame.human_vel)} entries; this is a 2D world and both must "
             "have exactly 2."
+        )
+    if frame.base_vel is not None or frame.base_pose is not None:
+        raise StreamFormatError(
+            f"{where}: carries base motion (base_vel={frame.base_vel!r}, "
+            f"base_pose={frame.base_pose!r}) and this schema has no columns for "
+            "either, so writing it would drop them. The file would then read "
+            "back as a fixed-base run, which is a different run — and nothing "
+            "downstream could tell, because the header it validates against "
+            "would still be the header it expects. Refusing rather than "
+            "truncating: the base columns arrive with the mobile fixtures "
+            "(docs/mobile-base.md §7, Tier 4), together with the "
+            "`reg.bench.COLUMN_RULES` entries that say which layer each of "
+            "them is, and this stream is Claim 1's baseline until they do."
         )
     if len(frame.objects) != n_obstacles:
         raise StreamFormatError(

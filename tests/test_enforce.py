@@ -154,7 +154,12 @@ Q_FOLDED = (0.0, 2.6)
 
 
 def proprio(q: tuple[float, float], t: float, qd: tuple[float, float] = (0.0, 0.0)):
-    return ProprioState(t=t, q=np.asarray(q, dtype=float), qd=np.asarray(qd, dtype=float))
+    return ProprioState(
+        t=t,
+        q=np.asarray(q, dtype=float),
+        qd=np.asarray(qd, dtype=float),
+        base_vel=None,
+    )
 
 
 def body_at(q: tuple[float, float]) -> Polygon:
@@ -477,6 +482,8 @@ def test_adjudicate_refuses_a_stateframe() -> None:
         qd=np.array([0.0, 0.0]),
         human_pos=np.array([1.0, 0.0]),
         human_vel=np.array([0.0, 0.0]),
+        base_vel=None,
+        base_pose=None,
         objects=(Obstacle("obs_0", "box", 1.0, 1.0, 0.2),),
     )
     e = enforcer()
@@ -806,6 +813,8 @@ def test_offer_refuses_a_state_that_is_not_proprioception() -> None:
         qd=np.zeros(2),
         human_pos=np.array([1.0, 1.0]),
         human_vel=np.zeros(2),
+        base_vel=None,
+        base_pose=None,
         objects=(),
     )
     with pytest.raises(EnforcementError, match="ProprioState"):
@@ -1401,6 +1410,8 @@ def _held_stream(path: pathlib.Path, n_frames: int) -> pathlib.Path:
             qd=np.zeros(2),
             human_pos=np.array([2.0, 0.0]),
             human_vel=np.zeros(2),
+            base_vel=None,
+            base_pose=None,
             objects=(),
         )
         for i in range(n_frames)
@@ -1512,7 +1523,7 @@ def _one_ulp_over_the_velocity_limit() -> ProprioState:
     """
     qd = np.zeros(len(LIMITS.qd_max))
     qd[-1] = math.nextafter(float(LIMITS.qd_max[-1]), math.inf)
-    return ProprioState(t=0.0, q=np.asarray(Q_EXTENDED, dtype=float), qd=qd)
+    return ProprioState(t=0.0, q=np.asarray(Q_EXTENDED, dtype=float), qd=qd, base_vel=None)
 
 
 def test_a_state_exactly_at_the_velocity_limit_is_a_bound_like_any_other() -> None:
@@ -1523,7 +1534,7 @@ def test_a_state_exactly_at_the_velocity_limit_is_a_bound_like_any_other() -> No
     """
     qd = np.zeros(len(LIMITS.qd_max))
     qd[-1] = float(LIMITS.qd_max[-1])
-    at_limit = ProprioState(t=0.0, q=np.asarray(Q_EXTENDED, dtype=float), qd=qd)
+    at_limit = ProprioState(t=0.0, q=np.asarray(Q_EXTENDED, dtype=float), qd=qd, base_vel=None)
     radius = horizon_bound(at_limit, LIMITS, HORIZON_S, SUBSTEP_DT_S)
     assert 0.0 < radius <= computed_bound(LIMITS) + 1e-12
     assert enforcer().offer(declaration(), at_limit) is None

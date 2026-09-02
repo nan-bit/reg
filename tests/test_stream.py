@@ -26,7 +26,7 @@ from reg.stream import (
     read_frames,
     write_frames,
 )
-from reg.types import Obstacle, StateFrame
+from reg.types import BasePose, BaseVelocity, Obstacle, PoseSource, StateFrame
 
 # Round-trip tolerance follows directly from the written precision: a value is
 # stored as a decimal string with FLOAT_PRECISION places, so it can move by at
@@ -51,6 +51,8 @@ def frames(n: int = 4, n_joints: int = 3) -> tuple[StateFrame, ...]:
                 qd=np.array([0.0, 0.5, -0.5][:n_joints], dtype=float),
                 human_pos=np.array([2.0 - 0.1 * i, 0.75], dtype=float),
                 human_vel=np.array([-0.1, 0.0], dtype=float),
+                base_vel=None,
+                base_pose=None,
                 objects=OBSTACLES,
             )
         )
@@ -66,6 +68,13 @@ def assert_frames_close(got: list[StateFrame], want: tuple[StateFrame, ...]) -> 
         assert np.allclose(a.qd, b.qd, atol=TOLERANCE, rtol=0)
         assert np.allclose(a.human_pos, b.human_pos, atol=TOLERANCE, rtol=0)
         assert np.allclose(a.human_vel, b.human_vel, atol=TOLERANCE, rtol=0)
+        # The schema has no base columns, so a frame read back from it records
+        # no base — and that must come back as `None` rather than as a zero
+        # reading nobody took (issue #150). Asserted on both sides: the frames
+        # this file writes carry no base either, so a codec that started
+        # inventing zeros would fail here and not silently agree.
+        assert a.base_vel is None and b.base_vel is None
+        assert a.base_pose is None and b.base_pose is None
         assert len(a.objects) == len(b.objects)
         for x, y in zip(a.objects, b.objects):
             assert x.entity_id == y.entity_id
@@ -88,7 +97,13 @@ def test_round_trip_with_no_obstacles(tmp_path) -> None:
     """Zero obstacles is a schema, not a missing one — the blocks are just empty."""
     want = tuple(
         StateFrame(
-            t=f.t, q=f.q, qd=f.qd, human_pos=f.human_pos, human_vel=f.human_vel
+            t=f.t,
+            q=f.q,
+            qd=f.qd,
+            human_pos=f.human_pos,
+            human_vel=f.human_vel,
+            base_vel=None,
+            base_pose=None,
         )
         for f in frames()
     )
@@ -142,6 +157,8 @@ def test_negative_zero_does_not_change_the_bytes(tmp_path) -> None:
                 qd=np.array([-0.0 if v == 0.0 else v for v in base.qd]),
                 human_pos=base.human_pos,
                 human_vel=np.array([base.human_vel[0], -0.0]),
+                base_vel=None,
+                base_pose=None,
                 objects=base.objects,
             )
         ],
@@ -316,6 +333,8 @@ def test_a_changing_joint_count_is_refused(tmp_path) -> None:
         qd=b.qd[:2],
         human_pos=b.human_pos,
         human_vel=b.human_vel,
+        base_vel=None,
+        base_pose=None,
         objects=b.objects,
     )
     with pytest.raises(StreamFormatError, match="joint"):
@@ -330,6 +349,8 @@ def test_a_changing_obstacle_count_is_refused(tmp_path) -> None:
         qd=b.qd,
         human_pos=b.human_pos,
         human_vel=b.human_vel,
+        base_vel=None,
+        base_pose=None,
         objects=b.objects[:1],
     )
     with pytest.raises(StreamFormatError, match="obstacle"):
@@ -344,6 +365,8 @@ def test_a_non_2d_human_is_refused(tmp_path) -> None:
         qd=f.qd,
         human_pos=np.array([1.0, 2.0, 3.0]),
         human_vel=f.human_vel,
+        base_vel=None,
+        base_pose=None,
         objects=f.objects,
     )
     with pytest.raises(StreamFormatError, match="exactly 2"):
@@ -358,6 +381,8 @@ def test_a_non_finite_value_is_not_recorded(tmp_path) -> None:
         qd=f.qd,
         human_pos=f.human_pos,
         human_vel=f.human_vel,
+        base_vel=None,
+        base_pose=None,
         objects=f.objects,
     )
     with pytest.raises(StreamFormatError, match="finite"):
@@ -447,3 +472,81 @@ def test_a_comment_containing_a_newline_is_refused(tmp_path) -> None:
 def test_a_non_string_comment_is_refused(tmp_path) -> None:
     with pytest.raises(StreamFormatError, match="not a str"):
         write_frames(frames(), tmp_path / "run.csv", comments=[0])
+
+
+def test_a_frame_carrying_base_motion_is_refused(tmp_path) -> None:
+    """Negative test: this schema has no base columns, so it will not pretend to.
+
+    Issue #150 put `base_vel` and `base_pose` on `StateFrame` and deliberately
+    left this format alone — these bytes are the denominator of every
+    compression figure Claim 1 quotes, and a new column also needs a
+    `reg.bench.COLUMN_RULES` entry saying which layer it is or the Layer A /
+    Layer B column split moves with nothing going red (docs/mobile-base.md §5).
+
+    That leaves the codec one thing it must not do: write the base nowhere and
+    say nothing. The frame would round-trip into a *fixed-base* run — same
+    header, same width, every existing check green — and the fact that the base
+    was moving would be gone with no record that it had ever been there. A
+    could-not-evaluate must not resolve to a pass, so this refuses.
+
+    Both fields, separately, because they are dropped by different halves of the
+    same omission and a check that only looked at one would let the other
+    through.
+    """
+    base = frames(n=1)[0]
+
+    moving = StateFrame(
+        t=base.t,
+        q=base.q,
+        qd=base.qd,
+        human_pos=base.human_pos,
+        human_vel=base.human_vel,
+        base_vel=BaseVelocity(vx=0.4, vy=0.0, omega=0.2),
+        base_pose=None,
+        objects=base.objects,
+    )
+    with pytest.raises(StreamFormatError, match="no columns"):
+        write_frames([moving], tmp_path / "moving.csv")
+
+    posed = StateFrame(
+        t=base.t,
+        q=base.q,
+        qd=base.qd,
+        human_pos=base.human_pos,
+        human_vel=base.human_vel,
+        base_vel=None,
+        base_pose=BasePose(x=1.0, y=2.0, theta=0.3, source=PoseSource.LOCALIZED),
+        objects=base.objects,
+    )
+    with pytest.raises(StreamFormatError, match="no columns"):
+        write_frames([posed], tmp_path / "posed.csv")
+
+    # And the refusal is about the base and not about the writer being unusable:
+    # the same frame with neither field recorded writes, as every fixture does.
+    assert write_frames([base], tmp_path / "fixed.csv").exists()
+
+
+def test_the_refusal_leaves_no_partial_file(tmp_path) -> None:
+    """A rejected frame must not leave a truncated stream behind.
+
+    `write_frames` builds every row before it opens the file for exactly this
+    reason, and the base check is on that path. If it were not, a run whose
+    tenth frame carried a base pose would leave nine frames on disk under a
+    valid header — a readable artifact that is a silently shortened run, which
+    is worse than no file at all.
+    """
+    good = frames(n=3)
+    bad = StateFrame(
+        t=0.06,
+        q=good[0].q,
+        qd=good[0].qd,
+        human_pos=good[0].human_pos,
+        human_vel=good[0].human_vel,
+        base_vel=BaseVelocity(vx=0.1, vy=0.0, omega=0.0),
+        base_pose=None,
+        objects=good[0].objects,
+    )
+    path = tmp_path / "partial.csv"
+    with pytest.raises(StreamFormatError, match="no columns"):
+        write_frames([*good, bad], path)
+    assert not path.exists()

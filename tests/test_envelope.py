@@ -57,6 +57,10 @@ LIMITS = Limits(
     link_lengths=np.array([0.5, 0.4]),
     source=LimitSource.PROPRIOCEPTIVE,
     link_radius=0.05,
+    base_v_max=0.0,
+    base_a_max=0.0,
+    base_omega_max=0.0,
+    base_alpha_max=0.0,
 )
 N_CORNERS = 2 ** len(LIMITS.link_lengths)
 
@@ -276,6 +280,10 @@ def test_hash_is_stable_in_a_fresh_process() -> None:
             link_lengths=np.array([0.5, 0.4]),
             source=LimitSource.PROPRIOCEPTIVE,
             link_radius=0.05,
+            base_v_max=0.0,
+            base_a_max=0.0,
+            base_omega_max=0.0,
+            base_alpha_max=0.0,
         )
         state = ProprioState(
             t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.5, -0.3]), base_vel=None
@@ -367,6 +375,10 @@ def test_an_unusable_acceleration_bound_is_refused(qdd_max: np.ndarray) -> None:
         link_lengths=LIMITS.link_lengths,
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=LIMITS.link_radius,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     with pytest.raises(ValueError, match="qdd_max"):
         compute_envelope(MOVING, limits, n_samples=N)
@@ -691,6 +703,10 @@ def test_an_ancestor_grid_too_large_to_evaluate_is_refused() -> None:
         link_lengths=np.full(many, 0.5),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     state = ProprioState(t=0.0, q=np.zeros(many), qd=np.zeros(many), base_vel=None)
     with pytest.raises(ValueError, match=str(reg.envelope.MAX_OUTER_GRID_CONFIGS)):

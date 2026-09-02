@@ -162,6 +162,16 @@ LIMITS = Limits(
     link_lengths=np.array([0.5, 0.4]),
     source=LimitSource.PROPRIOCEPTIVE,
     link_radius=0.05,
+    # The base is bolted down, and that is stated rather than omitted (issue
+    # #151). Zero is a fact about this fixture — `reg/kinematics.py` fixes the
+    # base at the origin and `BASE_XY` above restates it — and writing it here
+    # is what keeps it distinguishable from a `Limits` whose author never
+    # considered the base at all. There is no arm-only `Limits` to fall back on,
+    # because that would be the same default arriving through a different door.
+    base_v_max=0.0,
+    base_a_max=0.0,
+    base_omega_max=0.0,
+    base_alpha_max=0.0,
 )
 
 #: Static, and all clear of the workspace disc: the fixtures are about the human,

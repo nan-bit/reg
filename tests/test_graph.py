@@ -3348,10 +3348,12 @@ def test_the_retained_bracket_is_the_region_enforcement_would_compute(attested) 
         # records no base velocity, so the reconstruction says so (#150).
         base_vel=None,
     )
-    region = outer_envelope(state, limits, float(row["horizon"]), substep)
+    region = outer_envelope(
+        state, limits, float(row["horizon"]), ORIGIN_FRAME, substep
+    )
     assert row["outer_area"] == pytest.approx(quantize_area(region.area))
     assert row["outer_radius"] == pytest.approx(
-        quantize_distance(outer_radius(region))
+        quantize_distance(outer_radius(region, ORIGIN_FRAME))
     )
 
 

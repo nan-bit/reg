@@ -83,7 +83,7 @@ from reg.enforce import (
     verify_verdict,
 )
 from reg.envelope import HASH_COORD_PRECISION, compute_envelope, envelope_area
-from reg.kinematics import ORIGIN_FRAME, link_polygons
+from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
 from reg.scenarios import SCENARIOS, Scenario
 from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 from reg.world import DEMO_WORLD
@@ -591,6 +591,52 @@ def test_envelope_excess_refuses_a_geometry_it_cannot_evaluate() -> None:
         envelope_excess(bowtie, LIMITS)
     with pytest.raises(EnforcementError, match="shapely geometry"):
         envelope_excess("a polygon, honest", LIMITS)  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# The base frame the excess is measured from (issue #162)
+# --------------------------------------------------------------------------
+
+
+def test_the_excess_is_measured_from_the_base_it_is_given() -> None:
+    """`_furthest_vertex` took its centre from an implicit origin; now it is told.
+
+    Both bounds in this module are discs **about the base joint**, so the
+    distance the declared region is compared against has to be measured from the
+    same point the bound is. This is the negative for the argument being
+    accepted and ignored: a base a millimetre out along the spike's own axis has
+    to move the excess by exactly a millimetre — 1 mm being small enough that a
+    tolerance-based check would wave it through, and exactly the size of drift
+    "make this a parameter" produces when the parameter is never read.
+    """
+    bound = computed_bound(LIMITS)
+    spike = Polygon([(0.0, 0.0), (bound + 0.25, 0.0), (0.0, 0.001)])
+    at_origin = reg.enforce._furthest_vertex(spike, ORIGIN_FRAME, "test")
+
+    assert at_origin == pytest.approx(bound + 0.25, abs=1e-12)
+    assert reg.enforce._furthest_vertex(
+        spike, BaseFrame(x=-0.001, y=0.0, theta=0.0), "test"
+    ) == pytest.approx(at_origin + 0.001, abs=1e-12)
+    assert reg.enforce._furthest_vertex(
+        spike, BaseFrame(x=0.001, y=0.0, theta=0.0), "test"
+    ) == pytest.approx(at_origin - 0.001, abs=1e-12)
+
+
+def test_the_excess_refuses_a_base_that_is_not_a_frame() -> None:
+    """Negative: no default, no duck-type, and it reports in this module's currency.
+
+    A three-tuple carries no type and `None` reads as 'unspecified'. The refusal
+    arrives as an `EnforcementError` because that is what "the check could not be
+    performed as specified" is called here — a could-not-evaluate about the
+    caller, never a verdict. `reg.types.BasePose` is refused by the same check;
+    the layer argument for refusing it lives in `tests/test_layer_boundary.py`.
+    """
+    square = Polygon([(0, 0), (1, 0), (1, 1)])
+    for bad in ((0.0, 0.0, 0.0), [0.0, 0.0, 0.0], None, 0.0):
+        with pytest.raises(EnforcementError, match="BaseFrame"):
+            reg.enforce._furthest_vertex(square, bad, "test")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        reg.enforce._furthest_vertex(square, "test")  # type: ignore[call-arg]
 
 
 def test_the_mismatch_resolution_is_the_artifacts_own_and_is_not_a_tolerance() -> None:
@@ -1333,9 +1379,9 @@ def test_the_enforcer_computes_its_bound_on_the_grid_it_was_given() -> None:
     seen: list[float] = []
     real = reg.enforce.outer_envelope
 
-    def spy(state, limits, horizon, substep_dt):
+    def spy(state, limits, horizon, base, substep_dt):
         seen.append(substep_dt)
-        return real(state, limits, horizon, substep_dt)
+        return real(state, limits, horizon, base, substep_dt)
 
     for grid in (0.02, 0.05):
         seen.clear()
@@ -1497,9 +1543,9 @@ def test_the_artifact_and_its_enforcement_bound_share_one_substep_dt(
     enforce_grids: list[float] = []
 
     def spy(sink, real):
-        def wrapped(state, limits, horizon, substep_dt):
+        def wrapped(state, limits, horizon, base, substep_dt):
             sink.append(substep_dt)
-            return real(state, limits, horizon, substep_dt)
+            return real(state, limits, horizon, base, substep_dt)
 
         return wrapped
 

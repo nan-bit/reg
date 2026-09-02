@@ -65,7 +65,7 @@ from shapely.geometry import Point
 import reg
 from reg import graph, store
 from reg.identity import RunIdentity
-from reg.envelope import envelope_hash, envelope_layer
+from reg.envelope import envelope_hash, envelope_layer, outer_envelope, outer_radius
 from reg.stream import write_frames
 from reg.types import (
     BasePose,
@@ -1220,3 +1220,60 @@ def test_propriostate_cannot_hold_a_base_pose() -> None:
         if f.name.lower() in POSE_FIELD_NAMES
     ]
     assert pose_fields == []
+
+
+def test_the_outer_bound_refuses_a_base_pose_where_it_measures_from() -> None:
+    """The bound the enforcer VETOes on may not be placed by a Layer B pose (#162).
+
+    `outer_envelope`, `outer_radius` and `reg.enforce._furthest_vertex` gained a
+    required `BaseFrame` in issue #162. A `BasePose` has `x`, `y` and `theta`
+    too, so any structural reading of that argument would take one — and then
+    the outer set, the radius the artifact retains and the excess a VETO names
+    would all be room-frame quantities wearing a Layer A tag, which is the
+    mislabelling this file exists to catch. **No localizer of any kind moves a
+    room-frame pose to Layer A** (docs/sufficiency.md §5.6), so there is no
+    estimator good enough to make this argument the right one; placing a
+    body-frame set in the room is Tier 3's decision, taken in the open with
+    `sufficiency.md` moving in the same commit.
+
+    The refusals are reported in each module's own currency — `TypeError` from
+    the Layer A geometry, `EnforcementError` from enforcement, which is a
+    `ValueError` — and both name `BaseFrame`, so the message says what to pass.
+    """
+    import reg.enforce
+    from reg.envelope import SUBSTEP_DT
+
+    pose = BasePose(x=0.4, y=-0.2, theta=0.3, source=PoseSource.LOCALIZED)
+    state = ProprioState(
+        t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.0, 0.0]), base_vel=None
+    )
+    square = Point(0.0, 0.0).buffer(0.1)
+
+    with pytest.raises(TypeError, match="BaseFrame"):
+        outer_envelope(state, DATASHEET_LIMITS, 0.2, pose, SUBSTEP_DT)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="BaseFrame"):
+        outer_radius(square, pose)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="BaseFrame"):
+        reg.enforce._furthest_vertex(square, pose, "test")  # type: ignore[arg-type]
+
+
+def test_the_outer_bound_does_not_import_a_room_frame_pose() -> None:
+    """Structural: the refusal above is only as good as the modules' imports.
+
+    `reg/envelope.py` or `reg/enforce.py` binding `BasePose` at all would be the
+    first step to accepting one, and neither needs to — the whole check is
+    `isinstance(base, BaseFrame)` in `reg.kinematics`. Docstrings may *mention*
+    the type, and do; what must not exist is an import binding it. This is
+    `tests/test_kinematics.py::test_kinematics_does_not_import_a_room_frame_pose`
+    extended to the two modules that gained the same argument in issue #162.
+    """
+    import reg.enforce
+    import reg.envelope
+
+    for module in (reg.envelope, reg.enforce):
+        for name, obj in vars(module).items():
+            assert obj is not BasePose, (
+                f"{module.__name__} binds BasePose as `{name}`. That type is "
+                "Layer B; the outer bound is Layer A and takes a BaseFrame the "
+                "caller states."
+            )

@@ -81,7 +81,13 @@ from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from reg.kinematics import ORIGIN_FRAME, clamp_to_limits, link_polygons
+from reg.kinematics import (
+    ORIGIN_FRAME,
+    BaseFrame,
+    _base_frame,
+    clamp_to_limits,
+    link_polygons,
+)
 from reg.types import Layer, Limits, LimitSource, ProprioState
 
 __all__ = [
@@ -411,6 +417,14 @@ def compute_envelope(
 #    the grid buffer in step 3 can otherwise push the rim a few centimetres past
 #    a disc that was already correct.
 #
+#    Every step above is measured from the `BaseFrame` the caller passes, and
+#    step 4 is the one where getting that wrong is silent. Steps 1-3 build the
+#    set up and a mis-placed frame moves it somewhere visibly wrong; step 4
+#    *subtracts*, so a disc centred anywhere but on the base clips the true set
+#    and the result still looks like a sound outer bound. That is the failure
+#    docs/mobile-base.md §1 names as the worst available here, and it is why
+#    `base` is required rather than defaulted (issue #162).
+#
 # WHAT IT IS NOT. It is not ARMTD or ARMOUR (docs/prior-art.md §4): the joint box
 # is pushed through the kinematics as an interval rather than as a zonotope, so
 # this is looser than either, and it is a *kinematic* bound with no dynamics or
@@ -607,6 +621,7 @@ def outer_envelope(
     state: ProprioState,
     limits: Limits,
     horizon: float,
+    base: BaseFrame,
     substep_dt: float = SUBSTEP_DT,
 ) -> Polygon:
     """The region the body **cannot leave** within `horizon`. An outer bound.
@@ -638,6 +653,22 @@ def outer_envelope(
             function of it and a plausible invented horizon would produce a
             plausible invented bound, which is the one failure mode a bound
             enforcement VETOes on must not have.
+        base: the frame the whole set is measured from — where the base joint
+            sits and the heading the first link's angle is measured from.
+            **Required, no default, and typed `BaseFrame`** (issue #162). Every
+            caller in this repository passes `ORIGIN_FRAME`, which is a mounting
+            fact rather than a measurement; `grep ORIGIN_FRAME` is the list of
+            places this repository assumes a base that does not move. A
+            `reg.types.BasePose` has the same three fields and is refused, for
+            the reason `reg.kinematics._base_frame` gives: it is a room-frame,
+            Layer B pose, and transforming this set by one would produce a
+            room-frame region wearing a Layer A tag.
+
+            **This argument reaches the intersected disc below, and that is why
+            it may not be guessed.** The disc is an outer bound centred on the
+            base; centre it anywhere else and the intersection clips away part
+            of the true outer set, which is an unsound outer bound that looks
+            exactly like a sound one (docs/mobile-base.md §1).
         substep_dt: the integration grid the bound must cover as well as the
             continuous system — see `reachable_joint_box` for why a numerical
             parameter appears in a physical bound at all.
@@ -654,6 +685,7 @@ def outer_envelope(
             outer bound would read as "the robot can be nowhere", which clears
             every containment test built on it.
     """
+    base = _base_frame(base)
     lo, hi = reachable_joint_box(state, limits, horizon, substep_dt)
     lengths = np.asarray(limits.link_lengths, dtype=float)
     n = lengths.shape[0]
@@ -674,8 +706,11 @@ def outer_envelope(
             # The base of link k and the cumulative angle at it, for these
             # ancestors. Written out rather than routed through
             # `forward_kinematics` because only the k-th joint's frame is wanted
-            # and the cumulative angle has to come back out with it.
-            base_x = base_y = angle = 0.0
+            # and the cumulative angle has to come back out with it. It starts
+            # at `base` for the same reason the leading `0.0` in
+            # `forward_kinematics` became one (issue #152): that literal *was*
+            # the fixed base. At ORIGIN_FRAME every term below is unchanged.
+            base_x, base_y, angle = base.x, base.y, base.theta
             for j in range(k):
                 angle += float(ancestors[j])
                 base_x += float(lengths[j]) * math.cos(angle)
@@ -700,7 +735,15 @@ def outer_envelope(
     # replaces, and still correct. Intersecting two sound outer bounds is sound,
     # and it keeps the rim the grid dilation adds from reaching outside a disc
     # that already held.
-    disc = Point(0.0, 0.0).buffer(
+    #
+    # CENTRED ON `base`, AND THAT IS THE WHOLE DANGER OF THIS FUNCTION. Every
+    # link's centreline is within `sum(lengths)` of the base joint and every
+    # body point within a further `radius`, so a disc of that radius *about the
+    # base* over-covers and the intersection removes nothing true. About any
+    # other point it removes something true — and an outer set with a piece
+    # missing clears declarations it should refuse while looking exactly like a
+    # sound one. docs/mobile-base.md §1.
+    disc = Point(base.x, base.y).buffer(
         (float(lengths.sum()) + radius) * (1.0 / math.cos(math.pi / 256.0)),
         quad_segs=64,
     )
@@ -721,22 +764,31 @@ def outer_envelope(
     return region
 
 
-def outer_radius(poly: Polygon) -> float:
-    """The furthest any point of an outer envelope lies from the base, metres.
+def outer_radius(poly: Polygon, base: BaseFrame) -> float:
+    """The furthest any point of an outer envelope lies from `base`, metres.
 
     The radial projection of the region — the smallest disc centred on the base
     that contains it — and the scalar the artifact retains beside its area. It is
-    exact for a polygon: the greatest distance from the origin over a polygon is
+    exact for a polygon: the greatest distance from a point over a polygon is
     attained at a vertex.
 
     Sound in the same direction as the region it comes from: the true reachable
     set lies inside the outer envelope, which lies inside this disc.
+
+    `base` is **required and has no default** (issue #162). "Distance from the
+    base" was previously "distance from the origin" because the two were the
+    same point; they are the same point only while the base is bolted down, and
+    a radius measured from a centre nobody stated is indistinguishable
+    downstream from one measured from the centre a caller meant. It must be the
+    frame the region was computed at — pass `outer_envelope`'s `base`, which for
+    every caller in this repository is `ORIGIN_FRAME`.
     """
+    base = _base_frame(base)
     region = _checked_region(poly, "outer_radius")
     coords = shapely.get_coordinates(region)
     if coords.size == 0:
         raise ValueError("outer_radius was given a geometry with no coordinates.")
-    return float(np.hypot(coords[:, 0], coords[:, 1]).max())
+    return float(np.hypot(coords[:, 0] - base.x, coords[:, 1] - base.y).max())
 
 
 #: The layer an envelope inherits from the provenance of its bounds (issue #84).

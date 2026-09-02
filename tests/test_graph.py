@@ -177,6 +177,8 @@ def _frame(frame_id: int, human_xy: tuple[float, float], q=Q_HELD, qd=QD_HELD):
         qd=np.array(qd, dtype=float),
         human_pos=np.array(human_xy, dtype=float),
         human_vel=np.array([0.0, 0.0], dtype=float),
+        base_vel=None,
+        base_pose=None,
         objects=(OBSTACLE,),
     )
 
@@ -787,6 +789,8 @@ def test_a_non_uniform_frame_period_is_refused(tmp_path: Path) -> None:
             qd=np.array(QD_HELD),
             human_pos=np.array([2.0, 0.0]),
             human_vel=np.array([0.0, 0.0]),
+            base_vel=None,
+            base_pose=None,
             objects=(OBSTACLE,),
         ),
     ]
@@ -819,6 +823,8 @@ def test_a_moving_obstacle_is_refused(tmp_path: Path) -> None:
         qd=frames[2].qd,
         human_pos=frames[2].human_pos,
         human_vel=frames[2].human_vel,
+        base_vel=None,
+        base_pose=None,
         objects=(moved,),
     )
     csv = _write_stream(tmp_path / "moved.csv", frames)
@@ -837,6 +843,8 @@ def test_an_obstacle_named_like_the_human_is_refused(tmp_path: Path) -> None:
             qd=np.array(QD_HELD),
             human_pos=np.array([2.0, 0.0]),
             human_vel=np.array([0.0, 0.0]),
+            base_vel=None,
+            base_pose=None,
             objects=(clash,),
         )
         for i in range(4)
@@ -3336,6 +3344,9 @@ def test_the_retained_bracket_is_the_region_enforcement_would_compute(attested) 
         t=0.0,
         q=np.asarray([float(v) for v in str(row["q"]).split(",")]),
         qd=np.asarray([float(v) for v in str(row["qd"]).split(",")]),
+        # As `reg.graph` itself does off a `robot_config` row: the artifact
+        # records no base velocity, so the reconstruction says so (#150).
+        base_vel=None,
     )
     region = outer_envelope(state, limits, float(row["horizon"]), substep)
     assert row["outer_area"] == pytest.approx(quantize_area(region.area))

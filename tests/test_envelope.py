@@ -60,8 +60,8 @@ LIMITS = Limits(
 )
 N_CORNERS = 2 ** len(LIMITS.link_lengths)
 
-MOVING = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.5, -0.3]))
-STATIONARY = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.0, 0.0]))
+MOVING = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.5, -0.3]), base_vel=None)
+STATIONARY = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.0, 0.0]), base_vel=None)
 
 # Small enough to keep the suite quick; the invariants below do not depend on it.
 N = 16
@@ -131,6 +131,8 @@ def test_compute_envelope_refuses_a_stateframe() -> None:
         qd=np.array([0.0, 0.0]),
         human_pos=np.array([1.0, 0.5]),
         human_vel=np.array([0.0, 0.0]),
+        base_vel=None,
+        base_pose=None,
         objects=(Obstacle("obs_0", "box", 1.0, 1.0, 0.2),),
     )
     with pytest.raises(TypeError, match="ProprioState"):
@@ -275,7 +277,9 @@ def test_hash_is_stable_in_a_fresh_process() -> None:
             source=LimitSource.PROPRIOCEPTIVE,
             link_radius=0.05,
         )
-        state = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.5, -0.3]))
+        state = ProprioState(
+            t=0.0, q=np.array([0.2, 0.4]), qd=np.array([0.5, -0.3]), base_vel=None
+        )
         print(envelope_hash(compute_envelope(state, limits, n_samples=16, seed=7)))
         """
     )
@@ -341,11 +345,11 @@ def test_too_few_samples_to_hold_the_corners_is_refused() -> None:
 
 def test_a_state_outside_its_own_limits_is_refused() -> None:
     """Clamping the current pose would produce an envelope missing the robot."""
-    beyond_q = ProprioState(t=0.0, q=np.array([0.2, 3.0]), qd=np.array([0.0, 0.0]))
+    beyond_q = ProprioState(t=0.0, q=np.array([0.2, 3.0]), qd=np.array([0.0, 0.0]), base_vel=None)
     with pytest.raises(ValueError, match="state.q is outside limits"):
         compute_envelope(beyond_q, LIMITS, n_samples=N)
 
-    beyond_qd = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([9.0, 0.0]))
+    beyond_qd = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([9.0, 0.0]), base_vel=None)
     with pytest.raises(ValueError, match="state.qd exceeds"):
         compute_envelope(beyond_qd, LIMITS, n_samples=N)
 
@@ -417,11 +421,11 @@ QDD_MAX = np.asarray(LIMITS.qdd_max, dtype=float)
 #: the clamp is part of the model the outer set claims to bound, so a state that
 #: exercises it has to be in here.
 SOUNDNESS_STATES = (
-    ProprioState(t=0.0, q=np.array([0.0, 0.0]), qd=np.array([0.0, 0.0])),
-    ProprioState(t=0.0, q=np.array([0.0, 2.6]), qd=np.array([0.0, 0.0])),
-    ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([2.0, -2.5])),
-    ProprioState(t=0.0, q=np.array([-2.5, 1.0]), qd=np.array([-2.0, 2.5])),
-    ProprioState(t=0.0, q=np.array([1.5, -1.5]), qd=np.array([1.0, 1.2])),
+    ProprioState(t=0.0, q=np.array([0.0, 0.0]), qd=np.array([0.0, 0.0]), base_vel=None),
+    ProprioState(t=0.0, q=np.array([0.0, 2.6]), qd=np.array([0.0, 0.0]), base_vel=None),
+    ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([2.0, -2.5]), base_vel=None),
+    ProprioState(t=0.0, q=np.array([-2.5, 1.0]), qd=np.array([-2.0, 2.5]), base_vel=None),
+    ProprioState(t=0.0, q=np.array([1.5, -1.5]), qd=np.array([1.0, 1.2]), base_vel=None),
 )
 
 
@@ -565,7 +569,7 @@ def test_a_folded_arm_is_bounded_well_inside_the_workspace_disc() -> None:
     is different.
     """
     disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
-    folded = ProprioState(t=0.0, q=np.array([0.0, 2.6]), qd=np.array([0.0, 0.0]))
+    folded = ProprioState(t=0.0, q=np.array([0.0, 2.6]), qd=np.array([0.0, 0.0]), base_vel=None)
     radius = outer_radius(outer_envelope(folded, LIMITS, 0.5))
     assert radius < 0.8 * disc, (
         f"a folded arm at rest is bounded at {radius} m against a {disc} m "
@@ -636,6 +640,8 @@ def test_outer_envelope_refuses_a_stateframe() -> None:
         qd=np.array([0.0, 0.0]),
         human_pos=np.array([1.0, 1.0]),
         human_vel=np.array([0.0, 0.0]),
+        base_vel=None,
+        base_pose=None,
         objects=(Obstacle(entity_id="e", kind="crate", cx=1.0, cy=1.0, radius=0.2),),
     )
     with pytest.raises(TypeError, match="ProprioState"):
@@ -663,7 +669,7 @@ def test_a_state_outside_its_own_limits_is_refused_by_the_outer_set() -> None:
     polygon built on it — would come out too small, in the direction that clears
     declarations it should refuse.
     """
-    too_fast = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([9.0, 0.0]))
+    too_fast = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([9.0, 0.0]), base_vel=None)
     with pytest.raises(ValueError, match="qd_max"):
         outer_envelope(too_fast, LIMITS, 0.2)
     with pytest.raises(ValueError, match="qd_max"):
@@ -686,7 +692,7 @@ def test_an_ancestor_grid_too_large_to_evaluate_is_refused() -> None:
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
     )
-    state = ProprioState(t=0.0, q=np.zeros(many), qd=np.zeros(many))
+    state = ProprioState(t=0.0, q=np.zeros(many), qd=np.zeros(many), base_vel=None)
     with pytest.raises(ValueError, match=str(reg.envelope.MAX_OUTER_GRID_CONFIGS)):
         outer_envelope(state, long_arm, 0.5)
 

@@ -456,7 +456,12 @@ def test_the_action_class_follows_the_motion() -> None:
 
     def classes(q_of_t) -> list[str]:
         states = [
-            ProprioState(t=k * 0.02, q=np.asarray(q_of_t(k), dtype=float), qd=np.zeros(2))
+            ProprioState(
+                t=k * 0.02,
+                q=np.asarray(q_of_t(k), dtype=float),
+                qd=np.zeros(2),
+                base_vel=None,
+            )
             for k in range(26)
         ]
         return [
@@ -511,6 +516,8 @@ def test_the_policy_takes_proprioception_and_refuses_a_state_frame() -> None:
         qd=np.zeros(2),
         human_pos=np.array([1.0, 1.0]),
         human_vel=np.zeros(2),
+        base_vel=None,
+        base_pose=None,
         objects=(Obstacle("obs_0", "box", 1.0, 1.0, 0.2),),
     )
     with pytest.raises(DeclarationError, match=r"narrow a StateFrame with .proprio"):
@@ -576,8 +583,8 @@ def test_the_policy_refuses_a_run_that_is_not_a_run() -> None:
         )
 
     backwards = [
-        ProprioState(t=0.0, q=np.zeros(2), qd=np.zeros(2)),
-        ProprioState(t=0.0, q=np.zeros(2), qd=np.zeros(2)),
+        ProprioState(t=0.0, q=np.zeros(2), qd=np.zeros(2), base_vel=None),
+        ProprioState(t=0.0, q=np.zeros(2), qd=np.zeros(2), base_vel=None),
     ]
     with pytest.raises(DeclarationError, match="does not follow"):
         emit_declarations(

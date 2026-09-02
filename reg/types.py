@@ -26,6 +26,12 @@ arrives in a value, so `Limits` carries `source: LimitSource` — required, no
 default — and `reg.envelope.envelope_layer` turns it into the layer the
 `HAS_ENVELOPE` edge is tagged with. Issue #84; docs/sufficiency.md §7.
 
+Layer A was widened once, and once only: `ProprioState.base_vel` carries the
+base's *body-frame* velocity, which a wheel encoder measures and which names
+nothing outside the robot — the argument that already admits `qd`. The base's
+room-frame *pose* did not come with it: it lives on `StateFrame` as a `BasePose`
+and `proprio()` drops it. Issue #150; docs/sufficiency.md §5.7.
+
 A provenance field is not always a layer decision, and `BasePose` is the case
 where it is not. `PoseSource` sits beside `LimitSource` and looks like it, but a
 room-frame pose is Layer B *structurally* — a statement about the robot's
@@ -228,6 +234,54 @@ class Limits:
 
 
 @dataclass(frozen=True)
+class BaseVelocity:
+    """The base's velocity **in its own body frame**. Layer A (issue #150).
+
+    `BasePose` below is this type's sibling and they sit on opposite sides of
+    the boundary, which is the whole content of issue #150. The difference is
+    not how well either can be sensed — it is what each one is a statement
+    *about*:
+
+    * A body-frame rate — *this base is moving 0.4 m/s forward and turning at
+      0.2 rad/s* — is a statement about the machine. It mentions no map, no
+      landmark and no frame anybody defined, and it is what a wheel encoder
+      measures. That is the same argument that admits `qd`, and it is why this
+      type may be reached from Layer A.
+    * A room-frame pose is a statement about the robot's relationship to
+      something outside the robot, and no localizer moves it (`BasePose`,
+      `PoseSource`, docs/sufficiency.md §5.6).
+
+    Integrating one into the other is what crosses the boundary: `∫(vx, vy, ω)
+    dt` is a pose only *relative to a last known pose*, and its error grows
+    without bound under slip an encoder cannot observe. That is the "Layer A
+    with a validity horizon" case docs/sufficiency.md §7 records and does not
+    resolve, and nothing here integrates anything.
+
+    **The units are kept in separate fields on purpose.** `vx`/`vy` are m/s and
+    `omega` is rad/s; a single three-vector would put two units in one array,
+    where a norm, or a `clip` against one bound, is a mistake nothing would
+    catch.
+
+    **No provenance field, and that is deliberate.** `Limits.source` exists
+    because a *value* can carry a perceiver in from outside, and a base velocity
+    can too — visual odometry rather than a wheel encoder. But this type is
+    admitted on exactly the terms `qd` is admitted on, and `qd` carries no
+    provenance either; tagging the new field alone would leave the older one it
+    copies untagged and would be a wider change than issue #150. Recorded here,
+    not resolved.
+
+    No field has a default, matching `Limits` since issue #115 and `BasePose`
+    since issue #149.
+    """
+
+    #: Body-frame linear velocity, m/s. `vx` is along the base's own heading.
+    vx: float
+    vy: float
+    #: Yaw rate, rad/s. Counter-clockwise positive, as everywhere else here.
+    omega: float
+
+
+@dataclass(frozen=True)
 class ProprioState:
     """Everything the certifiable layer is allowed to know.
 
@@ -238,11 +292,47 @@ class ProprioState:
 
     If a computation genuinely needs the world, it belongs in Layer B and its
     results must be tagged accordingly.
+
+    WHAT `base_vel` WIDENED, AND WHAT IT DID NOT (issue #150)
+    --------------------------------------------------------
+    This type held `{t, q, qd}` from the beginning, and
+    `tests/test_layer_boundary.py::test_propriostate_fields_are_exactly_the_allowed_set`
+    pins the set so widening it cannot happen quietly. It has been widened once,
+    deliberately: `base_vel`, the base's *body-frame* velocity, which a wheel
+    encoder measures and which names nothing outside the robot.
+    docs/sufficiency.md §5.7 is the record of that decision, and the allowlist
+    moved in the same commit because the test requires it.
+
+    **The pose did not come with it.** `x`, `y`, `theta` in the room are Layer B
+    structurally (§5.6); they live on `StateFrame` as a `BasePose`, and
+    `proprio()` does not pass them through. None of those three names is in the
+    word check's `WORLD_WORDS` and none ever will be — the allowlist is the only
+    thing standing there, which is why moving it is a decision about what this
+    project can claim and not a refactor.
     """
 
     t: float
     q: np.ndarray
     qd: np.ndarray
+    #: Required, no default. `None` means **this state records no base
+    #: velocity** — a could-not-evaluate, and never zero. Nothing in `reg/`
+    #: produces one yet: the raw stream schema has no columns for it
+    #: (`reg.stream`), and `robot_config` stores only `q` and `qd`, so
+    #: `reg.graph` reconstructs states with `None` rather than reading the
+    #: absence as a base that was standing still. A bolted base's velocity is
+    #: zero, but an artifact that did not record it must not be
+    #: indistinguishable from one that did.
+    base_vel: BaseVelocity | None
+
+    def __post_init__(self) -> None:
+        if self.base_vel is not None and not isinstance(self.base_vel, BaseVelocity):
+            raise TypeError(
+                f"ProprioState.base_vel must be a BaseVelocity or None, got "
+                f"{self.base_vel!r}. `None` is the one way to say 'not "
+                "recorded'; a tuple or a bare array is a body-frame rate whose "
+                "units and ordering nothing checks, and this field is on the "
+                "Layer A side of the boundary."
+            )
 
 
 @dataclass(frozen=True)
@@ -272,11 +362,14 @@ class BasePose:
     particular: see `PoseSource`, which records what the pose inherits and over
     what horizon and deliberately does *not* select a layer.
 
-    Nothing in `reg/` constructs one of these yet — the envelope is computed for
-    a base bolted to the origin, and `reg.enforce.computed_bound` is finite
-    because of it. `tests/test_layer_boundary.py` is what keeps the contract
-    alive with no consumer behind it, so the type cannot drift into something
-    Layer A before anything uses it. docs/mobile-base.md §7, Tier 2.
+    It has a home since issue #150 — `StateFrame.base_pose`, on the Layer B side
+    of the frame, where `proprio()` drops it — and nothing in `reg/` constructs
+    one yet: the envelope is computed for a base bolted to the origin,
+    `reg.enforce.computed_bound` is finite because of it, and the fixed-arm
+    fixtures record `None`. `tests/test_layer_boundary.py` is what keeps the
+    contract alive with no producer behind it, so the type cannot drift into
+    something Layer A before anything fills it in. docs/mobile-base.md §7,
+    Tier 2.
     """
 
     x: float
@@ -318,6 +411,18 @@ class StateFrame:
     Mixed-layer by construction: this is the *raw stream*, the thing the evidence
     graph is compressed from. Nothing in Layer A consumes it directly — the
     envelope takes `proprio()` and never sees the rest.
+
+    THE BASE SITS ON BOTH SIDES OF THE LINE, AND `proprio()` IS WHERE IT SPLITS
+    ---------------------------------------------------------------------------
+    A moving base contributes two things and they are not the same kind of
+    thing (issue #150; docs/sufficiency.md §5.6, §5.7):
+
+    * `base_vel` is body-frame and **Layer A**. `proprio()` passes it through.
+    * `base_pose` is room-frame and **Layer B**. `proprio()` drops it, exactly
+      as it drops `human_pos`, and
+      `tests/test_layer_boundary.py::test_proprio_drops_the_base_pose` fails if
+      that stops being true. A pose that survived the narrowing would make every
+      envelope computed downstream a room-frame region wearing a Layer A tag.
     """
 
     t: float
@@ -325,8 +430,41 @@ class StateFrame:
     qd: np.ndarray
     human_pos: np.ndarray  # Layer B
     human_vel: np.ndarray  # Layer B
+    #: Layer A, and narrowed through. Required, no default; `None` is "this
+    #: frame records no base velocity" and never "the base was still".
+    base_vel: BaseVelocity | None
+    #: Layer B, and dropped by `proprio()`. Required, no default; `None` is
+    #: "this frame records no base pose". The fixed-arm fixtures in
+    #: `reg.scenarios` record `None` rather than `BasePose(0, 0, 0, ...)`,
+    #: because for a bolted base *the base is at the origin* is a mounting fact
+    #: and not an estimate, and `PoseSource` has no member for a mounting fact —
+    #: writing one of the two it does have would put a provenance nobody has on
+    #: a number nobody measured.
+    base_pose: BasePose | None
     objects: tuple[Obstacle, ...] = field(default=())  # Layer B
 
+    def __post_init__(self) -> None:
+        if self.base_vel is not None and not isinstance(self.base_vel, BaseVelocity):
+            raise TypeError(
+                f"StateFrame.base_vel must be a BaseVelocity or None, got "
+                f"{self.base_vel!r}. This field is narrowed into Layer A by "
+                "`proprio()`, so what arrives here is what the envelope would "
+                "eventually be computed from."
+            )
+        if self.base_pose is not None and not isinstance(self.base_pose, BasePose):
+            raise TypeError(
+                f"StateFrame.base_pose must be a BasePose or None, got "
+                f"{self.base_pose!r}. A bare `(x, y, theta)` tuple carries no "
+                "`PoseSource`, and a room-frame pose whose provenance nobody "
+                "stated is the one thing `BasePose` exists to make impossible."
+            )
+
     def proprio(self) -> ProprioState:
-        """Narrow to Layer A. The only supported way to feed the envelope."""
-        return ProprioState(t=self.t, q=self.q, qd=self.qd)
+        """Narrow to Layer A. The only supported way to feed the envelope.
+
+        What is dropped is the point: `human_pos`, `human_vel`, `objects` — and
+        `base_pose`, which is room-frame and therefore Layer B for the same
+        structural reason (docs/sufficiency.md §5.6). `base_vel` is body-frame
+        and comes through.
+        """
+        return ProprioState(t=self.t, q=self.q, qd=self.qd, base_vel=self.base_vel)

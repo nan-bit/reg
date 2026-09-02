@@ -418,6 +418,15 @@ class Scenario:
                 qd=qd,
                 human_pos=pos,
                 human_vel=vel,
+                # Every fixture here is a fixed arm: there is no base to have a
+                # velocity, and *the base is at the origin* is a mounting fact
+                # rather than a pose anybody estimated, so there is no
+                # `PoseSource` that would honestly describe one. Both are
+                # recorded as not-recorded (issue #150). Mobile fixtures are
+                # Tier 4 of docs/mobile-base.md §7 and arrive with the stream
+                # columns that carry them.
+                base_vel=None,
+                base_pose=None,
                 objects=self.world.obstacles,
             )
 

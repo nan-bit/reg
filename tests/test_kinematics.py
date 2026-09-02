@@ -32,6 +32,10 @@ def two_link(link_radius: float = 0.05) -> Limits:
         link_lengths=np.array([1.0, 1.0]),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=link_radius,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
 
 
@@ -75,6 +79,10 @@ def test_base_is_fixed_at_the_origin_and_links_are_connected() -> None:
         link_lengths=np.array([0.5, 0.4, 0.3]),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     segments = forward_kinematics(np.array([0.3, -1.1, 2.0]), limits)
 
@@ -175,6 +183,10 @@ def test_kinematics_reject_a_zero_length_link() -> None:
         link_lengths=np.array([1.0, 0.0]),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     with pytest.raises(ValueError, match="strictly positive"):
         forward_kinematics(np.array([0.0, 0.0]), limits)
@@ -275,6 +287,10 @@ def test_clamp_clips_position_and_velocity_to_the_stated_bounds() -> None:
         link_lengths=np.array([1.0, 1.0]),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     q, qd = clamp_to_limits(np.array([5.0, -3.0]), np.array([-9.0, 0.25]), limits)
 
@@ -339,6 +355,10 @@ def test_clamp_rejects_inverted_position_bounds() -> None:
         link_lengths=np.array([1.0, 1.0]),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     with pytest.raises(ValueError, match="q_min exceeds"):
         clamp_to_limits(np.array([0.0, 0.0]), np.array([0.0, 0.0]), limits)
@@ -353,6 +373,10 @@ def test_clamp_rejects_a_negative_velocity_bound() -> None:
         link_lengths=np.array([1.0, 1.0]),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     with pytest.raises(ValueError, match="non-negative magnitude"):
         clamp_to_limits(np.array([0.0, 0.0]), np.array([0.0, 0.0]), limits)

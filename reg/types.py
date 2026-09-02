@@ -55,6 +55,7 @@ is built.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
@@ -194,6 +195,47 @@ class Limits:
     remainder, and a figure measured against a value a caller never chose is
     indistinguishable downstream from one it did. The value did not change when
     the default went; what changed is that the distinction is no longer possible.
+
+    THE BASE'S OWN BOUNDS (issue #151)
+    ----------------------------------
+    Four more fields, with their units written down here rather than left to be
+    inferred from a name:
+
+    * `base_v_max` — **m/s**. The magnitude of the base's body-frame
+      translational velocity, i.e. of `BaseVelocity`'s `(vx, vy)`.
+    * `base_a_max` — **m/s^2**. The magnitude of its body-frame translational
+      acceleration.
+    * `base_omega_max` — **rad/s**. The magnitude of its yaw rate, i.e. of
+      `BaseVelocity.omega`.
+    * `base_alpha_max` — **rad/s^2**. The magnitude of its yaw acceleration.
+
+    **The two acceleration bounds stand in for a force and a torque limit
+    exactly as `qdd_max` stands in for a joint torque limit** (docs/plan.md,
+    Phase 1). There is no mass, no inertia and no wheel model anywhere in this
+    package, so `base_a_max` is not evidence of a dynamics model — it is the
+    same deliberate stand-in one level up, said here rather than left for a
+    reader to infer a model that does not exist.
+
+    **They are magnitude bounds, not a geometry.** `base_v_max` caps
+    `hypot(vx, vy)` and says nothing about which directions are attainable. A
+    differential-drive base is nonholonomic and cannot move sideways at all, so
+    the velocities it can actually command are a strict subset of the disc these
+    numbers describe. Bounding the superset is the safe direction — an
+    over-approximation of what the base can do — and it is loose; that looseness
+    is docs/mobile-base.md §3's subject and Tier 3's problem, and it is a
+    property of these fields rather than a defect in whatever consumes them.
+
+    **A bolted-down arm states zeros; it does not omit them.** There is no
+    arm-only `Limits`, because an arm-only `Limits` would be a default arriving
+    by another route: the caller who never considered the base would produce the
+    same object as the one who considered it and wrote down *this base does not
+    move*. `reg.world.LIMITS` is the worked example, and
+    `tests/test_layer_boundary.py` asserts it states them rather than leaving
+    them out.
+
+    `source` governs all four the way it governs `qd_max`. A base speed cap
+    computed from a measured separation distance — the ISO/TS 15066 case — makes
+    the whole object `DERIVED` and every envelope computed from it Layer B.
     """
 
     q_min: np.ndarray
@@ -211,6 +253,24 @@ class Limits:
     #: indistinguishable from one who did, and the artifact would record the
     #: invented number as a stated one.
     link_radius: float
+    #: Base translational speed bound, **m/s**: the largest `hypot(vx, vy)` the
+    #: base may command in its own body frame. Required, no default, and zero
+    #: for a bolted base — a plausible datasheet number is exactly what the rule
+    #: above exists to keep out of an artifact unstated.
+    base_v_max: float
+    #: Base translational acceleration bound, **m/s^2**. Stands in for a force
+    #: limit as `qdd_max` stands in for a torque limit (docs/plan.md, Phase 1).
+    base_a_max: float
+    #: Base yaw-rate bound, **rad/s**. A magnitude: it bounds `|omega|`.
+    base_omega_max: float
+    #: Base yaw-acceleration bound, **rad/s^2**. The rotational half of the same
+    #: stand-in — a torque limit, not a model of one.
+    base_alpha_max: float
+
+    #: The four above, named once. Every loop over them — the validation below,
+    #: the meta block in `reg.graph` — has to cover all four, and a list written
+    #: out twice is a list that silently exempts whichever one somebody forgot.
+    BASE_BOUND_FIELDS = ("base_v_max", "base_a_max", "base_omega_max", "base_alpha_max")
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, LimitSource):
@@ -230,6 +290,42 @@ class Limits:
                     f"{name} has {got} entries but there are {n} links. "
                     "Limits must be stated per joint; a mismatch here would be "
                     "silently broadcast by numpy into a bound nobody wrote."
+                )
+        for name in self.BASE_BOUND_FIELDS:
+            raw = getattr(self, name)
+            if isinstance(raw, (str, bytes)):
+                # `float("0.5")` succeeds, which is the trap: a string carries
+                # no unit and nothing downstream that formats it into the
+                # artifact would survive it. Refused here, where the field is
+                # named, rather than in whatever writes the meta block.
+                raise TypeError(
+                    f"Limits.{name} must be a number, got {raw!r}. A string that "
+                    "happens to parse as one is not a bound somebody stated in "
+                    "these units."
+                )
+            try:
+                value = float(raw)
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    f"Limits.{name} must be a number, got {raw!r}. It bounds "
+                    "what the base may command, and something that is not a "
+                    "number is not a bound."
+                ) from exc
+            if not math.isfinite(value):
+                raise ValueError(
+                    f"Limits.{name} is {raw!r}, which is not finite. An infinite "
+                    "or NaN bound is not a permissive bound: it is an unbounded "
+                    "workspace written as though somebody had measured one, and "
+                    "an unbounded workspace is a could-not-evaluate here "
+                    "(docs/mobile-base.md §1)."
+                )
+            if value < 0.0:
+                raise ValueError(
+                    f"Limits.{name} must be a non-negative magnitude bound, got "
+                    f"{raw!r}. A negative bound has no value that satisfies it — "
+                    "the argument qd_max is refused under in "
+                    "`reg.kinematics.clamp_to_limits`. A base that does not move "
+                    "states 0.0."
                 )
 
 

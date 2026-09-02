@@ -515,6 +515,45 @@ def test_offer_refuses_anything_that_is_not_a_declaration() -> None:
 # ==========================================================================
 
 
+def test_the_demo_worlds_bound_is_the_workspace_disc_it_has_always_been() -> None:
+    """`computed_bound` is unchanged by the base bounds on `Limits` (issue #151).
+
+    The base's actuation bounds joined `Limits` so that Tier 3 has something to
+    bound a base *with*. Tier 3 is where the bound itself changes, and it does
+    not change quietly: `computed_bound` refusing an unbounded workspace
+    (docs/mobile-base.md §1) re-labels what a VETO means, so it carries its own
+    reasoning and its own issue.
+
+    Until then this is the pin. The bound for the demo world is
+    `sum(link_lengths) + link_radius` and nothing else, stated as the arithmetic
+    rather than as a number, so it fails if either the fields it reads or the
+    formula moves.
+    """
+    assert computed_bound(LIMITS) == pytest.approx(
+        float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius), abs=1e-12
+    )
+
+
+def test_the_computed_bound_does_not_read_the_base_bounds() -> None:
+    """The negative half: a base that can drive does not widen the arm's disc.
+
+    A `computed_bound` that silently grew with `base_v_max` would be a bound
+    over a workspace that is unbounded given enough time — the failure
+    docs/mobile-base.md §1 calls the worst available here, because it VETOes and
+    looks principled while doing it. Today the disc is arm-only and this asserts
+    it, so the Tier 3 change cannot arrive as a side effect of somebody stating
+    a mobile base's datasheet.
+    """
+    mobile = dataclasses.replace(
+        LIMITS,
+        base_v_max=1.5,
+        base_a_max=2.0,
+        base_omega_max=3.0,
+        base_alpha_max=4.0,
+    )
+    assert computed_bound(mobile) == computed_bound(LIMITS)
+
+
 def test_the_computed_bound_contains_every_body_of_every_fixture() -> None:
     """Soundness, in the conservative direction, on real runs across seeds."""
     bound = computed_bound(LIMITS)
@@ -601,6 +640,10 @@ def test_computed_bound_refuses_a_malformed_robot() -> None:
         link_lengths=np.array([0.0]),
         source=LimitSource.PROPRIOCEPTIVE,
         link_radius=0.05,
+        base_v_max=0.0,
+        base_a_max=0.0,
+        base_omega_max=0.0,
+        base_alpha_max=0.0,
     )
     with pytest.raises(EnforcementError, match="strictly positive"):
         computed_bound(broken)

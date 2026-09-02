@@ -91,6 +91,13 @@ _BOUNDS = {
     "qdd_max": np.array([8.0, 10.0]),
     "link_lengths": np.array([0.5, 0.4]),
     "link_radius": 0.05,
+    # The base is bolted down and says so (issue #151). Zeros here are a
+    # statement, not an omission — there is no arm-only `Limits`, because one
+    # would be the default this dataclass refuses arriving by another door.
+    "base_v_max": 0.0,
+    "base_a_max": 0.0,
+    "base_omega_max": 0.0,
+    "base_alpha_max": 0.0,
 }
 DATASHEET_LIMITS = Limits(**_BOUNDS, source=LimitSource.PROPRIOCEPTIVE)
 #: The ISO/TS 15066 case: the same `qd_max`, but arrived at by capping the
@@ -412,6 +419,10 @@ def test_limits_reject_a_per_joint_mismatch() -> None:
             link_lengths=np.array([0.5, 0.4]),  # but two links
             source=LimitSource.PROPRIOCEPTIVE,
             link_radius=0.05,
+            base_v_max=0.0,
+            base_a_max=0.0,
+            base_omega_max=0.0,
+            base_alpha_max=0.0,
         )
 
 
@@ -465,6 +476,142 @@ def test_no_field_of_limits_has_a_default() -> None:
         or f.default_factory is not dataclasses.MISSING
     ]
     assert defaulted == []
+
+
+# --------------------------------------------------------------------------
+# The base's own bounds, under the same rule (issue #151)
+# --------------------------------------------------------------------------
+
+#: The four fields issue #151 added, with the unit each one is stated in. The
+#: units have to be written somewhere other than the docstring under test, so
+#: they are written here — but the *roster* is pinned against
+#: `Limits.BASE_BOUND_FIELDS` by the test just below, so a fifth base bound
+#: cannot be added past the parametrized refusals that iterate over this dict.
+BASE_BOUND_UNITS = {
+    "base_v_max": "m/s",
+    "base_a_max": "m/s^2",
+    "base_omega_max": "rad/s",
+    "base_alpha_max": "rad/s^2",
+}
+
+
+def test_the_base_bounds_this_file_checks_are_the_ones_limits_carries() -> None:
+    """The roster, so a fifth bound cannot be added past every test below.
+
+    `BASE_BOUND_UNITS` is what the parametrized refusals iterate over. If it
+    were a hand-written copy of the field list it would go stale silently — the
+    new field would have no negative test and nothing would say so — so it is
+    pinned against `Limits.BASE_BOUND_FIELDS`, which `__post_init__` itself
+    validates over.
+    """
+    assert set(BASE_BOUND_UNITS) == set(Limits.BASE_BOUND_FIELDS)
+    fields = {f.name for f in dataclasses.fields(Limits)}
+    assert set(Limits.BASE_BOUND_FIELDS) <= fields
+
+
+@pytest.mark.parametrize("missing", sorted(BASE_BOUND_UNITS))
+def test_limits_cannot_be_built_without_each_base_bound(missing: str) -> None:
+    """Negative test: omitting one is a `TypeError` naming it, never a zero.
+
+    Zero is what a bolted-down base *states* — `reg.world.LIMITS` writes it — and
+    it is the one value that must not also be what an omission means. A caller
+    who never considered the base would otherwise produce the identical object,
+    and the identical envelope, as one who considered it and concluded the base
+    does not move.
+    """
+    without = {k: v for k, v in _BOUNDS.items() if k != missing}
+    with pytest.raises(TypeError, match=missing):
+        Limits(  # type: ignore[call-arg]
+            **without, source=LimitSource.PROPRIOCEPTIVE
+        )
+
+
+@pytest.mark.parametrize("name", sorted(BASE_BOUND_UNITS))
+def test_limits_refuse_a_negative_base_bound_by_name(name: str) -> None:
+    """Negative test: a negative magnitude has no value that satisfies it.
+
+    The same argument `reg.kinematics.clamp_to_limits` refuses a negative
+    `qd_max` under, applied where the object is built rather than where it is
+    first used — there is no clamping step for a base bound to be caught by.
+    The message has to name the field: four bounds in three units means "a
+    limit was negative" is not a message anybody can act on.
+    """
+    with pytest.raises(ValueError, match=name):
+        Limits(**{**_BOUNDS, name: -0.5}, source=LimitSource.PROPRIOCEPTIVE)
+
+
+@pytest.mark.parametrize("name", sorted(BASE_BOUND_UNITS))
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+def test_limits_refuse_a_non_finite_base_bound_by_name(name: str, bad: float) -> None:
+    """Negative test: `inf` is not "no limit", it is an unbounded workspace.
+
+    A driven base with no speed cap has a workspace that is unbounded given
+    enough time, which docs/mobile-base.md §1 records as a could-not-evaluate
+    and not a large number. `nan` is the other half: it compares false against
+    every bound it meets, so a check written over it reports *pass* by
+    arithmetic rather than by evidence.
+    """
+    with pytest.raises(ValueError, match=name):
+        Limits(**{**_BOUNDS, name: bad}, source=LimitSource.PROPRIOCEPTIVE)
+
+
+@pytest.mark.parametrize("name", sorted(BASE_BOUND_UNITS))
+def test_limits_refuse_a_base_bound_that_is_not_a_number(name: str) -> None:
+    """Negative test: a string that looks like a bound is not a bound."""
+    with pytest.raises(TypeError, match=name):
+        Limits(  # type: ignore[arg-type]
+            **{**_BOUNDS, name: "0.5"}, source=LimitSource.PROPRIOCEPTIVE
+        )
+
+
+def test_a_base_bound_of_zero_is_accepted_because_that_is_what_bolted_means() -> None:
+    """The positive half: the refusals above must not have banned the fixture.
+
+    A check that refuses everything is not a check. Zero is the value a
+    bolted-down arm states, so it has to be constructible — the rule is that it
+    must be *written*, not that it must be non-zero.
+    """
+    limits = Limits(**_BOUNDS, source=LimitSource.PROPRIOCEPTIVE)
+    for name in Limits.BASE_BOUND_FIELDS:
+        assert getattr(limits, name) == 0.0
+
+
+def test_the_demo_world_states_its_base_bounds_rather_than_omitting_them() -> None:
+    """The fixed-base fixture states zero, explicitly (issue #151).
+
+    There is no arm-only `Limits` and this is where that is checked on the one
+    object every artifact in this repository is built from. `reg.world.LIMITS`
+    describes an arm bolted to the origin, so all four bounds are zero — and the
+    point is that they are *there*: the demo world is the thing a reader would
+    copy when writing their own, and a fixture that omitted them would teach the
+    omission.
+    """
+    from reg.world import LIMITS as DEMO_LIMITS
+
+    for name in Limits.BASE_BOUND_FIELDS:
+        assert getattr(DEMO_LIMITS, name) == 0.0, (
+            f"reg.world.LIMITS.{name} is not zero. The demo arm is bolted to "
+            "the origin (reg/kinematics.py fixes the base there), so a non-zero "
+            "base bound describes a robot the rest of this repository does not "
+            "model."
+        )
+
+
+def test_the_docstring_states_the_unit_of_every_base_bound() -> None:
+    """Naming and units are stated, not left to be inferred from a name.
+
+    `base_a_max` is an acceleration standing in for a force limit the way
+    `qdd_max` stands in for a torque limit, and a reader who infers a dynamics
+    model from it has inferred something that does not exist. The docstring is
+    the only place that can say so, so this asserts it does — including the
+    cross-reference, because *the same stand-in as qdd_max* is the whole content
+    of the claim.
+    """
+    doc = Limits.__doc__ or ""
+    for name, unit in BASE_BOUND_UNITS.items():
+        assert name in doc, f"Limits' docstring does not mention {name}."
+        assert unit in doc, f"Limits' docstring never states the unit {unit}."
+    assert "qdd_max" in doc and "torque" in doc
 
 
 @pytest.mark.parametrize("bad", ["proprioceptive", None, 0, True])
@@ -613,6 +760,109 @@ def test_the_artifact_records_where_its_limits_came_from(tmp_path: Path) -> None
             assert graph._limits_from_meta(conn).source is limits.source
         finally:
             conn.close()
+
+
+#: The same fixture arm with a base that can drive, used only to check the meta
+#: plumbing. Every number differs from every other one and none is zero, so a
+#: writer that transposed two keys, or wrote zeros over all four, fails below.
+#: It describes a robot nothing else in this repository models — which is the
+#: point: the artifact has to carry what it was built from, not what the
+#: fixtures happen to be.
+MOBILE_LIMITS = dataclasses.replace(
+    DATASHEET_LIMITS,
+    base_v_max=1.25,
+    base_a_max=2.5,
+    base_omega_max=0.75,
+    base_alpha_max=3.5,
+)
+
+
+def test_the_artifact_records_the_base_bounds_it_was_built_from(
+    tmp_path: Path,
+) -> None:
+    """The base bounds round-trip through `meta` (issue #151).
+
+    docs/lossiness.md Retained #10 keeps the limits because geometry that cannot
+    be recomputed is not evidence. `Limits` is now a wider object, so "the
+    limits" is wider too — an artifact that recorded six of ten fields would
+    make `_limits_from_meta` unable to build one at all, or, worse, able to
+    build one by supplying the four it did not read.
+    """
+    csv = _stream(tmp_path / "run.csv")
+    artifact = tmp_path / "mobile.sqlite"
+    graph.build(csv, artifact, MOBILE_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+
+    conn = store.connect(artifact)
+    try:
+        recovered = graph._limits_from_meta(conn)
+    finally:
+        conn.close()
+    for name in Limits.BASE_BOUND_FIELDS:
+        assert getattr(recovered, name) == getattr(MOBILE_LIMITS, name), (
+            f"{name} did not survive the round trip through the artifact."
+        )
+
+
+def test_an_artifact_missing_its_base_bounds_is_could_not_evaluate(
+    tmp_path: Path,
+) -> None:
+    """Negative test: a missing base bound refuses; it does not read as zero.
+
+    Zero is what a bolted base *states*, and it is the value an absent key is
+    most tempting to resolve to — every artifact this repository builds today
+    would even be right. That is exactly why it must not: an artifact written
+    before this key existed, or one somebody deleted the row from, does not know
+    whether its base could drive, and a `Limits` reconstructed with zeros would
+    recompute a bolted robot's geometry for a robot that was not one.
+    """
+    key = graph.META_LIMITS_BASE_BOUNDS
+    csv = _stream(tmp_path / "run.csv")
+    artifact = tmp_path / "run.sqlite"
+    graph.build(csv, artifact, MOBILE_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+
+    conn = store.connect(artifact)
+    try:
+        conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+        conn.commit()
+        assert store.get_meta(conn, key) is None
+        with pytest.raises(graph.GraphQueryError, match=key):
+            graph._limits_from_meta(conn)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("truncated", ["1.25", "1.25,2.5,0.75", "1.25,2.5,0.75,3.5,9.0"])
+def test_an_artifact_whose_base_bounds_are_the_wrong_length_is_refused(
+    tmp_path: Path, truncated: str
+) -> None:
+    """Negative test: a positional value of the wrong length has no valid prefix.
+
+    The four bounds share one row and are told apart by position, in three
+    different units. Reading the first three of a four-entry value would hand
+    `base_omega_max`'s rad/s to whichever field came third, and nothing
+    downstream carries a unit that could notice. So the length is checked, and
+    a value that fails it is a could-not-evaluate rather than a partial read.
+    """
+    csv = _stream(tmp_path / "run.csv")
+    artifact = tmp_path / "run.sqlite"
+    graph.build(csv, artifact, MOBILE_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+
+    conn = store.connect(artifact)
+    try:
+        # Raw SQL, because `store.put_meta` refuses to overwrite a key with a
+        # different value — the point here is a file that arrived damaged, not
+        # a build that changed its mind mid-run.
+        conn.execute(
+            "UPDATE meta SET value = ? WHERE key = ?",
+            (truncated, graph.META_LIMITS_BASE_BOUNDS),
+        )
+        conn.commit()
+        with pytest.raises(
+            graph.GraphQueryError, match=graph.META_LIMITS_BASE_BOUNDS
+        ):
+            graph._limits_from_meta(conn)
+    finally:
+        conn.close()
 
 
 def test_an_artifact_that_does_not_record_its_provenance_is_could_not_evaluate(

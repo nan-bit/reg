@@ -734,6 +734,27 @@ META_LIMITS_Q_MAX = "limits_q_max"
 META_LIMITS_QD_MAX = "limits_qd_max"
 META_LIMITS_QDD_MAX = "limits_qdd_max"
 
+#: The base's own actuation bounds (issue #151): one row for one body, in the
+#: order `Limits.BASE_BOUND_FIELDS` states — `base_v_max` (m/s), `base_a_max`
+#: (m/s^2), `base_omega_max` (rad/s), `base_alpha_max` (rad/s^2). Three units in
+#: one value, which `limits_qd_max` above never has to carry, so the order is
+#: read off `Limits` rather than restated here and `_base_bounds_from_meta`
+#: refuses a value of any other length: four numbers whose meaning depends on
+#: position is exactly the payload where a silent off-by-one is available.
+#:
+#: **One row, not four, and the reason is measured.** `meta` has a single row of
+#: page headroom in the artifacts `reg.bench` publishes; a second spills onto a
+#: new page and moves every byte figure in docs/retention.md by 2,048 B. Issue
+#: #151 says no published figure moves, and one row per body is the layout that
+#: is both true to the object and inside that budget. Whoever adds meta key
+#: number two here should expect to re-measure and republish — that is a real
+#: cost of a key, and it is better paid knowingly than discovered.
+#:
+#: `_limits_from_meta` refuses a file that lacks the key rather than reading the
+#: absence as a base that was standing still — zero is what a bolted base
+#: *states*, and an artifact that states nothing is a could-not-evaluate.
+META_LIMITS_BASE_BOUNDS = "limits_base_bounds"
+
 #: Where those limits came from (issue #84). The same contract as the six above
 #: and one more thing besides: it is what the `HAS_ENVELOPE` edges in this file
 #: were tagged from, so an artifact that does not carry it cannot say whether its
@@ -2310,6 +2331,18 @@ def _write_provenance(
     store.put_meta(conn, META_LIMITS_Q_MAX, _array_text(limits.q_max))
     store.put_meta(conn, META_LIMITS_QD_MAX, _array_text(limits.qd_max))
     store.put_meta(conn, META_LIMITS_QDD_MAX, _array_text(limits.qdd_max))
+    # ...including the base's, which for every fixture in this repository are
+    # the zeros a bolted base states (issue #151). They are written even so: an
+    # artifact whose base bounds are absent cannot be told from one whose base
+    # was standing still, and that is the distinction the required fields on
+    # `Limits` exist to keep.
+    store.put_meta(
+        conn,
+        META_LIMITS_BASE_BOUNDS,
+        ",".join(
+            _float_text(getattr(limits, name)) for name in Limits.BASE_BOUND_FIELDS
+        ),
+    )
     # ...and where they came from, which is what every HAS_ENVELOPE edge in this
     # file was tagged from (issue #84). One short string: a reader can tell a run
     # whose speed bound came off a datasheet from one whose speed bound came off
@@ -2503,6 +2536,40 @@ def _meta_limit_source(conn) -> LimitSource:
         ) from exc
 
 
+def _base_bounds_from_meta(conn) -> dict[str, float]:
+    """The base's four actuation bounds, as keyword arguments for `Limits`.
+
+    **A missing key is could-not-evaluate, not a base that was standing still**
+    (issue #151). Zero is what a bolted-down base *states* — `reg.world.LIMITS`
+    writes it — so it is the one value an absent key must not resolve to. Every
+    artifact this repository builds today would even be right, which is exactly
+    what makes the substitution invisible: an artifact written before this key
+    existed, or one somebody deleted the row from, does not know whether its
+    base could drive, and a `Limits` reconstructed with zeros would recompute a
+    mobile robot's geometry as a bolted one's.
+
+    The value is positional — four numbers in three units — so a value of any
+    other length is refused rather than zipped against a shorter field list. A
+    partial read would silently reassign `base_omega_max`'s rad/s to
+    `base_a_max`'s m/s^2, and nothing downstream carries a unit that could
+    notice.
+    """
+    names = Limits.BASE_BOUND_FIELDS
+    values = _floats(
+        _meta_required(conn, META_LIMITS_BASE_BOUNDS),
+        f"meta[{META_LIMITS_BASE_BOUNDS!r}]",
+    )
+    if values.shape != (len(names),):
+        raise GraphQueryError(
+            f"meta[{META_LIMITS_BASE_BOUNDS!r}] holds {values.size} numbers and "
+            f"the base states {len(names)}: {list(names)}, in that order. The "
+            "value is positional and its entries are in three different units, "
+            "so a short or long one is a could-not-evaluate — there is no "
+            "prefix of it that can be trusted to mean what it is read as."
+        )
+    return dict(zip(names, (float(v) for v in values)))
+
+
 def _limits_from_meta(conn) -> Limits:
     """The robot the artifact was built for, from its own provenance block.
 
@@ -2524,6 +2591,7 @@ def _limits_from_meta(conn) -> Limits:
             link_lengths=_meta_array(conn, META_LIMITS_LINK_LENGTHS),
             source=_meta_limit_source(conn),
             link_radius=_meta_float(conn, META_LIMITS_LINK_RADIUS),
+            **_base_bounds_from_meta(conn),
         )
     except ValueError as exc:  # Limits itself refuses a per-joint mismatch
         raise GraphQueryError(

@@ -28,12 +28,20 @@ contained in the computed one, so that "the envelope does not intersect the
 human" implies "the robot cannot reach the human". `outer_envelope` in this
 module is that set (issue #82) — the joint box pushed through the kinematics as
 an interval, which is ARMTD's construction with the zonotope replaced by
-something looser and cheaper (docs/prior-art.md §4). It is a **separate
-function** and `compute_envelope` is unchanged: the evidence graph records the
-region the robot demonstrably swept, and enforcement checks against the region
-it provably cannot leave. Two sets for two jobs; collapsing them would silently
-change what every published envelope means. Say "under-approximation" out loud
-wherever *this* polygon is reported, and "outer" wherever that one is.
+something looser and cheaper (docs/prior-art.md §4), Minkowski-summed since
+issue #163 with what the base's own actuation bounds let the vehicle do over the
+same horizon. It is a **separate function** and `compute_envelope` is unchanged:
+the evidence graph records the region the robot demonstrably swept, and
+enforcement checks against the region it provably cannot leave. Two sets for two
+jobs; collapsing them would silently change what every published envelope means.
+Say "under-approximation" out loud wherever *this* polygon is reported, and
+"outer" wherever that one is.
+
+`compute_envelope` does not sweep the base and is not going to. It integrates
+`q` alone, so for a robot that drives it under-covers by the base's whole
+displacement — which is the *sound* direction for an inner approximation and a
+fourth entry in the list below, not a defect. The set that has to grow when the
+base can drive is the outer one, because that is the set a VETO rests on.
 
 Three further sources of under-coverage, none of which the caller can see from
 the polygon alone:
@@ -48,6 +56,9 @@ the polygon alone:
   under-covers each joint by a half-disc.
 - Only constant accelerations are sampled. A control that switches sign inside
   the horizon can reach configurations no constant acceleration reaches.
+- The base does not move. `q` is integrated and `Limits`' four base bounds are
+  not read here at all, so for a robot that drives this polygon under-covers by
+  the base's displacement on top of everything above.
 
 WHAT IS AND IS NOT NEW HERE
 ---------------------------
@@ -95,11 +106,13 @@ __all__ = [
     "MAX_OUTER_GRID_CONFIGS",
     "SUBSTEP_DT",
     "HASH_COORD_PRECISION",
+    "base_motion_bounds",
     "compute_envelope",
     "envelope_area",
     "envelope_hash",
     "envelope_layer",
     "outer_envelope",
+    "outer_envelope_looseness",
     "outer_radius",
     "reachable_joint_box",
 ]
@@ -144,6 +157,28 @@ def _require_positive_float(value: object, name: str) -> float:
             f"{name} must be finite and strictly positive, got {out!r}. A "
             "non-positive value here yields an envelope of the current pose "
             "alone, which reads as 'the robot cannot move'."
+        )
+    return out
+
+
+def _require_finite_float(value: object, name: str) -> float:
+    """A number a bound may be computed from. Zero and negatives are fine here.
+
+    `_require_positive_float` is the wrong check for a velocity component: `vx =
+    0.0` is a base standing still and `vx = -0.4` is one reversing, both of which
+    are states. What is not a state is a NaN — it would propagate through every
+    comparison below as a silent False and out into a polygon.
+    """
+    if isinstance(value, bool) or not isinstance(
+        value, (int, float, np.floating, np.integer)
+    ):
+        raise TypeError(f"{name} must be a number, got {value!r}.")
+    out = float(value)
+    if not math.isfinite(out):
+        raise ValueError(
+            f"{name} must be finite, got {out!r}. A NaN compares False against "
+            "every bound it is tested against, so it would not be caught by the "
+            "limit checks below — it would reach the geometry."
         )
     return out
 
@@ -377,8 +412,19 @@ def compute_envelope(
 # two jobs, each labelled — collapsing them would silently change what every
 # published envelope means.
 #
-# WHY THE OUTER ONE IS SOUND, IN FOUR STEPS. Nothing here is a heuristic; each
-# step over-covers, and the composition of over-coverings over-covers.
+# WHAT THE SET IS. Issue #163 changed it, so the argument below is a rewrite and
+# not an amendment. The region is now
+#
+#     ( the arm's swept body, measured from `base`, with the base's own yaw
+#       folded into the first joint's angle )   (+)   disc(0, d_trans)
+#
+# where `(+)` is the Minkowski sum and `d_trans` is how far the vehicle itself
+# can translate inside the horizon. For a base that cannot move — every fixture
+# in this repository — `d_trans` and the yaw term are exactly zero and every line
+# below reduces to the arm-only construction issue #82 shipped.
+#
+# WHY IT IS SOUND, IN SIX STEPS. Nothing here is a heuristic; each step
+# over-covers, and the composition of over-coverings over-covers.
 #
 # 1. THE JOINT BOX. Joints are independent double integrators in configuration
 #    space under a box acceleration bound, so the reachable configuration set is
@@ -394,13 +440,59 @@ def compute_envelope(
 #    step (`clamp_to_limits`). Widening the box is always sound; this one is the
 #    exact reachable box, so nothing is given away here at all.
 #
-# 2. THE LAST JOINT, EXACTLY. With every ancestor joint fixed, the centreline of
+# 2. THE BASE, ANALYTICALLY AND NOT ON THE GRID. The vehicle contributes two
+#    scalars over the horizon and nothing else: a translation bound `d_trans`
+#    metres and a yaw bound `d_yaw` radians. Each is the *same integral as step
+#    1* with `(base_v_max, base_a_max)` and `(base_omega_max, base_alpha_max)`
+#    in place of a joint's pair — a magnitude bound on a double integrator under
+#    a rate cap — so `d_trans <= |v0| * H + a * H^2 / 2` and is tighter than that
+#    once the speed cap engages. `base_motion_bounds` computes them.
+#
+#    Analytically, because the alternative does not fit. Adding `(x, y, theta)`
+#    to the ancestor grid of step 5 multiplies its enumeration by three more
+#    dimensions and trips `MAX_OUTER_GRID_CONFIGS` on the first frame, and that
+#    guard refuses rather than degrades. Minkowski summation is the composition
+#    the reachability literature uses for exactly this reason — zonotopes exist
+#    partly because the operation is exact and cheap on them (docs/prior-art.md
+#    §24, §25) — and on a `shapely` polygon it is one `buffer`.
+#
+#    `base_vel` is **required** here whenever any of the four bounds is nonzero.
+#    `ProprioState.base_vel is None` means *this state records no base velocity*,
+#    which is a could-not-evaluate; substituting zero would compute a
+#    standing-still bound for a vehicle that was driving, which is unsound in the
+#    one place unsoundness is invisible. A base velocity exceeding its own bounds
+#    is refused for the reason `_check_state_within_limits` refuses a joint one.
+#
+# 3. THE YAW FOLDS INTO THE FIRST JOINT, EXACTLY. Turning the base by `tb` about
+#    the base point rotates the entire arm about that same point, and joint 0's
+#    angle is measured from the base heading — so the body at base yaw `tb` with
+#    joint 0 at `q0` is the identical body at yaw 0 with joint 0 at `tb + q0`.
+#    The reachable set of that sum is the Minkowski sum of the two intervals,
+#    `[lo0 - d_yaw, hi0 + d_yaw]`, and the base yaw is independent of the joint,
+#    so the sum is exact and not merely a cover. Three consequences, each of
+#    which is a decision:
+#
+#      * The widened interval is **not** re-clamped to `[q_min[0], q_max[0]]`. A
+#        joint stop bounds the joint; it does not bound the vehicle, and clamping
+#        here would delete real reach.
+#      * The widening is capped at `pi` per side, which is exact — the joint's
+#        own interval is never negative in width, so `pi` each way already spans
+#        a full turn, and the geometry depends on the angle modulo `2*pi`. It is
+#        what keeps a fast-yawing base from inflating step 5's grid without
+#        limit.
+#      * Widening the interval does widen that grid, at the resolution step 5
+#        derives. A base that can spin far enough inside the horizon therefore
+#        reaches `MAX_OUTER_GRID_CONFIGS` and is refused, which is the intended
+#        answer: the guard is not raised for the base, because a construction
+#        that needs it raised is the wrong construction (issue #163).
+#
+# 4. THE LAST JOINT, EXACTLY. With every ancestor joint fixed, the centreline of
 #    link `k` sweeps exactly a circular sector: centre at the link's base joint,
 #    radius `link_lengths[k]`, spanning the interval of its cumulative angle. No
 #    approximation, and `_sector` renders it *circumscribed* rather than
 #    inscribed, so the polygon contains the arc rather than cutting its corners.
 #
-# 3. THE ANCESTORS, ON A GRID PLUS A LIPSCHITZ BUFFER. Rotating joint `j` by `d`
+# 5. THE ANCESTORS, ON A GRID PLUS A LIPSCHITZ BUFFER. Rotating joint `j` by `d`
 #    moves any point the joint carries by at most `d * reach[j]`, where
 #    `reach[j]` is the length of the arm from joint `j` outwards. So sampling the
 #    ancestors on a grid of spacing `h_j` and dilating the result by
@@ -410,27 +502,58 @@ def compute_envelope(
 #    declared-region grid from, restated here rather than imported so that
 #    enforcement's bound does not travel through the policy's module.
 #
-# 4. THE BODY. The centreline union is dilated by `link_radius`, again
-#    circumscribed, and intersected with the **workspace disc** — the bound this
-#    replaces. Intersecting two sound outer bounds is sound, and it means this
+# 6. THE BODY, THEN THE TRANSLATION. The centreline union is dilated by
+#    `link_radius`, again circumscribed. That set — call it `S` — contains every
+#    body the robot can present *relative to where its base started*, because
+#    steps 1 and 3 cover every (yaw, joint) pair it can be in. A body point at
+#    time `t` is then
+#
+#        p(t) = base(0) + delta(t) + R(tb(t)) . offset(q(t)),   |delta(t)| <= d_trans
+#
+#    and the second and third terms are covered by `S`, so `p(t)` lies in
+#    `S (+) disc(0, d_trans)` — a `buffer` by `d_trans`, circumscribed like every
+#    other arc here. The sum treats `delta`, `tb` and `q` as independent when one
+#    trajectory couples them, which over-covers; that is the sound direction and
+#    it is most of §7's looseness below.
+#
+#    Finally the union is intersected with the **workspace disc** about `base`,
+#    of radius `sum(link_lengths) + link_radius + d_trans` — the bound this
+#    replaces, with the base's own travel added to it because otherwise the
+#    intersection would clip away reach the vehicle genuinely has. Intersecting
+#    two sound outer bounds is sound, and for a bolted-down base it means this
 #    set is never worse than `reg.enforce.computed_bound`, which matters because
-#    the grid buffer in step 3 can otherwise push the rim a few centimetres past
+#    the grid buffer in step 5 can otherwise push the rim a few centimetres past
 #    a disc that was already correct.
 #
 #    Every step above is measured from the `BaseFrame` the caller passes, and
-#    step 4 is the one where getting that wrong is silent. Steps 1-3 build the
-#    set up and a mis-placed frame moves it somewhere visibly wrong; step 4
+#    this one is where getting that wrong is silent. Steps 1-5 build the set up
+#    and a mis-placed frame moves it somewhere visibly wrong; the intersection
 #    *subtracts*, so a disc centred anywhere but on the base clips the true set
 #    and the result still looks like a sound outer bound. That is the failure
 #    docs/mobile-base.md §1 names as the worst available here, and it is why
 #    `base` is required rather than defaulted (issue #162).
 #
+# 7. HOW LOOSE, AND WHY IT IS PUBLISHED AS LOOSE. `d_trans` is a **disc**, and a
+#    differential-drive base is nonholonomic: it cannot move sideways at all, so
+#    its true horizon-limited reachable set is a curved, non-convex Dubins-shaped
+#    region that the disc over-covers by a wide margin. The literature that
+#    computes the tighter set does it with zonotopes and polynomial zonotopes
+#    (RTD, REFINE, CORA — docs/prior-art.md §23, §24), and `reg` may not: *no new
+#    dependencies* is a standing rule and *an HJ reachability solver* is a stated
+#    non-goal (docs/plan.md). So the looseness is a representation cost, paid
+#    deliberately, and how much it costs has not been computed for this
+#    construction by anyone. **The returned area is not an estimate of where the
+#    robot can get**, and a caller reporting it must say so —
+#    `outer_envelope_looseness(limits)` is that sentence, in a form that changes
+#    when the base can drive. docs/limitations.md §10 is the entry.
+#
 # WHAT IT IS NOT. It is not ARMTD or ARMOUR (docs/prior-art.md §4): the joint box
 # is pushed through the kinematics as an interval rather than as a zonotope, so
 # this is looser than either, and it is a *kinematic* bound with no dynamics or
-# torque model behind it — `qdd_max` stands in for one (docs/plan.md Phase 1).
-# What it has is soundness in the direction a safety claim needs, which sampling
-# can never have however many samples are drawn.
+# torque model behind it — `qdd_max` stands in for one, and `base_a_max` and
+# `base_alpha_max` stand in for a force and a torque limit the same way
+# (docs/plan.md Phase 1). What it has is soundness in the direction a safety
+# claim needs, which sampling can never have however many samples are drawn.
 # --------------------------------------------------------------------------
 
 #: Segments per quadrant used to render every arc in the outer set, matching the
@@ -466,6 +589,46 @@ def _reach(limits: Limits) -> np.ndarray:
     """
     lengths = np.asarray(limits.link_lengths, dtype=float)
     return np.cumsum(lengths[::-1])[::-1]
+
+
+def _displacement_bound(
+    rate0: np.ndarray,
+    acc_max: np.ndarray,
+    rate_max: np.ndarray,
+    horizon: float,
+    substep_dt: float,
+) -> np.ndarray:
+    """`integral_0^H min(|rate0| + acc_max * (s + dt/2), rate_max) ds`, elementwise.
+
+    How far a magnitude-bounded double integrator can travel in `horizon`,
+    starting at speed `rate0`, under acceleration bound `acc_max` and rate cap
+    `rate_max`. Written once because it is used twice on different quantities:
+    `reachable_joint_box` applies it per joint in radians, and
+    `base_motion_bounds` applies it to the vehicle in metres and in radians.
+    Two copies of this formula would be two places for the `substep_dt` term to
+    drift out of one of them.
+
+    The `dt/2` inside the integrand is the discrete-integrator correction —
+    `reachable_joint_box` is where it is argued, and the argument is about a
+    midpoint rule rather than about joints, so it carries over unchanged.
+
+    Everything is a magnitude: the caller passes non-negative bounds and the
+    result is the non-negative distance travelled, not a signed displacement.
+    """
+    speed = np.minimum(np.abs(rate0) + 0.5 * acc_max * substep_dt, rate_max)
+
+    # The rate bound is reached at t_star and holds after it. `np.where` guards
+    # the division rather than the result: an axis with acc_max == 0 never
+    # accelerates, so it never reaches rate_max from below and the whole horizon
+    # is spent at |rate0|.
+    accelerating = acc_max > 0.0
+    t_star = np.where(
+        accelerating,
+        (rate_max - speed) / np.where(accelerating, acc_max, 1.0),
+        float(horizon),
+    )
+    t_star = np.clip(t_star, 0.0, horizon)
+    return speed * t_star + 0.5 * acc_max * t_star**2 + rate_max * (horizon - t_star)
 
 
 def reachable_joint_box(
@@ -534,24 +697,194 @@ def reachable_joint_box(
     _check_state_within_limits(q0, qd0, limits)
 
     qd_max = np.asarray(limits.qd_max, dtype=float)
-    speed = np.minimum(np.abs(qd0) + 0.5 * qdd_max * substep_dt, qd_max)
-
-    # The velocity bound is reached at t_star and holds after it. `np.where`
-    # guards the division rather than the result: a joint with qdd_max == 0
-    # never accelerates, so it never reaches qd_max from below and the whole
-    # horizon is spent at |qd0|.
-    accelerating = qdd_max > 0.0
-    t_star = np.where(
-        accelerating,
-        (qd_max - speed) / np.where(accelerating, qdd_max, 1.0),
-        float(horizon),
-    )
-    t_star = np.clip(t_star, 0.0, horizon)
-    delta = speed * t_star + 0.5 * qdd_max * t_star**2 + qd_max * (horizon - t_star)
+    delta = _displacement_bound(qd0, qdd_max, qd_max, horizon, substep_dt)
 
     lo = np.maximum(q0 - delta, np.asarray(limits.q_min, dtype=float))
     hi = np.minimum(q0 + delta, np.asarray(limits.q_max, dtype=float))
     return lo, hi
+
+
+def base_motion_bounds(
+    state: ProprioState,
+    limits: Limits,
+    horizon: float,
+    substep_dt: float = SUBSTEP_DT,
+) -> tuple[float, float]:
+    """`(d_trans, d_yaw)`: how far the *vehicle* can move in `horizon`. Step 2.
+
+    `d_trans` is metres and `d_yaw` is radians, and they are magnitudes: the
+    base can translate at most `d_trans` in **any** direction and turn at most
+    `d_yaw` either way. Both are the same integral `reachable_joint_box` takes
+    per joint, with `(base_v_max, base_a_max)` and `(base_omega_max,
+    base_alpha_max)` standing in for a joint's rate and acceleration pair, so
+    `d_trans <= |v0| * H + base_a_max * H**2 / 2` and is smaller than that once
+    the speed cap engages.
+
+    **A bolted-down base returns `(0.0, 0.0)` exactly**, not approximately: all
+    four bounds are zero, so `speed` is zero, `t_star` is the horizon and every
+    term of the sum is a product with zero. That is what makes `outer_envelope`
+    bit-identical to its arm-only predecessor for every fixture in this
+    repository, which is the regression guard for this whole change.
+
+    WHY THE DISC IS LOOSE, SAID HERE AS WELL AS AT THE POLYGON
+    ---------------------------------------------------------
+    `d_trans` bounds `hypot(vx, vy)` and says nothing about direction, so it
+    describes a disc. A differential-drive base is nonholonomic and cannot move
+    sideways at all, so the set it can actually reach is a curved, non-convex
+    Dubins-shaped region strictly inside that disc, and by a wide margin.
+    Bounding the superset is the sound direction and it is the direction this
+    project can afford; the tighter construction needs zonotopes
+    (docs/prior-art.md §23, §24) and therefore a dependency this project has
+    refused. docs/limitations.md §10.
+
+    Args:
+        state: Layer A proprioception. `state.base_vel` is **required whenever
+            any of the four base bounds is nonzero** and refused when it
+            disagrees with them — see Raises.
+        limits: the robot's bounds, including the base's four.
+        horizon: seconds ahead. Required, no default, for the reason
+            `outer_envelope` gives.
+        substep_dt: the integration grid the bound must cover as well as the
+            continuous system, as in `reachable_joint_box`.
+
+    Returns:
+        `(d_trans_m, d_yaw_rad)`, both non-negative.
+
+    Raises:
+        TypeError: `state` is not a `ProprioState`, or a numeric argument is not
+            numeric.
+        ValueError: `state.base_vel` is `None` while the base can move — a
+            could-not-evaluate, because "not recorded" is not "standing still"
+            — or the recorded base velocity exceeds the bounds it is measured
+            against, which would make this an upper bound on a different robot.
+    """
+    if not isinstance(state, ProprioState):
+        raise TypeError(
+            f"base_motion_bounds takes a ProprioState, got "
+            f"{type(state).__name__}. The base's *body-frame* velocity is Layer "
+            "A and its room-frame pose is not (reg.types.BaseVelocity, "
+            "reg.types.BasePose); if you hold a StateFrame, call .proprio()."
+        )
+    horizon = _require_positive_float(horizon, "horizon")
+    substep_dt = _require_positive_float(substep_dt, "substep_dt")
+
+    v_max = float(limits.base_v_max)
+    a_max = float(limits.base_a_max)
+    omega_max = float(limits.base_omega_max)
+    alpha_max = float(limits.base_alpha_max)
+    can_move = any(b > 0.0 for b in (v_max, a_max, omega_max, alpha_max))
+
+    if state.base_vel is None:
+        if can_move:
+            raise ValueError(
+                "state.base_vel is None but limits say the base can move "
+                f"(base_v_max={v_max}, base_a_max={a_max}, "
+                f"base_omega_max={omega_max}, base_alpha_max={alpha_max}). "
+                "`None` records that this state has no base velocity in it, "
+                "which is a could-not-evaluate; reading it as zero would "
+                "compute a standing-still outer bound for a vehicle that was "
+                "driving, and an outer bound that is too small clears "
+                "declarations it should refuse while looking exactly like a "
+                "sound one. Supply a BaseVelocity, or state a base that cannot "
+                "move by setting all four bounds to 0.0."
+            )
+        return 0.0, 0.0
+
+    vx = _require_finite_float(state.base_vel.vx, "state.base_vel.vx")
+    vy = _require_finite_float(state.base_vel.vy, "state.base_vel.vy")
+    omega = _require_finite_float(state.base_vel.omega, "state.base_vel.omega")
+
+    speed = math.hypot(vx, vy)
+    if speed > v_max:
+        raise ValueError(
+            f"state.base_vel is moving at {speed} m/s against a base_v_max of "
+            f"{v_max} m/s. The displacement bound integrates min(|v0| + a*s, "
+            "v_max), which is only an upper bound while |v0| <= v_max, so a "
+            "state that violates its own speed limit would silently produce a "
+            "bound that is too small. A state outside its own limits is a fault "
+            "in whatever produced it (reg.envelope._check_state_within_limits "
+            "refuses the joint-space version for the same reason)."
+        )
+    if abs(omega) > omega_max:
+        raise ValueError(
+            f"state.base_vel is turning at {abs(omega)} rad/s against a "
+            f"base_omega_max of {omega_max} rad/s. Same argument as the speed "
+            "bound above: the yaw bound is only an upper bound while the state "
+            "satisfies the limit it is measured against."
+        )
+
+    d_trans = float(
+        _displacement_bound(
+            np.float64(speed),
+            np.float64(a_max),
+            np.float64(v_max),
+            horizon,
+            substep_dt,
+        )
+    )
+    d_yaw = float(
+        _displacement_bound(
+            np.float64(omega),
+            np.float64(alpha_max),
+            np.float64(omega_max),
+            horizon,
+            substep_dt,
+        )
+    )
+    return d_trans, d_yaw
+
+
+#: The sentence a caller reporting a fixed-base outer set has to carry with it.
+#: Every entry in this repository's artifacts is one of these.
+_LOOSENESS_ARM = (
+    "outer approximation: the true reachable set is inside this region and "
+    "there are points inside it the robot cannot reach. Its area is an upper "
+    "bound on the reachable area, never an estimate of it."
+)
+
+#: ...and the one for a base that can drive, which is a different and much
+#: weaker statement. It names the nonholonomic gap explicitly, because the
+#: failure this exists to prevent is a reader taking the area of a disc for the
+#: area of a Dubins region.
+_LOOSENESS_MOBILE = (
+    _LOOSENESS_ARM
+    + " The base's own motion is added as a DISC of radius base_motion_bounds()"
+    " (Minkowski sum), and a nonholonomic base cannot move sideways, so this"
+    " region over-covers a differential-drive vehicle by a wide and uncomputed"
+    " margin. Do not read the area as where the robot can get."
+    " docs/limitations.md §10."
+)
+
+
+def outer_envelope_looseness(limits: Limits) -> str:
+    """What a caller publishing an outer set's area or radius must say about it.
+
+    The same shape as `envelope_layer` and for the same reason: a property of
+    the answer that is decided by the `Limits` it was computed from, returned as
+    a value so that whoever stores the number stores the caveat with it rather
+    than leaving it in a docstring nobody reading the artifact will open.
+
+    Two answers, and the difference between them is the point. For a base that
+    cannot move the region is the arm's and over-covers it by the grid buffer and
+    the circumscribed arcs — real looseness, small and bounded. For a base that
+    can drive it also carries a **disc** where the true set is a Dubins-shaped
+    region (see the block comment above, step 7), which is looseness of a
+    different order and is not quantified anywhere. A caller that printed the
+    same sentence for both would be telling a reader of a mobile artifact
+    something true of a fixed-base one.
+
+    Raises:
+        TypeError: `limits` is not a `Limits`.
+    """
+    if not isinstance(limits, Limits):
+        raise TypeError(
+            f"outer_envelope_looseness takes a Limits, got "
+            f"{type(limits).__name__}. Which sentence is true is decided by the "
+            "base bounds, so there is no answer without them."
+        )
+    if any(float(getattr(limits, name)) > 0.0 for name in Limits.BASE_BOUND_FIELDS):
+        return _LOOSENESS_MOBILE
+    return _LOOSENESS_ARM
 
 
 def _sector(
@@ -632,7 +965,21 @@ def outer_envelope(
     robot cannot reach. That is the direction a safety claim needs — "the
     envelope does not intersect the human" implies "the robot cannot reach the
     human" — and it is why enforcement may VETO on it. See the block comment
-    above for the four steps and why each over-covers.
+    above for the six steps and why each over-covers.
+
+    **The base's own motion is in it since issue #163.** The arm's set is built
+    with the vehicle's yaw bound folded into the first joint's interval and is
+    then Minkowski-summed with a disc of radius `base_motion_bounds(...)[0]` —
+    analytically, because gridding three more dimensions would trip
+    `MAX_OUTER_GRID_CONFIGS` on the first frame (docs/mobile-base.md §3). For a
+    base that cannot move all four bounds are zero, both terms are exactly zero,
+    and the polygon is bit-identical to the arm-only one.
+
+    **That disc is loose and must be reported as loose.** A nonholonomic base
+    cannot move sideways, so its true reachable set is a Dubins-shaped region far
+    inside the disc, and the returned area is not an estimate of where the robot
+    can get. `outer_envelope_looseness(limits)` is the sentence to publish
+    alongside the area or the radius; docs/limitations.md §10 is the entry.
 
     `compute_envelope` is untouched by this and stays the inner approximation:
     the evidence graph records the set the robot demonstrably swept, and
@@ -645,10 +992,15 @@ def outer_envelope(
 
     Args:
         state: Layer A proprioception. A `StateFrame` is refused rather than
-            narrowed, for the reason `compute_envelope` gives.
-        limits: the robot's kinematic and actuation bounds. Their provenance
-            decides the layer of the answer exactly as it does for the inner
-            envelope — `envelope_layer(limits)`, issue #84.
+            narrowed, for the reason `compute_envelope` gives. Its `base_vel` is
+            **required whenever the base can move** — `None` records that the
+            state carries no base velocity, which is a could-not-evaluate and
+            never a base standing still (`base_motion_bounds`).
+        limits: the robot's kinematic and actuation bounds, the base's four
+            included. Their provenance decides the layer of the answer exactly
+            as it does for the inner envelope — `envelope_layer(limits)`, issue
+            #84 — and a base speed cap derived from a measured separation
+            distance makes the whole object `DERIVED` the same way `qd_max` does.
         horizon: seconds ahead. **Required, no default.** The bound is a
             function of it and a plausible invented horizon would produce a
             plausible invented bound, which is the one failure mode a bound
@@ -680,6 +1032,7 @@ def outer_envelope(
     Raises:
         TypeError: `state` is not a `ProprioState`, or `horizon` is not a number.
         ValueError: a bound is malformed, `state` is outside its own limits, the
+            state records no base velocity for a base that can move, the
             ancestor grid exceeds `MAX_OUTER_GRID_CONFIGS`, or the union comes
             out empty or disconnected — each a could-not-evaluate, and an empty
             outer bound would read as "the robot can be nowhere", which clears
@@ -687,6 +1040,7 @@ def outer_envelope(
     """
     base = _base_frame(base)
     lo, hi = reachable_joint_box(state, limits, horizon, substep_dt)
+    d_trans, d_yaw = base_motion_bounds(state, limits, horizon, substep_dt)
     lengths = np.asarray(limits.link_lengths, dtype=float)
     n = lengths.shape[0]
     radius = float(limits.link_radius)
@@ -697,6 +1051,35 @@ def outer_envelope(
             "the grid resolution is derived from."
         )
     reach = _reach(limits)
+
+    # STEP 3. The base's yaw folds into the first joint's interval, exactly:
+    # turning the vehicle by `tb` about the base point is indistinguishable from
+    # adding `tb` to joint 0's angle, and the two are independent, so the
+    # reachable set of the sum is the sum of the intervals. Deliberately *not*
+    # re-clamped to `[q_min[0], q_max[0]]` — a joint stop bounds the joint and
+    # not the vehicle — and capped at a full turn, which is exact because the
+    # geometry depends on the angle modulo 2*pi and is what stops a fast-yawing
+    # base from inflating the ancestor grid without limit.
+    #
+    # Guarded on `d_yaw > 0.0` so that a base which cannot turn leaves `lo` and
+    # `hi` as the identical objects `reachable_joint_box` returned. `x - 0.0` is
+    # `x` for every finite float, so this is a readability guard rather than a
+    # numerical one — but the bit-identity of every fixture's outer envelope is
+    # the regression guard for this whole change and it should not rest on the
+    # reader recalling that.
+    if n and d_yaw > 0.0:
+        # Capped at pi *per side*, not at a total span of 2*pi. Both are exact —
+        # the joint's own interval is non-negative in width, so a widening of pi
+        # each way already spans a full turn and the geometry is 2*pi-periodic —
+        # but this one is exact in floating point too. Centring the interval on
+        # a total span of exactly 2*pi would leave `_sector` comparing a
+        # difference of two large angles against `2*pi` and taking its
+        # not-quite-a-full-turn branch on a one-ulp shortfall.
+        yaw = min(d_yaw, math.pi)
+        lo = lo.copy()
+        hi = hi.copy()
+        lo[0] -= yaw
+        hi[0] += yaw
 
     bodies: list[Polygon] = []
     for k in range(n):
@@ -731,10 +1114,29 @@ def outer_envelope(
             )
         )
 
+    region = unary_union(bodies)
+
+    # STEP 6, the Minkowski sum. `region` above is every body the robot can
+    # present relative to where its base *started*; the vehicle can then be
+    # anywhere within `d_trans` of that start, in any direction, so the room-frame
+    # set is `region (+) disc(0, d_trans)` — which on a polygon is one `buffer`,
+    # circumscribed like every other arc here. Skipped entirely when the base
+    # cannot translate, so a fixed-base envelope is not routed through a
+    # zero-distance buffer that GEOS is free to re-node.
+    if d_trans > 0.0:
+        region = region.buffer(d_trans * _CIRCUMSCRIBE, quad_segs=ARC_QUAD_SEGS)
+
     # The workspace disc, circumscribed at a fine resolution: the bound this one
     # replaces, and still correct. Intersecting two sound outer bounds is sound,
     # and it keeps the rim the grid dilation adds from reaching outside a disc
     # that already held.
+    #
+    # `d_trans` is added to its radius because the vehicle carries the whole arm
+    # with it: without that term the intersection would clip away reach the base
+    # genuinely has, which is the same unsound-bound-that-looks-sound failure as
+    # mis-centring it. For a bolted-down base the term is exactly 0.0 and the
+    # disc is the one issue #82 shipped, so this set is still never worse than
+    # `reg.enforce.computed_bound` for the robot that bound is true of.
     #
     # CENTRED ON `base`, AND THAT IS THE WHOLE DANGER OF THIS FUNCTION. Every
     # link's centreline is within `sum(lengths)` of the base joint and every
@@ -744,10 +1146,10 @@ def outer_envelope(
     # missing clears declarations it should refuse while looking exactly like a
     # sound one. docs/mobile-base.md §1.
     disc = Point(base.x, base.y).buffer(
-        (float(lengths.sum()) + radius) * (1.0 / math.cos(math.pi / 256.0)),
+        (float(lengths.sum()) + radius + d_trans) * (1.0 / math.cos(math.pi / 256.0)),
         quad_segs=64,
     )
-    region = unary_union(bodies).intersection(disc)
+    region = region.intersection(disc)
 
     if region.is_empty:
         raise ValueError(
@@ -773,7 +1175,10 @@ def outer_radius(poly: Polygon, base: BaseFrame) -> float:
     attained at a vertex.
 
     Sound in the same direction as the region it comes from: the true reachable
-    set lies inside the outer envelope, which lies inside this disc.
+    set lies inside the outer envelope, which lies inside this disc. Publish it
+    with `outer_envelope_looseness(limits)` beside it — for a base that can drive
+    this number is the radius of a disc over a Dubins-shaped set and a reader
+    must not take it for a reach.
 
     `base` is **required and has no default** (issue #162). "Distance from the
     base" was previously "distance from the origin" because the two were the
@@ -865,6 +1270,11 @@ def envelope_area(poly: Polygon) -> float:
     Bear in mind what the number means: it is the area of an
     under-approximation, so it is a lower bound on the area of the true
     reachable set, never an upper one.
+
+    Given an `outer_envelope` it is the opposite — an upper bound — and it is a
+    loose one in a way that depends on the robot. `outer_envelope_looseness` is
+    the sentence to carry with it, and for a base that can drive the sentence
+    changes.
     """
     return float(_checked_region(poly, "envelope_area").area)
 

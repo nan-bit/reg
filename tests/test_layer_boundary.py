@@ -764,9 +764,9 @@ def test_the_artifact_records_where_its_limits_came_from(tmp_path: Path) -> None
 
 #: The same fixture arm with a base that can drive, used only to check the meta
 #: plumbing. Every number differs from every other one and none is zero, so a
-#: writer that transposed two keys, or wrote zeros over all four, fails below.
-#: It describes a robot nothing else in this repository models — which is the
-#: point: the artifact has to carry what it was built from, not what the
+#: reader that transposed two positions, or resolved all four to zero, fails
+#: below. It describes a robot nothing else in this repository models — which is
+#: the point: the artifact has to carry what it was built from, not what the
 #: fixtures happen to be.
 MOBILE_LIMITS = dataclasses.replace(
     DATASHEET_LIMITS,
@@ -775,6 +775,82 @@ MOBILE_LIMITS = dataclasses.replace(
     base_omega_max=0.75,
     base_alpha_max=3.5,
 )
+
+#: The four above in `Limits.BASE_BOUND_FIELDS` order, as `reg.graph` writes
+#: them into one `meta` row — restated rather than built from the writer,
+#: because a value derived from the code under test agrees with it by
+#: construction.
+MOBILE_BASE_BOUNDS_TEXT = "1.25,2.5,0.75,3.5"
+
+
+def _mobile_artifact(tmp_path: Path) -> Path:
+    """A fixed-base artifact with a mobile robot's base bounds written into it.
+
+    **This exists because `graph.build(csv, artifact, MOBILE_LIMITS)` no longer
+    runs, and that is a finding rather than an obstacle** (issue #163). The outer
+    envelope reads the base's bounds now, so it needs the base's velocity; the
+    raw stream schema has no columns for one, so every frame reconstructs with
+    `base_vel=None`, and `None` is *not recorded* rather than *standing still*.
+    A mobile artifact therefore cannot be built at all until the stream and
+    `robot_config` carry the base — docs/mobile-base.md §4 item 4, Tier 3 — and
+    the alternative would have been an artifact whose outer bracket was computed
+    for a vehicle that was assumed to be parked.
+
+    `test_a_mobile_artifact_cannot_be_built_at_all_yet` is where that refusal is
+    asserted. What the reader tests below need is a *file* holding a mobile
+    robot's base bounds, which is this: a real artifact, damaged in the one way
+    the reader must survive.
+    """
+    csv = _stream(tmp_path / "run.csv")
+    artifact = tmp_path / "mobile.sqlite"
+    graph.build(csv, artifact, DATASHEET_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+    conn = store.connect(artifact)
+    try:
+        # Raw SQL: `store.put_meta` refuses to overwrite a key with a different
+        # value, and the point is a file that says something this build did not.
+        conn.execute(
+            "UPDATE meta SET value = ? WHERE key = ?",
+            (MOBILE_BASE_BOUNDS_TEXT, graph.META_LIMITS_BASE_BOUNDS),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return artifact
+
+
+def test_a_mobile_artifact_cannot_be_built_at_all_yet(tmp_path: Path) -> None:
+    """The refusal that replaced a mobile build, asserted where it is felt.
+
+    Issue #151 put the base's bounds on `Limits`; issue #163 made the outer
+    envelope read them. Between the two, a `graph.build` for a robot that can
+    drive would have produced a file whose `outer_area` and `outer_radius` were
+    computed for a parked vehicle — the fixed-base numbers, in a mobile
+    artifact, with nothing in the file able to say so. It refuses instead, and
+    the message names `base_vel`, because the missing thing is what a reader has
+    to go and find.
+
+    The positive control is beside it: the identical stream and the identical
+    arm with four zeros builds, so this refuses a robot rather than refusing to
+    work.
+    """
+    csv = _stream(tmp_path / "run.csv")
+    with pytest.raises(Exception) as excinfo:
+        graph.build(
+            csv,
+            tmp_path / "mobile.sqlite",
+            MOBILE_LIMITS,
+            human_radius=_HUMAN_RADIUS,
+            **_FAST,
+        )
+    assert "base_vel" in str(excinfo.value), str(excinfo.value)
+
+    graph.build(
+        csv,
+        tmp_path / "bolted.sqlite",
+        DATASHEET_LIMITS,
+        human_radius=_HUMAN_RADIUS,
+        **_FAST,
+    )
 
 
 def test_the_artifact_records_the_base_bounds_it_was_built_from(
@@ -787,12 +863,32 @@ def test_the_artifact_records_the_base_bounds_it_was_built_from(
     limits" is wider too — an artifact that recorded six of ten fields would
     make `_limits_from_meta` unable to build one at all, or, worse, able to
     build one by supplying the four it did not read.
+
+    Two halves, and since issue #163 they are reached separately. The **writer**
+    is exercised end-to-end on the robot this repository can build — a bolted
+    base, four zeros, which still has to be *written* rather than omitted. The
+    **reader** is exercised on the four distinct nonzero values, injected by
+    `_mobile_artifact`, because a mobile artifact cannot be built yet and the
+    transposition this fixture exists to catch is a positional read.
     """
     csv = _stream(tmp_path / "run.csv")
-    artifact = tmp_path / "mobile.sqlite"
-    graph.build(csv, artifact, MOBILE_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+    bolted = tmp_path / "bolted.sqlite"
+    graph.build(csv, bolted, DATASHEET_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+    conn = store.connect(bolted)
+    try:
+        written = store.get_meta(conn, graph.META_LIMITS_BASE_BOUNDS)
+        recovered = graph._limits_from_meta(conn)
+    finally:
+        conn.close()
+    assert written is not None and len(str(written).split(",")) == 4, (
+        "a bolted base's zeros were not written as four positional values; an "
+        "artifact whose base bounds are absent cannot be told from one whose "
+        f"base was standing still. Got {written!r}."
+    )
+    for name in Limits.BASE_BOUND_FIELDS:
+        assert getattr(recovered, name) == getattr(DATASHEET_LIMITS, name)
 
-    conn = store.connect(artifact)
+    conn = store.connect(_mobile_artifact(tmp_path))
     try:
         recovered = graph._limits_from_meta(conn)
     finally:
@@ -816,9 +912,7 @@ def test_an_artifact_missing_its_base_bounds_is_could_not_evaluate(
     recompute a bolted robot's geometry for a robot that was not one.
     """
     key = graph.META_LIMITS_BASE_BOUNDS
-    csv = _stream(tmp_path / "run.csv")
-    artifact = tmp_path / "run.sqlite"
-    graph.build(csv, artifact, MOBILE_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+    artifact = _mobile_artifact(tmp_path)
 
     conn = store.connect(artifact)
     try:
@@ -843,9 +937,7 @@ def test_an_artifact_whose_base_bounds_are_the_wrong_length_is_refused(
     downstream carries a unit that could notice. So the length is checked, and
     a value that fails it is a could-not-evaluate rather than a partial read.
     """
-    csv = _stream(tmp_path / "run.csv")
-    artifact = tmp_path / "run.sqlite"
-    graph.build(csv, artifact, MOBILE_LIMITS, human_radius=_HUMAN_RADIUS, **_FAST)
+    artifact = _mobile_artifact(tmp_path)
 
     conn = store.connect(artifact)
     try:

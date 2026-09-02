@@ -82,6 +82,7 @@ from reg.envelope import (
     compute_envelope,
     envelope_hash,
     outer_envelope,
+    outer_envelope_looseness,
     outer_radius,
 )
 from reg.graph import (
@@ -3355,6 +3356,69 @@ def test_the_retained_bracket_is_the_region_enforcement_would_compute(attested) 
     assert row["outer_radius"] == pytest.approx(
         quantize_distance(outer_radius(region, ORIGIN_FRAME))
     )
+
+
+def test_the_retained_bracket_is_a_fixed_base_bracket_and_cannot_pretend_otherwise(
+    attested,
+) -> None:
+    """The recompute argument holds because the demo robot cannot drive (#163).
+
+    `store.py` retains `outer_area` and `outer_radius` as scalars and not as
+    geometry, on the argument that the region is a deterministic function of the
+    `robot_config` a row names plus the horizon it stores. Since issue #163 the
+    outer set also reads the base's four bounds and the state's base velocity —
+    and `robot_config` has columns for neither, so `reg.graph` reconstructs
+    states with `base_vel=None` and the demo world's limits state four zeros.
+    The argument therefore still holds, and it holds *conditionally*.
+
+    This asserts the condition and asserts that breaking it is loud. Give the
+    same reconstruction a robot that can drive and `outer_envelope` refuses,
+    because a `None` base velocity is a could-not-evaluate rather than a base
+    standing still. That refusal is what stops a mobile artifact from ever
+    carrying a fixed-base area wearing an outer set's name — the failure
+    docs/mobile-base.md §4 item 4 predicts, one release before the schema work
+    that resolves it.
+    """
+    limits = SCENARIOS["declared_violation"].world.limits
+    assert all(
+        float(getattr(limits, name)) == 0.0 for name in type(limits).BASE_BOUND_FIELDS
+    ), (
+        "the demo world's base can move. Every retained outer bracket is then a "
+        "region computed for a vehicle whose velocity the artifact never "
+        "recorded, and docs/limitations.md §9 and §10 are stale."
+    )
+    assert "nonholonomic" not in outer_envelope_looseness(limits), (
+        "the demo world publishes the mobile caveat, so a reader of a "
+        "fixed-base artifact is being told about looseness it does not have."
+    )
+
+    out, _ = attested
+    conn = store.connect(out)
+    try:
+        substep = float(store.get_meta(conn, graph.META_SUBSTEP_DT))
+        row = conn.execute(
+            "SELECT e.horizon AS horizon, c.q AS q, c.qd AS qd "
+            "FROM envelope e JOIN robot_config c ON c.config_key = e.config_key "
+            "WHERE e.source = 'computed' ORDER BY e.envelope_key LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    state = ProprioState(
+        t=0.0,
+        q=np.asarray([float(v) for v in str(row["q"]).split(",")]),
+        qd=np.asarray([float(v) for v in str(row["qd"]).split(",")]),
+        base_vel=None,
+    )
+    mobile = replace(
+        limits,
+        base_v_max=0.8,
+        base_a_max=1.5,
+        base_omega_max=1.2,
+        base_alpha_max=2.5,
+    )
+    with pytest.raises(ValueError, match="base_vel is None"):
+        outer_envelope(state, mobile, float(row["horizon"]), ORIGIN_FRAME, substep)
 
 
 def test_an_outer_bracket_on_something_that_is_not_a_reachable_set_is_refused(

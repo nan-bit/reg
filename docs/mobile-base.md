@@ -1,12 +1,16 @@
 # The mobile base — what moving the robot does to the argument
 
-**Status:** a design document, not a description of anything built · written
-2026-08-31 · **no code in this repository implements any of it** · normative for
-the mobile track only; where it touches what the project may claim, it defers to
+**Status:** a design document, and no longer entirely one · written 2026-08-31 ·
+**Tiers 1 and 2 have landed and §3's construction landed 2026-09-02 (issue
+#163); §1's refusal, §4's schema work and Tier 4's fixtures have not, and no
+robot in this repository moves** — the build order in §7 says per tier which is
+which, and it is the authority, not this line · normative for the mobile track
+only; where it touches what the project may claim, it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
 those files carry the change themselves — **§2.1 and §2.2 now do**, carried into
-`sufficiency.md` §2, §5.1, §5.6 and §7 on 2026-09-01 (issue #139), and that file
-is the normative statement of them · keep current
+`sufficiency.md` §2, §5.1, §5.6 and §7 on 2026-09-01 (issue #139), and **§3's
+looseness now does**, carried into `limitations.md` §10 on 2026-09-02 (issue
+#163); those files are the normative statement of them · keep current
 
 Every figure, every envelope and the bound enforcement VETOes on are computed for
 a planar arm with its base bolted to the origin. This document is what happens
@@ -225,6 +229,30 @@ gridded beside it: a body-frame translation bound over the horizon, Minkowski-
 summed with the arm's own body-frame outer set. That is deliberately loose, it
 must be **published as loose**, and what a tighter construction would buy belongs
 in [`limitations.md`](limitations.md). The tighter construction has a name and a
+literature — see below.
+
+**This paragraph is built, 2026-09-02 (issue #163), and `limitations.md` §10 is
+now the normative statement of its looseness.** `reg.envelope.base_motion_bounds`
+returns the two scalars, the yaw folds into the first joint's angular interval —
+exactly, because turning the vehicle about the base point and turning joint 0
+produce the same body — and the translation is one `buffer` on the arm's set.
+`MAX_OUTER_GRID_CONFIGS` was not raised, which was the test of whether the
+construction was the right one. The soundness argument in `reg/envelope.py` was
+rewritten rather than extended, because the set it describes changed, and
+`tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope_with_a_driven_base`
+drives the vehicle as well as the joints. Where this section and
+[`limitations.md`](limitations.md) §10 differ from here on, **§10 is right**: it
+is normative for what the project may claim and this is a design document.
+
+One thing the build settled that this section did not anticipate. `outer_envelope`
+now **refuses** a state whose `base_vel` is `None` when the base can move —
+"not recorded" is a could-not-evaluate and reading it as a base standing still
+would produce an outer bound that is too small, which is the one direction it may
+not be wrong in. That refusal is what stops item 4 of §4 from arriving quietly:
+until the pose and the base velocity are on `robot_config`, a mobile artifact
+cannot be written at all rather than being written with fixed-base numbers in it.
+
+The tighter construction has a name and a
 literature — RTD and REFINE compute exactly this forward reachable set for ground
 robots with zonotopes, and CORA's conservative linearization gives a large convex
 over-approximation of a Dubins car where polynomial zonotopes capture the
@@ -364,9 +392,20 @@ pose provenance beside `LimitSource`; an explicit base frame in
 the same commit as the first of these, because the test requires it.
 
 **Tier 3 — the envelope and the bound.** The body-frame outer envelope with the
-base states and a rewritten soundness argument; `computed_bound` refusing;
-`horizon_bound` on the outer envelope alone; the pose on `robot_config` with the
-schema bump; the two `declare.py` defects.
+base states and a rewritten soundness argument — **done, 2026-09-02, issue
+#163**, and its looseness is [`limitations.md`](limitations.md) §10;
+`computed_bound` refusing; `horizon_bound` on the outer envelope alone; the pose
+on `robot_config` with the schema bump; the two `declare.py` defects.
+
+*The next one is load-bearing and is now visibly so.* With the base in the outer
+set, `horizon_bound` is `min(computed_bound, outer_radius)` where the first term
+is a fixed-base disc and the second grows with the vehicle — so for a mobile
+robot the minimum is pinned at a bound §1 says does not exist. Nothing in this
+repository is affected, because every fixture states four zeros;
+`tests/test_enforce.py::test_the_horizon_bound_is_still_floored_by_a_fixed_base_disc`
+records the gap and is written to go red when `computed_bound` starts refusing,
+so the next tier cannot land without a test in front of it naming which sentence
+stopped being true.
 
 **Tier 4 — fixtures.** Mobile scenarios beside the eleven arm fixtures.
 

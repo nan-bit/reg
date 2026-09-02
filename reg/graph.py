@@ -2118,7 +2118,7 @@ def _observe(
     # boundary either way, and an outer bound that moved inward would stop being
     # one — and computed on the same `substep_dt` grid the inner one was
     # integrated on, because that is the grid its soundness argument covers.
-    outer = outer_envelope(proprio, limits, horizon, substep_dt)
+    outer = outer_envelope(proprio, limits, horizon, ORIGIN_FRAME, substep_dt)
 
     # The robot body is deliberately *not* simplified. The error budget in
     # docs/lossiness.md allows one simplified boundary per distance
@@ -2134,7 +2134,7 @@ def _observe(
         envelope_digest=digest,
         horizon=horizon,
         outer_area=quantize_area(outer.area),
-        outer_radius=quantize_distance(outer_radius(outer)),
+        outer_radius=quantize_distance(outer_radius(outer, ORIGIN_FRAME)),
         q_text=_joint_text(frame.q),
         qd_text=_joint_text(frame.qd),
     )

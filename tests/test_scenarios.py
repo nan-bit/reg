@@ -46,7 +46,7 @@ from reg.scenarios import (
     Waypoint,
     scenario,
 )
-from reg.kinematics import link_polygons
+from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.types import Limits, Obstacle, ProprioState
 from reg.world import BASE_XY, DEMO_WORLD, LIMITS, ROOM, Room, World
 
@@ -372,7 +372,9 @@ def test_the_outer_bound_contains_the_body_it_promises_to(name: str) -> None:
     span = int(round(horizon / sc.dt))
     for i in range(0, len(got) - span, max(1, span // 2)):
         state = ProprioState(t=got[i].t, q=got[i].q, qd=got[i].qd, base_vel=None)
-        outer = outer_envelope(state, sc.world.limits, horizon=horizon)
+        outer = outer_envelope(
+            state, sc.world.limits, horizon=horizon, base=ORIGIN_FRAME
+        )
         for j in range(i, i + span + 1):
             body = unary_union(link_polygons(got[j].q, sc.world.limits))
             escaped = body.difference(outer).area

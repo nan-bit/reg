@@ -260,7 +260,7 @@ from reg.chain import (
 # thing it is checking. `tests/test_enforce.py` asserts this.
 from reg.declare import ACTION_CLASSES, Declaration
 from reg.envelope import HASH_COORD_PRECISION, outer_envelope, outer_radius
-from reg.kinematics import ORIGIN_FRAME, link_polygons
+from reg.kinematics import ORIGIN_FRAME, BaseFrame, _base_frame, link_polygons
 from reg.types import Limits, ProprioState
 
 __all__ = [
@@ -698,10 +698,11 @@ def horizon_bound(
     """Radius of the bound for **this instant and this horizon**, metres (#82).
 
     `min(computed_bound(limits), outer_radius(outer_envelope(state, limits,
-    horizon, substep_dt)))` — the radial projection of the horizon-limited outer
-    reachable set, floored by the workspace disc so it can never be worse than
-    the bound it tightens. Both terms are sound in the conservative direction,
-    and the minimum of two sound bounds is sound.
+    horizon, base, substep_dt), base))`, with `base` the `ORIGIN_FRAME` this
+    repository's arm is bolted to (issue #162) — the radial projection of the
+    horizon-limited outer reachable set, floored by the workspace disc so it can
+    never be worse than the bound it tightens. Both terms are sound in the
+    conservative direction, and the minimum of two sound bounds is sound.
 
     **What this buys, and what it does not.** `computed_bound` has no `q`, no
     `qd` and no horizon in it, so it fires only on a declaration exceeding the
@@ -760,7 +761,7 @@ def horizon_bound(
             "is no bound at all on a grid with no steps in it."
         )
     try:
-        region = outer_envelope(state, limits, horizon, substep_dt)
+        region = outer_envelope(state, limits, horizon, ORIGIN_FRAME, substep_dt)
     except (TypeError, ValueError) as exc:
         # ABORTS, DOES NOT BECOME A VERDICT — issue #106, argued in full in the
         # module header. The commonest way here is a state whose `|qd|` exceeds
@@ -779,16 +780,34 @@ def horizon_bound(
             f"nine faults {list(FAULTS)} names this condition and a verdict must "
             "name one — see reg/enforce.py's header, issue #106."
         ) from None
-    return min(computed_bound(limits), outer_radius(region))
+    return min(computed_bound(limits), outer_radius(region, ORIGIN_FRAME))
 
 
-def _furthest_vertex(region: BaseGeometry, fn: str) -> float:
-    """The greatest distance from the base over a region, metres.
+def _furthest_vertex(region: BaseGeometry, base: BaseFrame, fn: str) -> float:
+    """The greatest distance from `base` over a region, metres.
 
     Exact for a polygon — the maximum of a convex function over a polygon is
     attained at a vertex — which is what makes every containment test against a
     disc-shaped bound exact rather than approximate.
+
+    `base` is **required and has no default** (issue #162), and it must be the
+    frame the bound it is compared against was computed at. Both bounds in this
+    module are discs *about the base joint*: measuring the region from one
+    centre and the bound from another compares two numbers that are not about
+    the same disc, and the answer is an excess in metres that reads exactly like
+    a real one. Every caller here passes `ORIGIN_FRAME`, which is the mounting
+    fact this repository's arm is bolted to.
+
+    A `reg.types.BasePose` is refused, on `reg.kinematics._base_frame`'s terms:
+    it duck-types as a frame and is Layer B, and enforcement's bound is Layer A.
+    The refusal is reported as an `EnforcementError` because that is this
+    module's currency for "the check could not be performed as specified" — it
+    is a could-not-evaluate about the caller, and it never becomes a verdict.
     """
+    try:
+        base = _base_frame(base, f"{fn}'s base")
+    except TypeError as exc:
+        raise EnforcementError(str(exc)) from None
     if not isinstance(region, BaseGeometry):
         raise EnforcementError(
             f"{fn} takes a shapely geometry, got {type(region).__name__}."
@@ -805,7 +824,7 @@ def _furthest_vertex(region: BaseGeometry, fn: str) -> float:
     coords = shapely.get_coordinates(region)
     if coords.size == 0:
         raise EnforcementError(f"{fn} was given a geometry with no coordinates.")
-    return float(np.hypot(coords[:, 0], coords[:, 1]).max())
+    return float(np.hypot(coords[:, 0] - base.x, coords[:, 1] - base.y).max())
 
 
 def envelope_excess(region: BaseGeometry, limits: Limits) -> float:
@@ -828,7 +847,9 @@ def envelope_excess(region: BaseGeometry, limits: Limits) -> float:
             Each is a could-not-evaluate, and returning 0.0 ("fits") for any of
             them would clear a bound nobody could read.
     """
-    return _furthest_vertex(region, "envelope_excess") - computed_bound(limits)
+    return _furthest_vertex(region, ORIGIN_FRAME, "envelope_excess") - computed_bound(
+        limits
+    )
 
 
 def horizon_excess(
@@ -851,7 +872,7 @@ def horizon_excess(
     Raises:
         EnforcementError: as `envelope_excess` and `horizon_bound`.
     """
-    return _furthest_vertex(region, "horizon_excess") - horizon_bound(
+    return _furthest_vertex(region, ORIGIN_FRAME, "horizon_excess") - horizon_bound(
         state, limits, horizon, substep_dt
     )
 
@@ -1289,7 +1310,9 @@ class Enforcer:
         # `horizon_excess` spelled out, so the bound is computed once and can be
         # named in the reason: an operator reading a VETO has to be able to see
         # which of the two bounds refused the declaration and by how much.
-        excess = _furthest_vertex(declaration.envelope(), "offer") - radius
+        excess = (
+            _furthest_vertex(declaration.envelope(), ORIGIN_FRAME, "offer") - radius
+        )
         if excess > 0.0:
             return self._refuse(
                 declaration,

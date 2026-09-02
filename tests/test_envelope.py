@@ -43,7 +43,7 @@ from reg.envelope import (
     outer_radius,
     reachable_joint_box,
 )
-from reg.kinematics import ORIGIN_FRAME, link_polygons
+from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
 from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
 
 # A two-link arm, stated here rather than imported from reg.world: these tests
@@ -499,7 +499,7 @@ def test_no_bang_bang_trajectory_escapes_the_outer_envelope(horizon: float) -> N
     circumscribed at every step precisely so that no tolerance is needed here.
     """
     for seed, state in enumerate(SOUNDNESS_STATES):
-        outer = outer_envelope(state, LIMITS, horizon)
+        outer = outer_envelope(state, LIMITS, horizon, ORIGIN_FRAME)
         for control in _bang_bang_controls(horizon, seed=seed, n=12):
             escape = _swept_body(state, control, horizon).difference(outer)
             assert escape.is_empty, (
@@ -521,7 +521,7 @@ def test_a_shrunk_outer_bound_does_not_survive_the_soundness_test() -> None:
     """
     horizon = 0.2
     state = SOUNDNESS_STATES[2]
-    shrunk = outer_envelope(state, LIMITS, horizon).buffer(-0.001)
+    shrunk = outer_envelope(state, LIMITS, horizon, ORIGIN_FRAME).buffer(-0.001)
     escaped = any(
         not _swept_body(state, control, horizon).difference(shrunk).is_empty
         for control in _bang_bang_controls(horizon, seed=0, n=12)
@@ -543,7 +543,7 @@ def test_the_sampled_envelope_is_inside_the_outer_one() -> None:
     """
     for state in SOUNDNESS_STATES:
         inner = compute_envelope(state, LIMITS, horizon=0.2, n_samples=N, seed=0)
-        outer = outer_envelope(state, LIMITS, 0.2)
+        outer = outer_envelope(state, LIMITS, 0.2, ORIGIN_FRAME)
         assert inner.difference(outer).is_empty, (
             f"q={state.q}: the sampled envelope reaches outside the outer bound, "
             "so one of the two is wrong about the same robot."
@@ -563,7 +563,9 @@ def test_the_outer_envelope_never_exceeds_the_workspace_disc() -> None:
     disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
     for state in SOUNDNESS_STATES:
         for horizon in (0.05, 0.5, 5.0):
-            radius = outer_radius(outer_envelope(state, LIMITS, horizon))
+            radius = outer_radius(
+                outer_envelope(state, LIMITS, horizon, ORIGIN_FRAME), ORIGIN_FRAME
+            )
             assert radius <= disc * 1.001, (
                 f"q={state.q}, horizon={horizon}: the outer envelope reaches "
                 f"{radius} m, past the {disc} m workspace disc. Tightening a "
@@ -582,7 +584,7 @@ def test_a_folded_arm_is_bounded_well_inside_the_workspace_disc() -> None:
     """
     disc = float(np.sum(LIMITS.link_lengths) + LIMITS.link_radius)
     folded = ProprioState(t=0.0, q=np.array([0.0, 2.6]), qd=np.array([0.0, 0.0]), base_vel=None)
-    radius = outer_radius(outer_envelope(folded, LIMITS, 0.5))
+    radius = outer_radius(outer_envelope(folded, LIMITS, 0.5, ORIGIN_FRAME), ORIGIN_FRAME)
     assert radius < 0.8 * disc, (
         f"a folded arm at rest is bounded at {radius} m against a {disc} m "
         "workspace disc; if these are close the tightening buys nothing."
@@ -602,10 +604,11 @@ def test_the_outer_envelope_is_monotone_in_the_horizon() -> None:
     """
     for state in SOUNDNESS_STATES:
         regions = [
-            outer_envelope(state, LIMITS, h) for h in (0.05, 0.1, 0.2, 0.4, 0.5)
+            outer_envelope(state, LIMITS, h, ORIGIN_FRAME)
+            for h in (0.05, 0.1, 0.2, 0.4, 0.5)
         ]
         areas = [envelope_area(region) for region in regions]
-        radii = [outer_radius(region) for region in regions]
+        radii = [outer_radius(region, ORIGIN_FRAME) for region in regions]
         assert areas == sorted(areas), f"q={state.q}: areas {areas} are not monotone"
         assert radii == sorted(radii), f"q={state.q}: radii {radii} are not monotone"
 
@@ -613,8 +616,8 @@ def test_the_outer_envelope_is_monotone_in_the_horizon() -> None:
 def test_the_outer_envelope_is_deterministic_and_unseeded() -> None:
     """No sampling, so nothing to seed — and the same inputs give the same bytes."""
     state = SOUNDNESS_STATES[0]
-    first = outer_envelope(state, LIMITS, 0.2)
-    second = outer_envelope(state, LIMITS, 0.2)
+    first = outer_envelope(state, LIMITS, 0.2, ORIGIN_FRAME)
+    second = outer_envelope(state, LIMITS, 0.2, ORIGIN_FRAME)
     assert envelope_hash(first) == envelope_hash(second)
 
 
@@ -657,19 +660,19 @@ def test_outer_envelope_refuses_a_stateframe() -> None:
         objects=(Obstacle(entity_id="e", kind="crate", cx=1.0, cy=1.0, radius=0.2),),
     )
     with pytest.raises(TypeError, match="ProprioState"):
-        outer_envelope(frame, LIMITS, 0.2)  # type: ignore[arg-type]
+        outer_envelope(frame, LIMITS, 0.2, ORIGIN_FRAME)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("horizon", (0.0, -0.1, float("nan"), float("inf")))
 def test_an_outer_horizon_that_is_not_a_duration_is_refused(horizon: float) -> None:
     with pytest.raises(ValueError):
-        outer_envelope(STATIONARY, LIMITS, horizon)
+        outer_envelope(STATIONARY, LIMITS, horizon, ORIGIN_FRAME)
 
 
 def test_an_outer_horizon_that_is_none_is_refused() -> None:
     """No default, and `None` is not one either: the bound is a function of it."""
     with pytest.raises(TypeError):
-        outer_envelope(STATIONARY, LIMITS, None)  # type: ignore[arg-type]
+        outer_envelope(STATIONARY, LIMITS, None, ORIGIN_FRAME)  # type: ignore[arg-type]
 
 
 def test_a_state_outside_its_own_limits_is_refused_by_the_outer_set() -> None:
@@ -683,7 +686,7 @@ def test_a_state_outside_its_own_limits_is_refused_by_the_outer_set() -> None:
     """
     too_fast = ProprioState(t=0.0, q=np.array([0.2, 0.4]), qd=np.array([9.0, 0.0]), base_vel=None)
     with pytest.raises(ValueError, match="qd_max"):
-        outer_envelope(too_fast, LIMITS, 0.2)
+        outer_envelope(too_fast, LIMITS, 0.2, ORIGIN_FRAME)
     with pytest.raises(ValueError, match="qd_max"):
         reachable_joint_box(too_fast, LIMITS, 0.2)
 
@@ -710,17 +713,260 @@ def test_an_ancestor_grid_too_large_to_evaluate_is_refused() -> None:
     )
     state = ProprioState(t=0.0, q=np.zeros(many), qd=np.zeros(many), base_vel=None)
     with pytest.raises(ValueError, match=str(reg.envelope.MAX_OUTER_GRID_CONFIGS)):
-        outer_envelope(state, long_arm, 0.5)
+        outer_envelope(state, long_arm, 0.5, ORIGIN_FRAME)
 
 
 def test_outer_radius_refuses_what_it_cannot_measure() -> None:
     with pytest.raises(ValueError, match="empty"):
-        outer_radius(Polygon())
+        outer_radius(Polygon(), ORIGIN_FRAME)
     with pytest.raises(TypeError):
-        outer_radius(0.95)  # type: ignore[arg-type]
+        outer_radius(0.95, ORIGIN_FRAME)  # type: ignore[arg-type]
 
 
 def test_outer_radius_is_the_furthest_vertex() -> None:
     """Exact for a polygon: the maximum of a convex function is at a vertex."""
     square = Polygon([(0, 0), (3, 0), (3, 4), (0, 4)])
-    assert outer_radius(square) == pytest.approx(5.0)
+    assert outer_radius(square, ORIGIN_FRAME) == pytest.approx(5.0)
+
+
+# --------------------------------------------------------------------------
+# The base frame the outer set is measured from (issue #162)
+#
+# `outer_envelope` and `outer_radius` took the base from an implicit origin
+# until this change: `Point(0.0, 0.0)` for the disc the set is intersected with,
+# and `hypot(x, y)` for the radius. Both now take a `BaseFrame` and nothing in
+# this repository has become mobile — every caller passes `ORIGIN_FRAME`.
+#
+# That makes this a refactor, and a refactor is only one if the numbers do not
+# move. The table below is the pin, and the two tests after it are what stop the
+# argument from being a rename: a required argument that is *ignored* passes
+# every test a refactor would otherwise ship with.
+# --------------------------------------------------------------------------
+
+#: The demo world's limits, imported rather than restated for this section only.
+#: Everything above deliberately uses the local `LIMITS` so that a change to the
+#: fixture cannot look like an envelope regression. Here the coupling is the
+#: point: this section asserts that *the published figures did not move*, and
+#: the published figures are computed from these numbers. If the demo world's
+#: limits change, this table is stale and must fail rather than quietly track it.
+from reg.world import LIMITS as DEMO_LIMITS  # noqa: E402
+
+#: `(q, qd, horizon, outer_radius, area)` — every value a `float.hex()` string,
+#: computed on the commit *before* the base became an argument, with
+#: `substep_dt` left at `SUBSTEP_DT`. Hex float literals rather than decimals
+#: because the claim is bit-identity: a table compared with a tolerance agrees
+#: with anything, and re-running the new code to regenerate this would make it
+#: agree with whatever the code does. `outer_radius` and `area` are the two
+#: scalars `reg.graph` retains per frame (issue #82), so between them they are
+#: what any artifact built from this function would show.
+DEMO_WORLD_OUTER_BEFORE = (
+    (
+        ("0x0.0p+0", "0x0.0p+0"),
+        ("0x0.0p+0", "0x0.0p+0"),
+        "0x1.999999999999ap-3",
+        "0x1.e66fc6d6a26bcp-1",
+        "0x1.4ba3994a903fbp-2",
+    ),
+    (
+        ("0x1.999999999999ap-3", "0x1.999999999999ap-2"),
+        ("0x1.0000000000000p-1", "-0x1.3333333333333p-2"),
+        "0x1.999999999999ap-3",
+        "0x1.e66fc6d6a26bcp-1",
+        "0x1.b8725f7bff37fp-2",
+    ),
+    (
+        ("0x1.999999999999ap-3", "0x1.999999999999ap-2"),
+        ("0x0.0p+0", "0x0.0p+0"),
+        "0x1.0000000000000p-1",
+        "0x1.e66fc6d6a26bcp-1",
+        "0x1.05d1db54c7681p+0",
+    ),
+    (
+        ("-0x1.3333333333333p+1", "0x1.4cccccccccccdp+1"),
+        ("-0x1.0000000000000p+0", "0x1.999999999999ap-1"),
+        "0x1.3333333333333p-2",
+        "0x1.277305423816ep-1",
+        "0x1.866ba2e8e9b6bp-2",
+    ),
+    (
+        ("0x1.921fb54442d18p+0", "-0x1.3333333333333p+0"),
+        ("0x1.0000000000000p+1", "0x1.4000000000000p+1"),
+        "0x1.999999999999ap-2",
+        "0x1.e66fc6d6a26bcp-1",
+        "0x1.10413935edf3fp+0",
+    ),
+)
+
+
+def _state_from_hex(q_hex: tuple[str, str], qd_hex: tuple[str, str]) -> ProprioState:
+    return ProprioState(
+        t=0.0,
+        q=np.array([float.fromhex(v) for v in q_hex]),
+        qd=np.array([float.fromhex(v) for v in qd_hex]),
+        base_vel=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "q_hex,qd_hex,horizon_hex,radius_hex,area_hex", DEMO_WORLD_OUTER_BEFORE
+)
+def test_the_outer_set_at_the_origin_is_bit_identical_to_before_the_base_moved(
+    q_hex: tuple[str, str],
+    qd_hex: tuple[str, str],
+    horizon_hex: str,
+    radius_hex: str,
+    area_hex: str,
+) -> None:
+    """No published figure moves, checked at the source of the ones that could.
+
+    Every `outer_area_m2` and `outer_radius_m` in every artifact, and the bound
+    `reg.enforce.horizon_bound` VETOes on, are these two numbers. "Did not
+    change" has to mean the bytes: a one-ulp drift in the intersected disc would
+    move an area in its last digit and nothing else here would say so.
+    """
+    state = _state_from_hex(q_hex, qd_hex)
+    region = outer_envelope(
+        state, DEMO_LIMITS, float.fromhex(horizon_hex), ORIGIN_FRAME
+    )
+
+    for got, expected_hex, name in (
+        (outer_radius(region, ORIGIN_FRAME), radius_hex, "outer_radius"),
+        (region.area, area_hex, "area"),
+    ):
+        expected = float.fromhex(expected_hex)
+        assert got.hex() == expected.hex(), (
+            f"{name} moved: got {got!r} ({got.hex()}), the commit before the "
+            f"base became an argument gave {expected!r} ({expected_hex})."
+        )
+
+
+def test_a_base_a_millimetre_away_moves_the_outer_set_by_exactly_that_much() -> None:
+    """**THE NEGATIVE for the table above**, and the point of issue #162.
+
+    A required argument that is accepted and then ignored passes the bit-identity
+    table, passes every existing test, and leaves the change a rename across nine
+    files. So the argument is fed a base one millimetre from the origin — small
+    enough that a tolerance-based check would wave it through — and the returned
+    region is required to be the origin region *translated by exactly that*:
+    different from it, and identical to it once translated back.
+    """
+    from shapely.affinity import translate
+
+    state = _state_from_hex(*DEMO_WORLD_OUTER_BEFORE[1][:2])
+    at_origin = outer_envelope(state, DEMO_LIMITS, 0.2, ORIGIN_FRAME)
+    moved = outer_envelope(
+        state, DEMO_LIMITS, 0.2, BaseFrame(x=0.001, y=0.0, theta=0.0)
+    )
+
+    assert at_origin.symmetric_difference(moved).area > 1e-6, (
+        "a base a millimetre away returned the same region, so `base` is "
+        "accepted and ignored and this change is a rename."
+    )
+    assert at_origin.symmetric_difference(
+        translate(moved, xoff=-0.001)
+    ).area < 1e-12, (
+        "the region moved, but not by the millimetre it was given — so some "
+        "term of the construction is still measured from the origin."
+    )
+
+
+def test_the_radius_is_measured_from_the_base_it_is_given() -> None:
+    """The same negative for `outer_radius`, which has its own origin to lose.
+
+    Two halves, and both are needed. *Exact*: a 3-4-5 square is 5 m from the
+    origin, and a base a millimetre away **along that diagonal** puts it at
+    exactly 5.001 m — a golden value that is exact arithmetic rather than a
+    rounded observation. *Consistent*: the outer set of a base-frame arm is the
+    same region rigidly moved, so its radius about its own base is unchanged,
+    while its radius about the origin is not. A `base` ignored here fails the
+    first; a `base` honoured in `outer_envelope` and dropped in `outer_radius`
+    fails the second, and that pair is the live failure mode.
+    """
+    square = Polygon([(0, 0), (3, 0), (3, 4), (0, 4)])
+    # (-0.0006, -0.0008) is 1 mm from the origin, directly away from (3, 4).
+    assert outer_radius(
+        square, BaseFrame(x=-0.0006, y=-0.0008, theta=0.0)
+    ) == pytest.approx(5.001, abs=1e-12)
+
+    state = _state_from_hex(*DEMO_WORLD_OUTER_BEFORE[1][:2])
+    base = BaseFrame(x=0.001, y=0.0, theta=0.0)
+    at_origin = outer_envelope(state, DEMO_LIMITS, 0.2, ORIGIN_FRAME)
+    moved = outer_envelope(state, DEMO_LIMITS, 0.2, base)
+
+    assert outer_radius(moved, base) == pytest.approx(
+        outer_radius(at_origin, ORIGIN_FRAME), abs=1e-12
+    )
+    assert outer_radius(moved, ORIGIN_FRAME) != pytest.approx(
+        outer_radius(at_origin, ORIGIN_FRAME), abs=1e-6
+    )
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        BaseFrame(x=0.6, y=0.3, theta=0.5),
+        BaseFrame(x=0.4, y=-0.2, theta=-0.3),
+        BaseFrame(x=-0.7, y=0.9, theta=2.4),
+    ],
+)
+def test_the_outer_set_still_contains_the_body_at_a_base_away_from_the_origin(
+    base: BaseFrame,
+) -> None:
+    """**THE NEGATIVE FOR THE DANGEROUS CASE** — the disc is a subtraction.
+
+    Steps 1-3 of the construction build the set up; step 4 intersects it with a
+    workspace disc, and an intersection can only remove. A disc left centred on
+    the origin while the body is measured from `base` clips away part of the
+    true outer set and returns something that looks exactly like a sound outer
+    bound — clears declarations it should refuse, and nothing downstream can
+    tell (docs/mobile-base.md §1).
+
+    The containment asserted here is the cheapest thing that catches it, and it
+    catches it *as what it is*: the arm's own body at `base` is inside the true
+    reachable set at every horizon by definition, so a piece of it outside the
+    returned region says "this bound is unsound" and not "this bound moved".
+    Leaving the disc at the origin leaves 4-9 cm² of body outside the region at
+    these frames, and further out than the workspace disc it returns nothing at
+    all. The translation test above would also notice a millimetre's worth of
+    clipped rim, but it reports a *displacement*, which is the finding somebody
+    talks themselves past; this one reports the arm being outside its own outer
+    bound, which is not.
+    """
+    state = _state_from_hex(*DEMO_WORLD_OUTER_BEFORE[1][:2])
+    region = outer_envelope(state, DEMO_LIMITS, 0.2, base)
+    body = unary_union(link_polygons(state.q, DEMO_LIMITS, base))
+
+    escape = body.difference(region)
+    assert escape.is_empty, (
+        f"{base}: {escape.area:.4e} m^2 of the arm's own body lies outside the "
+        "outer set computed for that frame. Something in the construction is "
+        "still measured from the origin, and an outer bound with a piece "
+        "missing clears what it should refuse."
+    )
+    # ...and the set was moved rigidly rather than clipped: a rigid motion
+    # preserves area exactly, a mis-centred intersection removes most of it.
+    at_origin = outer_envelope(state, DEMO_LIMITS, 0.2, ORIGIN_FRAME)
+    assert region.area == pytest.approx(at_origin.area, rel=1e-5)
+
+
+def test_the_outer_set_refuses_a_base_that_is_not_a_frame() -> None:
+    """No default, and no duck-type either — `reg.kinematics._base_frame`'s rule.
+
+    A three-tuple carries no type and `None` reads as 'unspecified', which is
+    what a required argument exists to make impossible. `reg.types.BasePose` is
+    refused by the test in `tests/test_layer_boundary.py`, where the layer
+    argument for refusing it lives.
+    """
+    for bad in ((0.0, 0.0, 0.0), [0.0, 0.0, 0.0], None, 0.0):
+        with pytest.raises(TypeError, match="BaseFrame"):
+            outer_envelope(STATIONARY, LIMITS, 0.2, bad)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="BaseFrame"):
+            outer_radius(Polygon([(0, 0), (1, 0), (1, 1)]), bad)  # type: ignore[arg-type]
+
+
+def test_the_outer_set_cannot_be_computed_without_a_base() -> None:
+    """It is positional and required: omitting it is a `TypeError`, not a guess."""
+    with pytest.raises(TypeError):
+        outer_envelope(STATIONARY, LIMITS, 0.2)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        outer_radius(Polygon([(0, 0), (1, 0), (1, 1)]))  # type: ignore[call-arg]

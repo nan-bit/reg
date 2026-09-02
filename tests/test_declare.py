@@ -640,6 +640,37 @@ def test_driving_the_base_is_not_reaching() -> None:
     assert reg.declare._classify(frozen, LIMITS, (driving[0],) * 3) == "hold"
 
 
+def test_the_extension_is_bit_identical_under_every_base_frame() -> None:
+    """**The test the first version of `_extension` needed and did not have.**
+
+    That version measured the tip in the room frame and subtracted the base
+    back, asserting in its docstring that translating or rotating the base
+    "moves both ends of the subtraction and leaves this number alone". True in
+    exact arithmetic; false in floating point, because a rotated base sends the
+    tip through `cos` and `sin` first. The classification compares extensions
+    exactly, so an ULP decided `traverse` against `retract` — and it tied on the
+    machine that wrote it and lost in CI.
+
+    An invariant a docstring claims and nothing checks is the defect. This
+    asserts bit-identity, not closeness: `assert_allclose` would have passed the
+    broken version, which is why it is `==` on the raw float.
+    """
+    config = np.array([0.2, 0.6])
+    reference = reg.declare._extension(config, LIMITS)
+    for frame in (
+        ORIGIN_FRAME,
+        BaseFrame(x=3.0, y=-2.0, theta=0.0),
+        BaseFrame(x=0.0, y=0.0, theta=0.5),
+        BaseFrame(x=-7.25, y=11.5, theta=2.3),
+    ):
+        # The signature no longer accepts a frame at all — that absence is the
+        # point — so the invariance is asserted where it can still be observed:
+        # the same configuration under any base is the same declared extension.
+        moved = np.array([[0.2, 0.6]] * 3)
+        assert reg.declare._classify(moved, LIMITS, frame) == "hold"
+        assert reg.declare._extension(config, LIMITS) == reference
+
+
 def test_base_rotation_does_not_enter_the_classification_either() -> None:
     """Yaw moves the end effector in the room and changes no extension."""
     frozen = np.array([[0.2, 0.6]] * 3)

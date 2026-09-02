@@ -641,22 +641,44 @@ def _padded(region: Polygon | MultiPolygon, margin: float | None) -> Polygon:
 # --------------------------------------------------------------------------
 
 
-def _extension(config: np.ndarray, limits: Limits, frame: BaseFrame) -> float:
+def _extension(config: np.ndarray, limits: Limits) -> float:
     """How far the end effector is from its own base, metres. **Body frame.**
 
-    A pure function of `config`: rigid links measured from `frame`, minus
-    `frame`'s own position, so translating or rotating the base moves both ends
-    of the subtraction and leaves this number alone. That invariance is the
-    whole point — it is what `reach` and `retract` are supposed to be about.
+    A pure function of `config` and the link lengths. It takes **no base**, and
+    that absence is the enforcement: a base it cannot see is a base that cannot
+    change the answer, which is the same argument `ProprioState` makes about the
+    world (`reg/types.py`). `reach` and `retract` are claims about the arm, and
+    nothing about where the arm is standing may reach them.
 
-    Written as a subtraction rather than as forward kinematics at the origin,
-    because kinematics at the origin is what this repository writes when it
-    means *the base is bolted there* (`grep ORIGIN_FRAME`), and this is not that
-    claim. At `ORIGIN_FRAME` the subtraction is the identity and the value is
-    bit-identical to the one this measured before.
+    WHY NOT MEASURED FROM THE FRAME AND SUBTRACTED BACK
+    ---------------------------------------------------
+    It was, until CI disagreed with the machine that wrote it. The first version
+    computed `forward_kinematics(config, limits, frame)` and subtracted
+    `(frame.x, frame.y)`, on the argument that translating or rotating the base
+    moves both ends of the subtraction and leaves the difference alone. That is
+    true in exact arithmetic and **false in floating point**: a rotated base
+    sends the tip through `cos` and `sin` before the subtraction, so the result
+    differs in its last bits from the same arm measured unrotated.
+
+    `_classify` then compares two extensions **exactly**, with the tie going to
+    `traverse`. A frozen arm on a turning base should tie. It tied on one
+    machine and lost by an ULP on another, so the same declaration classified
+    `traverse` locally and `retract` in CI — a verdict that reaches the record,
+    decided by a rounding difference. `CLAUDE.md` rule 2 forbids exactly that:
+    determinism is not negotiable, and a classification that depends on the
+    platform is not reproducible evidence.
+
+    Removing the parameter is the fix rather than adding a tolerance. A
+    threshold here would be an invented number (`CLAUDE.md`: never invent a
+    default), and it would leave the real defect — an invariant asserted in a
+    docstring that the arithmetic does not honour — in place.
+
+    `ORIGIN_FRAME` below is not the claim *this arm is bolted at the origin*. It
+    is the identity frame of a body-frame measurement, and it is what keeps this
+    value bit-identical to every extension this function has ever returned.
     """
-    tip = forward_kinematics(config, limits, frame)[-1][1]
-    return float(np.linalg.norm(tip - np.array([frame.x, frame.y])))
+    tip = forward_kinematics(config, limits, ORIGIN_FRAME)[-1][1]
+    return float(np.linalg.norm(tip))
 
 
 def _classify(
@@ -691,8 +713,8 @@ def _classify(
     frames, base_moved = _base_frames(bases, configs.shape[0], "_classify")
     if not base_moved and np.array_equal(configs.min(axis=0), configs.max(axis=0)):
         return "hold"
-    start = _extension(configs[0], limits, frames[0])
-    end = _extension(configs[-1], limits, frames[-1])
+    start = _extension(configs[0], limits)
+    end = _extension(configs[-1], limits)
     if end > start:
         return "reach"
     if end < start:

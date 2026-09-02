@@ -28,7 +28,7 @@ appear in `docs/retention.md`**, the document that publishes them.
 this paragraph overstated it.** It said `README ⊆ plan ⊆ retention == code`. The
 last equality is false: `tests/test_published_figures.py` re-derives the
 `bytes/hour` tables and `sufficiency.md`'s counts, and nothing else — of Claim 1's
-eight figures, `264 GB`, `~691x`, `182.5 TB`, `1 TB`, `13x` and `~40x` are not
+eight figures, `265 GB`, `~689x`, `182.5 TB`, `1 TB`, `13x` and `~40x` are not
 re-derived by anything. So this chain keeps the three documents *consistent with
 each other*, which is what stops the drift demonstrated above; it does not anchor
 them to a measurement. The anchor is one table, and the totals are arithmetic
@@ -182,16 +182,19 @@ def test_the_front_page_still_quotes_a_retention_size_and_a_ratio() -> None:
 
 def test_a_drifted_figure_is_caught() -> None:
     """The negative test: feed it the condition it guards against."""
-    # 265 GB is deliberately not a figure this project publishes. It was 264 GB
-    # here until issue #83 made 264 the real one, at which point this negative
-    # test started asserting that a true figure was drift. A negative whose
-    # fixture drifts into the truth stops testing anything, so the value has to
-    # be one nothing can legitimately produce.
+    # 999 GB is deliberately not a figure this project publishes, and it is the
+    # third value this fixture has held: 264 GB until issue #83 made 264 real,
+    # then 265 GB until issue #166 made 265 real. A negative whose fixture drifts
+    # into the truth stops testing anything, so the value is now one no
+    # measurement of this artifact can reach rather than the next size up —
+    # `test_a_plan_figure_absent_from_the_record_is_caught` uses the same 999 GB
+    # for the same reason. The assertion below fails loudly if it ever lands in a
+    # document, because then `missing` comes back empty.
     verdict, missing = check(
-        "the artifact is **265 GB** per robot for six months", PLAN.read_text()
+        "the artifact is **999 GB** per robot for six months", PLAN.read_text()
     )
     assert verdict == DISAGREE
-    assert missing == ["265 GB"]
+    assert missing == ["999 GB"]
 
 
 def test_a_drifted_ratio_is_caught() -> None:

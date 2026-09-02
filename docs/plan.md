@@ -74,8 +74,8 @@ representation you can retain, export, and hand to an assessor or insurer.
 > the artifact this project ships carries the record stream and is ~40x larger,
 > which is the figure Claim 1 publishes. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
-> answers no audit question. Against a *sensor* log the artifact is **~691x**
-> smaller over a six-month retention period at occurrence resolution (264 GB vs
+> answers no audit question. Against a *sensor* log the artifact is **~689x**
+> smaller over a six-month retention period at occurrence resolution (265 GB vs
 > 182.5 TB per robot). That is two orders of magnitude and not three: the
 > earlier ~9,900x was measured before the artifact carried any Layer A record
 > (issue #59). The artifact side is measured; the sensor side is sourced and must
@@ -198,7 +198,7 @@ absolute cost against a legal retention floor is a fact about a budget.
 
 **Success, as originally stated:** 2–4 orders of magnitude, one number, one
 chart. **As it should be stated now:** at occurrence resolution the artifact
-costs **264 GB** per robot for the six-month window, which is **~691x** below an
+costs **265 GB** per robot for the six-month window, which is **~689x** below an
 assumed **182.5 TB** raw sensor log over the same period. Two orders, not three,
 and never four — the ratio is linear in the assumed sensor rate, and
 [`sensor-baseline.md`](sensor-baseline.md) is blunt about what that buys. That
@@ -209,7 +209,7 @@ published under it — three live, and a fourth kept for the record — are
 **That coarsest level is 98.5% attestation records, and the figure means nothing
 without it** (issue #116). 3,120 of its 3,166 node rows are declarations and
 verdicts, against 42 occurrences: no resolution level coarsens a per-action
-record, so 264 GB is the price of retaining **attestation**, not the price of a
+record, so 265 GB is the price of retaining **attestation**, not the price of a
 DSSAD-equivalent event log. The level was labelled *DSSAD-shaped* until #116,
 which was true of 1.3% of the rows and of 100% of the reader's impression.
 Quoting "at occurrence resolution" without the composition reinstates exactly
@@ -217,7 +217,7 @@ that reading. The label, the two rejected alternatives and what the choice
 commits this project to are in [`retention.md`](retention.md), *What the coarsest
 level actually holds*.
 
-**And 264 GB is derived, not measured.** It is the measured **60.29 MB/h** — at
+**And 265 GB is derived, not measured.** It is the measured **60.42 MB/h** — at
 the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs at, and linear in it —
 times the 4,380 hours in the 182.5-day retention floor. `bytes/hour` is itself
 `size × 3600 / run seconds` over a 59.98-second run, so the artifact's fixed

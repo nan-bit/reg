@@ -1,0 +1,163 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "150-1788310668261255093-2180476",
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "05acbaf3fa5c417de8a24699d1caaed94b5fd0ac28fb2604b71147b3ff2f0ec1",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "efb4498cfafe2b0faa1c912317ed546aa06cab0c953edd20b818d9999f596424",
+        "concluded": "985e1c4147b9f8099c4ed9e23a96cd3fbed0f72ce2f655ec4572e953b46c6ff8",
+        "coverage": "39b726648a5441aed56a24c291a67feea54058d85db736c42b6935f21a29edfe",
+        "declared": "7af19f8c0586b17b1502b411c4321c0bd0f760a0eb4a42fd5f9d3c701b296f07",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "9ae2bdd7beedc2e766c6b76585530e16925115707dc7a06ab5ee4aa2776b2c7b",
+        "out_of_scope": "6009609c87e46ac04df39bfd45c4eda55fc22807c7ef55a883ad4418ea030d75",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676"
+      },
+      "head": "440e65b1e63bc4a3715f7b47684c84d6c4a63bfb0806e9bfa160fddf3daef944",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "7a560c8beff1d5cd3e51b9d30206945e6407bd9c",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/sufficiency.md",
+        "reg/graph.py",
+        "reg/scenarios.py",
+        "reg/stream.py",
+        "reg/types.py",
+        "tests/test_declare.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_kinematics.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_scenarios.py",
+        "tests/test_stream.py",
+        "tests/test_viz.py"
+      ],
+      "edge_kinds": [
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/sufficiency.md",
+        "reg/bench.py",
+        "reg/chain.py",
+        "reg/commit.py",
+        "reg/declare.py",
+        "reg/enforce.py",
+        "reg/envelope.py",
+        "reg/graph.py",
+        "reg/kinematics.py",
+        "reg/query.py",
+        "reg/scenarios.py",
+        "reg/sim.py",
+        "reg/store.py",
+        "reg/stream.py",
+        "reg/types.py",
+        "reg/viz.py",
+        "reg/world.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_declare.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_kinematics.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_personal_data.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py",
+        "tests/test_sim_cli.py",
+        "tests/test_stream.py",
+        "tests/test_viz.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 48
+      },
+      "changed_unreadable": [
+        "docs/sufficiency.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 1
+      },
+      "unresolved_edges": [
+        {
+          "at": "tests/test_layer_boundary.py:801",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:803",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "CLAUDE.md",
+        "docs/sufficiency.md",
+        "reg/graph.py",
+        "reg/scenarios.py",
+        "reg/stream.py",
+        "reg/types.py",
+        "tests/",
+        "tests/test_declare.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_kinematics.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_scenarios.py",
+        "tests/test_stream.py",
+        "tests/test_viz.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 150,
+    "out_of_scope": [
+      "reg/bench.py",
+      "reg/chain.py",
+      "reg/commit.py",
+      "reg/declare.py",
+      "reg/enforce.py",
+      "reg/envelope.py",
+      "reg/kinematics.py",
+      "reg/query.py",
+      "reg/sim.py",
+      "reg/store.py",
+      "reg/viz.py",
+      "reg/world.py",
+      "scripts/check_bench_determinism.py"
+    ],
+    "prev": [],
+    "verdict": "out-of-scope"
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v1",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "7a560c8beff1d5cd3e51b9d30206945e6407bd9c"
+      },
+      "name": "auto/issue-150"
+    }
+  ]
+}

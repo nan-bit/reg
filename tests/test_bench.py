@@ -396,6 +396,91 @@ def test_the_refusal_is_an_exception_and_not_a_sentinel() -> None:
         proprioceptive_columns(["t", "q_0", "unknown_column"])
 
 
+# --- the base, whose two halves are on opposite sides (issue #176) ----------
+#
+# `reg.stream` can now write a robot with a base, as two optional blocks. That
+# is the first schema change to reach this rule set since it was made data, and
+# it is the case the rule set was written for: a mobile base's pose was the
+# worked example in the comment above `COLUMN_RULES`. The tests below are the
+# three things that can go wrong — the split for the priced fixture moves, both
+# halves land on the same side, or a rule written loosely enough to cover the
+# base absorbs the columns the refusal is still supposed to catch.
+
+
+#: The header of a robot with both base blocks. Two joints and three obstacles,
+#: so it differs from `PRICED_HEADER` in exactly the base.
+MOBILE_HEADER = expected_header(2, 3, base_vel=True, base_pose=True)
+
+
+def test_the_priced_fixtures_split_does_not_move_when_the_base_arrives() -> None:
+    """The whole constraint on issue #176, restated where the split is computed.
+
+    Claim 1 is a fixed-arm claim: the base columns are optional and the priced
+    fixture has none, so this must be the same 24 columns and the same five
+    proprioceptive ones it was before the rules gained anything.
+    """
+    assert len(PRICED_HEADER) == 24
+    assert proprioceptive_columns(PRICED_HEADER) == ["t", "q_0", "q_1", "qd_0", "qd_1"]
+    assert len([c for c in PRICED_HEADER if c not in proprioceptive_columns(PRICED_HEADER)]) == 19
+    assert not any(c.startswith("base") for c in PRICED_HEADER)
+
+
+def test_the_base_velocity_is_layer_a_and_the_base_pose_is_layer_b() -> None:
+    """**The classification this issue is about.** The two halves of a base are
+    not the same kind of thing and must not land on the same side.
+
+    A body-frame rate is what a wheel encoder measures — a statement about the
+    machine, naming no map and no frame anybody defined — and it is admitted on
+    exactly the terms `qd` is. A room-frame pose is a statement about the
+    robot's relationship to something outside the robot, so it is Layer B
+    structurally, and its `source` goes with it because both `PoseSource` values
+    are Layer B (`reg.types.PoseSource`; docs/sufficiency.md §5.6).
+    """
+    for column in ("base_vx", "base_vy", "base_omega"):
+        assert column_layer(column) == query.LAYER_A, column
+    for column in (
+        "base_pose_x",
+        "base_pose_y",
+        "base_pose_theta",
+        "base_pose_source",
+    ):
+        assert column_layer(column) == query.LAYER_B, column
+
+
+def test_a_mobile_header_is_classifiable_and_splits_where_the_types_do() -> None:
+    """Every column of a header the stream can write has a rule, and the Layer A
+    subset is the joints plus the base's body-frame rates — nothing else."""
+    assert proprioceptive_columns(MOBILE_HEADER) == [
+        "t", "q_0", "q_1", "qd_0", "qd_1", "base_vx", "base_vy", "base_omega",
+    ]
+    assert len(MOBILE_HEADER) - len(proprioceptive_columns(MOBILE_HEADER)) == 23
+
+
+def test_each_column_of_a_mobile_header_is_matched_by_exactly_one_rule() -> None:
+    """The same property `test_each_column_is_matched_by_exactly_one_rule` gives
+    the fixed-arm schema. `base_vx` and `base_pose_x` sit one prefix apart, which
+    is exactly where a rule written as `base_.*` would match both and make the
+    layer depend on the order of the tuple."""
+    for column in MOBILE_HEADER:
+        matched = [rule for rule in COLUMN_RULES if rule.matches(column)]
+        assert len(matched) == 1, f"{column!r} matched {len(matched)} rules"
+
+
+def test_the_base_rules_do_not_absorb_the_columns_that_have_none() -> None:
+    """**The negative that had to survive the addition.**
+
+    `base_x`, `base_y` and `base_theta` are the columns the refusal is driven
+    with above, and they still have no rule. A rule broad enough to cover the
+    real base columns would have swallowed them — and a classifier that can no
+    longer say *this column has no rule* has no could-not-evaluate, which is the
+    whole reason `COLUMN_RULES` is data.
+    """
+    for column in ("base_x", "base_y", "base_theta", "base", "base_pose",
+                   "base_v", "base_pose_source_x", "base_omega_2"):
+        with pytest.raises(BenchError, match=re.escape(column)):
+            column_layer(column)
+
+
 # --------------------------------------------------------------------------
 # The live run. Shape, not values.
 # --------------------------------------------------------------------------

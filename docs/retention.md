@@ -438,9 +438,20 @@ from it:
 | faults | 24 |
 | chain records | 3,120 |
 | artifact on disk | 2,584,576 B |
-| gzipped CSV baseline | 64,651 B |
+| gzipped CSV baseline | 64,652 B |
 | x gz CSV | 0.03x |
 | how much larger | ~40x |
+
+*The baseline moved by one byte on 2026-09-03, and it is a byte of provenance
+rather than a byte of stream.* `reg.sim.PROVENANCE_VERSION` went to 2 when
+`reg.stream` gained the two optional base blocks (issue #176): the banner above
+every raw stream reads `v2` instead of `v1`, one character, which gzip happened
+to render one byte longer. **No fixture grew a column.** The base blocks are
+present only in a stream whose frames carry a base and every robot in this
+repository is bolted to the origin, so `reg.stream.expected_header(2, 3)` is the
+same 24 columns it has always been and every ratio, MB/hour and GB figure in this
+document is unchanged. Recorded here rather than absorbed, because a figure that
+moves for a reason nobody wrote down is the thing the pin exists to prevent.
 
 **That baseline is not the incumbent, and the gap is now measured.** Nobody
 retains a gzipped CSV; practitioners retain rosbag2, in MCAP. For the same
@@ -458,7 +469,7 @@ and are not composable into a single corrected ratio. **~40x remains the number
 to quote**, now with the incumbent named beside it rather than left unstated.
 
 
-The baseline is the same 64,651 B on both sides of the comparison — same fixture,
+The baseline is the same 64,652 B on both sides of the comparison — same fixture,
 same seed, same stream — so the whole of the distance between 13x and **~40x** is
 the Layer A the build carries: the ladder above has **no record stream** in it and
 this build has 3,120 chain records in it. **~40x is the number to quote**, and 13x

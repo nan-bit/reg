@@ -59,10 +59,19 @@ from reg.stream import FLOAT_PRECISION, read_comments, write_frames
 EXIT_OK = 0
 EXIT_USAGE = 2
 
-#: Version of the provenance block's field set. Bumped when a field is added,
-#: removed or renamed, so a reader that meets an unfamiliar block can say it does
-#: not understand it rather than silently finding no `seed=` and carrying on.
-PROVENANCE_VERSION = 1
+#: Version of the provenance block's field set, and of the stream schema the
+#: block sits above. Bumped when a field is added, removed or renamed, so a
+#: reader that meets an unfamiliar block can say it does not understand it rather
+#: than silently finding no `seed=` and carrying on.
+#:
+#: **v2, issue #176.** `reg.stream` gained the two optional base blocks, so a
+#: header with no base columns stopped being the only header this producer can
+#: write. Under v1 that absence had exactly one meaning — this format has no base
+#: columns at all — and a reader was entitled to conclude it from the version
+#: alone. Under v2 it means *this run recorded no base*, which is a statement
+#: about the run. Those are different facts, and the version is what tells them
+#: apart in a file already written.
+PROVENANCE_VERSION = 2
 
 #: Written into every artifact; see "ON `--seed` HAVING A DEFAULT" above.
 DEFAULT_SEED = 0

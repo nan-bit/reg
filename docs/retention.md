@@ -224,15 +224,23 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.42 MB/h → 265 GB → ~690x** | 150.15 MB/h → 658 GB → ~278x | 218.00 MB/h → 955 GB → ~191x |
-| 100 Hz | 106.45 MB/h → 466 GB → ~391x | 246.33 MB/h → 1.08 TB → ~169x | 409.70 MB/h → 1.79 TB → ~102x |
-| 250 Hz | 247.13 MB/h → 1.08 TB → ~169x | 528.44 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
-| **1 kHz (a real manipulator)** | **951.65 MB/h → 4.17 TB → ~44x** | 1.94 GB/h → 8.50 TB → ~21x | 4.26 GB/h → 18.66 TB → ~10x |
+| **50 Hz (this simulator, published above)** | **60.42 MB/h → 265 GB → ~689x** | 150.15 MB/h → 658 GB → ~277x | 218.00 MB/h → 955 GB → ~191x |
+| 100 Hz | 106.57 MB/h → 467 GB → ~391x | 247.19 MB/h → 1.08 TB → ~169x | 410.37 MB/h → 1.80 TB → ~101x |
+| 250 Hz | 247.32 MB/h → 1.08 TB → ~169x | 529.79 MB/h → 2.32 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
+| **1 kHz (a real manipulator)** | **1.08 GB/h → 4.73 TB → ~39x** | 2.08 GB/h → 9.11 TB → ~20x | 4.52 GB/h → 19.80 TB → ~9x |
 
 The `MB/h` column is measured. The six-month size is that figure times the 4,380
 hours in the retention floor, and the ratio is against the **assumed** 182.5 TB
 sensor log — an assumption, unchanged, at 1 TB/day
 ([`sensor-baseline.md`](sensor-baseline.md)).
+
+**The ratio is computed from the six-month size *as published here*, not from the
+unrounded product.** At 50 Hz that is `182.5 TB / 265 GB = ~689x`, where the
+unrounded 264.64 GB would give ~690x. Both are defensible and the difference is
+inside the `~`; what is not defensible is leaving the choice unstated, because
+the two conventions disagree on two of the four rungs and nothing in the
+repository derives these ratios to check them. Stated here so a reader who
+recomputes and gets the other answer knows which step they took differently.
 
 **Two of those rungs are above the artifact's own declared domain of validity, and
 that is stated here rather than two documents away.**
@@ -261,8 +269,8 @@ the third option and it is the one this project keeps having to correct.
 
 **So the two-order claim is a claim about the control rate as well as about the
 sensor rate, and at 1 kHz it does not hold.** At occurrence resolution a 1 kHz
-robot retains **4.17 TB** for the mandated six months and the artifact is
-**~44x** below the assumed sensor log — **one order of magnitude, not two**, and
+robot retains **4.73 TB** for the mandated six months and the artifact is
+**~39x** below the assumed sensor log — **one order of magnitude, not two**, and
 at a rate whose per-frame queries are outside the artifact's stated time base
 ([`limitations.md`](limitations.md) §5). The
 band survives at 250 Hz (~169x) and is gone by 1 kHz; where between those two it

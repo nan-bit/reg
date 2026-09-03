@@ -435,8 +435,16 @@ def test_the_base_velocity_is_layer_a_and_the_base_pose_is_layer_b() -> None:
     robot's relationship to something outside the robot, so it is Layer B
     structurally, and its `source` goes with it because both `PoseSource` values
     are Layer B (`reg.types.PoseSource`; docs/sufficiency.md §5.6).
+
+    `base_vel_source` (issue #156) rides with the rates it describes, and that
+    is what this classifier can honestly say rather than the whole truth: the
+    split here is **per column and static**, so it cannot depend on the value in
+    a cell, and the value in that cell is exactly what says whether the three
+    rates beside it came from a perceiver. docs/limitations.md §11 is the entry;
+    what this test pins is that the column has a rule at all and that the rule
+    does not put it on the pose's side of the line.
     """
-    for column in ("base_vx", "base_vy", "base_omega"):
+    for column in ("base_vx", "base_vy", "base_omega", "base_vel_source"):
         assert column_layer(column) == query.LAYER_A, column
     for column in (
         "base_pose_x",
@@ -451,7 +459,8 @@ def test_a_mobile_header_is_classifiable_and_splits_where_the_types_do() -> None
     """Every column of a header the stream can write has a rule, and the Layer A
     subset is the joints plus the base's body-frame rates — nothing else."""
     assert proprioceptive_columns(MOBILE_HEADER) == [
-        "t", "q_0", "q_1", "qd_0", "qd_1", "base_vx", "base_vy", "base_omega",
+        "t", "q_0", "q_1", "qd_0", "qd_1",
+        "base_vx", "base_vy", "base_omega", "base_vel_source",
     ]
     assert len(MOBILE_HEADER) - len(proprioceptive_columns(MOBILE_HEADER)) == 23
 

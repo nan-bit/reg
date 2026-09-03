@@ -59,6 +59,7 @@ from reg.types import (
     Obstacle,
     ProprioState,
     StateFrame,
+    VelocitySource,
 )
 
 # A two-link arm, stated here rather than imported from reg.world: these tests
@@ -470,9 +471,17 @@ MOBILE_LIMITS = dataclasses.replace(
 
 
 def _mobile(state: ProprioState, vx: float, vy: float, omega: float) -> ProprioState:
-    """The same joint state on a base that is moving. Body frame, m/s and rad/s."""
+    """The same joint state on a base that is moving. Body frame, m/s and rad/s.
+
+    `PROPRIOCEPTIVE` is stated rather than defaulted (issue #156): these tests
+    model a base with wheel encoders, and the soundness argument they hold up is
+    about the geometry, which is identical whichever provenance the rates carry.
+    """
     return dataclasses.replace(
-        state, base_vel=BaseVelocity(vx=vx, vy=vy, omega=omega)
+        state,
+        base_vel=BaseVelocity(
+            vx=vx, vy=vy, omega=omega, source=VelocitySource.PROPRIOCEPTIVE
+        ),
     )
 
 

@@ -78,6 +78,7 @@ from reg.types import (
     PoseSource,
     ProprioState,
     StateFrame,
+    VelocitySource,
 )
 
 # Anything matching one of these in a Layer A structure means the world leaked in.
@@ -303,7 +304,9 @@ def test_proprio_drops_the_base_pose() -> None:
         qd=np.array([0.0, 0.0]),
         human_pos=np.array([1.0, 2.0]),
         human_vel=np.array([0.0, 0.0]),
-        base_vel=BaseVelocity(vx=0.4, vy=0.0, omega=0.2),
+        base_vel=BaseVelocity(
+            vx=0.4, vy=0.0, omega=0.2, source=VelocitySource.PROPRIOCEPTIVE
+        ),
         base_pose=BasePose(x=3.0, y=-1.0, theta=0.7, source=PoseSource.LOCALIZED),
     )
     narrowed = frame.proprio()
@@ -334,6 +337,12 @@ def test_a_base_velocity_is_frozen_and_has_no_defaults() -> None:
     rest of Layer A has rather than less of it: nothing here has a value a
     caller can be assumed to have meant, and a rate that can be edited after the
     fact is not evidence of how fast anything was going.
+
+    Asserted over every field rather than field by field, which is what made it
+    cover `source` unchanged when issue #156 added it: `PROPRIOCEPTIVE` is the
+    tempting default there — it is what every fixture in this repository states
+    — and a default would put it on the artifact of the caller who never
+    considered visual odometry at all.
     """
     defaulted = [
         f.name
@@ -343,7 +352,9 @@ def test_a_base_velocity_is_frozen_and_has_no_defaults() -> None:
     ]
     assert defaulted == []
 
-    vel = BaseVelocity(vx=0.4, vy=0.0, omega=0.2)
+    vel = BaseVelocity(
+        vx=0.4, vy=0.0, omega=0.2, source=VelocitySource.PROPRIOCEPTIVE
+    )
     with pytest.raises(dataclasses.FrozenInstanceError):
         vel.vx = 0.0  # type: ignore[misc]
 
@@ -351,6 +362,102 @@ def test_a_base_velocity_is_frozen_and_has_no_defaults() -> None:
     # gets, applied to the type that is now reachable from it.
     for f in dataclasses.fields(BaseVelocity):
         assert not any(w in f.name.lower() for w in WORLD_WORDS)
+
+
+# --- the provenance on the velocity (issue #156) -----------------------------
+#
+# `Limits.source` exists because a **value** can carry a perceiver past a check
+# that inspects **names**, and `BaseVelocity` is that hole reopened for the type
+# Layer A was widened for: a body-frame rate names nothing outside the robot,
+# and visual odometry fills one by looking at the room. The asymmetry with `qd`
+# — the precedent the omission was justified by — is the whole argument: nothing
+# plausibly measures a *joint* velocity that way and something plausibly measures
+# a *base* velocity that way. docs/sufficiency.md §5.9, docs/limitations.md §11.
+
+
+def test_a_base_velocity_cannot_be_built_without_saying_where_it_came_from() -> None:
+    """**Negative test.** No default, so omitting `source` is a `TypeError`.
+
+    The tempting default is `PROPRIOCEPTIVE`, and it is tempting for the worst
+    possible reason: it is true of every fixture in this repository, so nothing
+    here would fail if it were the default. The artifact it would corrupt is the
+    one nobody has written yet — a run on a vehicle whose odometry is visual —
+    and by then the caller who never considered the question would be producing
+    the same record as the one who considered it and wrote down *encoders*.
+    """
+    with pytest.raises(TypeError, match="source"):
+        BaseVelocity(vx=0.4, vy=0.0, omega=0.2)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    "bad", ["proprioceptive", "derived", "visual_odometry", None, 0, True]
+)
+def test_a_base_velocity_refuses_a_source_that_is_not_a_velocity_source(
+    bad: object,
+) -> None:
+    """**Negative test.** A bare string that spells a member is not the member.
+
+    `"proprioceptive"` is the dangerous one and it is here on purpose: it reads
+    correctly in a repr, it is what somebody hand-writing a fixture would type,
+    and it compares equal to no member — so a lenient constructor would put a
+    provenance nobody stated on an artifact that looks like one somebody did.
+    `None` is refused for the same reason: *unspecified* is the state this field
+    exists to forbid, not a value it can hold. Same treatment `Limits.source`
+    and `BasePose.source` get.
+    """
+    with pytest.raises(TypeError, match="VelocitySource"):
+        BaseVelocity(vx=0.4, vy=0.0, omega=0.2, source=bad)  # type: ignore[arg-type]
+
+
+def test_velocity_source_distinguishes_an_encoder_from_a_perceiver() -> None:
+    """The vocabulary, and the fork `PoseSource` deliberately does not have.
+
+    Both `PoseSource` values are Layer B, so that enum maps to no layer and must
+    not. This one is `LimitSource`'s kind: a wheel encoder is proprioception and
+    a camera is not, so the two members really do describe different sides of
+    the boundary, and an artifact that cannot tell them apart cannot say which
+    side its base rates came from.
+    """
+    assert {s.name for s in VelocitySource} >= {"PROPRIOCEPTIVE", "DERIVED"}
+    assert VelocitySource.PROPRIOCEPTIVE is not VelocitySource.DERIVED
+
+
+def test_two_identical_rates_with_opposite_provenance_are_different_records() -> None:
+    """The differential form the rest of this file uses: same numbers, opposite
+    provenance, and the artifact must not collapse them.
+
+    This is what the field buys **today**, stated as the invariant rather than
+    as an aspiration. Nothing in `reg/` maps `VelocitySource` to a `Layer` yet —
+    `reg.envelope.envelope_layer` still decides the `HAS_ENVELOPE` tag from
+    `Limits.source` alone, and docs/limitations.md §11 is the entry that says so
+    — so what is enforceable here is *recorded, and distinguishable*. A test
+    that asserted a layer would be asserting a mapping that does not exist; a
+    test that asserted nothing would let the field be dropped as unused.
+    """
+    encoder = BaseVelocity(
+        vx=0.4, vy=0.0, omega=0.2, source=VelocitySource.PROPRIOCEPTIVE
+    )
+    visual = BaseVelocity(vx=0.4, vy=0.0, omega=0.2, source=VelocitySource.DERIVED)
+    assert encoder != visual, (
+        "two base velocities with identical rates and opposite provenance "
+        "compare equal, so the record cannot tell an encoder-measured rate "
+        "from a visually-estimated one — which is the whole content of "
+        "issue #156."
+    )
+
+    # And the provenance survives the narrowing into Layer A. `proprio()` is the
+    # only supported way to feed the envelope, so a source dropped there would be
+    # a source that exists in the raw stream and nowhere the bound is computed.
+    frame = StateFrame(
+        t=0.5,
+        q=np.array([0.1, 0.2]),
+        qd=np.array([0.0, 0.0]),
+        human_pos=np.array([1.0, 2.0]),
+        human_vel=np.array([0.0, 0.0]),
+        base_vel=visual,
+        base_pose=None,
+    )
+    assert frame.proprio().base_vel.source is VelocitySource.DERIVED
 
 
 @pytest.mark.parametrize(

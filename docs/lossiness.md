@@ -194,6 +194,26 @@ Each entry is a claim that the graph can be tested against.
     and the schema version, once per artifact. Determinism is only checkable if the
     artifact says what produced it.
 
+    **The schema version is itself versioned, and it moved to 2 (issue #176).**
+    `reg.sim.PROVENANCE_VERSION` is what a reader consults when the block it is
+    holding is older than the code reading it. `reg.stream` can now carry a
+    mobile base as two optional blocks, which changes what an *absence* means: a
+    header with no base columns used to mean *this format has no base columns*
+    and now means *this run recorded no base*. Those are different facts about
+    two files that look identical, and the version is the only thing in either
+    of them that tells the two apart — so it bumped, which is what the constant
+    is for.
+
+    **What that cost.** One character in one comment line, and gzip rendered it
+    one byte longer: the gzipped CSV baseline in [`retention.md`](retention.md)
+    went from 64,651 B to 64,652 B, +0.0015%, re-measured with `python -m
+    reg.bench --resolution --seed 0` and republished there in the same change.
+    Nothing else moved — no fixture grew a column, because every robot here is
+    bolted to the origin and the base blocks are written only for a stream whose
+    frames carry one. It is recorded at this size for the same reason the +0.20%
+    to +0.29% above is: a figure that moves for an unwritten reason is
+    indistinguishable from a regression.
+
 ---
 
 ## Discarded

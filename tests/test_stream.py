@@ -17,10 +17,20 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from reg import stream as stream_module
+
+# `_schema_from_header` is private and imported anyway: it is the function that
+# decides which robot wrote a header, and the properties this file has to assert
+# about it — every writable header reads back as its own schema, no two schemas
+# share one, a stray base column is refused — are properties of the derivation
+# itself. Driving them only through `read_frames` would mean writing a file per
+# shape and would test the file plumbing as much as the schema.
 from reg.stream import (
     FLOAT_PRECISION,
     LINE_TERMINATOR,
     StreamFormatError,
+    StreamSchema,
+    _schema_from_header,
     expected_header,
     read_comments,
     read_frames,
@@ -59,6 +69,32 @@ def frames(n: int = 4, n_joints: int = 3) -> tuple[StateFrame, ...]:
     return tuple(out)
 
 
+def assert_base_matches(got, want, numeric: tuple[str, ...]) -> None:
+    """One half of the base, compared as recorded-or-not first and values second.
+
+    Presence is checked before any field is, because the failure this is here for
+    is not a wrong number: it is a run whose base was never written coming back
+    as zeros, or a recorded one coming back as `None`. Both read as a perfectly
+    ordinary frame downstream.
+    """
+    assert (got is None) == (want is None), (
+        f"one side records a base and the other does not: got={got!r}, "
+        f"want={want!r}. `None` is 'not recorded' and a value is 'recorded'; "
+        "they are different facts about the run."
+    )
+    if want is None:
+        return
+    for field in numeric:
+        assert getattr(got, field) == pytest.approx(
+            getattr(want, field), abs=TOLERANCE
+        ), field
+    if hasattr(want, "source"):
+        # Identity, not equality of the string: reconstructing a `PoseSource`
+        # that is merely equal-looking is how a provenance nobody stated becomes
+        # indistinguishable from one somebody did.
+        assert got.source is want.source
+
+
 def assert_frames_close(got: list[StateFrame], want: tuple[StateFrame, ...]) -> None:
     """`==` on a StateFrame raises — numpy fields — so equality is spelled out."""
     assert len(got) == len(want)
@@ -68,13 +104,15 @@ def assert_frames_close(got: list[StateFrame], want: tuple[StateFrame, ...]) -> 
         assert np.allclose(a.qd, b.qd, atol=TOLERANCE, rtol=0)
         assert np.allclose(a.human_pos, b.human_pos, atol=TOLERANCE, rtol=0)
         assert np.allclose(a.human_vel, b.human_vel, atol=TOLERANCE, rtol=0)
-        # The schema has no base columns, so a frame read back from it records
-        # no base — and that must come back as `None` rather than as a zero
-        # reading nobody took (issue #150). Asserted on both sides: the frames
-        # this file writes carry no base either, so a codec that started
-        # inventing zeros would fail here and not silently agree.
-        assert a.base_vel is None and b.base_vel is None
-        assert a.base_pose is None and b.base_pose is None
+        # Whether each half of the base was recorded has to survive the round
+        # trip as a *fact about the run*, not as a number. A stream written from
+        # frames that record no base must read back `None` and never zeros — a
+        # zero says the base was measured and found still (issue #150) — and a
+        # stream that does record one must come back with the same values and
+        # the same `PoseSource` (issue #176). `assert_base_matches` refuses both
+        # directions, so a codec that started inventing either fails here.
+        assert_base_matches(a.base_vel, b.base_vel, ("vx", "vy", "omega"))
+        assert_base_matches(a.base_pose, b.base_pose, ("x", "y", "theta"))
         assert len(a.objects) == len(b.objects)
         for x, y in zip(a.objects, b.objects):
             assert x.entity_id == y.entity_id
@@ -474,56 +512,86 @@ def test_a_non_string_comment_is_refused(tmp_path) -> None:
         write_frames(frames(), tmp_path / "run.csv", comments=[0])
 
 
-def test_a_frame_carrying_base_motion_is_refused(tmp_path) -> None:
-    """Negative test: this schema has no base columns, so it will not pretend to.
+def test_a_frame_that_gains_a_base_mid_stream_is_refused(tmp_path) -> None:
+    """**Negative test.** The header is derived from frame 0, so a later frame
+    that gained a base is a stream one header cannot describe.
 
-    Issue #150 put `base_vel` and `base_pose` on `StateFrame` and deliberately
-    left this format alone — these bytes are the denominator of every
-    compression figure Claim 1 quotes, and a new column also needs a
-    `reg.bench.COLUMN_RULES` entry saying which layer it is or the Layer A /
-    Layer B column split moves with nothing going red (docs/mobile-base.md §5).
-
-    That leaves the codec one thing it must not do: write the base nowhere and
-    say nothing. The frame would round-trip into a *fixed-base* run — same
+    Until issue #176 this schema had no base columns at all and refused every
+    frame carrying either half. It has them now, and the refusal moved rather
+    than went: what is still not allowed is writing the base **nowhere** and
+    saying nothing. The frame would round-trip into a run with no base — same
     header, same width, every existing check green — and the fact that the base
     was moving would be gone with no record that it had ever been there. A
-    could-not-evaluate must not resolve to a pass, so this refuses.
+    could-not-evaluate must not resolve to a pass.
 
-    Both fields, separately, because they are dropped by different halves of the
+    Both halves, separately, because they are dropped by different halves of the
     same omission and a check that only looked at one would let the other
     through.
     """
-    base = frames(n=1)[0]
+    base = frames(n=2)[0]
 
-    moving = StateFrame(
-        t=base.t,
-        q=base.q,
-        qd=base.qd,
-        human_pos=base.human_pos,
-        human_vel=base.human_vel,
+    def gained(**base_fields) -> StateFrame:
+        return StateFrame(
+            t=base.t,
+            q=base.q,
+            qd=base.qd,
+            human_pos=base.human_pos,
+            human_vel=base.human_vel,
+            objects=base.objects,
+            **{"base_vel": None, "base_pose": None, **base_fields},
+        )
+
+    moving = gained(base_vel=BaseVelocity(vx=0.4, vy=0.0, omega=0.2))
+    with pytest.raises(StreamFormatError, match="no columns for one"):
+        write_frames([base, moving], tmp_path / "moving.csv")
+
+    posed = gained(
+        base_pose=BasePose(x=1.0, y=2.0, theta=0.3, source=PoseSource.LOCALIZED)
+    )
+    with pytest.raises(StreamFormatError, match="no columns for one"):
+        write_frames([base, posed], tmp_path / "posed.csv")
+
+    # And the refusal is about the shape changing and not about the writer being
+    # unusable: the same frames with neither field recorded write, as every
+    # fixed-arm fixture does.
+    assert write_frames([base, base], tmp_path / "fixed.csv").exists()
+
+
+def test_a_frame_that_loses_a_base_mid_stream_is_refused(tmp_path) -> None:
+    """**The other negative, and the one with no honest fallback.**
+
+    Frame 0 recorded a base, so the header has columns for it; a later frame
+    that recorded none leaves cells with nothing true to put in them. Zeros are
+    the tempting answer and they are the wrong one — *the base was measured and
+    found still* is a different fact from *the base was not recorded* — and a
+    blank cell reads back through `_number` as a value that is not one.
+    """
+    fixed = frames(n=2)[0]
+    mobile = StateFrame(
+        t=fixed.t,
+        q=fixed.q,
+        qd=fixed.qd,
+        human_pos=fixed.human_pos,
+        human_vel=fixed.human_vel,
         base_vel=BaseVelocity(vx=0.4, vy=0.0, omega=0.2),
+        base_pose=BasePose(x=1.0, y=2.0, theta=0.3, source=PoseSource.DEAD_RECKONED),
+        objects=fixed.objects,
+    )
+    with pytest.raises(StreamFormatError, match="records no base velocity"):
+        write_frames([mobile, fixed], tmp_path / "lost.csv")
+
+    dropped_pose = StateFrame(
+        t=fixed.t,
+        q=fixed.q,
+        qd=fixed.qd,
+        human_pos=fixed.human_pos,
+        human_vel=fixed.human_vel,
+        base_vel=mobile.base_vel,
         base_pose=None,
-        objects=base.objects,
+        objects=fixed.objects,
     )
-    with pytest.raises(StreamFormatError, match="no columns"):
-        write_frames([moving], tmp_path / "moving.csv")
-
-    posed = StateFrame(
-        t=base.t,
-        q=base.q,
-        qd=base.qd,
-        human_pos=base.human_pos,
-        human_vel=base.human_vel,
-        base_vel=None,
-        base_pose=BasePose(x=1.0, y=2.0, theta=0.3, source=PoseSource.LOCALIZED),
-        objects=base.objects,
-    )
-    with pytest.raises(StreamFormatError, match="no columns"):
-        write_frames([posed], tmp_path / "posed.csv")
-
-    # And the refusal is about the base and not about the writer being unusable:
-    # the same frame with neither field recorded writes, as every fixture does.
-    assert write_frames([base], tmp_path / "fixed.csv").exists()
+    with pytest.raises(StreamFormatError, match="records no base pose"):
+        write_frames([mobile, dropped_pose], tmp_path / "lost-pose.csv")
 
 
 def test_the_refusal_leaves_no_partial_file(tmp_path) -> None:
@@ -547,6 +615,343 @@ def test_the_refusal_leaves_no_partial_file(tmp_path) -> None:
         objects=good[0].objects,
     )
     path = tmp_path / "partial.csv"
-    with pytest.raises(StreamFormatError, match="no columns"):
+    with pytest.raises(StreamFormatError, match="no columns for one"):
         write_frames([*good, bad], path)
     assert not path.exists()
+
+
+# --- the base blocks (issue #176) -------------------------------------------
+#
+# The constraint the whole design is shaped by is that Claim 1 stays a fixed-arm
+# claim: `expected_header(2, 3)` is the 24 columns the priced fixture's published
+# figures are measured on, and a base column that arrived unconditionally would
+# move the gzipped baseline for eleven robots bolted to the origin. So the base
+# is two optional blocks — and the price of an optional block is that a reader
+# has to be able to tell which robot wrote a header. These tests are that price:
+# every header the writer can write reads back as the schema that wrote it, no
+# two schemas share a header, and a base column in a position no block accounts
+# for is refused rather than guessed at.
+
+#: Every shape the writer can produce, small enough to enumerate exhaustively.
+#: Enumerated rather than sampled: injectivity is a property of the whole map,
+#: and a sampled one is a property of the sample.
+SHAPES = [
+    (n_joints, n_obstacles, base_vel, base_pose)
+    for n_joints in (0, 1, 2, 6)
+    for n_obstacles in (0, 1, 3, 12)
+    for base_vel in (False, True)
+    for base_pose in (False, True)
+]
+
+
+def test_the_priced_fixtures_header_is_the_twenty_four_columns_it_has_always_been() -> None:
+    """**The constraint, asserted directly rather than derived.**
+
+    `docs/retention.md` publishes `264 GB`, `~40x` and a gzipped baseline in
+    bytes, all measured against a stream with this header. Spelled out in full
+    here — not `len(...) == 24`, and not rebuilt from the same constants the
+    function is built from — so that a base column arriving unconditionally
+    fails on the column that appeared and names it, rather than on a count.
+    """
+    assert expected_header(2, 3) == [
+        "t",
+        "q_0",
+        "q_1",
+        "qd_0",
+        "qd_1",
+        "human_x",
+        "human_y",
+        "human_vx",
+        "human_vy",
+        "obs_0_id", "obs_0_kind", "obs_0_x", "obs_0_y", "obs_0_r",
+        "obs_1_id", "obs_1_kind", "obs_1_x", "obs_1_y", "obs_1_r",
+        "obs_2_id", "obs_2_kind", "obs_2_x", "obs_2_y", "obs_2_r",
+    ]
+
+
+def test_the_base_blocks_sit_between_the_joints_and_the_human() -> None:
+    """Layer A first and contiguous — `t`, the joints, then the body-frame rates
+    — with the room-frame pose behind them and the world behind that. The
+    ordering is not cosmetic: `reg.bench.proprioceptive_columns` returns the
+    Layer A subset in header order, and the split is what Claim 1's
+    like-for-like comparison is computed over."""
+    header = expected_header(2, 1, base_vel=True, base_pose=True)
+    assert header[:5] == ["t", "q_0", "q_1", "qd_0", "qd_1"]
+    assert header[5:8] == ["base_vx", "base_vy", "base_omega"]
+    assert header[8:12] == [
+        "base_pose_x",
+        "base_pose_y",
+        "base_pose_theta",
+        "base_pose_source",
+    ]
+    assert header[12:16] == ["human_x", "human_y", "human_vx", "human_vy"]
+
+
+@pytest.mark.parametrize(("n_joints", "n_obstacles", "base_vel", "base_pose"), SHAPES)
+def test_every_header_the_writer_can_write_reads_back_as_the_schema_that_wrote_it(
+    n_joints: int, n_obstacles: int, base_vel: bool, base_pose: bool
+) -> None:
+    """Round trip at the level of the *schema*, not the values.
+
+    An optional block whose presence the reader cannot recover is a stream
+    nobody can read back, and it fails silently: the reader would take a base
+    block for an obstacle block, or the other way round, and every number after
+    it would land in the wrong field with no exception anywhere.
+    """
+    header = expected_header(
+        n_joints, n_obstacles, base_vel=base_vel, base_pose=base_pose
+    )
+    assert _schema_from_header(header, "<test>") == StreamSchema(
+        n_joints=n_joints,
+        n_obstacles=n_obstacles,
+        base_vel=base_vel,
+        base_pose=base_pose,
+    )
+    assert len(header) == StreamSchema(
+        n_joints=n_joints,
+        n_obstacles=n_obstacles,
+        base_vel=base_vel,
+        base_pose=base_pose,
+    ).width()
+
+
+def test_no_two_distinct_robots_produce_the_same_header() -> None:
+    """Injectivity, over every shape the writer can produce.
+
+    This is the property an optional block puts at risk and the one the reader's
+    correctness rests on. Asserted as a set comparison so a collision names both
+    schemas rather than reporting a count that is one short.
+    """
+    headers: dict[tuple[str, ...], tuple[int, int, bool, bool]] = {}
+    for shape in SHAPES:
+        n_joints, n_obstacles, base_vel, base_pose = shape
+        key = tuple(
+            expected_header(
+                n_joints, n_obstacles, base_vel=base_vel, base_pose=base_pose
+            )
+        )
+        assert key not in headers, (
+            f"{shape} and {headers[key]} produce the same header, so a file "
+            "written by one reads back as the other."
+        )
+        headers[key] = shape
+
+
+def test_no_combination_of_base_blocks_is_a_multiple_of_the_obstacle_block() -> None:
+    """The arithmetic backstop behind the name comparison.
+
+    Presence is decided by matching names at a fixed offset, so this is not what
+    keeps the reader correct today. It is what keeps a *future* careless edit
+    from making it wrong: were an optional block's width a multiple of the
+    obstacle block's, a reader that lost the name comparison could read the base
+    as an extra obstacle and the header would still satisfy the remainder check.
+    A block widened to 5 or 10 columns fails here, which is the point.
+    """
+    obstacle_block = len(stream_module._OBSTACLE_COLUMNS)
+    vel, pose = (
+        len(stream_module._BASE_VEL_COLUMNS),
+        len(stream_module._BASE_POSE_COLUMNS),
+    )
+    for width in (vel, pose, vel + pose):
+        assert width % obstacle_block != 0, (
+            f"a base block combination of {width} column(s) is a whole number "
+            f"of {obstacle_block}-column obstacle blocks"
+        )
+
+
+# --- negative: a base column where no block could have put it ---------------
+
+
+@pytest.mark.parametrize(
+    ("what", "header"),
+    [
+        (
+            "a truncated velocity block",
+            ["t", "q_0", "qd_0", "base_vx", "base_vy",
+             "human_x", "human_y", "human_vx", "human_vy"],
+        ),
+        (
+            "a truncated pose block",
+            ["t", "q_0", "qd_0", "base_pose_x", "base_pose_y", "base_pose_theta",
+             "human_x", "human_y", "human_vx", "human_vy"],
+        ),
+        (
+            "the blocks in the wrong order",
+            ["t", "q_0", "qd_0",
+             "base_pose_x", "base_pose_y", "base_pose_theta", "base_pose_source",
+             "base_vx", "base_vy", "base_omega",
+             "human_x", "human_y", "human_vx", "human_vy"],
+        ),
+        (
+            "a block after the human columns",
+            ["t", "q_0", "qd_0", "human_x", "human_y", "human_vx", "human_vy",
+             "base_vx", "base_vy", "base_omega"],
+        ),
+        (
+            "a duplicated base column",
+            ["t", "q_0", "qd_0", "base_vx", "base_vy", "base_omega", "base_vx",
+             "human_x", "human_y", "human_vx", "human_vy"],
+        ),
+    ],
+)
+def test_a_header_whose_base_columns_are_not_a_block_is_refused(
+    what: str, header: list[str]
+) -> None:
+    """**The negative the optional block buys.** A base column outside a whole
+    block in the position the schema puts one is refused by name.
+
+    Guessing is the failure mode being ruled out, and it is available in each of
+    these: drop the odd column and the remainder arithmetic works out, so a
+    lenient reader would hand back a schema and read every row under it. The
+    refusal has to name the columns, because with the blocks out of place the
+    shape of the rest of the header no longer says which robot wrote the file —
+    there is nothing left to infer it from.
+    """
+    with pytest.raises(StreamFormatError, match="not a complete") as excinfo:
+        _schema_from_header(header, "<test>")
+    assert "base_" in str(excinfo.value), what
+
+
+def test_the_refusal_names_the_offending_columns_not_only_that_there_are_some() -> None:
+    """A header usually goes wrong by a block, and a message that says only
+    *something is wrong* sends whoever is fixing it back to count columns."""
+    header = ["t", "q_0", "qd_0", "base_vx", "base_vy",
+              "human_x", "human_y", "human_vx", "human_vy"]
+    with pytest.raises(StreamFormatError) as excinfo:
+        _schema_from_header(header, "<test>")
+    message = str(excinfo.value)
+    for column in ("base_vx", "base_vy"):
+        assert column in message
+
+
+def test_a_stray_base_column_is_refused_by_the_reader_end_to_end(tmp_path) -> None:
+    """Through `read_frames`, not only through the derivation — the refusal has
+    to reach the caller who opened a file, and it has to happen eagerly rather
+    than on the first row somebody iterates."""
+    path = write_frames(frames(), tmp_path / "run.csv")
+    lines = path.read_text().split(LINE_TERMINATOR)
+    columns = lines[0].split(",")
+    columns.insert(columns.index("human_x"), "base_vx")
+    lines[0] = ",".join(columns)
+    bad = tmp_path / "stray.csv"
+    bad.write_text(LINE_TERMINATOR.join(lines))
+    with pytest.raises(StreamFormatError, match="base_vx"):
+        read_frames(bad)
+
+
+# --- the mobile round trip --------------------------------------------------
+
+
+def mobile_frames(
+    n: int = 4, *, with_vel: bool = True, with_pose: bool = True
+) -> tuple[StateFrame, ...]:
+    """The same hand-authored trajectory as `frames`, with a base on it."""
+    out = []
+    for i, frame in enumerate(frames(n=n)):
+        out.append(
+            StateFrame(
+                t=frame.t,
+                q=frame.q,
+                qd=frame.qd,
+                human_pos=frame.human_pos,
+                human_vel=frame.human_vel,
+                base_vel=(
+                    BaseVelocity(vx=0.4 - 0.05 * i, vy=-0.125, omega=0.2 * i)
+                    if with_vel
+                    else None
+                ),
+                base_pose=(
+                    BasePose(
+                        x=1.5 + 0.25 * i,
+                        y=-0.75,
+                        theta=0.125 * i,
+                        source=PoseSource.DEAD_RECKONED,
+                    )
+                    if with_pose
+                    else None
+                ),
+                objects=frame.objects,
+            )
+        )
+    return tuple(out)
+
+
+def test_a_mobile_stream_round_trips_to_identical_values(tmp_path) -> None:
+    """**The positive this issue exists for.** A mobile scenario can be written
+    to disk and read back as the run it was, values and provenance intact."""
+    want = mobile_frames()
+    got = list(read_frames(write_frames(want, tmp_path / "mobile.csv")))
+    assert_frames_close(got, want)
+    assert [f.base_pose.source for f in got] == [PoseSource.DEAD_RECKONED] * len(want)
+
+
+@pytest.mark.parametrize(
+    ("with_vel", "with_pose"), [(True, False), (False, True), (True, True)]
+)
+def test_each_half_of_the_base_is_optional_on_its_own(
+    tmp_path, with_vel: bool, with_pose: bool
+) -> None:
+    """A base with wheel encoders and no localizer is the ordinary case, so the
+    two blocks are independent. Folded into one block, that robot's stream would
+    have to carry a pose nobody measured and a `PoseSource` nobody stated."""
+    want = mobile_frames(n=2, with_vel=with_vel, with_pose=with_pose)
+    path = write_frames(want, tmp_path / "half.csv")
+    got = list(read_frames(path))
+    assert_frames_close(got, want)
+    assert (got[0].base_vel is not None) == with_vel
+    assert (got[0].base_pose is not None) == with_pose
+
+
+def test_a_fixed_base_stream_still_reads_back_as_not_recorded(tmp_path) -> None:
+    """The other side of the same statement, and the one issue #150 fixed: a
+    stream with no base blocks says *nothing was recorded*, which must not
+    resolve into a base that was measured and found still."""
+    got = list(read_frames(write_frames(frames(), tmp_path / "fixed.csv")))
+    assert all(f.base_vel is None and f.base_pose is None for f in got)
+
+
+def test_a_mobile_stream_is_byte_identical_on_two_writes(tmp_path) -> None:
+    """The base columns are floats written through the same fixed-precision path
+    as every other one, so *same frames in, same bytes out* has to hold for them
+    too — a compression baseline measured on a mobile fixture is not a baseline
+    otherwise."""
+    a = write_frames(mobile_frames(), tmp_path / "a.csv")
+    b = write_frames(mobile_frames(), tmp_path / "b.csv")
+    assert a.read_bytes() == b.read_bytes()
+
+
+def test_an_unwritable_pose_source_is_refused_rather_than_defaulted(tmp_path) -> None:
+    """**Negative test.** A `base_pose_source` cell the reader cannot resolve is
+    a could-not-evaluate, and it must not resolve to a member.
+
+    `BasePose.source` is required with no default precisely so that a pose whose
+    provenance nobody stated cannot be told apart from one somebody did. Picking
+    a member here — or reading the pose and leaving the provenance out — would
+    reintroduce that one layer down, in the file rather than in the type.
+    """
+    path = write_frames(mobile_frames(n=2), tmp_path / "mobile.csv")
+    lines = path.read_text().rstrip(LINE_TERMINATOR).split(LINE_TERMINATOR)
+    at = lines[0].split(",").index("base_pose_source")
+    cells = lines[1].split(",")
+    cells[at] = "gps"
+    lines[1] = ",".join(cells)
+    bad = tmp_path / "bad-source.csv"
+    bad.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
+    with pytest.raises(StreamFormatError, match="not a PoseSource"):
+        list(read_frames(bad))
+
+
+def test_a_non_numeric_base_cell_is_refused(tmp_path) -> None:
+    """The base columns go through the same `_number` gate as every other float:
+    a NaN read back as a base velocity propagates into the outer envelope, which
+    is the only bound a mobile robot's VETO rests on (docs/mobile-base.md §1)."""
+    path = write_frames(mobile_frames(n=2), tmp_path / "mobile.csv")
+    lines = path.read_text().rstrip(LINE_TERMINATOR).split(LINE_TERMINATOR)
+    at = lines[0].split(",").index("base_omega")
+    cells = lines[1].split(",")
+    cells[at] = "nan"
+    lines[1] = ",".join(cells)
+    bad = tmp_path / "nan.csv"
+    bad.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
+    with pytest.raises(StreamFormatError, match="not finite"):
+        list(read_frames(bad))

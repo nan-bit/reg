@@ -28,6 +28,7 @@ from reg.sim import (
     EXIT_OK,
     EXIT_USAGE,
     PROVENANCE_BANNER,
+    PROVENANCE_VERSION,
     main,
     parse_provenance,
     simulate,
@@ -206,6 +207,42 @@ def test_a_file_without_provenance_reports_nothing_rather_than_defaults(
     path = tmp_path / "bare.csv"
     write_frames(scenario("contact").states(0), path)
     assert parse_provenance(path) == {}
+
+
+def test_the_banner_names_the_current_provenance_version(tmp_path) -> None:
+    """The version is what tells two blocks apart, so it has to be *in* the file.
+
+    Bumped to 2 by issue #176: `reg.stream` gained the two optional base blocks,
+    so a header with no base columns stopped meaning *this format has no base
+    columns* and started meaning *this run recorded no base*. Those are different
+    facts, and a reader holding a file written before the change can only tell
+    which one it is looking at from the version. Read out of the artifact rather
+    than compared to the constant twice over, because the property is that the
+    number reaches the file.
+    """
+    path = run(tmp_path)
+    assert read_comments(path)[0] == f"reg-sim provenance v{PROVENANCE_VERSION}"
+    assert PROVENANCE_VERSION >= 2
+
+
+def test_a_fixed_arm_scenario_records_no_base_rather_than_a_still_one(
+    tmp_path,
+) -> None:
+    """**The negative beside the version bump.** Every scenario in this
+    repository is bolted to the origin, so every stream the CLI writes must come
+    back with no base at all.
+
+    The schema can carry one since issue #176, which is exactly what makes this
+    worth asserting: a producer that started writing zeros into base columns
+    would still round-trip, still validate, and would say the base was measured
+    and found still — a claim no fixture here can make. `None` is *not
+    recorded*, and it must not resolve into a reading nobody took.
+    """
+    path = run(tmp_path, name="contact")
+    assert "base" not in header_line(path)
+    frames = list(read_frames(path))
+    assert frames
+    assert all(f.base_vel is None and f.base_pose is None for f in frames)
 
 
 # --- refusal ----------------------------------------------------------------

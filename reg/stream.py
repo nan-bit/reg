@@ -29,16 +29,51 @@ the human and the obstacles, which are Layer B. Nothing in Layer A reads it —
 the envelope takes `StateFrame.proprio()`. This module is a codec and makes no
 claim of its own.
 
-**This schema is a fixed-base schema and says so out loud.** `StateFrame` gained
-`base_vel` and `base_pose` in issue #150 and this format has columns for
-neither, which leaves the codec two honest options and one dishonest one. It
-reads absence as `None` — *not recorded* — and refuses to write a frame that
-carries either; what it must not do is write them nowhere and read them back as
-zeros, because that is a mobile run silently returning as a fixed-base one.
-Widening the schema is not free either: these bytes are the denominator of every
-compression figure Claim 1 quotes, and a new column needs a
-`reg.bench.COLUMN_RULES` entry naming its layer or the Layer A/Layer B column
-split moves without anything going red (docs/mobile-base.md §5).
+THE BASE, AND WHY IT IS TWO OPTIONAL BLOCKS RATHER THAN SEVEN COLUMNS (#176)
+----------------------------------------------------------------------------
+`StateFrame` gained `base_vel` and `base_pose` in issue #150 and this format had
+columns for neither, so it refused to write a frame carrying either — reading
+absence as *not recorded* rather than writing a mobile run out as a fixed-base
+one. It can now carry both, and the shape of that addition is set by one
+constraint: **Claim 1 stays a fixed-arm claim** (#140). `expected_header(2, 3)`
+is the 24 columns the priced fixture is measured on, and adding base columns
+unconditionally would grow every fixture's header, move the gzipped baseline,
+and move `265 GB`, `~40x` and every other figure `docs/retention.md` publishes —
+for eleven robots that are bolted to the origin. So the base is **two optional
+blocks**, present only in a stream whose frames carry them, and a header with
+neither is exactly the header it has always been.
+
+**They are two blocks and not one because the Layer A / Layer B line runs
+between them** (issue #150, docs/sufficiency.md §5.6):
+
+* `base_vx`, `base_vy`, `base_omega` are body-frame rates — what a wheel encoder
+  measures, a statement about the machine, **Layer A**.
+* `base_pose_x`, `base_pose_y`, `base_pose_theta`, `base_pose_source` are a
+  room-frame pose — a statement about the robot's relationship to a map or a
+  frame somebody defined, **Layer B**, structurally and not for want of a better
+  estimator.
+
+A robot can have one without the other (a base with encoders and no localizer is
+the ordinary case), and folding them into one block would mean writing the half
+nobody recorded — zeros for a pose nobody measured, or a `PoseSource` nobody
+stated. Each block is present or absent on its own for that reason.
+`reg.bench.COLUMN_RULES` carries one rule per block, on opposite sides of the
+boundary, or the Layer A / Layer B column split Claim 1's like-for-like
+comparison is computed over would move with nothing going red
+(docs/mobile-base.md §5).
+
+**WHY AN OPTIONAL BLOCK DOES NOT MAKE A HEADER AMBIGUOUS.** Two robots that
+differ must not produce the same header, or the stream is one nobody can read
+back. Block presence is decided by **comparing names at a fixed offset**, never
+by arithmetic over the column count, so `(n_joints, base_vel, base_pose,
+n_obstacles)` is recovered exactly and the map from it to a header is injective.
+The arithmetic is a backstop rather than the mechanism: no subset of the optional
+blocks — 3, 4 or 7 columns — is a multiple of the 5-column obstacle block, so
+even a reader that lost the name comparison could not read a base block as an
+extra obstacle. Anything else carrying base column *names* — a truncated block, a
+block after the human columns, a duplicated one — is refused by name rather than
+guessed at, because with the blocks out of place the rest of the header no longer
+identifies the robot that wrote it. `tests/test_stream.py` asserts all three.
 
 FAILURE POSTURE
 ---------------
@@ -54,12 +89,13 @@ import csv
 import math
 import os
 from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 
 import numpy as np
 
-from reg.types import Obstacle, StateFrame
+from reg.types import BasePose, BaseVelocity, Obstacle, PoseSource, StateFrame
 
 # Decimal places every float in the stream is written with. Chosen, not
 # defaulted: the raw stream is the fine-grained end of the pipeline (the graph
@@ -89,11 +125,37 @@ COMMENT_PREFIX = "#"
 
 _HUMAN_COLUMNS = ("human_x", "human_y", "human_vx", "human_vy")
 
+# The base's body-frame velocity — **Layer A**, the same terms `qd` is admitted
+# on (`reg.types.BaseVelocity`). Optional: present only in a stream whose frames
+# carry one.
+_BASE_VEL_COLUMNS = ("base_vx", "base_vy", "base_omega")
+
+# The base's room-frame pose — **Layer B**, structurally (`reg.types.BasePose`,
+# docs/sufficiency.md §5.6). `source` is carried for the reason an obstacle's
+# `kind` is: `BasePose.source` is required and has no default, so reconstructing
+# one on read would mean inventing a provenance indistinguishable downstream from
+# a recorded one. Deliberately **not** named `base_x`/`base_y`/`base_theta`: those
+# three are the columns `reg.bench.COLUMN_RULES` has no rule for, and
+# `tests/test_bench.py` requires them to stay unclassifiable, because a column
+# nobody has thought about must not be absorbed by a rule written for a different
+# one.
+_BASE_POSE_COLUMNS = (
+    "base_pose_x",
+    "base_pose_y",
+    "base_pose_theta",
+    "base_pose_source",
+)
+
 # Per-obstacle block. `x`, `y`, `r` are the three the schema is specified around;
 # `id` and `kind` are carried because `Obstacle` has them and a round trip that
 # silently drops them is not a round trip — reconstructing a `kind` on read would
 # mean inventing a value indistinguishable downstream from a recorded one.
 _OBSTACLE_COLUMNS = ("id", "kind", "x", "y", "r")
+
+#: Every column name that belongs to one of the two base blocks. Used to catch a
+#: base column sitting somewhere no block could have put it; see
+#: `_stray_base_columns`.
+_BASE_COLUMN_NAMES = frozenset(_BASE_VEL_COLUMNS) | frozenset(_BASE_POSE_COLUMNS)
 
 
 class StreamFormatError(ValueError):
@@ -105,8 +167,69 @@ class StreamFormatError(ValueError):
     """
 
 
-def expected_header(n_joints: int, n_obstacles: int) -> list[str]:
-    """The one definition of the column layout. Writer and reader both use it."""
+@dataclass(frozen=True)
+class StreamSchema:
+    """What one header says the stream holds. The writer derives it from the
+    frames; the reader recovers it from the header; they must be the same thing.
+
+    Four fields and no more, and that is the readability property: a header is a
+    function of exactly these, and this is recoverable from exactly that header
+    (`_schema_from_header`). Two robots that differ in any one of them produce
+    different headers — the module docstring says why that is a property of the
+    layout rather than a hope.
+
+    `base_vel` and `base_pose` are *whether the stream records them*, which is
+    not the same statement as *whether the base moved*. False means the file says
+    nothing about that half of the base, and `read_frames` renders it as `None`.
+    """
+
+    n_joints: int
+    n_obstacles: int
+    #: True if the stream carries the Layer A body-frame velocity block.
+    base_vel: bool
+    #: True if the stream carries the Layer B room-frame pose block.
+    base_pose: bool
+
+    def header(self) -> list[str]:
+        """The columns this schema writes, in order."""
+        return expected_header(
+            self.n_joints,
+            self.n_obstacles,
+            base_vel=self.base_vel,
+            base_pose=self.base_pose,
+        )
+
+    def width(self) -> int:
+        """How many fields a data row has under this schema."""
+        return (
+            1
+            + 2 * self.n_joints
+            + (len(_BASE_VEL_COLUMNS) if self.base_vel else 0)
+            + (len(_BASE_POSE_COLUMNS) if self.base_pose else 0)
+            + len(_HUMAN_COLUMNS)
+            + self.n_obstacles * len(_OBSTACLE_COLUMNS)
+        )
+
+
+def expected_header(
+    n_joints: int,
+    n_obstacles: int,
+    *,
+    base_vel: bool = False,
+    base_pose: bool = False,
+) -> list[str]:
+    """The one definition of the column layout. Writer and reader both use it.
+
+    `base_vel` and `base_pose` say whether the stream **records** each half of
+    the base. They are the one pair of arguments here with a default, and the
+    default is not an invented value: `False` is the statement a header with no
+    base columns already makes — *this file records no base* — which is what
+    `read_frames` renders as `None` and has meant since issue #150. Nothing in
+    the writer takes the default, either: `write_frames` derives both from the
+    frames it was handed, so a mobile run cannot become a fixed-base file by
+    omission. What the default buys is that `expected_header(2, 3)` is still the
+    24 columns Claim 1's published figures are measured on, byte for byte.
+    """
     if n_joints < 0 or n_obstacles < 0:
         raise ValueError(
             f"n_joints={n_joints}, n_obstacles={n_obstacles}: both must be >= 0"
@@ -114,6 +237,10 @@ def expected_header(n_joints: int, n_obstacles: int) -> list[str]:
     columns = ["t"]
     columns += [f"q_{i}" for i in range(n_joints)]
     columns += [f"qd_{i}" for i in range(n_joints)]
+    if base_vel:
+        columns += list(_BASE_VEL_COLUMNS)
+    if base_pose:
+        columns += list(_BASE_POSE_COLUMNS)
     columns += list(_HUMAN_COLUMNS)
     for j in range(n_obstacles):
         columns += [f"obs_{j}_{name}" for name in _OBSTACLE_COLUMNS]
@@ -128,10 +255,11 @@ def write_frames(
 ) -> Path:
     """Write a state stream to CSV. Returns the path, for `read_frames(write_frames(x))`.
 
-    The schema comes from the frames: joint count and obstacle count are read off
-    the first frame and every later frame must agree. A stream whose shape changes
-    mid-run cannot be described by one header, and quietly padding it would put
-    numbers under column names they do not belong to.
+    The schema comes from the frames: joint count, obstacle count and whether
+    each half of the base is recorded are read off the first frame, and every
+    later frame must agree. A stream whose shape changes mid-run cannot be
+    described by one header, and quietly padding it would put numbers under
+    column names they do not belong to.
 
     `comments` is written above the header as a `#`-prefixed block — the run's
     provenance, and nothing that varies between two runs of the same command. A
@@ -141,16 +269,21 @@ def write_frames(
     frames = tuple(frames)
     if not frames:
         raise StreamFormatError(
-            "no frames to write: the header (joint count, obstacle count) is "
-            "derived from the frames, so an empty stream has no schema. Nothing "
-            "was written — pass at least one StateFrame."
+            "no frames to write: the header (joint count, obstacle count, "
+            "whether the base is recorded) is derived from the frames, so an "
+            "empty stream has no schema. Nothing was written — pass at least "
+            "one StateFrame."
         )
 
-    n_joints = len(frames[0].q)
-    n_obstacles = len(frames[0].objects)
-    header = expected_header(n_joints, n_obstacles)
+    schema = StreamSchema(
+        n_joints=len(frames[0].q),
+        n_obstacles=len(frames[0].objects),
+        base_vel=frames[0].base_vel is not None,
+        base_pose=frames[0].base_pose is not None,
+    )
+    header = schema.header()
 
-    rows = [_row(frame, index, n_joints, n_obstacles) for index, frame in enumerate(frames)]
+    rows = [_row(frame, index, schema) for index, frame in enumerate(frames)]
     # Built before the file is opened, so a rejected comment leaves no partial
     # artifact behind — same posture as the row checks above.
     banner = [_comment(text, index) for index, text in enumerate(comments)]
@@ -191,11 +324,11 @@ def read_frames(path: str | os.PathLike[str]) -> Iterator[StateFrame]:
         header = next(reader, None)
         if header is None:  # pragma: no cover - `first` is a line, so there is one
             raise StreamFormatError(f"{path}: file is empty.")
-        n_joints, n_obstacles = _schema_from_header(header, path)
+        schema = _schema_from_header(header, path)
     except BaseException:
         handle.close()
         raise
-    return _iter_frames(handle, reader, n_joints, n_obstacles, path, n_comments)
+    return _iter_frames(handle, reader, schema, path, n_comments)
 
 
 def read_comments(path: str | os.PathLike[str]) -> list[str]:
@@ -245,31 +378,89 @@ def _uncomment(line: str) -> str:
     return text[1:] if text.startswith(" ") else text
 
 
+def _stray_base_columns(
+    header: Sequence[str], block_start: int, block_end: int
+) -> list[str]:
+    """Base column names sitting outside the blocks that were recognised.
+
+    A block is recognised by an exact name match at the offset the layout puts it
+    at, so anything left over is a base column in a position no writer of this
+    schema could have produced: a truncated block, a misordered one, a block after
+    the human columns, a duplicate. Returned as `index: name` rather than counted,
+    because the remedy is to look at that column.
+    """
+    return [
+        f"column {i}: {name!r}"
+        for i, name in enumerate(header)
+        if name in _BASE_COLUMN_NAMES and not (block_start <= i < block_end)
+    ]
+
+
 def _schema_from_header(
     header: list[str], path: str | os.PathLike[str]
-) -> tuple[int, int]:
-    """Derive (n_joints, n_obstacles) from a header, or refuse it.
+) -> StreamSchema:
+    """Derive the schema from a header, or refuse it.
 
     Derivation is only a guess at the shape; the check is the exact comparison
     against `expected_header`, which is what catches a renamed, reordered, or
     dropped column instead of reading the next column's numbers into it.
+
+    The two base blocks are detected by **name at a fixed offset** and never by
+    arithmetic over the column count — see the module docstring. A base column
+    that no block accounts for is refused before the arithmetic runs, so the
+    reader says *these base columns are not where a base block goes* rather than
+    the obstacle-block remainder message, which describes the symptom and not the
+    cause.
     """
     n_joints = 0
     while 1 + n_joints < len(header) and header[1 + n_joints] == f"q_{n_joints}":
         n_joints += 1
 
-    fixed = 1 + 2 * n_joints + len(_HUMAN_COLUMNS)
+    base_at = 1 + 2 * n_joints
+    at = base_at
+    base_vel = list(header[at : at + len(_BASE_VEL_COLUMNS)]) == list(
+        _BASE_VEL_COLUMNS
+    )
+    if base_vel:
+        at += len(_BASE_VEL_COLUMNS)
+    base_pose = list(header[at : at + len(_BASE_POSE_COLUMNS)]) == list(
+        _BASE_POSE_COLUMNS
+    )
+    if base_pose:
+        at += len(_BASE_POSE_COLUMNS)
+
+    stray = _stray_base_columns(header, base_at, at)
+    if stray:
+        raise StreamFormatError(
+            f"{path}: header carries base column(s) that are not a complete "
+            f"base block in the position the schema puts one: {stray}. The base "
+            f"is two whole blocks — {list(_BASE_VEL_COLUMNS)} (Layer A) and "
+            f"{list(_BASE_POSE_COLUMNS)} (Layer B) — immediately after the joint "
+            "columns, each present or absent as a unit. Refusing rather than "
+            "guessing which of them was meant: with the blocks out of place the "
+            "shape of the rest of the header no longer says which robot wrote "
+            f"it. Header: {header}"
+        )
+
+    fixed = at + len(_HUMAN_COLUMNS)
     remaining = len(header) - fixed
     if remaining < 0 or remaining % len(_OBSTACLE_COLUMNS) != 0:
         raise StreamFormatError(
             f"{path}: header has {len(header)} columns, which is not a valid "
-            f"stream schema. With {n_joints} joint column(s) the layout needs "
+            f"stream schema. With {n_joints} joint column(s), "
+            f"{'a' if base_vel else 'no'} base-velocity block and "
+            f"{'a' if base_pose else 'no'} base-pose block the layout needs "
             f"{fixed} columns plus a multiple of {len(_OBSTACLE_COLUMNS)} for "
             f"the obstacle blocks; got {remaining} left over. Header: {header}"
         )
-    n_obstacles = remaining // len(_OBSTACLE_COLUMNS)
+    schema = StreamSchema(
+        n_joints=n_joints,
+        n_obstacles=remaining // len(_OBSTACLE_COLUMNS),
+        base_vel=base_vel,
+        base_pose=base_pose,
+    )
 
-    expected = expected_header(n_joints, n_obstacles)
+    expected = schema.header()
     if header != expected:
         raise StreamFormatError(
             f"{path}: header does not match the stream schema.\n"
@@ -280,7 +471,7 @@ def _schema_from_header(
             "that names them differently would put values in the wrong fields "
             "without erroring anywhere downstream."
         )
-    return n_joints, n_obstacles
+    return schema
 
 
 def _first_difference(expected: list[str], got: list[str]) -> str:
@@ -293,12 +484,13 @@ def _first_difference(expected: list[str], got: list[str]) -> str:
 def _iter_frames(
     handle,
     reader,
-    n_joints: int,
-    n_obstacles: int,
+    schema: StreamSchema,
     path: str | os.PathLike[str],
     line_offset: int = 0,
 ) -> Iterator[StateFrame]:
-    width = 1 + 2 * n_joints + len(_HUMAN_COLUMNS) + n_obstacles * len(_OBSTACLE_COLUMNS)
+    n_joints = schema.n_joints
+    n_obstacles = schema.n_obstacles
+    width = schema.width()
     try:
         for row in reader:
             # The reader never saw the provenance block, so its line numbers are
@@ -316,7 +508,13 @@ def _iter_frames(
             # reading it positionally keeps reader and `expected_header` in step.
             q_at = 1
             qd_at = q_at + n_joints
-            human_at = qd_at + n_joints
+            base_vel_at = qd_at + n_joints
+            base_pose_at = base_vel_at + (
+                len(_BASE_VEL_COLUMNS) if schema.base_vel else 0
+            )
+            human_at = base_pose_at + (
+                len(_BASE_POSE_COLUMNS) if schema.base_pose else 0
+            )
             obs_at = human_at + len(_HUMAN_COLUMNS)
 
             t = _number(row[0], "t", line, path)
@@ -333,6 +531,31 @@ def _iter_frames(
                     for i in range(n_joints)
                 ],
                 dtype=float,
+            )
+            # No block means the file records nothing about that half of the
+            # base, and `None` is that statement. Zeros would be an invented
+            # reading: they say the base was measured and found still, which is
+            # what a mobile stream earns a column to claim (#150, #176).
+            base_vel = (
+                BaseVelocity(
+                    vx=_number(row[base_vel_at + 0], "base_vx", line, path),
+                    vy=_number(row[base_vel_at + 1], "base_vy", line, path),
+                    omega=_number(row[base_vel_at + 2], "base_omega", line, path),
+                )
+                if schema.base_vel
+                else None
+            )
+            base_pose = (
+                BasePose(
+                    x=_number(row[base_pose_at + 0], "base_pose_x", line, path),
+                    y=_number(row[base_pose_at + 1], "base_pose_y", line, path),
+                    theta=_number(
+                        row[base_pose_at + 2], "base_pose_theta", line, path
+                    ),
+                    source=_pose_source(row[base_pose_at + 3], line, path),
+                )
+                if schema.base_pose
+                else None
             )
             human_pos = np.array(
                 [
@@ -369,19 +592,33 @@ def _iter_frames(
                 qd=qd,
                 human_pos=human_pos,
                 human_vel=human_vel,
-                # This schema has no base columns, so a file written under it
-                # says nothing about the base — and `None` is that statement.
-                # Zeros would be an invented reading: they say the base was
-                # measured and found still, which is what a mobile stream would
-                # have to earn a column to claim. `_row` refuses to write a
-                # frame carrying either field for the same reason, so the round
-                # trip is exact rather than lossy in this direction (#150).
-                base_vel=None,
-                base_pose=None,
+                base_vel=base_vel,
+                base_pose=base_pose,
                 objects=tuple(objects),
             )
     finally:
         handle.close()
+
+
+def _pose_source(
+    raw: str, line: int, path: str | os.PathLike[str]
+) -> PoseSource:
+    """`PoseSource` for a written provenance string, or a refusal.
+
+    Not defaulted and not coerced. `BasePose.source` is required with no default
+    because a pose whose provenance nobody stated must not be indistinguishable
+    from one somebody did (`reg.types.PoseSource`); picking a member here for an
+    unreadable cell would reintroduce exactly that, one layer down.
+    """
+    try:
+        return PoseSource(raw)
+    except ValueError:
+        raise StreamFormatError(
+            f"{path} line {line}, column base_pose_source: {raw!r} is not a "
+            f"PoseSource. Valid values: {[m.value for m in PoseSource]}. The "
+            "pose is not read with a substituted provenance — what the pose "
+            "inherits and over what horizon is the whole content of this field."
+        ) from None
 
 
 def _number(raw: str, column: str, line: int, path: str | os.PathLike[str]) -> float:
@@ -402,8 +639,9 @@ def _number(raw: str, column: str, line: int, path: str | os.PathLike[str]) -> f
     return value
 
 
-def _row(frame: StateFrame, index: int, n_joints: int, n_obstacles: int) -> list[str]:
+def _row(frame: StateFrame, index: int, schema: StreamSchema) -> list[str]:
     where = f"frame {index} (t={frame.t})"
+    n_joints = schema.n_joints
     if len(frame.q) != n_joints or len(frame.qd) != n_joints:
         raise StreamFormatError(
             f"{where}: q has {len(frame.q)} and qd has {len(frame.qd)} entries, "
@@ -416,29 +654,32 @@ def _row(frame: StateFrame, index: int, n_joints: int, n_obstacles: int) -> list
             f"{len(frame.human_vel)} entries; this is a 2D world and both must "
             "have exactly 2."
         )
-    if frame.base_vel is not None or frame.base_pose is not None:
-        raise StreamFormatError(
-            f"{where}: carries base motion (base_vel={frame.base_vel!r}, "
-            f"base_pose={frame.base_pose!r}) and this schema has no columns for "
-            "either, so writing it would drop them. The file would then read "
-            "back as a fixed-base run, which is a different run — and nothing "
-            "downstream could tell, because the header it validates against "
-            "would still be the header it expects. Refusing rather than "
-            "truncating: the base columns arrive with the mobile fixtures "
-            "(docs/mobile-base.md §7, Tier 4), together with the "
-            "`reg.bench.COLUMN_RULES` entries that say which layer each of "
-            "them is, and this stream is Claim 1's baseline until they do."
-        )
-    if len(frame.objects) != n_obstacles:
+    _check_base_agrees(frame.base_vel, schema.base_vel, "base velocity", where)
+    _check_base_agrees(frame.base_pose, schema.base_pose, "base pose", where)
+    if len(frame.objects) != schema.n_obstacles:
         raise StreamFormatError(
             f"{where}: {len(frame.objects)} obstacle(s), but the stream header "
-            f"declares {n_obstacles} from frame 0. Obstacles are static and are "
-            "written every frame; a changing count means the header is a lie."
+            f"declares {schema.n_obstacles} from frame 0. Obstacles are static "
+            "and are written every frame; a changing count means the header is "
+            "a lie."
         )
 
     cells = [_fixed(frame.t, "t", where)]
     cells += [_fixed(v, f"q_{i}", where) for i, v in enumerate(frame.q)]
     cells += [_fixed(v, f"qd_{i}", where) for i, v in enumerate(frame.qd)]
+    if schema.base_vel:
+        cells += [
+            _fixed(frame.base_vel.vx, "base_vx", where),
+            _fixed(frame.base_vel.vy, "base_vy", where),
+            _fixed(frame.base_vel.omega, "base_omega", where),
+        ]
+    if schema.base_pose:
+        cells += [
+            _fixed(frame.base_pose.x, "base_pose_x", where),
+            _fixed(frame.base_pose.y, "base_pose_y", where),
+            _fixed(frame.base_pose.theta, "base_pose_theta", where),
+            frame.base_pose.source.value,
+        ]
     cells += [
         _fixed(frame.human_pos[0], "human_x", where),
         _fixed(frame.human_pos[1], "human_y", where),
@@ -454,6 +695,43 @@ def _row(frame: StateFrame, index: int, n_joints: int, n_obstacles: int) -> list
             _fixed(obstacle.radius, f"obs_{j}_r", where),
         ]
     return cells
+
+
+def _check_base_agrees(
+    value: object, declared: bool, what: str, where: str
+) -> None:
+    """Refuse a frame whose base differs in *shape* from the header's.
+
+    The header is derived from frame 0, so a later frame that gained or lost a
+    base is a stream one header cannot describe. Both directions are refusals and
+    for different reasons, which is why the message says which one happened:
+
+    * **Carries one, header has no columns for it.** Writing it would drop the
+      base, and the file would read back as a fixed-base run — same header, same
+      width, every check downstream green, and the fact that the base was there
+      gone with no record of it.
+    * **Header has columns, frame records none.** There is nothing honest to put
+      in the cells. Zeros would say the base was measured and found still, and a
+      blank would be read back as a number that is not one.
+    """
+    if (value is not None) == declared:
+        return
+    if value is not None:
+        raise StreamFormatError(
+            f"{where}: carries a {what} ({value!r}) and this stream has no "
+            f"columns for one — the header is derived from frame 0, which "
+            "recorded none. Writing it would drop the value and the file would "
+            "read back as a run that never had it, which nothing downstream "
+            "could detect. One header cannot describe a stream whose shape "
+            "changes."
+        )
+    raise StreamFormatError(
+        f"{where}: records no {what}, but frame 0 did, so this stream has "
+        "columns for one. There is no honest cell to write: zeros would say the "
+        "base was measured and found still, which is a different fact from not "
+        "having been recorded. One header cannot describe a stream whose shape "
+        "changes."
+    )
 
 
 def _fixed(value: float, column: str, where: str) -> str:

@@ -974,6 +974,45 @@ COLUMN_RULES: tuple[ColumnRule, ...] = (
         LAYER_B,
         "an obstacle's identity, kind or pose",
     ),
+    # --- the base, and the two halves are not on the same side (issue #176) ---
+    #
+    # This is the first place both halves of a mobile base appear in this rule
+    # set, and lumping them together would be the mistake the rule set exists to
+    # make impossible. The split is `reg.types.BaseVelocity` against
+    # `reg.types.BasePose`, docs/sufficiency.md §5.6, and it is structural rather
+    # than a judgement about how well either can be sensed:
+    #
+    # * A **body-frame rate** — *this base is moving 0.4 m/s forward and turning
+    #   at 0.2 rad/s* — is a statement about the machine. It names no map, no
+    #   landmark and no frame anybody defined, and it is what a wheel encoder
+    #   measures. That is the argument `qd` is admitted on, so it is Layer A on
+    #   the same terms.
+    # * A **room-frame pose** is a statement about the robot's relationship to
+    #   something outside the robot, so it is Layer B — and no localizer moves
+    #   it, including a set-membership estimator returning a set guaranteed to
+    #   contain the true pose, because a guarantee conditioned on a map is a
+    #   Layer B guarantee. `base_pose_source` goes with the pose: it records what
+    #   that pose inherits and over what horizon, and both `PoseSource` values
+    #   are Layer B (`reg.types.PoseSource` — there is deliberately no mapping
+    #   from a member to a layer).
+    #
+    # The columns are `base_pose_x` and not `base_x` on purpose: the negative
+    # tests in `tests/test_bench.py` drive the refusal with `base_x`, `base_y`
+    # and `base_theta`, and a rule written loosely enough to absorb those would
+    # retire the one check that can say *this column has no rule*.
+    ColumnRule(
+        r"base_(?:vx|vy|omega)",
+        LAYER_A,
+        "the base's body-frame linear or yaw rate — what a wheel encoder "
+        "measures, admitted on the same terms as a joint velocity",
+    ),
+    ColumnRule(
+        r"base_pose_(?:x|y|theta|source)",
+        LAYER_B,
+        "the base's room-frame pose, or the provenance of that pose — a "
+        "statement about the robot's relationship to a map or a frame somebody "
+        "defined, and Layer B structurally",
+    ),
 )
 
 

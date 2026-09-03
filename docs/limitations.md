@@ -16,7 +16,7 @@ an intent, and every one of these is an intent stated out loud.
 
 ---
 
-## 1. Recomputed envelope geometry assumes the same code and the same shapely
+## 1. Recomputed envelope geometry assumes the same code, shapely and platform
 
 **What.** Most `envelope` rows in an artifact carry `geometry_wkb = NULL`. The
 polygon was discarded because it is a deterministic function of things the artifact
@@ -51,6 +51,34 @@ Two consequences worth being precise about, because they are not the same:
   chain (Layer A) are stored in full and hash nothing that a geometry library
   computes. `verify_chain()` is unaffected by this limitation.
 
+**The platform is a second axis, and it is recorded even less than the first.**
+"Deterministic" is also deterministic *on one architecture*. `sin` and `cos` come
+from whatever libm the interpreter was linked against, and IEEE-754 does not pin
+either of them; a GEOS build is entitled to the same freedom. This is measured
+rather than supposed: the repository's own bit-identity tables —
+`tests/test_kinematics.py::test_the_demo_arm_at_the_origin_is_bit_identical_to_before_the_base_moved`
+and
+`tests/test_envelope.py::test_the_outer_set_at_the_origin_is_bit_identical_to_before_the_base_moved`
+— pin hex float literals captured on x86_64 Linux, and four of those
+parametrizations differed in their last bits on arm64 Darwin (issue #175).
+
+**The cost of that axis, in the same two directions.** An assessor recomputing a
+discarded envelope from a five-year-old artifact on a different architecture can
+get a polygon that differs from the one built at the time, for a reason the
+artifact does not record and cannot state. On a *stored* frame the disagreement
+is visible — `shapely.equals_exact(..., tolerance=0.0)` is what
+`tests/test_graph.py::test_envelope_at_recomputes_the_stored_polygon_exactly`
+compares with, deliberately at zero tolerance — and it is visible as a bare
+disagreement: nothing distinguishes *the geometry moved* from *this is a
+different machine*, and those call for opposite responses. And the first bullet
+above does not rescue it: `envelope_hash` is taken over coordinates quantized to
+`reg.envelope.HASH_COORD_PRECISION`, nine decimal places, chosen so that
+last-bit noise cannot change the digest. So the hash detects the drift it was
+built to detect — a recomputation that moved by more than a nanometre — and an
+ulp-scale platform difference passes it silently. That is the right trade and it
+is worth stating in this direction: on this axis a matching `envelope_hash` is
+not evidence that the two polygons are the same bytes.
+
 **What a claim would need instead.** Retaining every polygon — which is what this
 project did until issue #28 measured the artifact at 20–30x *larger* than a gzipped
 CSV of the stream it replaced (24 columns for the priced fixture, 19 of them
@@ -63,6 +91,22 @@ alone is not sufficient — **the shapely and GEOS versions that built
 an artifact are not currently recorded in it, and recording them would let a future
 reader know whether to trust a recomputation rather than having to assume.** That is
 a small, obvious follow-up and it is deliberately not smuggled in here.
+
+**What a claim would need instead, for this axis.** The same versioned,
+specified-output geometry kernel the paragraph above asks for, plus correctly
+rounded transcendentals — a claim of bit-identity across architectures needs the
+whole stack to be specified, not merely deterministic. Short of that, an artifact
+would have to record the platform it was built on (`platform.machine()` and
+`platform.system()`, beside the shapely and GEOS versions named above) so a
+recomputation that disagrees can be read as *wrong machine* rather than as *the
+geometry moved*. **It records none of them today.** What has been done is
+the smaller, in-repository half: each bit-identity table now records the platform
+it was captured on and reports an explicit could-not-evaluate — the repository's
+third state, warned so it is audible and skipped so it never reads as a pass —
+when the suite runs anywhere else, while the moved-base negatives stay ungated so
+a real divergence is still red on every platform. `CLAUDE.md` rule 2 carries the
+same qualifier, because *same seed, same bytes* is checked by two CI runs on one
+platform.
 
 **What this limitation is not.** It is not a reason to distrust the *retained*
 answers. Every `INTERSECTS`, `SEPARATION` and `CONTACT` interval, every

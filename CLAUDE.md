@@ -59,6 +59,22 @@ not read as a clean Layer A one. Issue #84, `docs/sufficiency.md` §7,
 argument and record it. Same seed, same bytes. An audit artifact that is not
 reproducible is not an audit artifact, and CI compares two runs.
 
+*Same bytes on one platform, and the qualifier is not a hedge.* The two runs CI
+compares are on the same machine, so what that comparison establishes is
+determinism *within* an architecture. Across architectures it does not hold and
+is not claimed: `sin`, `cos` and a GEOS build are the platform's, not
+IEEE-754's, and issue #175 measured it — hex-float tables captured on x86_64
+Linux differ in their last bits on arm64 Darwin. So a test that pins exact bytes
+**records the platform it captured them on** and reports a could-not-evaluate
+there, rather than a pass or a failure, when it runs anywhere else;
+`tests/test_kinematics.py` and `tests/test_envelope.py` are the worked examples,
+and the negatives that feed the same comparison a real divergence stay ungated,
+because a mechanism that turned that into a could-not-evaluate would be worse
+than the red suite it replaces. `docs/limitations.md` §1 carries the cost one
+level up: an artifact records neither the platform nor the shapely and GEOS
+versions it was built with, so an assessor's recomputation that disagrees cannot
+be read as *wrong machine* rather than *the geometry moved*.
+
 **3. Enforcement must not trust the policy.** `reg/enforce.py` computes its own
 bound and imports from `declare/` no further than the dataclass. A constraint
 layer supplied by the same party as the policy has common-cause failure with it —

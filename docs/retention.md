@@ -224,7 +224,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.29 MB/h → 264 GB → ~691x** | 149.72 MB/h → 656 GB → ~278x | 217.57 MB/h → 953 GB → ~192x |
+| **50 Hz (this simulator, published above)** | **60.42 MB/h → 265 GB → ~690x** | 150.15 MB/h → 658 GB → ~278x | 218.00 MB/h → 955 GB → ~191x |
 | 100 Hz | 106.45 MB/h → 466 GB → ~391x | 246.33 MB/h → 1.08 TB → ~169x | 409.70 MB/h → 1.79 TB → ~102x |
 | 250 Hz | 247.13 MB/h → 1.08 TB → ~169x | 528.44 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
 | **1 kHz (a real manipulator)** | **951.65 MB/h → 4.17 TB → ~44x** | 1.94 GB/h → 8.50 TB → ~21x | 4.26 GB/h → 18.66 TB → ~10x |

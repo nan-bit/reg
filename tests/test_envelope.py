@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import inspect
 import math
 import pathlib
+import platform
 import subprocess
 import sys
 import textwrap
+import warnings
 
 import numpy as np
 import pytest
@@ -960,6 +963,92 @@ def test_outer_radius_is_the_furthest_vertex() -> None:
 #: limits change, this table is stale and must fail rather than quietly track it.
 from reg.world import LIMITS as DEMO_LIMITS  # noqa: E402
 
+# AND THE TABLE IS PLATFORM-BOUND (issue #175)
+# --------------------------------------------
+# Sixty-four bits is a claim about a machine, not about arithmetic. The values
+# below come out of GEOS through `sin`/`cos`, and neither the platform's libm
+# nor a GEOS build is pinned by IEEE-754. So this table held on the platform it
+# was captured on and failed by a last bit on arm64 Darwin, which made the whole
+# suite red on a developer machine — and an exactness test that fails for a
+# reason that looks incidental is the one most likely to be waved away.
+#
+# The answer is not a tolerance (`assert_allclose` passes the broken version
+# this table exists to catch), not deleting the table, and not a bare `skipif`
+# that leaves the reader to guess why. It is the repository's third state: off
+# the capture platform this is a stated COULD-NOT-EVALUATE, warned so it is
+# audible in the default `-q` output and skipped so it never reads as a pass.
+# The negatives below are deliberately *not* guarded — see
+# `test_the_moved_base_negative_is_not_gated_by_the_platform_guard`.
+# `docs/limitations.md` §1 carries the same axis one level up, beside the
+# shapely-version dependence it already records, where it is about what an
+# artifact may claim rather than about this file.
+#
+# The hazard this leaves is worth naming: if CI ever moved to another
+# architecture, the table would stop being evaluated on every push. That is
+# visible rather than silent — the COULD-NOT-EVALUATE appears in the run's own
+# output — and the response is to recapture the table there, as a second table
+# with its own capture record, not to widen the constant below.
+
+#: The platform the table below was captured on: `(platform.machine(),
+#: platform.system())`. Recorded rather than assumed so that the next person to
+#: see a divergence can tell *wrong platform* from *the geometry moved* — those
+#: need opposite responses, and without this constant they are the same red
+#: line. CI runs on this platform, so the exactness is checked on every push.
+BIT_IDENTITY_CAPTURE_PLATFORM = ("x86_64", "Linux")
+
+
+class BitIdentityNotEvaluated(UserWarning):
+    """A could-not-evaluate that has to be heard.
+
+    `pytest.skip` alone is silent under `-q`: the reader sees an `s` and no
+    reason, which is the *bare skipif* the issue rules out. A warning is
+    printed in the summary by default, so the platform question is stated in
+    the output of the run that could not answer it.
+    """
+
+
+def bit_identity_could_not_evaluate(
+    here: tuple[str, str],
+    capture: tuple[str, str] = BIT_IDENTITY_CAPTURE_PLATFORM,
+) -> str | None:
+    """`None` if `here` may evaluate the table; the reason it cannot otherwise.
+
+    Split out from the guard so the decision is testable without a machine of
+    each architecture: the tests below feed it both answers and check that the
+    reason names both platforms and does not claim the table passed.
+    """
+    if here == capture:
+        return None
+    return (
+        "COULD-NOT-EVALUATE: the outer-envelope bit-identity table was "
+        f"captured on {capture[0]}/{capture[1]} and this is {here[0]}/"
+        f"{here[1]}. The last bits of a GEOS area and of `sin`/`cos` are the "
+        "platform's, not IEEE-754's, so bit-identity is claimed on the capture "
+        "platform and is not claimed across architectures. The table is "
+        "neither confirmed nor contradicted here — this is not a pass. Run it "
+        f"on {capture[0]}/{capture[1]}, as CI does, to evaluate it. See "
+        "docs/limitations.md §1."
+    )
+
+
+def require_the_capture_platform() -> None:
+    """Guard for the table's tests only. **Never for their negatives.**
+
+    A mechanism that turned a real divergence into a could-not-evaluate would
+    be worse than the red suite it replaces, so the moved-base negatives below
+    do not call this and
+    `test_the_moved_base_negative_is_not_gated_by_the_platform_guard` holds
+    them to it.
+    """
+    reason = bit_identity_could_not_evaluate(
+        (platform.machine(), platform.system())
+    )
+    if reason is None:
+        return
+    warnings.warn(BitIdentityNotEvaluated(reason), stacklevel=2)
+    pytest.skip(reason)
+
+
 #: `(q, qd, horizon, outer_radius, area)` — every value a `float.hex()` string,
 #: computed on the commit *before* the base became an argument, with
 #: `substep_dt` left at `SUBSTEP_DT`. Hex float literals rather than decimals
@@ -1042,7 +1131,14 @@ def test_the_outer_set_at_the_origin_is_bit_identical_to_before_the_base_moved(
     a ring in GEOS and does not return it unchanged. That makes this table the
     regression guard for the whole mobile tier, and it is why it is checked with
     `.hex()` rather than with `pytest.approx`.
+
+    Bit-identity is claimed **on the capture platform**; elsewhere this is a
+    could-not-evaluate rather than a pass or a failure (issue #175). The
+    negatives below are not guarded, because a real divergence must stay red
+    everywhere.
     """
+    require_the_capture_platform()
+
     state = _state_from_hex(q_hex, qd_hex)
     region = outer_envelope(
         state, DEMO_LIMITS, float.fromhex(horizon_hex), ORIGIN_FRAME
@@ -1055,7 +1151,11 @@ def test_the_outer_set_at_the_origin_is_bit_identical_to_before_the_base_moved(
         expected = float.fromhex(expected_hex)
         assert got.hex() == expected.hex(), (
             f"{name} moved: got {got!r} ({got.hex()}), the commit before the "
-            f"base became an argument gave {expected!r} ({expected_hex})."
+            f"base became an argument gave {expected!r} ({expected_hex}). This "
+            f"ran on {BIT_IDENTITY_CAPTURE_PLATFORM[0]}/"
+            f"{BIT_IDENTITY_CAPTURE_PLATFORM[1]}, the platform the table was "
+            "captured on, so this is the geometry moving and not a difference "
+            "between architectures."
         )
 
 
@@ -1118,6 +1218,104 @@ def test_the_radius_is_measured_from_the_base_it_is_given() -> None:
     assert outer_radius(moved, ORIGIN_FRAME) != pytest.approx(
         outer_radius(at_origin, ORIGIN_FRAME), abs=1e-6
     )
+
+
+def test_the_moved_base_negative_is_not_gated_by_the_platform_guard() -> None:
+    """**THE NEGATIVE FOR THE GUARD.** Could-not-evaluate must not swallow it.
+
+    The guard exists so that a last-bit difference between architectures stops
+    reading as a defect. The failure mode it introduces is the opposite one: a
+    mechanism that also turned a *real* divergence into a could-not-evaluate
+    would be worse than the red suite it replaces, because the table would then
+    be unable to fail anywhere but on one machine.
+
+    Two halves. *Structural*: the two moved-base negatives above do not call the
+    guard, asserted against their source, so no platform can skip them.
+    *Numeric*: the same comparison the table uses, fed a base one millimetre
+    away, disagrees by more than a billion ulps on every row — six orders of
+    magnitude past anything a differing libm or GEOS build could contribute — so
+    the disagreement is a property of the geometry and not of this machine.
+    """
+    for negative in (
+        test_a_base_a_millimetre_away_moves_the_outer_set_by_exactly_that_much,
+        test_the_radius_is_measured_from_the_base_it_is_given,
+    ):
+        assert require_the_capture_platform.__name__ not in inspect.getsource(
+            negative
+        ), (
+            f"{negative.__name__} now calls the platform guard, so a real "
+            "divergence reports could-not-evaluate off the capture platform."
+        )
+
+    base = BaseFrame(x=0.001, y=0.0, theta=0.0)
+    for q_hex, qd_hex, horizon_hex, radius_hex, _area_hex in DEMO_WORLD_OUTER_BEFORE:
+        region = outer_envelope(
+            _state_from_hex(q_hex, qd_hex),
+            DEMO_LIMITS,
+            float.fromhex(horizon_hex),
+            base,
+        )
+        got = outer_radius(region, ORIGIN_FRAME)
+        expected = float.fromhex(radius_hex)
+
+        assert got.hex() != expected.hex()
+        assert abs(got - expected) > 1e9 * math.ulp(expected), (
+            f"a base 1 mm away moved outer_radius from {expected!r} to {got!r},"
+            " a gap within the range a platform's libm or GEOS build could "
+            "account for. This negative would then be indistinguishable from "
+            "the noise the guard hides."
+        )
+
+
+def test_the_platform_guard_reports_could_not_evaluate_off_the_capture_platform() -> (
+    None
+):
+    """The reason has to say enough to act on: which platform, and what is not claimed.
+
+    A skip whose reason is "wrong platform" sends the reader to the source to
+    find out which platform, and a skip that reads like a pass is the outcome
+    issue #175 rules out. So the text is asserted, not just the verdict.
+    """
+    reason = bit_identity_could_not_evaluate(("arm64", "Darwin"))
+
+    assert reason is not None
+    assert "COULD-NOT-EVALUATE" in reason
+    assert "arm64/Darwin" in reason, "the reason does not name where it ran"
+    assert "x86_64/Linux" in reason, "the reason does not name the capture platform"
+    assert "not claimed across architectures" in reason
+    assert "not a pass" in reason
+
+
+def test_the_platform_guard_evaluates_the_table_on_the_capture_platform() -> None:
+    """**The other half of the negative**: the guard must not skip everywhere.
+
+    A guard that always returned a reason would make the table unfalsifiable
+    while looking careful — CI would go green on an outer set that moved. It
+    also has to be strict about *which* platform: same architecture on a
+    different OS is a different libm and a different GEOS build, so that is a
+    could-not-evaluate too.
+    """
+    assert bit_identity_could_not_evaluate(BIT_IDENTITY_CAPTURE_PLATFORM) is None
+    assert bit_identity_could_not_evaluate(("x86_64", "Windows")) is not None
+    assert bit_identity_could_not_evaluate(("aarch64", "Linux")) is not None
+
+
+def test_the_guard_warns_and_skips_rather_than_passing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The verdict is delivered, not just computed — and it is not silence.
+
+    `pytest.skip` under `-q` prints an `s` and nothing else, which is the bare
+    `skipif` this replaces. The warning is what makes the could-not-evaluate
+    appear in the run's own output, and the skip is what stops the assertions
+    below it from being reached and read as a pass.
+    """
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+
+    with pytest.warns(BitIdentityNotEvaluated, match="COULD-NOT-EVALUATE"):
+        with pytest.raises(pytest.skip.Exception, match="COULD-NOT-EVALUATE"):
+            require_the_capture_platform()
 
 
 @pytest.mark.parametrize(

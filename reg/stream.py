@@ -61,7 +61,8 @@ the ordinary case), and folding them into one block would mean writing the half
 nobody recorded — zeros for a pose nobody measured, or a `PoseSource` nobody
 stated. Each block carries its own provenance column for the same reason
 (`base_vel_source`, `base_pose_source`): the two are separate claims about the
-run, and neither can be inferred from the other. Each block is present or absent on its own for that reason.
+run, and neither can be inferred from the other. Each block is present or
+absent on its own for that reason.
 `reg.bench.COLUMN_RULES` carries one rule per block, on opposite sides of the
 boundary, or the Layer A / Layer B column split Claim 1's like-for-like
 comparison is computed over would move with nothing going red

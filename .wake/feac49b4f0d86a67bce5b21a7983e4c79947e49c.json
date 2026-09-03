@@ -1,0 +1,91 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "156-1788418394424684186-1446045",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "harness": "wake-runner",
+      "harness_version": "v0.4.5 (688a71b67)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "aaa47b49a9fc804596de050f2291465af6d48a322b7536250ab1d98c695c2667",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "362e35809aeeb6d25e38614264429f2431aabf67d803e8816b11e7a8d302dbe3",
+        "authored_by": "80f9cb8d86c24a8a58aebe515f9fbc7f7446880aef0ab7584c564a56266267c6",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "2d27c7df41977534d8400b11ffafcbef03bc6155ea460a8ba27cc08ac9249b7e",
+        "concluded": "b6429dbb35b2efe5e6607b67495cb864e982275f93366945069d2b3de2c673c1",
+        "coverage": "3bcfedbf4d7db342a5f12f449b96b9109bdaebeb7a162d21e35bfabe1a310669",
+        "declared": "936f4ce83ede70c27d43f8c3f6481cdb82f05d2b58875a7425fa42cbe95e2e27",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "0fecf9247f3ddc84db8a804fa3065c013baf6b7c2458c2ba2bf56c2e1d42ddd4",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "9fb6079598834b5b5f278e474391050d7633b0d95407e8848fa20837887216b3",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "9d31c2c4e74258aa4b89a2a9fd3d7965c657501093def4007c6d417a888fdd73",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "feac49b4f0d86a67bce5b21a7983e4c79947e49c",
+    "concluded": {
+      "analyzer": "unknown",
+      "changed": [],
+      "edge_kinds": [],
+      "granularity": "file",
+      "reach": []
+    },
+    "coverage": {
+      "analyzed": {},
+      "changed_unreadable": [],
+      "reason": "",
+      "unreadable": {},
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [],
+      "source": "issue-body:Affected areas",
+      "state": "undeclared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 156,
+    "out_of_scope": [],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": false,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "could-not-evaluate",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "feac49b4f0d86a67bce5b21a7983e4c79947e49c"
+      },
+      "name": "auto/issue-156"
+    }
+  ]
+}

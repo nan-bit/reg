@@ -1216,6 +1216,17 @@ def envelope_layer(limits: Limits) -> Layer:
     cannot name the world — so the provenance of the bounds is the only thing
     left that decides this, and `Limits.source` is where it is written down.
 
+    **That sentence is exactly true of `compute_envelope` and not of
+    `outer_envelope`** (issue #156). The outer set reads `state.base_vel` through
+    `base_motion_bounds`, and a `BaseVelocity` can be filled by visual odometry —
+    the taint arrives in a *value* on the state side too, which is why
+    `reg.types.VelocitySource` is required on that type. Nothing maps a member of
+    it to a layer yet and this function does not consult one, so an outer set
+    whose base term came from a perceiver is still tagged from its bounds alone.
+    Recorded rather than hidden: docs/limitations.md §11, docs/sufficiency.md
+    §5.9. Closing it is a decision about the *edge*, taken together with the
+    posed-configuration case §5.8 holds open, and not a patch to this function.
+
     The case that makes it matter is ISO/TS 15066 speed-and-separation
     monitoring: `qd_max` capped by a measured separation distance is
     perception-derived, so the envelope integrated under it is Layer B and the

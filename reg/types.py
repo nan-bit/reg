@@ -40,6 +40,14 @@ moves it. So that enum records what the pose inherits and over what horizon, and
 there is deliberately no function turning it into a `Layer`. Issue #149;
 docs/sufficiency.md §5.6.
 
+The widening did not come free either, and `BaseVelocity.source` is what it
+cost. A body-frame rate names nothing outside the robot, and **visual odometry
+fills one by looking at the room** — the `Limits` hole again, in the type Layer A
+was widened for. So this type carries `source: VelocitySource`, required and with
+no inference; unlike `PoseSource` it really does fork a layer, and unlike
+`LimitSource` nothing consumes it yet, which is a gap this file names rather than
+one it hides. Issue #156; docs/sufficiency.md §5.9, docs/limitations.md §11.
+
 This mirrors established practice rather than inventing it: reachability-based
 trajectory design (ARMTD, ARMOUR) computes a manipulator's reachable set offline
 and independent of obstacles, then intersects with the scene afterwards. See
@@ -172,6 +180,71 @@ class PoseSource(Enum):
     #: Map-based pose estimation. Layer B in the room for the same structural
     #: reason, with the map and the association as its failure modes.
     LOCALIZED = "localized"
+
+
+class VelocitySource(Enum):
+    """Where a `BaseVelocity`'s numbers came from (issue #156).
+
+    THIS IS ISSUE #84's HOLE, REOPENED FOR A NEW TYPE
+    -------------------------------------------------
+    `LimitSource` above exists because a **value** can carry a perceiver in past
+    a check that inspects **names**: `Limits` names nothing outside the robot,
+    and under ISO/TS 15066 speed-and-separation monitoring `qd_max` is still a
+    function of a measured separation distance. The same sentence, one type
+    over. `BaseVelocity` names nothing outside the robot either — *0.4 m/s
+    forward, 0.2 rad/s* is a statement about the machine — and **visual
+    odometry** fills that structure by looking at the room.
+
+    So the body-frame *quantity* is Layer A, on exactly the terms `qd` is, and a
+    `BaseVelocity` **filled from a perceiver is not**. Those are not in tension:
+    a layer is a claim about whose failure modes an answer inherits, and a VO
+    estimate inherits texture, lighting, and a scene that was assumed static.
+    Only the party that assembled the numbers knows which case a given artifact
+    is in, so the caller states it — required, no default, no inference.
+    docs/sufficiency.md §5.9.
+
+    WHY THIS ONE FORKS A LAYER AND `PoseSource` DOES NOT
+    ---------------------------------------------------
+    `PoseSource` sits above and looks like the same shape, and it deliberately
+    has no mapping to a `Layer` because **both** its values are Layer B: a
+    room-frame pose is a statement about the robot's relationship to a map, and
+    no localizer moves it. There is no such collapse here. A wheel encoder is
+    proprioception and a camera is not, so this enum is `LimitSource`'s kind and
+    not `PoseSource`'s, and a scan that treats the two alike is wrong about one
+    of them.
+
+    **Nothing in `reg/` maps a member of this enum to a `Layer` yet, and that is
+    a gap rather than a decision.** `reg.envelope.envelope_layer` decides the
+    `HAS_ENVELOPE` tag from `Limits.source` alone, so an outer envelope computed
+    from a `DERIVED` base velocity — `reg.envelope.base_motion_bounds` reads
+    `state.base_vel`, and since issue #163 that displacement is inside the bound
+    every VETO for a mobile robot rests on — is still tagged from its bounds
+    only. What this field buys today is that the artifact **records** which case
+    it is in; what it does not yet buy is the tag following it.
+    docs/limitations.md §11 is the entry, in the form that file's entries take.
+    Do not close that gap by giving this enum a default or by inferring a
+    member: an undecided provenance must never resolve to `PROPRIOCEPTIVE`,
+    which is the whole content of issue #84.
+
+    WHAT THIS BINARY SIMPLIFIES, SAID OUT LOUD
+    ------------------------------------------
+    The same two values, and the same simplification `LimitSource` records: a
+    wheel encoder needs ISO 13849 cat-3 dual channel before it carries a safety
+    claim and still lands in `PROPRIOCEPTIVE`, while a fused wheel-odometry /
+    IMU / VO estimator — which is what a real base runs — is one number with
+    three provenances and lands in `DERIVED` as a whole, because a fused value
+    inherits the taint of its weakest input. A tag plus an integrity attribute
+    would model that; it was considered and rejected for scope under issue #84
+    and this type does not reopen it (docs/sufficiency.md §7).
+    """
+
+    #: Measured on the robot: wheel encoders, a steering resolver, a drive-shaft
+    #: tachometer. The `qd` case, one body down.
+    PROPRIOCEPTIVE = "proprioceptive"
+    #: Estimated from something perceived — visual or visual-inertial odometry,
+    #: a lidar scan match, an external tracker. Whatever is computed from this
+    #: velocity inherits that perceiver.
+    DERIVED = "derived"
 
 
 @dataclass(frozen=True)
@@ -358,13 +431,25 @@ class BaseVelocity:
     where a norm, or a `clip` against one bound, is a mistake nothing would
     catch.
 
-    **No provenance field, and that is deliberate.** `Limits.source` exists
-    because a *value* can carry a perceiver in from outside, and a base velocity
-    can too — visual odometry rather than a wheel encoder. But this type is
-    admitted on exactly the terms `qd` is admitted on, and `qd` carries no
-    provenance either; tagging the new field alone would leave the older one it
-    copies untagged and would be a wider change than issue #150. Recorded here,
-    not resolved.
+    **`source` is required, and issue #156 is why it stopped being absent.**
+    This type shipped without a provenance field on the argument that it is
+    admitted on exactly the terms `qd` is admitted on and that `qd` carries none
+    either. The argument does not hold, because the two are not symmetric:
+    **nothing plausibly measures a joint velocity by looking at the room, and
+    something plausibly measures a base velocity that way.** Visual odometry is
+    ordinary on a real vehicle, a `BaseVelocity` filled from it is Layer A
+    wearing a tag it did not earn, and that is `Limits.source`'s hole exactly —
+    a taint arriving in a **value**, where a field-name check cannot reach it.
+    So the caller states it: no default, no inference, `VelocitySource` for the
+    argument. docs/sufficiency.md §5.9.
+
+    **`qd` stays untagged, and the reason is written down rather than assumed.**
+    It is a *deployment* argument and not a structural one — joint state comes
+    off the actuator's own encoders on every arm this project would run on —
+    which is the weaker kind of argument by §5.6's own standard, and it is
+    recorded as a residual in docs/limitations.md §11 rather than treated as
+    settled. What makes it tolerable is that no ordinary system fills `qd` from
+    a perceiver, while an ordinary system fills this field from one.
 
     No field has a default, matching `Limits` since issue #115 and `BasePose`
     since issue #149.
@@ -375,6 +460,26 @@ class BaseVelocity:
     vy: float
     #: Yaw rate, rad/s. Counter-clockwise positive, as everywhere else here.
     omega: float
+    #: Required, and unlike `BasePose.source` it *does* decide a layer: an
+    #: encoder-measured rate is proprioception and a visually-estimated one is
+    #: not. Nothing maps it to a `Layer` yet — see `VelocitySource` and
+    #: docs/limitations.md §11 — but a rate whose provenance nobody stated must
+    #: not be indistinguishable from one somebody did, which is the part that
+    #: cannot wait for the mapping.
+    source: VelocitySource
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, VelocitySource):
+            raise TypeError(
+                f"BaseVelocity.source must be a VelocitySource, got "
+                f"{self.source!r}. It is the artifact's record of whether this "
+                "rate was measured on the robot or estimated from something "
+                "perceived — wheel encoders against visual odometry. A string "
+                "or None here is not 'unspecified': it is a provenance nobody "
+                "stated arriving as one somebody did, and the outer bound every "
+                "VETO for a mobile robot rests on is computed from this value "
+                "(reg.envelope.base_motion_bounds)."
+            )
 
 
 @dataclass(frozen=True)

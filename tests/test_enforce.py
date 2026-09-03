@@ -98,6 +98,7 @@ from reg.types import (
     Obstacle,
     ProprioState,
     StateFrame,
+    VelocitySource,
 )
 from reg.world import DEMO_WORLD
 
@@ -1009,7 +1010,10 @@ def test_the_horizon_bound_rests_on_the_outer_envelope_alone_for_a_driven_base()
     is what holds it up (docs/mobile-base.md §1).
     """
     state = dataclasses.replace(
-        proprio(Q_EXTENDED, 0.0), base_vel=BaseVelocity(vx=0.8, vy=0.0, omega=0.0)
+        proprio(Q_EXTENDED, 0.0),
+        base_vel=BaseVelocity(
+            vx=0.8, vy=0.0, omega=0.0, source=VelocitySource.PROPRIOCEPTIVE
+        ),
     )
     region = outer_envelope(
         state, MOBILE_LIMITS, HORIZON_S, ORIGIN_FRAME, SUBSTEP_DT_S

@@ -29,7 +29,7 @@ the human and the obstacles, which are Layer B. Nothing in Layer A reads it —
 the envelope takes `StateFrame.proprio()`. This module is a codec and makes no
 claim of its own.
 
-THE BASE, AND WHY IT IS TWO OPTIONAL BLOCKS RATHER THAN SEVEN COLUMNS (#176)
+THE BASE, AND WHY IT IS TWO OPTIONAL BLOCKS RATHER THAN EIGHT COLUMNS (#176)
 ----------------------------------------------------------------------------
 `StateFrame` gained `base_vel` and `base_pose` in issue #150 and this format had
 columns for neither, so it refused to write a frame carrying either — reading
@@ -46,8 +46,11 @@ neither is exactly the header it has always been.
 **They are two blocks and not one because the Layer A / Layer B line runs
 between them** (issue #150, docs/sufficiency.md §5.6):
 
-* `base_vx`, `base_vy`, `base_omega` are body-frame rates — what a wheel encoder
-  measures, a statement about the machine, **Layer A**.
+* `base_vx`, `base_vy`, `base_omega`, `base_vel_source` are body-frame rates and
+  the provenance of those rates — a statement about the machine, **Layer A** on
+  the terms `qd` is. The provenance column is not decoration: a rate estimated by
+  visual odometry came from a perceiver, and since issue #156 the artifact says
+  which case it is in rather than leaving it to be assumed.
 * `base_pose_x`, `base_pose_y`, `base_pose_theta`, `base_pose_source` are a
   room-frame pose — a statement about the robot's relationship to a map or a
   frame somebody defined, **Layer B**, structurally and not for want of a better
@@ -56,7 +59,9 @@ between them** (issue #150, docs/sufficiency.md §5.6):
 A robot can have one without the other (a base with encoders and no localizer is
 the ordinary case), and folding them into one block would mean writing the half
 nobody recorded — zeros for a pose nobody measured, or a `PoseSource` nobody
-stated. Each block is present or absent on its own for that reason.
+stated. Each block carries its own provenance column for the same reason
+(`base_vel_source`, `base_pose_source`): the two are separate claims about the
+run, and neither can be inferred from the other. Each block is present or absent on its own for that reason.
 `reg.bench.COLUMN_RULES` carries one rule per block, on opposite sides of the
 boundary, or the Layer A / Layer B column split Claim 1's like-for-like
 comparison is computed over would move with nothing going red
@@ -68,7 +73,7 @@ back. Block presence is decided by **comparing names at a fixed offset**, never
 by arithmetic over the column count, so `(n_joints, base_vel, base_pose,
 n_obstacles)` is recovered exactly and the map from it to a header is injective.
 The arithmetic is a backstop rather than the mechanism: no subset of the optional
-blocks — 3, 4 or 7 columns — is a multiple of the 5-column obstacle block, so
+blocks — 4, 4 or 8 columns — is a multiple of the 5-column obstacle block, so
 even a reader that lost the name comparison could not read a base block as an
 extra obstacle. Anything else carrying base column *names* — a truncated block, a
 block after the human columns, a duplicated one — is refused by name rather than
@@ -95,7 +100,14 @@ from pathlib import Path
 
 import numpy as np
 
-from reg.types import BasePose, BaseVelocity, Obstacle, PoseSource, StateFrame
+from reg.types import (
+    BasePose,
+    BaseVelocity,
+    Obstacle,
+    PoseSource,
+    StateFrame,
+    VelocitySource,
+)
 
 # Decimal places every float in the stream is written with. Chosen, not
 # defaulted: the raw stream is the fine-grained end of the pipeline (the graph
@@ -128,7 +140,14 @@ _HUMAN_COLUMNS = ("human_x", "human_y", "human_vx", "human_vy")
 # The base's body-frame velocity — **Layer A**, the same terms `qd` is admitted
 # on (`reg.types.BaseVelocity`). Optional: present only in a stream whose frames
 # carry one.
-_BASE_VEL_COLUMNS = ("base_vx", "base_vy", "base_omega")
+#
+# `base_vel_source` is carried for the reason `base_pose_source` below is:
+# `BaseVelocity.source` is required with no default since issue #156, so
+# reconstructing one on read would mean inventing a provenance indistinguishable
+# downstream from a recorded one. It is the column that says whether these three
+# rates came off wheel encoders or out of visual odometry, and a stream that
+# carries the rates without it is refused rather than read as the encoder case.
+_BASE_VEL_COLUMNS = ("base_vx", "base_vy", "base_omega", "base_vel_source")
 
 # The base's room-frame pose — **Layer B**, structurally (`reg.types.BasePose`,
 # docs/sufficiency.md §5.6). `source` is carried for the reason an obstacle's
@@ -541,6 +560,7 @@ def _iter_frames(
                     vx=_number(row[base_vel_at + 0], "base_vx", line, path),
                     vy=_number(row[base_vel_at + 1], "base_vy", line, path),
                     omega=_number(row[base_vel_at + 2], "base_omega", line, path),
+                    source=_velocity_source(row[base_vel_at + 3], line, path),
                 )
                 if schema.base_vel
                 else None
@@ -598,6 +618,31 @@ def _iter_frames(
             )
     finally:
         handle.close()
+
+
+def _velocity_source(
+    raw: str, line: int, path: str | os.PathLike[str]
+) -> VelocitySource:
+    """`VelocitySource` for a written provenance string, or a refusal.
+
+    Not defaulted and not coerced, and the temptation here is stronger than it
+    is for a pose: `PROPRIOCEPTIVE` is what a bolted base's stream would say and
+    substituting it for an unreadable cell would look harmless in every fixture
+    in this repository. It is not harmless — this is the one column saying
+    whether the rates beside it came from a perceiver, and a substituted value
+    is exactly the mislabelling `reg.types.VelocitySource` exists to stop
+    (issue #156, issue #84).
+    """
+    try:
+        return VelocitySource(raw)
+    except ValueError:
+        raise StreamFormatError(
+            f"{path} line {line}, column base_vel_source: {raw!r} is not a "
+            f"VelocitySource. Valid values: {[m.value for m in VelocitySource]}. "
+            "The velocity is not read with a substituted provenance — whether "
+            "these rates were measured on the robot or estimated from something "
+            "perceived is the whole content of this field."
+        ) from None
 
 
 def _pose_source(
@@ -672,6 +717,7 @@ def _row(frame: StateFrame, index: int, schema: StreamSchema) -> list[str]:
             _fixed(frame.base_vel.vx, "base_vx", where),
             _fixed(frame.base_vel.vy, "base_vy", where),
             _fixed(frame.base_vel.omega, "base_omega", where),
+            frame.base_vel.source.value,
         ]
     if schema.base_pose:
         cells += [

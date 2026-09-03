@@ -36,7 +36,14 @@ from reg.stream import (
     read_frames,
     write_frames,
 )
-from reg.types import BasePose, BaseVelocity, Obstacle, PoseSource, StateFrame
+from reg.types import (
+    BasePose,
+    BaseVelocity,
+    Obstacle,
+    PoseSource,
+    StateFrame,
+    VelocitySource,
+)
 
 # Round-trip tolerance follows directly from the written precision: a value is
 # stored as a decimal string with FLOAT_PRECISION places, so it can move by at
@@ -541,7 +548,11 @@ def test_a_frame_that_gains_a_base_mid_stream_is_refused(tmp_path) -> None:
             **{"base_vel": None, "base_pose": None, **base_fields},
         )
 
-    moving = gained(base_vel=BaseVelocity(vx=0.4, vy=0.0, omega=0.2))
+    moving = gained(
+        base_vel=BaseVelocity(
+            vx=0.4, vy=0.0, omega=0.2, source=VelocitySource.PROPRIOCEPTIVE
+        )
+    )
     with pytest.raises(StreamFormatError, match="no columns for one"):
         write_frames([base, moving], tmp_path / "moving.csv")
 
@@ -573,7 +584,9 @@ def test_a_frame_that_loses_a_base_mid_stream_is_refused(tmp_path) -> None:
         qd=fixed.qd,
         human_pos=fixed.human_pos,
         human_vel=fixed.human_vel,
-        base_vel=BaseVelocity(vx=0.4, vy=0.0, omega=0.2),
+        base_vel=BaseVelocity(
+            vx=0.4, vy=0.0, omega=0.2, source=VelocitySource.PROPRIOCEPTIVE
+        ),
         base_pose=BasePose(x=1.0, y=2.0, theta=0.3, source=PoseSource.DEAD_RECKONED),
         objects=fixed.objects,
     )
@@ -610,7 +623,9 @@ def test_the_refusal_leaves_no_partial_file(tmp_path) -> None:
         qd=good[0].qd,
         human_pos=good[0].human_pos,
         human_vel=good[0].human_vel,
-        base_vel=BaseVelocity(vx=0.1, vy=0.0, omega=0.0),
+        base_vel=BaseVelocity(
+            vx=0.1, vy=0.0, omega=0.0, source=VelocitySource.PROPRIOCEPTIVE
+        ),
         base_pose=None,
         objects=good[0].objects,
     )
@@ -677,14 +692,18 @@ def test_the_base_blocks_sit_between_the_joints_and_the_human() -> None:
     like-for-like comparison is computed over."""
     header = expected_header(2, 1, base_vel=True, base_pose=True)
     assert header[:5] == ["t", "q_0", "q_1", "qd_0", "qd_1"]
-    assert header[5:8] == ["base_vx", "base_vy", "base_omega"]
-    assert header[8:12] == [
+    # `base_vel_source` is inside the Layer A run and not appended after the
+    # pose: it is the provenance of the three rates before it, and a provenance
+    # column separated from the block it describes is one a reader has to guess
+    # the owner of (issue #156).
+    assert header[5:9] == ["base_vx", "base_vy", "base_omega", "base_vel_source"]
+    assert header[9:13] == [
         "base_pose_x",
         "base_pose_y",
         "base_pose_theta",
         "base_pose_source",
     ]
-    assert header[12:16] == ["human_x", "human_y", "human_vx", "human_vy"]
+    assert header[13:17] == ["human_x", "human_y", "human_vx", "human_vy"]
 
 
 @pytest.mark.parametrize(("n_joints", "n_obstacles", "base_vel", "base_pose"), SHAPES)
@@ -779,13 +798,18 @@ def test_no_combination_of_base_blocks_is_a_multiple_of_the_obstacle_block() -> 
             "the blocks in the wrong order",
             ["t", "q_0", "qd_0",
              "base_pose_x", "base_pose_y", "base_pose_theta", "base_pose_source",
-             "base_vx", "base_vy", "base_omega",
+             "base_vx", "base_vy", "base_omega", "base_vel_source",
              "human_x", "human_y", "human_vx", "human_vy"],
         ),
         (
             "a block after the human columns",
             ["t", "q_0", "qd_0", "human_x", "human_y", "human_vx", "human_vy",
-             "base_vx", "base_vy", "base_omega"],
+             "base_vx", "base_vy", "base_omega", "base_vel_source"],
+        ),
+        (
+            "a velocity block with its provenance column missing",
+            ["t", "q_0", "qd_0", "base_vx", "base_vy", "base_omega",
+             "human_x", "human_y", "human_vx", "human_vy"],
         ),
         (
             "a duplicated base column",
@@ -856,7 +880,18 @@ def mobile_frames(
                 human_pos=frame.human_pos,
                 human_vel=frame.human_vel,
                 base_vel=(
-                    BaseVelocity(vx=0.4 - 0.05 * i, vy=-0.125, omega=0.2 * i)
+                    # `DERIVED` deliberately: it is the case the reader could
+                    # get wrong invisibly. A codec that substituted a member
+                    # for the cell it read would substitute `PROPRIOCEPTIVE` —
+                    # the value every fixture in this repository would carry —
+                    # so a fixture written with that value could not tell a
+                    # recorded provenance from an invented one (issue #156).
+                    BaseVelocity(
+                        vx=0.4 - 0.05 * i,
+                        vy=-0.125,
+                        omega=0.2 * i,
+                        source=VelocitySource.DERIVED,
+                    )
                     if with_vel
                     else None
                 ),
@@ -883,6 +918,10 @@ def test_a_mobile_stream_round_trips_to_identical_values(tmp_path) -> None:
     got = list(read_frames(write_frames(want, tmp_path / "mobile.csv")))
     assert_frames_close(got, want)
     assert [f.base_pose.source for f in got] == [PoseSource.DEAD_RECKONED] * len(want)
+    # Both provenances survive, and this one is the half issue #156 added: a
+    # visually-estimated base velocity must not read back as an encoder-measured
+    # one, which is the whole content of the column.
+    assert [f.base_vel.source for f in got] == [VelocitySource.DERIVED] * len(want)
 
 
 @pytest.mark.parametrize(
@@ -939,6 +978,42 @@ def test_an_unwritable_pose_source_is_refused_rather_than_defaulted(tmp_path) ->
     bad.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
     with pytest.raises(StreamFormatError, match="not a PoseSource"):
         list(read_frames(bad))
+
+
+def test_an_unwritable_velocity_source_is_refused_rather_than_defaulted(
+    tmp_path,
+) -> None:
+    """**Negative test, the Layer A half (issue #156).**
+
+    The pose case above is the same shape, and this one is worse, which is why
+    it is asserted separately rather than parametrized alongside it. A
+    `base_pose_source` nobody can resolve at least belongs to a value already
+    tagged Layer B. `base_vel_source` decides whether the three Layer A-shaped
+    rates beside it came off wheel encoders or out of visual odometry, and the
+    substitution a lenient reader would make — `proprioceptive`, the value every
+    fixture here carries — is precisely the mislabelling the field exists to
+    stop. So an unreadable cell is a could-not-evaluate and the frame is not
+    read.
+    """
+    path = write_frames(mobile_frames(n=2), tmp_path / "mobile.csv")
+    lines = path.read_text().rstrip(LINE_TERMINATOR).split(LINE_TERMINATOR)
+    at = lines[0].split(",").index("base_vel_source")
+    cells = lines[1].split(",")
+    cells[at] = "visual_odometry"
+    lines[1] = ",".join(cells)
+    bad = tmp_path / "bad-vel-source.csv"
+    bad.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
+    with pytest.raises(StreamFormatError, match="not a VelocitySource"):
+        list(read_frames(bad))
+
+    # And an empty cell is not "unspecified" either — the reader has to refuse
+    # it for the same reason, rather than treating a blank as an absent block.
+    cells[at] = ""
+    lines[1] = ",".join(cells)
+    blank = tmp_path / "blank-vel-source.csv"
+    blank.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
+    with pytest.raises(StreamFormatError, match="not a VelocitySource"):
+        list(read_frames(blank))
 
 
 def test_a_non_numeric_base_cell_is_refused(tmp_path) -> None:

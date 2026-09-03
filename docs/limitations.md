@@ -776,3 +776,81 @@ error compounds — which is how the disc got here in the first place. Until the
 the supportable claim is exactly: **the outer set contains everything a base
 within these actuation bounds could do, and it contains a great deal that a
 differential-drive base could not.**
+
+---
+
+## 11. A base velocity's provenance is recorded, and nothing reads it — and `qd` has none at all
+
+Added 2026-09-03 (issue #156). [`sufficiency.md`](sufficiency.md) §5.9 is the
+decision: a `BaseVelocity` filled from a perceiver is **not** Layer A, so
+`reg.types.VelocitySource` is required on the type with no default and no
+inference. This entry is the half of that decision which is not yet enforcement,
+and the older hole it leaves standing next to it.
+
+**What.** Two gaps, and they are different in kind.
+
+*The tag does not follow the value.* `reg.envelope.envelope_layer` decides the
+`HAS_ENVELOPE` edge's layer from `Limits.source` alone, and nothing anywhere maps
+a `VelocitySource` member to a `Layer`. Meanwhile
+`reg.envelope.base_motion_bounds` reads `state.base_vel` and integrates it into
+the displacement term of `outer_envelope` (§10, issue #163) — which for a mobile
+robot is the *only* bound a VETO rests on, since `reg.enforce.computed_bound`
+refuses to produce a workspace disc for a base that can drive. So an outer set
+whose base term came out of visual odometry is, today, tagged `A` on the strength
+of its bounds having come off a datasheet. The same holds one level down in the
+raw stream: `reg.bench.COLUMN_RULES` classifies `base_vel_source` as Layer A
+beside the three rates it describes, because that classifier is **per column and
+static** and the thing that decides the question is the *value in the cell*.
+
+*`qd` carries no provenance at all.* `ProprioState.q` and `ProprioState.qd` are
+Layer A by their kind, and nothing records where a particular run's numbers came
+from. The argument that this is safe is a **deployment** one — joint state comes
+off the actuator's own encoders on every arm this project would run on — and by
+[`sufficiency.md`](sufficiency.md) §5.6's own standard that is the weaker kind of
+argument, the kind somebody can answer by building a thing. A visual joint-state
+estimator is that thing. The asymmetry that made the base velocity worth tagging
+first is one of *likelihood*, not of structure: visual odometry is ordinary and
+visual joint-state estimation is not.
+
+**The cost.** An artifact can be internally honest and still read stronger than
+it is. Everything issue #156 built is real — a `DERIVED` base velocity is
+recorded as derived, survives the stream round trip, and cannot be confused with
+an encoder-measured one — but a `WHERE layer = 'B'` query, which is what Claim 3
+*is*, will not return the envelope over it. A reader who trusts the tag rather
+than reading the `base_vel_source` column beside the rates gets the pre-#156
+answer. For `qd` there is not even a column to read: an arm whose joint state
+came from somewhere unusual produces an artifact indistinguishable from one whose
+did not, and no query can be written that would find it.
+
+**What it does not cost, today.** Nothing in this repository. No fixture is
+mobile — `reg.world.LIMITS` states four base bounds of zero, every fixture frame
+records `base_vel=None`, and `reg.enforce.Enforcer` refuses to construct for a
+driven base at all (issue #164) — so no artifact this repository builds carries a
+base velocity of either provenance, and every layer tag on every edge in every
+fixture is the tag it was. No published figure moves: the stream's velocity block
+is optional, `expected_header(2, 3)` is the 24 columns Claim 1 is priced on, and
+`base_vel_source` appears only in a header no fixture writes.
+
+**Why it was left here rather than closed.** The mapping is three lines and the
+test for it is not: a `velocity_layer` written now would be exercised against no
+mobile fixture, and the decision it forces — whether an envelope's layer is the
+*minimum* over its inputs, and what that does to the four attestation edges §2's
+asymmetry rests on — is the same decision [`sufficiency.md`](sufficiency.md) §5.8
+holds open for a posed configuration, on purpose, until there is something in
+hand the answer would be about. Writing it twice, separately, in advance of that
+fixture is how the two answers end up disagreeing.
+
+**What a claim would need in order not to inherit this.** Three things, in
+order. (1) An envelope layer that is the weakest of its inputs rather than of one
+of them — `Limits.source` **and** the provenance of every state value the bound
+was computed from — decided once for the posed-configuration case and this one
+together. (2) A provenance on `qd` on the same pattern, or a written argument
+that a joint rate is structurally proprioceptive in a way a base rate is not;
+this entry asserts only that the argument currently offered is the weaker kind,
+not that no stronger one exists. (3) The graded integrity attribute
+[`sufficiency.md`](sufficiency.md) §7 rejects for scope, if the claim needs to
+distinguish a PLd-rated perceiver from an unrated one — which is what a real
+assurance case does, and which the binary cannot express in either direction.
+Until then the supportable claim is exactly: **this artifact records whether a
+base velocity came from a perceiver, and its layer tags do not yet depend on the
+answer.**

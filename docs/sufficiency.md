@@ -673,6 +673,101 @@ republished across this document, [`retention.md`](retention.md),
 [`lossiness.md`](lossiness.md) and both READMEs rather than left to drift.
 [`lossiness.md`](lossiness.md) *Retained* #8 carries the attribution.
 
+### 5.9 The provenance on the velocity: the decision issue #156 forced
+
+§5.7 admitted `BaseVelocity` to Layer A and recorded, in the type's own
+docstring, that it carries no provenance field — on the argument that it is
+admitted on exactly the terms `qd` is, that `qd` carries none either, and that
+tagging the newer of the two while leaving the older untagged would be a wider
+change than the widening. That was a scope call and it was a fair one. This
+section is the decision it deferred. *Issue #156, 2026-09-03;
+[`docs/limitations.md`](limitations.md) §11.*
+
+**The decision. A `BaseVelocity` filled from a perceiver is not Layer A, and the
+type now says which case it is in.** `reg.types.VelocitySource` is required on
+every `BaseVelocity`, with no default and no inference — `PROPRIOCEPTIVE` for a
+rate measured on the robot, `DERIVED` for one estimated from something perceived
+— on `Limits.source`'s pattern and for `Limits.source`'s reason.
+
+**Why the deferral did not survive contact with the asymmetry.** The
+justification rested on `qd` being the precedent, and the two are not the same
+case:
+
+* The *quantity* is Layer A in both. *This base is moving 0.4 m/s forward and
+  turning at 0.2 rad/s* names no map, no landmark and no frame anybody defined,
+  exactly as a joint rate does not. §5.7's argument stands and is not withdrawn.
+* The *value* is where they part. **Nothing plausibly measures a joint velocity
+  by looking at the room, and something plausibly measures a base velocity that
+  way.** Visual and visual-inertial odometry are ordinary on a real vehicle; a
+  `BaseVelocity` filled from one is a perceiver's output wearing a Layer A tag,
+  and no check that inspects field *names* can see it — which is §7's first
+  bullet about `Limits`, verbatim, one type over.
+
+So the gap was not symmetric with the precedent it was justified by, and it is
+the justification that failed rather than the omission that was careless.
+
+**What this is not: a graded integrity attribute.** §7 records that a two-value
+provenance is not how assurance is actually argued, and that a tag plus an
+integrity attribute was considered and rejected for scope under issue #84. This
+section does not reopen that. A wheel encoder still needs ISO 13849 cat-3 dual
+channel before it carries a safety claim and still lands in `PROPRIOCEPTIVE`; a
+fused wheel/IMU/VO estimator — which is what a real base runs — is one number
+with three provenances and lands in `DERIVED` whole, because a fused value
+inherits the taint of its weakest input. The binary records *which case an
+artifact is in*, and that is all it does.
+
+**`qd` stays untagged, and here is the reason, since it is the precedent that
+justified the omission.** It is a **deployment** argument and not a structural
+one: joint state comes off the actuator's own encoders on every arm this project
+would run on, so no ordinary system fills `qd` from a perceiver, while an
+ordinary system fills a base velocity from one. By this document's own standard
+that is the weaker kind of argument — §5.6 prefers the structural form precisely
+because a sensing-status claim is a claim about 2026 that somebody could answer
+by building something — and a visual joint-state estimator would answer it. So
+`qd`'s untagged status is a **residual**, not a settled question, and
+[`limitations.md`](limitations.md) §11 carries it in the form that file's entries
+take. What makes it tolerable meanwhile is the likelihood asymmetry above and
+nothing stronger.
+
+**What was built.** `BaseVelocity.source`, required; `reg.types.VelocitySource`,
+two members; `base_vel_source` in the raw stream's optional velocity block, so a
+recorded provenance survives the round trip and an unreadable cell is a refusal
+rather than a substituted member; and a `reg.bench.COLUMN_RULES` entry, because a
+column with no rule is a could-not-evaluate the classifier is required to raise
+on.
+
+**What was not built, and it is the part a reader should hold this section to.**
+Nothing maps a `VelocitySource` to a `Layer`. `reg.envelope.envelope_layer`
+still decides the `HAS_ENVELOPE` tag from `Limits.source` alone, so an outer
+envelope computed from a `DERIVED` base velocity — and
+`reg.envelope.base_motion_bounds` reads `state.base_vel` into the bound every
+VETO for a mobile robot rests on (issue #163) — is still tagged from its bounds
+only. **What the artifact gained is that it records the case; what it did not
+gain is the tag following it.** [`limitations.md`](limitations.md) §11 is that
+entry, and the reason it is an entry rather than a line of code is that the tag
+is a property of an *edge*, no fixture in this repository is mobile, and
+`reg.enforce.Enforcer` refuses to construct for a driven base at all (issue
+#164) — so the mapping would be written, tested against nothing, and first
+exercised by whoever brings the first mobile fixture. That is the same
+could-not-evaluate held open on purpose that §5.8 describes for the attestation
+edges, and for the same reason.
+
+**No published figure moves.** The velocity block is optional and no fixture in
+this repository records a base at all, so `expected_header(2, 3)` is the 24
+columns Claim 1 is measured on, byte for byte; the gzipped baseline, `265 GB`,
+`~40x` and every figure in §3 and [`retention.md`](retention.md) are the numbers
+they were. What changed is a required argument to a constructor no fixture calls
+and one column in a header no fixture writes.
+
+**The fifth door, and it is the first one that had already been described.** §5.8
+counts four ways a dependency has got past a field-name check here: through a
+**value**, through a **frame**, through a **name that is not a world word**, and
+through a **column**. This is the first, again — and the interesting part is that
+it arrived in the type Layer A had just been widened for, in a change that cited
+the very bullet describing it. A door that is documented is not thereby closed.
+
+---
+
 ---
 
 ## 6. What a real deployment changes
@@ -782,6 +877,23 @@ document's asymmetry lives.
   envelopes are as dependent on perception as they always were, and the change is
   that the dependence is now in the column Claim 3 queries instead of nowhere.
   *Recorded 2026-08-21, issue #84.*
+- **Not that every Layer A value records where it came from.** Two do:
+  `Limits.source` since issue #84, and `BaseVelocity.source` since issue #156
+  (§5.9). `t`, `q` and `qd` do not, and the reason `qd` does not is a
+  **deployment** argument rather than a structural one — joint state comes off
+  the actuator's own encoders on every arm this project would run on, so nothing
+  ordinary fills it from a perceiver, whereas visual odometry ordinarily fills a
+  base velocity. By §5.6's own standard that is the weaker kind of argument: a
+  claim about what exists in 2026, which a visual joint-state estimator would
+  answer. It is recorded as a residual in [`limitations.md`](limitations.md) §11
+  and not treated as settled. **And a provenance the artifact records is not yet
+  a provenance the artifact acts on**: nothing maps a `VelocitySource` to a
+  layer, so an outer envelope computed from a `DERIVED` base velocity still
+  carries the tag its `Limits` earned. What issue #156 closed is the
+  *indistinguishability* — a rate whose provenance nobody stated can no longer
+  be told apart from one somebody did — and what it left open is the tag
+  following the value, which §5.9 states and §11 prices. *Recorded 2026-09-03,
+  issue #156.*
 - **Not that a two-value provenance is how assurance is actually argued.** The
   binary above matches this project's two layers and it is a simplification, said
   out loud here because the alternative was considered rather than unseen. An

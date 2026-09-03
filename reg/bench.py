@@ -1006,6 +1006,26 @@ COLUMN_RULES: tuple[ColumnRule, ...] = (
         "the base's body-frame linear or yaw rate — what a wheel encoder "
         "measures, admitted on the same terms as a joint velocity",
     ),
+    # `base_vel_source` is the provenance of the three rates above (issue #156),
+    # and it rides with them on the Layer A side because that is what this
+    # classifier can honestly say. The split here is **per column and static** —
+    # it is the byte accounting Claim 1's like-for-like comparison is computed
+    # over — so it cannot be a function of the value in a cell, and the value in
+    # this cell is exactly what decides whether the rates beside it came from a
+    # perceiver. A stream whose `base_vel_source` says `derived` is carrying
+    # three Layer A-shaped columns whose contents inherit a camera, and no rule
+    # written against a column *name* can express that. Recorded in
+    # docs/limitations.md §11 rather than papered over by classifying the
+    # provenance column itself as Layer B, which would move bytes across the
+    # boundary while saying nothing about the three that actually moved.
+    ColumnRule(
+        r"base_vel_source",
+        LAYER_A,
+        "the provenance of the base's body-frame rates — proprioceptive or "
+        "derived; it travels with the block it describes, and see "
+        "docs/limitations.md §11 for what a static per-column rule cannot say "
+        "about a `derived` one",
+    ),
     ColumnRule(
         r"base_pose_(?:x|y|theta|source)",
         LAYER_B,

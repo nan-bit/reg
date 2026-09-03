@@ -64,6 +64,8 @@ from shapely.geometry import Point
 
 import reg
 from reg import graph, store
+from reg.chain import GENESIS_HASH, UNSIGNED_MAC
+from reg.declare import Declaration, envelope_wkb
 from reg.identity import RunIdentity
 from reg.envelope import envelope_hash, envelope_layer, outer_envelope, outer_radius
 from reg.stream import write_frames
@@ -1035,7 +1037,12 @@ def test_an_envelope_edge_may_not_be_written_without_stating_its_layer(
     conn = store.create(tmp_path / "hand.sqlite", record_tables=False)
     try:
         store.insert_robot_config(
-            conn, "cfg_0", "0.000000,0.000000", "0.000000,0.000000"
+            conn,
+            "cfg_0",
+            "0.000000,0.000000",
+            "0.000000,0.000000",
+            base_pose=None,
+            base_pose_source=None,
         )
         store.insert_envelope(
             conn,
@@ -1369,3 +1376,198 @@ def test_the_outer_bound_does_not_import_a_room_frame_pose() -> None:
                 "Layer B; the outer bound is Layer A and takes a BaseFrame the "
                 "caller states."
             )
+
+
+# --------------------------------------------------------------------------
+# THE POSE REACHES AN EDGE (issue #166; docs/sufficiency.md §5.6, §5.8)
+#
+# Everything above this line keeps a room-frame pose *out* of Layer A: out of
+# `ProprioState`, out of `forward_kinematics`, out of the outer bound. Issue
+# #166 lets one into the artifact, on the `robot_config` row, because an
+# `outer_radius` about an unstated centre and an envelope recomputed at the
+# origin for a robot that was elsewhere are worse than a pose in the file.
+#
+# That opens the door this file exists to watch. An edge resting on a posed
+# configuration depends on something outside the robot while naming **no
+# `Entity`** and carrying no perception-derived `Limits` — so neither the word
+# check (none of `base_pose`, `x`, `y`, `theta` is a world word, and none can
+# be) nor `EDGE_SPECS` nor `Limits.source` can see it. `reg.store.open_edge`
+# reading the pose off the endpoint is the whole guard, and these are what stop
+# it rotting into a tautology.
+# --------------------------------------------------------------------------
+
+
+def _posed_store(path: Path, pose_source: str) -> sqlite3.Connection:
+    """A hand-built artifact: one bolted configuration and one that states a pose.
+
+    Hand-built because nothing in `reg/` writes a posed configuration yet — the
+    raw stream has no base columns and every fixture is bolted down
+    (docs/mobile-base.md §7, Tier 4) — and an unexercised rule drifts.
+    """
+    conn = store.create(path, record_tables=False)
+    store.insert_robot_config(
+        conn,
+        "cfg_bolted",
+        "0.000000,0.000000",
+        "0.000000,0.000000",
+        base_pose=None,
+        base_pose_source=None,
+    )
+    store.insert_robot_config(
+        conn,
+        "cfg_posed",
+        "0.000000,0.000000",
+        "0.000000,0.000000",
+        base_pose="1.200000,-0.400000,0.300000",
+        base_pose_source=pose_source,
+    )
+    for envelope_id, config_id, digest in (
+        ("env_bolted", "cfg_bolted", "a1" * 32),
+        ("env_posed", "cfg_posed", "b2" * 32),
+    ):
+        store.insert_envelope(
+            conn,
+            envelope_id,
+            envelope_hash=digest,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id=config_id,
+            horizon=0.1,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+    return conn
+
+
+def test_an_edge_resting_on_a_room_frame_pose_cannot_be_layer_a(
+    tmp_path: Path,
+) -> None:
+    """THE TEST THIS ISSUE IS ABOUT. A Layer A tag on an answer that inherits a
+    perceiver, arriving through a door no field-name check can watch.
+
+    The control comes first, and it is what makes this a test about the pose
+    rather than about a store that has stopped writing edges: the identical
+    `HAS_ENVELOPE` edge over a configuration that states no pose is Layer A,
+    which is every artifact this repository builds.
+    """
+    conn = _posed_store(tmp_path / "posed.sqlite", "localized")
+    try:
+        assert store.open_edge(
+            conn, "HAS_ENVELOPE", "cfg_bolted", "env_bolted", 0.0, layer="A"
+        )
+
+        with pytest.raises(store.StoreError, match="pose in the room") as excinfo:
+            store.open_edge(
+                conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="A"
+            )
+        assert "cfg_posed" in str(excinfo.value)
+        assert store.open_edge(
+            conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="B"
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("pose_source", [source.value for source in PoseSource])
+def test_the_taint_is_the_pose_and_never_its_provenance(
+    tmp_path: Path, pose_source: str
+) -> None:
+    """Both provenances refuse identically, and that is the point.
+
+    `DEAD_RECKONED` is derivable from proprioception, so the plausible reading —
+    the one `LimitSource` invites — hands back `A` for it. It is still a pose in
+    the room, and the room is where the boundary is
+    (docs/sufficiency.md §5.6). If this ever passes for one member and not the
+    other, `reg/store.py` has grown the `pose_layer`
+    `test_no_function_in_reg_maps_a_pose_provenance_to_a_layer` scans for, with
+    the mapping inlined where the scan cannot see it.
+    """
+    conn = _posed_store(tmp_path / f"{pose_source}.sqlite", pose_source)
+    try:
+        with pytest.raises(store.StoreError, match="pose in the room"):
+            store.open_edge(
+                conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="A"
+            )
+    finally:
+        conn.close()
+
+
+def test_the_word_check_could_never_have_caught_the_pose_on_an_edge() -> None:
+    """Why the rule above is a read of the row and not another name check.
+
+    Stated as an assertion rather than in a comment, because this is the third
+    time a dependency has got past a field-name test in this project — through a
+    *value* (`Limits`, issue #84), through a *frame* (issue #150), and now
+    through a *column* — and each time the reason was the same: a pose is not a
+    thing in the world, it is the robot's relationship to one, so it arrives
+    under names as innocent as `qd`'s.
+    """
+    for name in ("base_pose", "base_pose_source", "x", "y", "theta"):
+        assert not any(word in name for word in WORLD_WORDS), (
+            f"{name!r} contains a world word, so the word check would catch a "
+            "pose arriving under it and the argument for reading the row "
+            "instead is weaker than this file says."
+        )
+
+
+def test_an_attestation_edge_over_a_posed_region_is_refused_not_relabelled(
+    tmp_path: Path,
+) -> None:
+    """The other half, and the one that is a claim change rather than a tag.
+
+    `DECLARED`, `ADJUDICATED`, `ENFORCED` and `FOLLOWS` are Layer A *by their
+    type* — docs/sufficiency.md §2's asymmetry, the thing this project's
+    headline claim rests on — so there is no `B` for a call site to state
+    instead. Relabelling them would be reclassifying the attestation layer,
+    which is a decision about what the project may claim and is made in
+    `sufficiency.md` and not by an `open_edge` argument. So the write is refused,
+    and a mobile run has to retain the region rather than a bound over a base
+    that moved.
+    """
+    # `_posed_store` above builds with `record_tables=False`, and a DECLARED
+    # edge would then be refused for the missing table rather than for the
+    # pose — which would be a green test about nothing. So this one builds its
+    # own store with the record tables in it.
+    conn = store.create(tmp_path / "records.sqlite", record_tables=True)
+    try:
+        store.insert_robot_config(
+            conn,
+            "cfg_posed",
+            "0.000000,0.000000",
+            "0.000000,0.000000",
+            base_pose="1.200000,-0.400000,0.300000",
+            base_pose_source="localized",
+        )
+        store.insert_envelope(
+            conn,
+            "env_posed",
+            envelope_hash="b2" * 32,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id="cfg_posed",
+            horizon=0.1,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+        store.insert_declaration(
+            conn,
+            Declaration(
+                declaration_id="dec_0",
+                seq=0,
+                t_issued=0.0,
+                horizon=0.1,
+                action_class="hold",
+                declared_envelope=envelope_wkb(Point(0.0, 0.0).buffer(0.4)),
+                prev_hash=GENESIS_HASH,
+                mac=UNSIGNED_MAC,
+            ),
+        )
+        with pytest.raises(store.StoreError, match="refused rather than relabelled"):
+            store.open_edge(conn, "DECLARED", "dec_0", "env_posed", 0.0)
+        # ...and stating a layer is not a way round it: DECLARED takes none.
+        with pytest.raises(store.StoreError):
+            store.open_edge(conn, "DECLARED", "dec_0", "env_posed", 0.0, layer="B")
+    finally:
+        conn.close()

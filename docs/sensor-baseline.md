@@ -110,40 +110,42 @@ The artifact sizes below are **measured**, from one execution of
 `long_run` at 3,000 frames **at a 50 Hz control rate**, 16 envelope samples,
 200 ms horizon, 1.0 s occurrence
 resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. Each
-size is that level's measured `bytes/hour` — 60.29, 149.72 and 217.57 MB/h —
+size is that level's measured `bytes/hour` — 60.42, 150.15 and 218.00 MB/h —
 times the 4,380 hours in the retention floor. The control rate is not a detail
 of the fixture: every one of those three figures is **linear in it**, and
 [The control rate](#the-control-rate) below is the measurement of that. They are **much larger than the
 provisional figures they replace**, because those measured an artifact holding no
 Layer A record at all (issue #59): occurrence went 18.9 GB → 263 GB, transition
 229.7 → 655 GB, per-frame 589.3 → 952 GB. (Those are the figures **#59
-produced**; today they are 264, 656 and 953 GB. Issue #83 added wall-clock time
-and run identity, and #82 added the outer-envelope scalars — together about
-4 KB per artifact. The attribution above is to #59 because that is the change that
-moved the figures by an order of magnitude; the two since have moved them by
-0.4% between them.) What the sensitivity establishes is
+produced**; today they are 265, 658 and 955 GB. Issue #83 added wall-clock time
+and run identity, #82 added the outer-envelope scalars — together about
+4 KB per artifact — and #166 added the base pose to the `robot_config` row, which
+costs 2,048 B of schema and index at the coarsest level and a further 2 B on every
+retained configuration row at the two finer ones. The attribution above is to #59
+because that is the change that moved the figures by an order of magnitude; the
+three since have moved them by 0.8% between them.) What the sensitivity establishes is
 *the shape of the dependence*, which did not change when the sizes did — but the
 conclusion drawn from it did, and the two paragraphs after the crossover table
 are where.
 
-| sensor rate | log at 6 months | vs occurrence (264 GB) | vs transition (656 GB) | vs per-frame (953 GB) |
+| sensor rate | log at 6 months | vs occurrence (265 GB) | vs transition (658 GB) | vs per-frame (955 GB) |
 |---|---|---|---|---|
 | 0.1 TB/day | 18.2 TB | 69x | 28x | 19x |
-| 0.5 TB/day | 91.2 TB | 346x | 139x | 96x |
-| **1 TB/day (published)** | **182.5 TB** | **691x** | **278x** | **192x** |
-| 5 TB/day | 912.5 TB | 3,456x | 1,391x | 958x |
-| 21.3 TB/day (cited max) | 3,887 TB | 14,724x | 5,926x | 4,079x |
+| 0.5 TB/day | 91.2 TB | 344x | 139x | 96x |
+| **1 TB/day (published)** | **182.5 TB** | **689x** | **277x** | **191x** |
+| 5 TB/day | 912.5 TB | 3,443x | 1,387x | 955x |
+| 21.3 TB/day (cited max) | 3,887 TB | 14,669x | 5,908x | 4,070x |
 
 **What survives the whole range and what does not.** The crossovers are
 **derived, not measured** — `threshold_TB_per_day = size_GB * 10^orders / 1000 /
-182.5`, so occurrence at two orders is `264 * 100 / 1000 / 182.5 = 0.145` — and
+182.5`, so occurrence at two orders is `265 * 100 / 1000 / 182.5 = 0.145` — and
 they are recomputed from the sizes above rather than carried over:
 
 | level | clears 2 orders above | clears 3 orders above |
 |---|---|---|
-| occurrence | 0.145 TB/day | 1.447 TB/day |
-| transition | 0.359 TB/day | 3.593 TB/day |
-| per-frame | 0.522 TB/day | 5.222 TB/day |
+| occurrence | 0.145 TB/day | 1.450 TB/day |
+| transition | 0.360 TB/day | 3.604 TB/day |
+| per-frame | 0.523 TB/day | 5.232 TB/day |
 
 At occurrence resolution the claim clears **two** orders of magnitude at any
 sensor rate above 0.145 TB/day — seven times lower than the published
@@ -153,7 +155,7 @@ and clears nothing, which was equally true of the provisional figures. So the
 two-order conclusion still does not depend on the assumption being right to
 within a factor of a few.
 
-**Three orders now needs 1.44 TB/day, which the published assumption does not
+**Three orders now needs 1.45 TB/day, which the published assumption does not
 reach.** Before Layer A was measured this threshold sat at 0.104 TB/day and the
 assumption cleared it tenfold. That is the single largest change this
 re-measurement made to the argument, and it is a change in the conclusion, not
@@ -210,7 +212,7 @@ published curve exactly, which is what makes the other three comparable to it.
 
 | control rate | frames | records retained | occurrence | transition | per-frame |
 |---|---|---|---|---|---|
-| **50 Hz (published above)** | 3,000 | 3,120 | **60.29 MB/h** | 149.72 MB/h | 217.57 MB/h |
+| **50 Hz (published above)** | 3,000 | 3,120 | **60.42 MB/h** | 150.15 MB/h | 218.00 MB/h |
 | 100 Hz | 5,999 | 6,119 | 106.45 MB/h | 246.33 MB/h | 409.70 MB/h |
 | 250 Hz | 14,996 | 15,116 | 247.13 MB/h | 528.44 MB/h | 1.04 GB/h |
 | **1 kHz (a real manipulator)** | 59,981 | 60,101 | **951.65 MB/h** | 1.94 GB/h | 4.26 GB/h |
@@ -240,7 +242,7 @@ in the retention floor, against the **unchanged** 182.5 TB assumption:
 
 | control rate | occurrence, 6 months | vs 182.5 TB | transition | vs | per-frame | vs |
 |---|---|---|---|---|---|---|
-| **50 Hz** | **264 GB** | **~691x** | 656 GB | ~278x | 953 GB | ~192x |
+| **50 Hz** | **265 GB** | **~689x** | 658 GB | ~277x | 955 GB | ~191x |
 | 100 Hz | 466 GB | ~391x | 1.08 TB | ~169x | 1.79 TB | ~102x |
 | 250 Hz | 1.08 TB | ~169x | 2.31 TB | ~79x | 4.56 TB | ~40x |
 | **1 kHz** | **4.17 TB** | **~44x** | 8.50 TB | ~21x | 18.66 TB | ~10x |
@@ -383,7 +385,7 @@ every other input to this argument gets exactly those three (issue #102).
 What the retention argument needs is that keeping the raw log for the mandated
 window is expensive per robot and keeping the artifact is not. Both halves are
 above and neither mentions a network: 182.5 TB per robot per retention window at
-the published multiplier, against 264 GB of artifact at occurrence resolution and
+the published multiplier, against 265 GB of artifact at occurrence resolution and
 a 50 Hz control rate, with the ratio's sensitivity to the multiplier in
 [Sensitivity](#sensitivity). None of that arithmetic moves on a site with a fibre
 uplink. Sourcing the premise instead would have added a second empirical input to

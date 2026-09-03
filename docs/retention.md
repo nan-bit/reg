@@ -11,7 +11,7 @@ no figure changed** · keep current
 CI run: the control-rate ladder's **50 Hz row**, the coarsest level's **label**
 and the record and node counts behind it, the **byte attribution**, and the
 **Layer-A comparison** table. Everything else is prose or arithmetic over those —
-including the six-month totals in the resolution table below, `264 GB` among
+including the six-month totals in the resolution table below, `265 GB` among
 them, and every ratio against the sensor assumption. That module's own *What this
 does not cover* is the authority on the boundary; this line exists so that
 nothing here reads as guaranteed when it is not.
@@ -102,13 +102,13 @@ Per robot, from the measured resolution curve:
 
 | retained at | per robot, 6 months | fleet of 100 |
 |---|---|---|
-| **occurrence (±1 s) — 98.5% attestation records** | **264 GB** | 26.4 TB |
-| transition (10 ms) | 656 GB | 65.6 TB |
-| per-frame (10 ms) | 953 GB | 95.3 TB |
+| **occurrence (±1 s) — 98.5% attestation records** | **265 GB** | 26.5 TB |
+| transition (10 ms) | 658 GB | 65.8 TB |
+| per-frame (10 ms) | 955 GB | 95.5 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
-Each is the measured `bytes/hour` for that level — 60.29, 149.72 and
-217.57 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
+Each is the measured `bytes/hour` for that level — 60.42, 150.15 and
+218.00 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
 one of those three figures is a figure at 50 Hz**, which is what
 `reg.scenarios.DEFAULT_DT` runs at, and every one of them **moves with that
 rate**: enforcement emits one verdict and one chain record per commanded action
@@ -135,7 +135,7 @@ the coarsest level actually holds, why it is no longer called *DSSAD-shaped*,
 and the two labels that were rejected instead are below, under *What the
 coarsest level actually holds*.
 
-At occurrence resolution the artifact is **~691x smaller** than the sensor
+At occurrence resolution the artifact is **~689x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
 two-order band, and **short of three**. The artifact side of that comparison is
 measured. The sensor side is an **assumption with a sourced range**, set out in
@@ -147,8 +147,8 @@ always stated rather than assumed.
 the assumed sensor rate, and the sensitivity analysis is blunt about what that
 buys: the 2-order band is occupied down to 0.145 TB/day — a sevenfold margin
 below the assumption, where before Layer A was measured it looked like a
-hundredfold — while three orders needs 1.44 TB/day, which the published
-assumption does **not** reach, and four needs 14.4 TB/day. The robust claim is
+hundredfold — while three orders needs 1.45 TB/day, which the published
+assumption does **not** reach, and four needs 14.5 TB/day. The robust claim is
 the one to make, and it is now a narrower one. It is also, conveniently, the
 resolution the only mandated evidence recorder in existence operates at (UN R157
 DSSAD, ±1.0 s). The finer levels are weaker again: transition clears two orders
@@ -170,8 +170,8 @@ execution of the command in the blockquote above:
 | **total** | **3,166** | |
 
 A reader who took *DSSAD-shaped* at face value concluded that this is a
-DSSAD-equivalent event recorder priced at 264 GB. It is not. It is a **per-action
-attestation record** with an occurrence layer attached, and 264 GB is
+DSSAD-equivalent event recorder priced at 265 GB. It is not. It is a **per-action
+attestation record** with an occurrence layer attached, and 265 GB is
 overwhelmingly the price of the attestation. Nothing in the *measurement* was
 wrong — the figure reproduces to the byte — and nothing about it moved when the
 label did.
@@ -194,10 +194,10 @@ both stated rather than left to be discovered:
    contents.** UN R157's DSSAD is why ±1 s is the coarsest quantum this project
    prices (*The control rate* below, [`lossiness.md`](lossiness.md) *Level 1*);
    it is not a claim that `reg` at this level is a DSSAD, or that a DSSAD would
-   cost 264 GB. A recorder holding this level's 42 occurrence rows and none of
+   cost 265 GB. A recorder holding this level's 42 occurrence rows and none of
    its 3,120 records would be a far smaller file, and this project has not
    measured one.
-2. **The lever on the 264 GB is the attestation cadence**, not the occurrence
+2. **The lever on the 265 GB is the attestation cadence**, not the occurrence
    vocabulary. Declaring per behaviour segment rather than per control step
    would cut the term that dominates; it is a design change to what the artifact
    attests, it is held open, and *The control rate* below says so again where it
@@ -224,7 +224,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.29 MB/h → 264 GB → ~691x** | 149.72 MB/h → 656 GB → ~278x | 217.57 MB/h → 953 GB → ~192x |
+| **50 Hz (this simulator, published above)** | **60.42 MB/h → 265 GB → ~690x** | 150.15 MB/h → 658 GB → ~278x | 218.00 MB/h → 955 GB → ~191x |
 | 100 Hz | 106.45 MB/h → 466 GB → ~391x | 246.33 MB/h → 1.08 TB → ~169x | 409.70 MB/h → 1.79 TB → ~102x |
 | 250 Hz | 247.13 MB/h → 1.08 TB → ~169x | 528.44 MB/h → 2.31 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
 | **1 kHz (a real manipulator)** | **951.65 MB/h → 4.17 TB → ~44x** | 1.94 GB/h → 8.50 TB → ~21x | 4.26 GB/h → 18.66 TB → ~10x |
@@ -302,38 +302,38 @@ Claim 1 prices:
 
 | table, coarsest level at 50 Hz | bytes | share of the level |
 |---|---|---|
-| `verdict` | 551,936 | 54.9% |
-| `declaration` | 185,344 | 18.5% |
-| `indexes + schema` | 129,024 | 12.8% |
+| `verdict` | 551,936 | 54.8% |
+| `declaration` | 185,344 | 18.4% |
+| `indexes + schema` | 131,072 | 13.0% |
 | `node` | 112,640 | 11.2% |
 | `meta` | 10,240 | 1.0% |
 | `occurrence` | 9,216 | 0.9% |
 | `entity` | 3,072 | 0.3% |
 | `envelope`, `robot_config`, `edge` — one empty page each | 3,072 | 0.3% |
-| **file** | **1,004,544** | |
+| **file** | **1,006,592** | |
 
 1. **The scene rows are 5,120 B**, 0.5% of the level: `entity`, `envelope` and
    `robot_config` together, two of the three being a single empty page at this
    level. Half a percent of a file cannot account for a fifth of its growth.
-2. **`indexes + schema` is not the artifact's fixed cost.** It is 129,024 B
+2. **`indexes + schema` is not the artifact's fixed cost.** It is 131,072 B
    here and most of it is indexes *over rows*, which arrive with the rows and
    leave with them. The genuinely fixed part is the schema: an artifact created
    and never written to is **26,624 B** — `reg.store.create(path,
    record_tables=True)`, ten tables and their indexes at `reg.store.PAGE_SIZE` —
    which is 2.6% of this level.
 3. **The mass the control rate does not move is the `declaration` table**, at
-   185,344 B and 18.5% of the level. The fixture's policy replans on a
+   185,344 B and 18.4% of the level. The fixture's policy replans on a
    **wall-clock** interval, so it emits the same 120 declarations at every rung
    of the ladder — `tests/test_bench.py` asserts exactly that, because a
    declaration count that started tracking the frame clock would invalidate the
    study — and a declaration row is fat: ~1,545 B against a verdict row's
    ~184 B, because it carries the declared region as a polygon. Twenty times the
    control rate buys twenty times the verdicts and **no** further declarations.
-   An 18.5% share at 50 Hz is a share of about 1% at 1 kHz, and that dilution is
+   An 18.4% share at 50 Hz is a share of about 1% at 1 kHz, and that dilution is
    where the difference between 20x and 15.8x goes.
 
 **The two terms it named come to 31,744 B, 3.2% of the level; the
-term it did not name is 185,344 B, 18.5%.** The stated cause is smaller than the
+term it did not name is 185,344 B, 18.4%.** The stated cause is smaller than the
 one that carries the effect by a factor of **5.8**. Issue #116 estimated the miss
 at ~15x, reading it off *row* counts; measured in bytes it is 5.8x against the
 term that actually carries it. Same direction, same conclusion, and now an
@@ -360,7 +360,7 @@ is reported here and in the benchmark's own table, and repairing it is a
 separate piece of work in `reg.graph`, not something this measurement is
 permitted to tune away.
 
-**This is a purchasing decision, not a slogan.** 264 GB buys *did contact
+**This is a purchasing decision, not a slogan.** 265 GB buys *did contact
 occur*, *how close did it come*, every refused action with its fault code and
 the declaration it was raised against, and both hash chains walked end to end.
 It also buys *when* — **for events sustained longer than its one-second
@@ -437,7 +437,7 @@ from it:
 | verdicts | 3,000 |
 | faults | 24 |
 | chain records | 3,120 |
-| artifact on disk | 2,577,408 B |
+| artifact on disk | 2,584,576 B |
 | gzipped CSV baseline | 64,651 B |
 | x gz CSV | 0.03x |
 | how much larger | ~40x |

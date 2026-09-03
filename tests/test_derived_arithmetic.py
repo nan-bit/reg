@@ -9,8 +9,15 @@ number: one **derived** from a published figure by arithmetic inside a document.
 sensor-log size divided by a retention size — so when the occurrence figure was
 republished from 263 GB to 264 GB the bold row and the column header were
 updated and three rows underneath were not. `14,780x` only reproduces from the
-superseded 263 GB; against the published 264 GB it is `14,724x`. The figure pin
-was green throughout, because no published figure had moved.
+superseded 263 GB; against the 264 GB published then it was `14,724x`. The figure
+pin was green throughout, because no published figure had moved.
+
+The sizes moved again in issue #166, which put the base pose on the
+`robot_config` row: 264 -> 265, 656 -> 658 and 953 -> 955 GB. **The two negatives
+below quote cells of the live table, so they move with it** — a fixture naming a
+row the table no longer has is a `replace` that does nothing, and a negative that
+mutates nothing asserts nothing. Each now says so itself rather than leaving that
+to be noticed.
 
 Found by an external technical review, on a branch that never landed; this is
 that fix carried onto `main` with the check that would have caught it.
@@ -135,8 +142,20 @@ def test_the_worked_example_uses_a_published_size() -> None:
 
 
 def test_a_row_left_behind_by_a_republish_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The actual defect: the size moved 263 -> 264 and a row kept 263's answer."""
-    text = BASELINE.read_text().replace("| 14,724x |", "| 14,780x |")
+    """The actual defect: the size moved 263 -> 264 and a row kept 263's answer.
+
+    The cell replaced is the live table's 21.3 TB/day occurrence ratio, re-quoted
+    whenever the sizes are republished — `14,724x` under 264 GB, `14,669x` under
+    the 265 GB issue #166 left. What it is replaced with is the stale value the
+    original defect left behind.
+    """
+    published = BASELINE.read_text()
+    text = published.replace("| 14,669x |", "| 14,780x |")
+    assert text != published, (
+        "`| 14,669x |` is no longer a cell of the sensitivity table, so this "
+        "negative mutated nothing and would pass against any document at all. "
+        "Re-quote it from the table the republish left."
+    )
     monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: text)
     bad = divergences()
     assert bad and "14,780" in bad[0]
@@ -146,7 +165,12 @@ def test_a_moved_column_size_with_stale_rows_is_caught(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The other direction: republish the header and leave every row alone."""
-    text = BASELINE.read_text().replace("vs occurrence (264 GB)", "vs occurrence (300 GB)")
+    published = BASELINE.read_text()
+    text = published.replace("vs occurrence (265 GB)", "vs occurrence (300 GB)")
+    assert text != published, (
+        "the sensitivity table no longer publishes `vs occurrence (265 GB)`, so "
+        "this negative mutated nothing. Re-quote the header the republish left."
+    )
     monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: text)
     assert len(divergences()) >= 5
 

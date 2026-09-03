@@ -148,6 +148,36 @@ Each entry is a claim that the graph can be tested against.
    row carries neither: neither is a reachable set, and a number invented for them
    would be indistinguishable downstream from one something computed.
 
+   **And a radius is retained with the frame it is measured from, or it is not
+   retained (issue #166).** `outer_radius` is a distance from the base, so it is a
+   radius *about a centre*, and until the schema could hold a moving base nothing
+   in the file named that centre — it was the origin by there being no other
+   possibility. The `config_id` beside it is now required, because that row states
+   the frame: its own `base_pose` when the base drove, or `meta[base_frame]`, the
+   frame the base was bolted in, for a configuration that states none. An artifact
+   stating neither is a could-not-evaluate and `reg.graph.envelope_frame` refuses
+   it; the absence does not resolve to the origin.
+
+   **What it cost, because it is not free and the issue that asked for it expected
+   it to be.** Two nullable columns on `robot_config` and one `meta` row, measured
+   on the build Claim 1 prices (`python -m reg.bench --resolution --seed 0`,
+   `long_run` at 3,000 frames): **+2,048 B** at the `occurrence` level, all of it in
+   `indexes + schema` — that level retains no `robot_config` row at all — and
+   **+7,168 B** at `transition` and `per-frame`, which is the same 2,048 plus **2 B
+   on each of the 2,560 configuration rows those levels keep**. The 2 B is SQLite's
+   record header: a column that is NULL on every row still costs one serial-type
+   byte per row, and there is no trailing-NULL trimming to hide behind — a table
+   with two more columns is a larger table even when nothing is written into them.
+   So the schema could not hold a base pose *and* leave the published figures
+   still, and the figures moved by **+0.20% to +0.29%**. They were re-measured with
+   the command above and republished in the same change, here and in
+   [`retention.md`](retention.md), [`sensor-baseline.md`](sensor-baseline.md),
+   [`sufficiency.md`](sufficiency.md), [`plan.md`](plan.md), `docs/README.md` and
+   the top-level `README.md`. The alternative — a side table, so a bolted run pays
+   nothing — was rejected because it puts where the base was somewhere other than
+   the row that says what the robot was doing, and a pose reachable only by a join
+   is one every reader of `robot_config` can forget to make.
+
    Two narrower clauses sit under this one and both are in *Discarded*, because both
    are things the contract could have kept and does not: **which frames get a row at
    all** is #10, and **which of those rows carry the polygon** is #9.
@@ -229,6 +259,56 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    identical at **zero tolerance**. If that ever fails, the discard is not lossless
    and this item is wrong rather than merely expensive.
 
+   **The recomputation contract holds for a base that does not move, and that
+   condition is now written into the schema.** Every term in the function above is
+   **body-frame**: `q`, `qd`, the horizon and the three envelope parameters
+   describe an arm relative to its own base, and where the base *was* is in none
+   of them. For a bolted arm that is a complete description, because the base is
+   at the origin as a mounting fact. Allow it to drive and the same six inputs
+   describe the same arm **somewhere else**, so a recomputation from them alone
+   returns the region a robot at the origin could reach — not a looser answer than
+   the right one, an answer about a different robot, and one that arrives looking
+   exactly like a stored polygon. Since issue #166 the `robot_config` row can say
+   where the base was (`base_pose`, with its `PoseSource` beside it, both NULL for
+   *this artifact records no pose*), and `reg.graph.envelope_at` **refuses** a row
+   that states one rather than recomputing it. So the clause reads: geometry is
+   discarded because it is recomputable *for a base that did not move*, and a run
+   whose base moved has to retain it. Nothing in this repository writes a posed
+   configuration yet, so nothing here is currently discarding a polygon it cannot
+   recover; the refusal is what stops that from arriving quietly when something
+   does.
+
+   **The same condition, and the same fix, for the two scalars in Retained #8.**
+   `outer_area` and `outer_radius` are kept instead of the outer polygon on the
+   identical recomputability argument, so the paragraph above applies unchanged.
+   `outer_radius` also carried a second, quieter defect: it is a radius **about a
+   centre**, and until issue #166 nothing in the file named that centre. It was the
+   origin because there was no other possibility — a fact about the code that wrote
+   the artifact rather than about the artifact — and a schema that can hold a moving
+   base makes it meaningless. So a retained `outer_radius` now requires the
+   `config_id` beside it, which is what names the frame: that row's own `base_pose`,
+   or `meta[base_frame]` for a configuration that states none. `reg.graph.envelope_frame`
+   is the reader, and an artifact stating neither is a **could-not-evaluate** — the
+   absence never resolves to the origin.
+
+   **And the base frame is not a third term in the distance error budget.** The
+   budget below is exactly saturated (`GEOM_SIMPLIFY_TOL_M + DISTANCE_TOL_M/2 =
+   DISTANCE_TOL_M`), so a third rounded length in it would break the equality. There
+   is not one. Both terms are places the builder *rounds a length* — Douglas–Peucker
+   on a stored boundary, and `quantize_distance` on a reported distance — and a base
+   frame passes through neither: it is written as text at the raw stream's own
+   precision (`reg.stream.FLOAT_PRECISION`), exactly as `q` and `qd` are, with no
+   quantum of its own, because none of the four tolerances is a quantum for a frame
+   and inventing one would put a bound in the artifact that no document states. `q`
+   is the precedent and it is a strong one: every distance this artifact reports is
+   computed from geometry built out of `q`, and `q` has never been a term in the
+   budget for exactly this reason. The centre is also written down *after* the radius
+   is measured about it, so no reported number is computed through the digits; they
+   say what the retained radius is a radius **about**. Retain a frame with a quantum
+   of its own and this paragraph stops being true — which is what *no headroom for a
+   third error term* means, and the discipline it asks for is to keep the frame out
+   of the rounding path rather than to shave the budget.
+
    **Its precondition, stated rather than assumed.** Recomputation is exact for the
    same code and the same shapely version. An artifact handed to an assessor years
    later may not reproduce byte-identical geometry, and on the frames where the
@@ -238,7 +318,8 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
 
    **What it does not license.** Discarding the scalars (Retained #8), discarding
    the `config_id` that makes recomputation possible (the schema refuses an
-   `envelope` row with neither geometry nor a config), or lowering `n_samples` to
+   `envelope` row with neither geometry nor a config, and since issue #166 it
+   refuses an `outer_radius` with no config beside it), or lowering `n_samples` to
    make the polygons smaller — that changes what the envelope *is* in order to move
    a storage number, which is the move this whole document forbids.
 
@@ -341,9 +422,9 @@ result". The CSV was a substitute this simulator forced, not a restatement of
 the claim. But the question it provoked is the durable part and it outlived its
 own premise: *how coarse can the evidence get before it stops answering the
 question?* The resolution levels below are what answer it, and they turn out to
-be **where the compression argument actually lives** — a measured **264 GB** per
+be **where the compression argument actually lives** — a measured **265 GB** per
 robot per six months at occurrence resolution against a projected 182.5 TB of
-sensor log, i.e. ~691x ([`retention.md`](retention.md); measured 2026-08-20 at seed 0,
+sensor log, i.e. ~689x ([`retention.md`](retention.md); measured 2026-08-20 at seed 0,
 and the sensor rate is an assumption with a sourced range and a sensitivity
 table, [`sensor-baseline.md`](sensor-baseline.md)). It lives there **less
 comfortably than the provisional 18.9 GB suggested**: that figure was measured
@@ -676,6 +757,13 @@ mode this contract is written to prevent.
 inequality with room in it. There is no headroom in `DISTANCE_TOL_M` for a third
 error term, which is why the next section's failure appears the instant a third
 one exists rather than growing gradually into it.
+
+**The base frame that arrived in issue #166 is not one**, and the arithmetic is in
+*Discarded* #9 rather than repeated here: it is stored as text at the raw stream's
+own precision, like `q`, and passes through neither of the two roundings the
+equality above is a sum of. The rule the equality implies is that anything retained
+with a quantum of its own has to be added to this sum — so the way to add a frame
+to the artifact is to keep it out of the rounding path, not to widen a tolerance.
 
 ### The rate range these hold in
 

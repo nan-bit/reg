@@ -3,7 +3,8 @@
     from reg import store
     conn = store.create("runs/contact.sqlite", record_tables=False)
     store.insert_entity(conn, "obs_crate", "crate", geometry=disc)
-    cfg_id = store.insert_robot_config(conn, "cfg_0", "0.0,0.0", "0.0,0.0")
+    cfg_id = store.insert_robot_config(conn, "cfg_0", "0.0,0.0", "0.0,0.0",
+                                       base_pose=None, base_pose_source=None)
     edge_id = store.open_edge(conn, "SEPARATION", cfg_id, "obs_crate", t_start=0.0,
                               min_distance=0.41)
     store.extend_edge(conn, edge_id, t_end=2.98)
@@ -56,6 +57,13 @@ would otherwise be indistinguishable from a right one:
   stores no polygon and does not say what it was computed from is a row nobody
   can turn back into a region, and `reg.graph.envelope_at` would have to answer
   "no envelope" for a frame that had one. See `insert_envelope`.
+* an `outer_radius` with no `config_id` — a radius is a distance about a centre,
+  and the configuration is what names the frame that centre is in (issue #166).
+  A radius about an unstated centre reads as a measurement and is not one.
+* a `base_pose` with no `base_pose_source`, and either of them in an artifact
+  that states `meta[base_frame]` — a room-frame pose whose provenance nobody
+  stated, and a run claiming both that its base was bolted and that a localizer
+  put it somewhere.
 * an occurrence outside the vocabulary, or one whose entity or metric does not
   match what its type is — see `OCCURRENCE_SPECS` and `insert_occurrence`.
 
@@ -168,15 +176,18 @@ from typing import Literal
 import shapely
 from shapely.geometry.base import BaseGeometry
 
-from reg.types import Layer
+from reg.types import Layer, PoseSource
 
 __all__ = [
     "SCHEMA_VERSION",
+    "SCHEMA_CHANGES",
     "META_SCHEMA_VERSION",
     "META_FRAME_PERIOD",
+    "META_BASE_FRAME",
     "HASH_BYTES",
     "PAGE_SIZE",
     "ENVELOPE_SOURCES",
+    "POSE_SOURCES",
     "EDGE_SPECS",
     "LAYER_FROM_LIMIT_SOURCE",
     "NODE_TABLES",
@@ -203,6 +214,7 @@ __all__ = [
     "insert_entity",
     "insert_occurrence",
     "insert_robot_config",
+    "config_base_pose",
     "insert_verdict",
     "open_edge",
     "extend_edge",
@@ -293,12 +305,82 @@ __all__ = [
 #: reader meeting a v9 file sees the inner area and has no way to tell an
 #: artifact that brackets it from one that never did, which is the same confident
 #: wrong answer every other bump here is about.
-SCHEMA_VERSION = 9
+#:
+#: 10: `robot_config` gained `base_pose` and `base_pose_source`, `meta` gained
+#: `base_frame`, and a retained `outer_radius` now requires the `config_id` that
+#: states the frame it is measured about (issue #166, docs/mobile-base.md §4
+#: item 4). Two things a v9 reader would be confidently wrong about, and they are
+#: different failures. **The polygon.** A v9 file's `geometry_wkb` may be NULL
+#: because the envelope is a function of the `robot_config` a row names plus four
+#: numbers in `meta` — an argument that holds only while the base is bolted down,
+#: and a v9 reader meeting a v10 file whose config states a pose would recompute
+#: that envelope **at the origin, for a robot that was somewhere else**, and
+#: return it as the region in force. **The radius.** `outer_radius` was a radius
+#: about a centre nothing in the file named; it was globally known to be the
+#: origin, which stops being a fact the moment a row can say otherwise. In the
+#: other direction a v10 reader meeting a v9 file cannot tell an artifact whose
+#: base was bolted at the origin from one that never said where its radii are
+#: measured from, and `connect` refusing it is that could-not-evaluate rather
+#: than an origin assumed on the file's behalf.
+SCHEMA_VERSION = 10
+
+#: What each version changed, one line each, keyed by the version it arrived in.
+#: The comment block above is the argument; this is the part a **refusal** can
+#: quote, and `connect` quotes it.
+#:
+#: WHY THE GATE NAMES THE CHANGE. "This build understands version 10" tells a
+#: reader that their build is wrong and not *what about the file* they would have
+#: been wrong about — and that second half is the only part that says whether the
+#: artifact is readable by anything they have. A version gate that cannot say
+#: what changed is a refusal a reader can only respond to by upgrading blind.
+#: `tests/test_graph.py` asserts every version from 2 up is named here, so a bump
+#: that forgets its line fails rather than silently narrowing the message.
+SCHEMA_CHANGES: dict[int, str] = {
+    2: "envelope.geometry_wkb became nullable and envelope.config_id arrived",
+    3: "the timestep table went and HAS_ENVELOPE runs RobotConfig -> Envelope",
+    4: "the occurrence table arrived",
+    5: "the declaration and verdict tables and the four attestation edges "
+    "arrived, and envelope.horizon became nullable",
+    6: "node identity moved into the node table and every join carries its "
+    "INTEGER surrogate; envelope.envelope_hash became a 32-byte BLOB",
+    7: "edge.layer on a HAS_ENVELOPE row follows Limits.source rather than the "
+    "row type, and meta gained limits_source",
+    8: "occurrence.date and occurrence.t_utc arrived, and meta gained "
+    "run_start_utc, unit_id, operator_id and the commitment block",
+    9: "envelope.outer_area and envelope.outer_radius arrived",
+    10: "robot_config gained base_pose and base_pose_source, meta gained "
+    "base_frame, and a retained outer_radius now names the config whose "
+    "frame it is measured about — so an envelope is no longer recomputable "
+    "from q and qd alone and a radius is no longer a radius about an "
+    "unstated centre",
+}
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
 #: wrote it; these are the ones a reader may rely on.
 META_SCHEMA_VERSION = "schema_version"
 META_FRAME_PERIOD = "frame_period_s"
+
+#: The frame every `robot_config` in this artifact that states **no** base pose
+#: is measured in, as `x,y,theta` (issue #166). It is what makes a retained
+#: `outer_radius` a radius about a centre somebody named.
+#:
+#: **A mounting fact, and it is written because a caller stated it.** For every
+#: fixture in this repository the base is bolted at the origin and the builder
+#: passes `reg.kinematics.ORIGIN_FRAME` — the value `grep ORIGIN_FRAME` lists as
+#: the places this repository assumes a base that does not move — so what lands
+#: here is that frame written down, not a frame this module chose. Absent is a
+#: **could-not-evaluate**: a file whose configs state no pose and whose meta
+#: states no frame holds radii about a centre nobody wrote down, and no reader
+#: may resolve that to the origin. `reg.graph.envelope_frame` is the reader that
+#: refuses.
+#:
+#: **It is exclusive with a per-config pose.** A run whose base drove has no one
+#: frame its configs are measured in, so `insert_robot_config` refuses a
+#: `base_pose` in an artifact that states this key. The two are different claims
+#: — *the base was bolted here* and *the base was here at this instant, and a
+#: localizer says so* — and an artifact making both would leave every reader to
+#: pick one.
+META_BASE_FRAME = "base_frame"
 
 #: How wide an `envelope_hash` is, in bytes. `reg.envelope.envelope_hash` is a
 #: SHA-256, so this is 32 — and it is checked on the way in rather than assumed,
@@ -347,6 +429,19 @@ PAGE_SIZE = 1024
 #: retained separately because "a clamp is only legible if the declared and the
 #: computed bound both survive" (docs/lossiness.md Retained #8).
 ENVELOPE_SOURCES = ("computed", "declared", "clamped")
+
+#: The `base_pose_source` vocabulary, derived from `reg.types.PoseSource` rather
+#: than written out again — a second list is how the two drift apart, and a
+#: provenance the schema accepts but the type does not is a value nothing
+#: downstream can read.
+#:
+#: **Neither member decides a layer, and no function here maps one to a layer.**
+#: A room-frame pose is Layer B structurally on both provenances
+#: (docs/sufficiency.md §5.6), so what makes an edge resting on a posed config
+#: Layer B in `open_edge` is the *presence* of a pose and never its source.
+#: `tests/test_layer_boundary.py::test_no_function_in_reg_maps_a_pose_provenance_to_a_layer`
+#: is what keeps that true here as well as in `reg.types`.
+POSE_SOURCES: tuple[str, ...] = tuple(source.value for source in PoseSource)
 
 
 #: The node kinds a chain link may join. `FOLLOWS` is the one edge type whose
@@ -421,6 +516,19 @@ class EdgeSpec:
 #: near the robot does not. `tests/test_graph.py::
 #: test_layer_b_is_exactly_the_entity_naming_edges` holds the line: an edge that
 #: names an `Entity` is Layer B whatever its author intended.
+#:
+#: **AND *NAMES NO ENTITY* IS NOT THE SAME AS *DEPENDS ON NOTHING OUTSIDE THE
+#: ROBOT*, WHICH IS ISSUE #166.** Where the base is comes from localization, and
+#: a `robot_config` row may now say so (`base_pose`). Nothing in that sentence
+#: names an entity, and none of `base_pose`, `x`, `y` or `theta` is a word a
+#: world-word check could hold against — so an edge resting on a posed
+#: configuration is a Layer A tag on an answer that inherits a perceiver,
+#: arriving by a door the paragraph above cannot see. `open_edge` reads the
+#: pose off the endpoint and refuses the `A`: `HAS_ENVELOPE`, whose layer is
+#: stated, must be stated `B`, and a type whose layer is a fixed `A` is refused
+#: outright rather than relabelled, because reclassifying the attestation edges
+#: is a change to what this project claims and not a call site's to make
+#: (docs/sufficiency.md §5.8).
 #:
 #: `HAS_ENVELOPE` runs `RobotConfig -> Envelope` and not `Timestep -> Envelope`
 #: (issue #29). docs/plan.md Phase 5's table originally said `Timestep`; it now
@@ -533,6 +641,7 @@ RECORD_TABLE_NAMES: frozenset[str] = frozenset(
 _SQL_EDGE_TYPES = ", ".join(f"'{name}'" for name in EDGE_SPECS)
 _SQL_NODE_KINDS = ", ".join(f"'{name}'" for name in NODE_TABLES)
 _SQL_ENVELOPE_SOURCES = ", ".join(f"'{name}'" for name in ENVELOPE_SOURCES)
+_SQL_POSE_SOURCES = ", ".join(f"'{name}'" for name in POSE_SOURCES)
 _SQL_OCCURRENCE_TYPES = ", ".join(f"'{name}'" for name in OCCURRENCE_SPECS)
 _SQL_OCCURRENCE_ENTITY_TYPES = ", ".join(
     f"'{name}'" for name, spec in OCCURRENCE_SPECS.items() if spec.subject == "entity"
@@ -592,10 +701,38 @@ CREATE TABLE node (
 -- Created only when it anchors a retained relationship (docs/lossiness.md
 -- Discarded #1), or when an envelope the artifact retains was computed from it.
 -- The interpolated path between two of these is gone.
+--
+-- WHERE THE BASE WAS, AND WHY IT IS ON THIS ROW (issue #166,
+-- docs/mobile-base.md §4 item 4). `base_pose` is `x,y,theta` in the **room** and
+-- `base_pose_source` is the `reg.types.PoseSource` that produced it. Both NULL
+-- means *this artifact records no base pose for this configuration*, which is a
+-- could-not-evaluate and never a base at the origin: `meta[base_frame]` is where
+-- an artifact says its base was bolted, and it is a different claim.
+--
+-- Text, and three numbers in one column, for the reason `q` is text: the joint
+-- count is a property of the robot rather than of the schema, and the artifact
+-- should read back the digits the raw stream carried rather than whatever a
+-- REAL column round-trips to. A pose is not variable-length, but it is the same
+-- claim about digits, and splitting it into three REALs would make the pose the
+-- one thing on this row rendered by SQLite rather than by the writer.
+--
+-- **This row is where a room-frame statement enters the artifact**, and
+-- `open_edge` reads it: an edge resting on a configuration that states a pose
+-- may not be written Layer A, whatever its type says, because everything
+-- computed from a room-frame pose inherits the perceiver that supplied it
+-- (docs/sufficiency.md §5.6, §5.8). That is the first time a Layer A
+-- attestation edge could depend on something outside the robot while naming no
+-- `Entity`, which is the gap the layer test could not see.
 CREATE TABLE robot_config (
-    config_key INTEGER PRIMARY KEY REFERENCES node (node_key),
-    q          TEXT NOT NULL,
-    qd         TEXT NOT NULL
+    config_key       INTEGER PRIMARY KEY REFERENCES node (node_key),
+    q                TEXT NOT NULL,
+    qd               TEXT NOT NULL,
+    base_pose        TEXT,
+    base_pose_source TEXT CHECK (base_pose_source IN ({_SQL_POSE_SOURCES})),
+    -- A pose with no provenance is the thing `BasePose` exists to make
+    -- impossible, and a provenance with no pose is a failure mode described
+    -- about nothing.
+    CHECK ((base_pose IS NULL) = (base_pose_source IS NULL))
 );
 
 -- A row per envelope the artifact retains, keyed on `envelope_hash`
@@ -609,14 +746,27 @@ CREATE TABLE robot_config (
 -- `geometry_wkb` is retained on a second and narrower rule again
 -- (docs/lossiness.md Discarded #9, issue #28).
 --
--- WHY THE GEOMETRY MAY BE NULL. The polygon is a deterministic function of
--- `(q, qd, horizon, n_samples, envelope_seed, substep_dt)` — the config this
--- row names plus four numbers in `meta` — so storing it on every frame stores
--- the same information twice, once cheaply and once expensively. It is retained
--- only where it is evidence in its own right: `reg.graph.GEOMETRY_RETENTION`
--- states the rule, `reg.graph.envelope_at` is the reader that makes the absence
--- invisible, and the artifact records the rule in `meta` so nothing has to
--- infer it from the pattern of NULLs.
+-- WHY THE GEOMETRY MAY BE NULL, AND THE CONDITION ON IT (issue #166). The
+-- polygon is a deterministic function of `(q, qd, horizon, n_samples,
+-- envelope_seed, substep_dt)` — the config this row names plus four numbers in
+-- `meta` — so storing it on every frame stores the same information twice, once
+-- cheaply and once expensively. It is retained only where it is evidence in its
+-- own right: `reg.graph.GEOMETRY_RETENTION` states the rule,
+-- `reg.graph.envelope_at` is the reader that makes the absence invisible, and
+-- the artifact records the rule in `meta` so nothing has to infer it from the
+-- pattern of NULLs.
+--
+-- **That function is complete only while the base is bolted down.** Every term
+-- in it is body-frame; where the body *was* is not in it. For a configuration
+-- that states a `base_pose` the same six inputs describe the same arm in a
+-- different place, so recomputing from them alone answers about a robot at the
+-- origin — which is not a rounding error but a different robot, and the answer
+-- would come back looking exactly like a right one. `reg.graph.envelope_at`
+-- refuses a posed configuration for that reason rather than recomputing it, and
+-- the discard rule above therefore reads: the polygon is recomputable **for a
+-- base that did not move**, and a mobile run must retain it. Nothing in this
+-- repository writes a posed configuration yet (docs/mobile-base.md §7, Tier 4),
+-- so nothing here is currently discarding a polygon it cannot recover.
 --
 -- `config_key` is what makes that recoverable, so the CHECK requires one or the
 -- other: a row with neither stores no region and names nothing to recompute one
@@ -650,7 +800,20 @@ CREATE TABLE robot_config (
 -- of the `robot_config` this row names plus the horizon it stores, so retaining
 -- its WKB would store the same information twice — once at 16 bytes a frame and
 -- once at several kilobytes. Enforcement computes the region, uses it, and
--- discards it; these two numbers are what survives.
+-- discards it; these two numbers are what survives. The same condition as the
+-- geometry above applies to that recomputation, and for the same reason.
+--
+-- AND A RADIUS IS STORED WITH THE FRAME IT IS MEASURED FROM, OR NOT STORED
+-- (issue #166). `outer_radius` is a distance from the base to the furthest point
+-- the robot can reach — a radius **about a centre**, and until this version
+-- nothing in the file named that centre. It was globally known to be the origin,
+-- which is a fact about there being no other possibility rather than about the
+-- artifact, and it stops being true the moment a `robot_config` row can say
+-- where the base was. So the CHECK below requires a `config_key` beside it: that
+-- row states the frame, either as its own `base_pose` or, for a config that
+-- states none, as `meta[base_frame]`. A radius with neither is a number in
+-- metres about a point nobody can name, which compares against declared regions
+-- and bounds as though it meant something.
 --
 -- Both are present exactly for a `computed` envelope. A `declared` region is the
 -- policy's claim and a `clamped` one is the bound a verdict applied; neither is
@@ -680,7 +843,8 @@ CREATE TABLE envelope (
     -- CHECK on the rounded pair would be an invariant that fails a build for a
     -- rounding rather than for a fault. Zero, though, is always a failed
     -- computation: an outer bound of no extent contains no declared region.
-    CHECK (outer_area IS NULL OR (outer_area > 0.0 AND outer_radius > 0.0))
+    CHECK (outer_area IS NULL OR (outer_area > 0.0 AND outer_radius > 0.0)),
+    CHECK (outer_radius IS NULL OR config_key IS NOT NULL)
 );
 
 -- `geometry_wkb` is the entity's world-frame boundary and is present exactly
@@ -1150,9 +1314,41 @@ def connect(path: str | os.PathLike[str]) -> sqlite3.Connection:
             f"{path} was written against schema version {version}; this build "
             f"understands version {SCHEMA_VERSION}. The column meanings may have "
             "changed, and a query against the wrong ones returns answers rather "
-            "than errors."
+            f"than errors. {_schema_change_summary(version)}"
         )
     return conn
+
+
+def _schema_change_summary(version: str) -> str:
+    """What changed between the file's version and this build's, named.
+
+    The refusal above says a reader cannot read the file. This says **what about
+    it** they would have got wrong, which is the half that tells them whether
+    anything they have can read it and what to go and look at.
+
+    Three-valued, like everything else that gates: a version this build cannot
+    place — not an integer, or one from a future build whose changes are not in
+    `SCHEMA_CHANGES` — is a could-not-evaluate and says so, rather than
+    describing a span it cannot see the ends of.
+    """
+    try:
+        found = int(version)
+    except (TypeError, ValueError):
+        return (
+            f"This build cannot say what changed: {version!r} is not a version "
+            "number it can place against SCHEMA_CHANGES."
+        )
+    span = [v for v in sorted(SCHEMA_CHANGES) if min(found, SCHEMA_VERSION) < v
+            <= max(found, SCHEMA_VERSION)]
+    if not span:
+        return (
+            f"This build cannot say what changed between {found} and "
+            f"{SCHEMA_VERSION}: SCHEMA_CHANGES names no version in that span, "
+            "so the file was written by a build newer than this one."
+        )
+    direction = "since" if found < SCHEMA_VERSION else "after"
+    changes = "; ".join(f"v{v}: {SCHEMA_CHANGES[v]}" for v in span)
+    return f"What changed {direction} v{found} — {changes}."
 
 
 # --------------------------------------------------------------------------
@@ -1505,6 +1701,12 @@ def insert_envelope(
     set, so neither has an outer approximation, and a number invented for them
     here would be indistinguishable downstream from one something computed.
 
+    An `outer_radius` requires a `config_id` beside it (issue #166): the radius is
+    measured from the base, and the configuration is the only thing in the file
+    that names which frame the base was in — its own `base_pose`, or
+    `meta[base_frame]` for a configuration that states none. A radius about an
+    unstated centre is not a measurement of anything.
+
     Re-inserting an id whose row already exists fills in a geometry or a
     `config_id` the first insert left `NULL`, and refuses a *different* value for
     any scalar column. A second `config_id` for a row that already has one is
@@ -1543,6 +1745,16 @@ def insert_envelope(
             "neither is a set the robot can reach. A computed envelope missing "
             "it would be an under-approximation with nothing bracketing it, "
             "which is the state issue #82 is about."
+        )
+    if outer_radius is not None and config_id is None:
+        raise StoreError(
+            f"envelope {envelope_id!r} would store outer_radius={outer_radius!r} "
+            "with no config_id. The radius is measured from the base, and the "
+            "configuration is what names the frame the base was in — its own "
+            f"base_pose, or meta[{META_BASE_FRAME!r}] for a configuration that "
+            "states none. Without it this is a length in metres about a point "
+            "nobody can name, which still compares against every declared "
+            "region and every bound as though it meant something (issue #166)."
         )
     if (horizon is None) != (source == "clamped"):
         raise StoreError(
@@ -1673,10 +1885,13 @@ SELECT e.envelope_key              AS envelope_key,
        e.horizon                   AS horizon,
        e.source                    AS source,
        e.outer_area                AS outer_area,
-       e.outer_radius              AS outer_radius
+       e.outer_radius              AS outer_radius,
+       rc.base_pose                AS base_pose,
+       rc.base_pose_source         AS base_pose_source
 FROM envelope e
 JOIN node n ON n.node_key = e.envelope_key
 LEFT JOIN node c ON c.node_key = e.config_key
+LEFT JOIN robot_config rc ON rc.config_key = e.config_key
 """
 
 
@@ -2182,7 +2397,13 @@ def read_verdicts(conn: sqlite3.Connection) -> list:
 
 
 def insert_robot_config(
-    conn: sqlite3.Connection, config_id: str, q: str, qd: str
+    conn: sqlite3.Connection,
+    config_id: str,
+    q: str,
+    qd: str,
+    *,
+    base_pose: str | None,
+    base_pose_source: str | None,
 ) -> str:
     """A joint configuration that anchors a retained relationship, or an envelope.
 
@@ -2195,10 +2416,139 @@ def insert_robot_config(
     column per joint because the joint count is a property of the robot and not
     of the schema, and because the artifact should read back exactly the digits
     the raw stream carried rather than whatever a float column round-trips to.
+
+    `base_pose` is `x,y,theta` in the room and `base_pose_source` is a
+    `reg.types.PoseSource` value; both are **required arguments with no default**
+    and both are `None` for a configuration whose base pose this artifact does
+    not record (issue #166). That is the `Limits.source` discipline applied to
+    the field it was written for: `None` here says *nobody recorded where the
+    base was*, and a default would make that indistinguishable from a run whose
+    base was known to be at the origin. It is also the same text argument as `q`
+    — the digits the raw stream carried, not what a REAL column renders.
+
+    Writing a pose into an artifact that states `meta[base_frame]` is refused.
+    Those are two different claims about the same run — *the base was bolted
+    here*, a mounting fact, and *the base was there at this instant*, a room-frame
+    estimate that inherits a perceiver — and an artifact making both leaves every
+    reader of a retained `outer_radius` to choose which centre it is about.
     """
-    return _insert_node(
-        conn, "RobotConfig", config_id, {"q": str(q), "qd": str(qd)}
+    base_pose = None if base_pose is None else str(base_pose)
+    base_pose_source = (
+        None if base_pose_source is None else str(base_pose_source)
     )
+    if (base_pose is None) != (base_pose_source is None):
+        raise StoreError(
+            f"robot_config {config_id!r} has base_pose={base_pose!r} and "
+            f"base_pose_source={base_pose_source!r}. A room-frame pose whose "
+            "provenance nobody stated is what reg.types.BasePose exists to make "
+            "impossible, and a provenance with no pose describes the failure "
+            "modes of nothing. Both, or neither — and neither says this "
+            "artifact records no pose, which is not the same as a base at the "
+            "origin."
+        )
+    if base_pose_source is not None and base_pose_source not in POSE_SOURCES:
+        raise StoreError(
+            f"base_pose_source={base_pose_source!r} is not in the vocabulary "
+            f"{POSE_SOURCES}. It is a reg.types.PoseSource value: what the pose "
+            "inherits and over what horizon — integration from a last known "
+            "pose, or a map. An unrecognised string is a provenance nobody can "
+            "read, and it decides no layer either way."
+        )
+    if base_pose is not None:
+        bolted = get_meta(conn, META_BASE_FRAME)
+        if bolted is not None:
+            raise StoreError(
+                f"robot_config {config_id!r} states base_pose={base_pose!r}, but "
+                f"this artifact states meta[{META_BASE_FRAME!r}]={bolted!r} — "
+                "that its base does not move and is bolted at that frame. Those "
+                "are two different claims about one run, and every retained "
+                "outer_radius would then be a radius about whichever centre the "
+                "reader picked. An artifact whose base drove states no "
+                f"meta[{META_BASE_FRAME!r}]."
+            )
+    return _insert_node(
+        conn,
+        "RobotConfig",
+        config_id,
+        {
+            "q": str(q),
+            "qd": str(qd),
+            "base_pose": base_pose,
+            "base_pose_source": base_pose_source,
+        },
+    )
+
+
+def config_base_pose(
+    conn: sqlite3.Connection, config_id: str
+) -> tuple[str, str] | None:
+    """The `(base_pose, base_pose_source)` a configuration states, or `None`.
+
+    `None` is *this artifact records no base pose for that configuration*, and it
+    is not an answer about where the base was. `reg.graph.envelope_frame` is what
+    turns the two cases into a frame or into a refusal.
+    """
+    row = conn.execute(
+        "SELECT c.base_pose AS base_pose, c.base_pose_source AS source "
+        "FROM robot_config c JOIN node n ON n.node_key = c.config_key "
+        "WHERE n.node_id = ?",
+        (str(config_id),),
+    ).fetchone()
+    if row is None:
+        raise StoreError(
+            f"no RobotConfig node with id {config_id!r}. A pose read off a "
+            "configuration this artifact does not hold would be a pose about "
+            "nothing."
+        )
+    if row["base_pose"] is None:
+        return None
+    return (str(row["base_pose"]), str(row["source"]))
+
+
+def _room_frame_endpoint(
+    conn: sqlite3.Connection, kind: str, node_key: int
+) -> tuple[str, str] | None:
+    """The posed configuration one edge endpoint rests on, or `None` (issue #166).
+
+    `(config_id, base_pose)` for an endpoint that is a `RobotConfig` stating a
+    pose, or an `Envelope` computed from one. `None` for every other kind, and
+    for a configuration that states no pose.
+
+    **This is a taint, and it travels through the envelope on purpose.** An
+    envelope row names the configuration it was computed from precisely so the
+    polygon can be recomputed and so its `outer_radius` has a centre; if that
+    configuration is in the room, then so is the region, and so is anything a
+    reader concludes from an edge naming it. Reading the pose off the endpoint
+    rather than trusting the caller is the same rule the layer column has always
+    been under: no layer tag is ever written by an omission, and nobody has to
+    remember this one either.
+
+    It reads *whether* there is a pose and never which `PoseSource` produced it.
+    Both are Layer B (docs/sufficiency.md §5.6), so a mapping from provenance to
+    layer would have nothing to say and would be the mislabelling
+    `tests/test_layer_boundary.py` scans for.
+    """
+    if kind == "RobotConfig":
+        row = conn.execute(
+            "SELECT n.node_id AS config_id, c.base_pose AS base_pose "
+            "FROM robot_config c JOIN node n ON n.node_key = c.config_key "
+            "WHERE c.config_key = ?",
+            (int(node_key),),
+        ).fetchone()
+    elif kind == "Envelope":
+        row = conn.execute(
+            "SELECT n.node_id AS config_id, c.base_pose AS base_pose "
+            "FROM envelope e "
+            "JOIN robot_config c ON c.config_key = e.config_key "
+            "JOIN node n ON n.node_key = c.config_key "
+            "WHERE e.envelope_key = ?",
+            (int(node_key),),
+        ).fetchone()
+    else:
+        return None
+    if row is None or row["base_pose"] is None:
+        return None
+    return (str(row["config_id"]), str(row["base_pose"]))
 
 
 # --------------------------------------------------------------------------
@@ -2368,6 +2718,45 @@ def open_edge(
 
     src_key = _require_node(conn, resolved_src, str(src_id))
     dst_key = _require_node(conn, resolved_dst, str(dst_id))
+
+    # THE ROOM-FRAME TAINT (issue #166). Every rule above derives the layer from
+    # the edge *type*, and one derives it from the provenance of the `Limits`
+    # (issue #84). Neither can see this one: a base pose reaches an edge through
+    # a value on a row it names, under field names — `base_pose`, `x`, `y`,
+    # `theta` — that no word check would ever hold against the world, and the
+    # edge it reaches names no `Entity`. That is what makes it the first way a
+    # Layer A attestation edge could depend on something outside the robot,
+    # docs/sufficiency.md §5.6 and §5.8.
+    #
+    # The layer is checked first and the rows are read only for an `A`, which is
+    # not an optimisation dressed as a rule: a `B` edge is already tagged with
+    # the dependency, so there is nothing for the pose to change about it. Every
+    # entity-naming edge takes that path and never touches the two lookups.
+    if resolved_layer == "A" and (
+        posed := _room_frame_endpoint(conn, resolved_src, src_key)
+        or _room_frame_endpoint(conn, resolved_dst, dst_key)
+    ):
+        config_id, pose = posed
+        varies = not isinstance(spec.layer, str)
+        raise StoreError(
+            f"a {edge_type} edge would be written layer 'A', but it rests on "
+            f"robot_config {config_id!r}, which states base_pose={pose!r} — a "
+            "pose in the room. A room-frame pose is a statement about the "
+            "robot's relationship to a map, landmarks or a frame somebody "
+            "defined, and no localizer of any kind moves it to Layer A "
+            "(docs/sufficiency.md §5.6); everything computed from it inherits "
+            "whatever supplied it. "
+            + (
+                "State layer 'B'."
+                if varies
+                else f"A {edge_type} edge is always layer 'A' by its type, so "
+                "there is no layer to state instead and this write is refused "
+                "rather than relabelled: reclassifying the attestation edges is "
+                "a change to what this project claims (docs/sufficiency.md §2) "
+                "and not something a call site decides. Retain the region "
+                "rather than a bound over a base that moved."
+            )
+        )
 
     t_start = float(t_start)
     t_end = t_start if t_end is None else float(t_end)

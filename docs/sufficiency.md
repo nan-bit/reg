@@ -4,8 +4,8 @@
 [`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable · written for
 Milestone 2, re-measured 2026-08-20 after Milestone 3, §7 reconciled against the
 measured tables 2026-08-21, §5.1's frame condition recorded 2026-09-01
-(issue #139), §5.7's widening of Layer A recorded 2026-09-02 (issue #150) ·
-keep current
+(issue #139), §5.7's widening of Layer A recorded 2026-09-02 (issue #150), §5.8's
+pose in the artifact recorded 2026-09-02 (issue #166) · keep current
 
 The mechanism this document argues from already exists. Every edge in the
 artifact carries a `layer` column, `A` or `B`, and so does every occurrence; the
@@ -14,7 +14,10 @@ value is never supplied by a caller but derived from the type in
 `tests/test_graph.py::test_layer_b_is_exactly_the_entity_naming_edges` derives
 the *expected* value from whether the type touches an `Entity`, so an edge type
 added without a layer decision fails there rather than in somebody's query months
-later.
+later. **Since issue #166 that test also covers the way into Layer B that the
+type table cannot express** — an edge resting on a configuration that states where
+the base was — which is §5.8 below and is the first dependency on something
+outside the robot that reaches an edge naming no `Entity` at all.
 
 What did not exist until this file is the argument that turns that column into a
 claim: **which audit questions this artifact answers on its own authority, and
@@ -123,7 +126,7 @@ Layer A question can be unanswerable at a coarse level: the occurrence view hold
 **zero** edge rows, so nothing about the envelope survives into it and the
 reachability question dies there despite being certifiable. A Layer B question can
 be perfectly answerable at the coarsest level: *did the robot contact the human*
-is answered from a DSSAD-shaped occurrence flag in a level costing 60.29 MB/h —
+is answered from a DSSAD-shaped occurrence flag in a level costing 60.42 MB/h —
 a figure **at a 50 Hz control rate**, which the level's attestation stream and
 not its occurrence flags is what buys (98.5% of its rows are records,
 [`retention.md`](retention.md), issue #116) — and is still only as strong as
@@ -151,9 +154,9 @@ with `python -m reg.bench --resolution`:
 
 | level | ts res | SQLite B | bytes/hour @ 50 Hz | nodes | edges | occ | records |
 |---|---|---|---|---|---|---|---|
-| `occurrence` | 1.0 s | 1,004,544 | **60.29 MB/h** | 3,166 | 0 | 42 | 3,120 |
-| `transition` | 0.01 s | 2,494,464 | **149.72 MB/h** | 5,870 | 9,724 | 0 | 3,120 |
-| `per-frame` | 0.01 s | 3,624,960 | **217.57 MB/h** | 5,870 | 18,428 | 0 | 3,120 |
+| `occurrence` | 1.0 s | 1,006,592 | **60.42 MB/h** | 3,166 | 0 | 42 | 3,120 |
+| `transition` | 0.01 s | 2,501,632 | **150.15 MB/h** | 5,870 | 9,724 | 0 | 3,120 |
+| `per-frame` | 0.01 s | 3,632,128 | **218.00 MB/h** | 5,870 | 18,428 | 0 | 3,120 |
 
 The rate is in the column heading because the column **moves with it**:
 enforcement emits one verdict and one chain record per commanded action and no
@@ -221,7 +224,7 @@ not omitted, and it is not softened into a claim.
 | 2 | Did the policy exceed its declared bound? (`violations(window)`) | **A** — [`docs/lossiness.md`](lossiness.md) supported-question set, query 6. No entity is named by a declaration or a verdict | **occurrence** — AGREE at every level. The record tables survive all three views intact, so this is the rare question the coarsest artifact answers in full | **certifiable**, and measured |
 | 3 | What did the policy declare at t? (`declared_bound(t)`) | **A** — same, query 5 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level states no declaration in force at t=30.0"), because the region a declaration names lives in the `edge` and `envelope` tables the occurrence view empties; transition and per-frame: AGREE | **certifiable**, and measured |
 | 4 | Was the record tampered with? (`verify_chain()`) | **A** — same, query 8. A hash chain and a MAC over records that name no entity | **occurrence** — AGREE at every level, walked under `measurement_keyring` over 3,120 chain records. Negative tests feed it a truncated chain, an altered record and a missing key | **certifiable**, and measured |
-| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 60.29 MB/h at 50 Hz. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
+| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 60.42 MB/h at 50 Hz. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
 | 6 | How close did the robot get to the human? (`min_separation`) | **B** — `SEPARATION` is `EdgeSpec("B", "RobotConfig", "Entity", "min_distance")`; `closest_approach` is `OccurrenceSpec("B", "entity", "min_distance_m")` | **occurrence** — AGREE, Δ 0.0007 m against a 0.01 m (`DISTANCE_TOL_M`) predicate | **only as strong as perception** |
 | 7 | Was the human inside the reachable set, and when did it first enter? (`first_envelope_intersection`) | **B** — `INTERSECTS` is `EdgeSpec("B", "Envelope", "Entity", "overlap_area")` | **transition** — `reg.query` declares it `answerable_from={edge}`: the occurrence layer locates entry only to ±1.0 s and carries no overlap area, so it cannot produce the intervals this query returns. Agreement **unmeasured**, for the same envelope-ground-truth reason as row 1 | **only as strong as perception** |
 | 8 | Which entities were inside the envelope during [t₀, t₁]? (`reachable_entities`) | **B** — `INTERSECTS`, as above | **transition** — `answerable_from={edge}`. The predicate is exact set equality with no tolerance to spend, and membership derived from ±1.0 s events would be exact-looking and wrong at the edges. Agreement **unmeasured**, as row 1 | **only as strong as perception** |
@@ -301,7 +304,7 @@ being answerable.
 ### 5.2 Layer B, and occurrence resolution is enough: contact, and how close
 
 *Did the robot contact the human?* is answered at the coarsest level in the
-project — one occurrence flag, timestamped to ±1.0 s, in a 1,004,544-byte artifact —
+project — one occurrence flag, timestamped to ±1.0 s, in a 1,006,592-byte artifact —
 and it AGREEs with ground truth recomputed from the raw stream by forward
 kinematics. *How close did it get?* likewise, to within 0.0007 m of a 0.01 m
 budget, carried on the `closest_approach` occurrence's `min_distance_m`.
@@ -364,7 +367,7 @@ measures the sustained case coming back `AGREE` at the same 1.0 s. Whether a
 coarse timestamp suffices is a property of the event, not of the recorder.
 
 So this row carries both qualifiers: it is conditional on perception **and** it is
-conditional on retaining 149.72 MB/h instead of 60.29 — both figures **at a 50 Hz
+conditional on retaining 150.15 MB/h instead of 60.42 — both figures **at a 50 Hz
 control rate**, and both linear in it, so the retention this row asks for scales
 with the loop the robot runs. The two qualifiers are independent, and a deployment
 could fail either one on its own.
@@ -580,6 +583,96 @@ denominator of Claim 1 and a new column would also need a
 ([`mobile-base.md`](mobile-base.md) §5). What moved is the **boundary**, which is
 the only thing this section is about. The geometry is Tier 3.
 
+### 5.8 The pose in the artifact: what §5.6 costs once the record can hold one
+
+§5.6 is an argument about frames and §5.7 is the one change to a *type* it
+produced. This is the one change to the **artifact**, and it is the decision
+§5.6 said was Tier 3's to make in the open. *Issue #166, 2026-09-02;
+[`docs/mobile-base.md`](mobile-base.md) §4 item 4 and §7, Tier 3.*
+
+**What was added.** `robot_config` gained `base_pose` — `x,y,theta` in the room,
+as text, with its `PoseSource` in the column beside it — and `meta` gained
+`base_frame`, the frame the base was bolted in for a run whose base does not
+move. Both are optional and neither has a default: `NULL` says *this artifact
+records no pose for this configuration*, which is a could-not-evaluate and never
+a base at the origin, and the two statements are exclusive, because *bolted here*
+and *localized there* are different claims about one run. `SCHEMA_VERSION` is 10.
+
+**Why the record had to hold it, stated as the cost of not holding it.** Two
+things in the artifact were silently conditional on the base being bolted down,
+and both would have answered rather than refused:
+
+* `envelope.geometry_wkb` may be `NULL` because the polygon is a deterministic
+  function of the configuration the row names plus four numbers in `meta`. Every
+  term in that function is body-frame, so for a robot that had driven,
+  `envelope_at` would have recomputed the region at the **origin** and returned
+  it as the region in force — an answer about a different robot, arriving looking
+  exactly like a stored polygon.
+* `outer_radius` is a radius **about a centre** that nothing in the file named.
+  It was the origin by there being no other possibility, which is a fact about the
+  code that wrote the artifact and not about the artifact.
+
+Both are now enforced rather than argued: a retained radius requires the config
+that states its frame, and `envelope_at` refuses a posed configuration instead of
+recomputing it. [`docs/lossiness.md`](lossiness.md) carries the restated
+recomputation clause and the arithmetic showing the frame is not a third term in
+the distance error budget.
+
+**The decision this section exists to record: a Layer B pose is allowed into the
+artifact, and everything resting on it is Layer B.** Letting a room-frame pose
+into the record is letting the perceiver in, so the question is not whether the
+pose is Layer B — §5.6 settles that structurally, on both `PoseSource` values —
+but what happens to the edges over it. An edge resting on a posed configuration
+depends on something outside the robot **while naming no `Entity`**, and that is
+the case none of this project's three existing guards can see: not the word check
+(`base_pose`, `x`, `y`, `theta` are not world words and cannot be made into
+them), not `EDGE_SPECS` (the layer is a property of the type), and not
+`Limits.source` (the bounds are still a datasheet's). `reg.store.open_edge` reads
+the pose off the endpoint and refuses the `A`:
+
+| edge type | over a bolted config | over a posed config |
+|---|---|---|
+| `HAS_ENVELOPE` — layer stated by the caller (§7, issue #84) | `A` or `B` by `Limits.source` | **`B`**, and an `A` is refused naming the pose |
+| `DECLARED`, `ADJUDICATED`, `ENFORCED`, `FOLLOWS` — layer fixed at `A` by type | `A` | **refused**, not relabelled |
+
+**Why the second row refuses instead of turning `B`.** §2's asymmetry — *the four
+attestation edges are Layer A and not one of them names an `Entity`* — is the
+half of this document worth the trouble, and relabelling those edges is a change
+to what the project claims rather than a tag on a row. Nothing forces that
+decision yet: no fixture is mobile, `reg.enforce.Enforcer` refuses to construct
+for a driven base (issue #164), and a run whose base moved can retain its regions
+rather than bounds over a base that moved. So the refusal is a
+could-not-evaluate held open on purpose, and the decision stays available to
+whoever brings the first mobile fixture — which is the right place to take it,
+with something in hand that the answer would be about.
+
+**And this is the fourth distinct door a dependency has come through.** §7 records
+two: through a **value** (`Limits`, issue #84) and through a **frame** (§5.6).
+§5.7 added a third, a **name that is not a world word**. This is the fourth and
+it is the first that reaches the *record* rather than a type — through a
+**column** — and it is worth writing down that the pattern has not varied: every
+one of them arrived somewhere a field-name test does not look, and every one was
+caught by a check that reads what the thing actually depends on.
+
+**What it does not do.** Nothing in `reg/` writes a posed configuration. The raw
+stream has no base columns (`reg.stream`), the eleven fixtures are bolted down,
+`meta[base_frame]` on every artifact this repository builds is the origin written
+out, and every existing artifact holds exactly the rows it held before. No layer
+tag on any edge in any fixture changes and `ProprioState` was not touched. What
+moved is what the record is **able** to say, and what it is now refused from
+saying quietly.
+
+**The byte counts did move, and §3's table above is the re-measurement.** Two
+nullable columns cost one SQLite record-header byte per `robot_config` row that
+exists, written into or not, so the file grew by 2,048 B of schema and index at
+the `occurrence` level and by 7,168 B at the two finer ones — +0.20% to +0.29%.
+Issue #166 asked for no published figure to move; that part could not be met, and
+the figures were re-measured with `python -m reg.bench --resolution --seed 0` and
+republished across this document, [`retention.md`](retention.md),
+[`sensor-baseline.md`](sensor-baseline.md), [`plan.md`](plan.md),
+[`lossiness.md`](lossiness.md) and both READMEs rather than left to drift.
+[`lossiness.md`](lossiness.md) *Retained* #8 carries the attribution.
+
 ---
 
 ## 6. What a real deployment changes
@@ -718,7 +811,12 @@ document's asymmetry lives.
   recorded rather than modelled — and not the graded integrity attribute the
   bullet above rejects for scope. Either way it is a change to this document
   before it is a change to a type. *Recorded 2026-09-01, issue #139;
-  [`docs/mobile-base.md`](mobile-base.md) §2.2.*
+  [`docs/mobile-base.md`](mobile-base.md) §2.2.* **Still recorded and still not
+  resolved after issue #166**, which is worth saying because the record now holds
+  poses: `robot_config.base_pose_source` stores which of the two provenances a
+  pose has, and neither of them buys a third layer value. A `DEAD_RECKONED` pose
+  taints an edge exactly as a `LOCALIZED` one does (§5.8), which is the honest
+  answer under a binary and is not the same as the drift horizon being modelled.
 - **Not that the layer tag makes a Layer B answer safe to quote.** It makes it
   legibly conditional. Quoting a Layer B answer without its condition is the
   failure this document exists to prevent, which is why the strength column says

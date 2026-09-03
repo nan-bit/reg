@@ -1,10 +1,11 @@
 # The mobile base — what moving the robot does to the argument
 
 **Status:** a design document, and no longer entirely one · written 2026-08-31 ·
-**Tiers 1 and 2 have landed; §3's construction landed 2026-09-02 (issue #163),
-§1's refusal landed 2026-09-02 (issue #164) and §4's two `declare.py` defects
-were fixed 2026-09-02 (issue #165); §4's schema work and Tier 4's fixtures have
-not, and no robot in this repository moves** — the build order in §7 says per
+**Tiers 1, 2 and 3 have landed; §3's construction landed 2026-09-02 (issue
+#163), §1's refusal landed 2026-09-02 (issue #164), §4's two `declare.py`
+defects were fixed 2026-09-02 (issue #165) and §4's schema work landed
+2026-09-02 (issue #166); Tier 4's fixtures have not, and no robot in this
+repository moves** — the build order in §7 says per
 tier which is which, and it is the authority, not this line ·
 normative for the mobile track only; where it touches what the project may
 claim, it defers to [`sufficiency.md`](sufficiency.md) and
@@ -13,7 +14,9 @@ claim, it defers to [`sufficiency.md`](sufficiency.md) and
 on 2026-09-01 (issue #139); **§3's looseness now does**, carried into
 `limitations.md` §10 on 2026-09-02 (issue #163); and **§1's refusal now does**,
 carried into `limitations.md` §3 and §9 and into
-[`../CLAUDE.md`](../CLAUDE.md) rule 3 on 2026-09-02 (issue #164); those files are
+[`../CLAUDE.md`](../CLAUDE.md) rule 3 on 2026-09-02 (issue #164); **and §4 item
+4's schema work now does**, carried into `sufficiency.md` §5.8 and
+[`lossiness.md`](lossiness.md) on 2026-09-02 (issue #166); those files are
 the normative statement of them · keep current
 
 Every figure, every envelope and the bound enforcement VETOes on are computed for
@@ -264,6 +267,15 @@ not be wrong in. That refusal is what stops item 4 of §4 from arriving quietly:
 until the pose and the base velocity are on `robot_config`, a mobile artifact
 cannot be written at all rather than being written with fixed-base numbers in it.
 
+*Half of that condition is now met and the sentence still holds.* Issue #166 put
+the **pose** on the row and not the velocity, so this refusal is still what
+stands between a driven base and an artifact: `reg.graph` reconstructs states
+with `base_vel=None`, and `outer_envelope` refuses one for a robot that can
+drive. What issue #166 added beside it is a second refusal at the *read* —
+`envelope_at` will not recompute a discarded polygon for a configuration that
+states a pose — so the two absences cannot compound into a fixed-base region
+returned as a mobile one.
+
 The tighter construction has a name and a
 literature — RTD and REFINE compute exactly this forward reachable set for ground
 robots with zonotopes, and CORA's conservative linearization gives a large convex
@@ -312,14 +324,31 @@ What breaks, worst first:
 3. `reg/enforce.py`'s `_furthest_vertex` and `reg/envelope.py`'s `outer_radius` —
    both measure distance from an implicit origin, both are on the VETO path, both
    need a centre.
-4. `reg/store.py` — the envelope-recompute argument stops holding. `geometry_wkb`
-   may be NULL because the polygon is a deterministic function of the
-   `robot_config` a row names plus four `meta` numbers; with a moving base that
-   function is incomplete, and `envelope_at` would recompute an envelope at the
-   origin for a robot that was elsewhere. Worse, the retained `outer_radius` is a
-   radius **about an unstated centre** — today globally known, tomorrow
-   meaningless. This is the decisive argument for putting the pose on the
-   `robot_config` row, and it needs a `SCHEMA_VERSION` bump.
+4. `reg/store.py` — **fixed 2026-09-02, issue #166.** The envelope-recompute
+   argument stopped holding. `geometry_wkb` may be NULL because the polygon is a
+   deterministic function of the `robot_config` a row names plus four `meta`
+   numbers; with a moving base that function is incomplete, and `envelope_at`
+   would recompute an envelope at the origin for a robot that was elsewhere.
+   Worse, the retained `outer_radius` was a radius **about an unstated centre** —
+   globally known then, meaningless once a row can say otherwise. That was the
+   decisive argument for putting the pose on the `robot_config` row, and it
+   needed a `SCHEMA_VERSION` bump.
+
+   It has one. `robot_config` carries `base_pose` and `base_pose_source`, `meta`
+   carries `base_frame` for a run whose base was bolted, `SCHEMA_VERSION` is 10
+   and the gate names what changed. `envelope_at` **refuses** a posed
+   configuration rather than recomputing it at the origin, and a retained
+   `outer_radius` requires the config that states its frame. The claim change
+   came with it and it is the part that was not in the issue title: an edge
+   resting on a posed configuration is Layer B though it names no `Entity`, and
+   the four attestation edges — layer `A` by type — are **refused** over one
+   rather than relabelled, because relabelling them is
+   [`sufficiency.md`](sufficiency.md) §2's asymmetry and not a call site's
+   decision. Where this list and [`sufficiency.md`](sufficiency.md) §5.8 differ
+   from here on, **§5.8 is right**: it is normative for what the project may
+   claim and this is a design document. Nothing in this repository writes a
+   posed configuration; the base velocity is still not on the row, so §3's
+   refusal still stands and a mobile artifact still cannot be built.
 5. `reg/declare.py` — **fixed 2026-09-02, issue #165.** `declared_region`
    *raised* on a disconnected union, on the argument that every configuration's
    first link contains the base. A declaration spanning base motion can be
@@ -419,7 +448,7 @@ pose provenance beside `LimitSource`; an explicit base frame in
 `forward_kinematics`. The layer-boundary allowlist and `sufficiency.md` move in
 the same commit as the first of these, because the test requires it.
 
-**Tier 3 — the envelope and the bound.** The body-frame outer envelope with the
+**Tier 3 — the envelope and the bound. Complete, 2026-09-02.** The body-frame outer envelope with the
 base states and a rewritten soundness argument — **done, 2026-09-02, issue
 #163**, and its looseness is [`limitations.md`](limitations.md) §10;
 `computed_bound` refusing and `horizon_bound` on the outer envelope alone —
@@ -428,8 +457,32 @@ base states and a rewritten soundness argument — **done, 2026-09-02, issue
 [`../CLAUDE.md`](../CLAUDE.md) rule 3; the two `declare.py` defects — **done,
 2026-09-02, issue #165**, §4 items 5 and 6, and neither changed a classification
 or a declared envelope byte in any fixture, because for a base at one point the
-old measurement and the new one are the same number; the pose on `robot_config`
-with the schema bump, which is what is left of this tier.
+old measurement and the new one are the same number; and the pose on
+`robot_config` with the schema bump — **done, 2026-09-02, issue #166**, §4 item
+4, and the normative statement of what it decided is
+[`sufficiency.md`](sufficiency.md) §5.8, with
+[`lossiness.md`](lossiness.md)'s recomputation clause restated in the same
+change. Every existing artifact holds the same rows it did, because every
+fixture here is bolted down and writes `base_pose` NULL — but it is **not**
+byte-identical and **the published figures moved**, by +0.20% to +0.29%. Two
+nullable columns cost one SQLite record-header byte each on every
+`robot_config` row that exists, whether or not anything is written into them, so
+a schema that can hold a base pose cannot also leave the byte counts still. The
+measurement, the attribution and the list of documents re-measured with
+`python -m reg.bench --resolution --seed 0` are in
+[`lossiness.md`](lossiness.md) *Retained* #8; the issue asked for no movement and
+that part of it could not be met.
+
+*The claim change that tier made, in one sentence, because it is the one thing
+here a reader should not have to find in a subsection.* A base pose is the first
+dependency on something outside the robot that reaches an edge naming **no
+`Entity`**, so `reg.store.open_edge` reads the pose off the endpoint and refuses
+a Layer A tag on an edge resting on one. That closes the gap §2.1 records and
+[`sufficiency.md`](sufficiency.md) §5.6 predicted:
+`tests/test_graph.py::test_layer_b_is_exactly_the_entity_naming_edges` now
+constructs that edge and requires the refusal, so the layer boundary is enforced
+for the one case this whole track is about rather than for the four edge types
+that existed before it.
 
 *The gap the previous entry recorded is closed, and the pin that recorded it was
 rewritten rather than deleted.* With the base in the outer set,

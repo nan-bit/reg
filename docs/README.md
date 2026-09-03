@@ -48,7 +48,7 @@ retention figure, and [`prior-art.md`](prior-art.md) binds `plan.md`.
   [`sensor-baseline.md`](sensor-baseline.md) for what it is measured against.
   The `bytes/hour` tables are re-derived from the code on each CI run by
   `tests/test_published_figures.py`, so those cannot drift quietly. The
-  six-month totals computed from them — `264 GB` among them — are arithmetic
+  six-month totals computed from them — `265 GB` among them — are arithmetic
   stated in prose and are **not** re-derived; that module's own
   *What this does not cover* is the list, and it is worth reading before
   treating any figure here as machine-checked.

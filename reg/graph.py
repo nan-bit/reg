@@ -35,9 +35,15 @@ docs/lossiness.md Discarded #9) and recovered by recomputation
 not been: the polygon is a deterministic function of `(q, qd, horizon,
 n_samples, seed, substep_dt)`, every one of which the artifact already stores, so
 storing it per frame was storing the same information twice — once cheaply and
-once expensively. What stays per frame is what queries actually read and what
-costs almost nothing: `envelope_hash`, `area`, `horizon`, `source`, and — since
-issue #82 — `outer_area` and `outer_radius`, the same two projections of the
+once expensively. **Every one of those terms is body-frame, which is why the
+argument is now stated with its condition** (issue #166): it holds for a base
+that did not move, and a `robot_config` row that states a `base_pose` is one it
+does not hold for — the same six inputs then describe the same arm somewhere
+else, so `envelope_at` refuses such a row rather than handing back the region a
+robot at the origin could reach.
+
+What stays per frame is what queries actually read and what costs almost
+nothing: `envelope_hash`, `area`, `horizon`, `source`, and — since issue #82 — `outer_area` and `outer_radius`, the same two projections of the
 *outer* reachable set for that frame, which bracket the sampled area from the
 side it cannot bound itself. The outer region's geometry is discarded under this
 same rule and for this same reason.
@@ -243,7 +249,7 @@ from reg.envelope import (
     outer_radius,
 )
 from reg.identity import IdentityError, RunIdentity
-from reg.kinematics import ORIGIN_FRAME, link_polygons
+from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
 from reg.stream import FLOAT_PRECISION, read_comments, read_frames
 from reg.tolerances import (
     AREA_QUANT_SIGFIGS,
@@ -302,6 +308,7 @@ __all__ = [
     "attestation_from_stream",
     "build",
     "envelope_at",
+    "envelope_frame",
     "main",
     "quantize_occurrence_time",
     "recorder_version",
@@ -936,6 +943,20 @@ def _joint_text(values: np.ndarray) -> str:
     return ",".join(f"{float(v):.{FLOAT_PRECISION}f}" for v in np.asarray(values))
 
 
+def _frame_text(base: BaseFrame) -> str:
+    """A base frame as `x,y,theta`, at the raw stream's own precision.
+
+    The same rendering as `_joint_text` and for the same reason: none of the four
+    tolerances is a length quantum for a *frame*, so there is nothing to quantize
+    here and inventing a quantum would put a bound in the artifact that no
+    document states. It is also what keeps the pose out of the distance error
+    budget — see the note beside `outer_radius` in `_frame_observations`.
+    """
+    return ",".join(
+        f"{float(v):.{FLOAT_PRECISION}f}" for v in (base.x, base.y, base.theta)
+    )
+
+
 def _digest(*parts: str) -> str:
     return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:16]
 
@@ -1064,8 +1085,26 @@ class _FrameNodes:
         )
 
     def config(self) -> str:
+        """The `RobotConfig` row for this frame. It states no base pose.
+
+        `None` and not the origin (issue #166). The raw stream this builder reads
+        has no base columns at all (`reg.stream`), so nothing in the file was
+        ever told where the base was — and *not recorded* is what the artifact
+        must say, on the same terms `base_vel=None` says it. Where the base was
+        bolted is `meta[base_frame]`, which is a mounting fact about the run
+        rather than a per-frame estimate, and it is written once.
+
+        A producer arrives with the mobile fixtures (docs/mobile-base.md §7,
+        Tier 4). Until then the pose reaches the artifact through
+        `reg.store.insert_robot_config` and through nothing here.
+        """
         return store.insert_robot_config(
-            self._conn, self._config_id, self._q_text, self._qd_text
+            self._conn,
+            self._config_id,
+            self._q_text,
+            self._qd_text,
+            base_pose=None,
+            base_pose_source=None,
         )
 
     def keep_geometry(self) -> None:
@@ -2125,6 +2164,24 @@ def _observe(
     # (GEOM_SIMPLIFY_TOL_M + DISTANCE_TOL_M/2 <= DISTANCE_TOL_M), and the entity
     # boundary is already spending it. Simplifying both would put reported
     # distances outside the 1 cm the artifact advertises.
+    #
+    # AND THE BASE FRAME IS NOT A THIRD TERM IN THAT BUDGET (issue #166). It
+    # would be if it were rounded, because the equality above is exact and has
+    # no room in it. It is not rounded. The budget's two terms are the two
+    # places this builder *rounds a length* — Douglas–Peucker on a stored
+    # boundary, and `quantize_distance` on a reported one — and a base frame
+    # goes through neither: `_frame_text` writes it at the raw stream's own
+    # precision, exactly as `_joint_text` writes `q`, and for the reason stated
+    # there. `q` is the precedent and it is a strong one: every distance this
+    # artifact reports is computed from geometry built out of `q`, and `q` has
+    # never been in the budget, because none of the four tolerances is a quantum
+    # for it. The centre is written down *after* `outer_radius` is measured
+    # about it, so nothing the artifact reports is computed through the digits;
+    # they say what the retained radius is a radius about. Retain a frame with a
+    # quantum of its own and this comment stops being true — that is what "no
+    # headroom for a third error term" means, and the discipline it asks for is
+    # to keep the frame out of the rounding path rather than to shave the
+    # budget.
     body = unary_union(link_polygons(proprio, limits, ORIGIN_FRAME))
 
     nodes = _FrameNodes(
@@ -2349,6 +2406,16 @@ def _write_provenance(
     # a safety scanner, and the layer column already says which without them
     # having to know the difference.
     store.put_meta(conn, META_LIMITS_SOURCE, limits.source.value)
+
+    # Where the base was, once, for the whole run (issue #166). Every fixture in
+    # this repository is bolted down and this builder passes `ORIGIN_FRAME`
+    # everywhere it computes a region, so what lands here is that frame written
+    # out — the same mounting fact `grep ORIGIN_FRAME` lists, said in the
+    # artifact instead of only in the source. It is what makes every retained
+    # `outer_radius` in the file a radius about a centre somebody named; a file
+    # missing it is a could-not-evaluate, and `envelope_frame` refuses rather
+    # than resolving the absence to the origin.
+    store.put_meta(conn, store.META_BASE_FRAME, _frame_text(ORIGIN_FRAME))
 
     store.put_meta(conn, "human_entity_id", HUMAN_ENTITY_ID)
     store.put_meta(conn, "human_radius_m", _float_text(human_radius))
@@ -2599,6 +2666,93 @@ def _limits_from_meta(conn) -> Limits:
         ) from exc
 
 
+def envelope_frame(conn, envelope_id: str) -> BaseFrame:
+    """The frame this envelope's `outer_radius` is measured about (issue #166).
+
+    `outer_radius` is a distance from the base to the furthest point the robot
+    can reach inside the horizon — a radius **about a centre**, and until the
+    schema could say where the base was, that centre was the origin by the fact
+    that there was no other possibility rather than by anything the artifact
+    said. This is the reader that makes it a measurement: the radius and the
+    point it is measured from, together, or a refusal.
+
+    Two ways an artifact states the frame, and they are exclusive:
+
+    * the configuration the envelope names states a `base_pose` — a room-frame
+      pose, **Layer B**, and everything measured about it inherits whatever
+      supplied it (docs/sufficiency.md §5.6);
+    * the artifact states `meta[base_frame]` — where the base was bolted for the
+      whole run, a mounting fact and Layer A, which is what every fixture in this
+      repository has.
+
+    Returns:
+        The centre as a `BaseFrame`. It is a *frame* and deliberately not a
+        `BasePose` even when it came from one: `reg.kinematics` is Layer A and
+        may not import a room-frame pose, and a caller that needs the provenance
+        reads it off `reg.store.config_base_pose`, where it is still attached to
+        the thing it is a provenance of.
+
+    Raises:
+        GraphQueryError: the artifact holds no such envelope; the row retains no
+            `outer_radius`, so there is no radius for a frame to belong to; or it
+            states neither a pose nor a base frame, which is a
+            could-not-evaluate. **The absence never resolves to the origin.** A
+            radius silently attributed to `(0, 0)` for a robot that was elsewhere
+            is the failure this whole reader exists to make impossible, and it is
+            worse than no answer because it is one.
+    """
+    row = store.envelope_row(conn, str(envelope_id))
+    if row is None:
+        raise GraphQueryError(
+            f"this artifact holds no envelope {str(envelope_id)!r}, so there is "
+            "no radius here and no frame to measure one from."
+        )
+    if row["outer_radius"] is None:
+        raise GraphQueryError(
+            f"envelope {str(envelope_id)!r} has source={str(row['source'])!r} "
+            "and retains no outer_radius. A declared region is the policy's "
+            "claim and a clamped bound is what a verdict applied; neither is a "
+            "reachable set, so neither has an outer radius and neither has a "
+            "frame one would be measured about."
+        )
+    if row["base_pose"] is not None:
+        pose, source = str(row["base_pose"]), str(row["base_pose_source"])
+        values = _floats(
+            pose, f"robot_config[{str(row['config_id'])!r}].base_pose"
+        )
+        if len(values) != 3:
+            raise GraphQueryError(
+                f"robot_config {str(row['config_id'])!r} states "
+                f"base_pose={pose!r}, which is not the three numbers x,y,theta. "
+                "A pose this reader cannot parse is a frame nobody stated, and "
+                f"the radius on envelope {str(envelope_id)!r} is about a point "
+                "that cannot be placed. Its provenance says "
+                f"{source!r}, which does not help."
+            )
+        return BaseFrame(x=values[0], y=values[1], theta=values[2])
+
+    frame = store.get_meta(conn, store.META_BASE_FRAME)
+    if frame is None:
+        raise GraphQueryError(
+            f"envelope {str(envelope_id)!r} retains "
+            f"outer_radius={float(row['outer_radius'])!r}, and this artifact "
+            f"states neither a base_pose on config {str(row['config_id'])!r} nor "
+            f"meta[{store.META_BASE_FRAME!r}]. That radius is a length in metres "
+            "about a point nothing in the file names. Reading it as a radius "
+            "about the origin is exactly what an artifact that can hold a moving "
+            "base may not let a reader do, so it is a could-not-evaluate."
+        )
+    values = _floats(frame, f"meta[{store.META_BASE_FRAME!r}]")
+    if len(values) != 3:
+        raise GraphQueryError(
+            f"meta[{store.META_BASE_FRAME!r}] is {frame!r}, which is not the "
+            "three numbers x,y,theta. A base frame this reader cannot parse "
+            "places nothing, and every retained outer_radius in the file is "
+            "about a point it names."
+        )
+    return BaseFrame(x=values[0], y=values[1], theta=values[2])
+
+
 def envelope_at(conn, t: float) -> BaseGeometry:
     """The envelope in force at `t`: read back, or recomputed. Same answer.
 
@@ -2692,7 +2846,7 @@ def envelope_at(conn, t: float) -> BaseGeometry:
     # through the identifier would look up a *second* time something the row has
     # already said once.
     config = conn.execute(
-        "SELECT q, qd FROM robot_config WHERE config_key = ?",
+        "SELECT q, qd, base_pose FROM robot_config WHERE config_key = ?",
         (row["config_key"],),
     ).fetchone()
     if config is None:
@@ -2701,16 +2855,39 @@ def envelope_at(conn, t: float) -> BaseGeometry:
             "not in this artifact. The polygon was discarded as recomputable and "
             "the thing it was to be recomputed from is missing."
         )
+    if config["base_pose"] is not None:
+        # THE RECOMPUTE ARGUMENT'S CONDITION, ENFORCED (issue #166). Everything
+        # below is body-frame: `q`, `qd`, the limits and the four numbers in
+        # `meta`. Where the body *was* is not in it, so for a configuration that
+        # states a pose these inputs describe the same arm in a different place,
+        # and the polygon that came back would be the region a robot at the
+        # origin could reach. That is not a looser answer than the right one; it
+        # is an answer about somewhere else, and it would look exactly like a
+        # stored polygon to every caller. docs/lossiness.md Discarded #9.
+        raise GraphQueryError(
+            f"envelope {envelope_id!r} was discarded as recomputable, but the "
+            f"config {str(config_id)!r} it names states "
+            f"base_pose={str(config['base_pose'])!r} — the base was not at the "
+            "frame this recomputation would place it at. The envelope is a "
+            "function of q, qd and the horizon *in the base's own frame*, so "
+            "recomputing it here would return the region a robot at "
+            f"meta[{store.META_BASE_FRAME!r}] could reach and report it as the "
+            "region in force. A run whose base moved has to retain the polygon "
+            "(GEOMETRY_RETENTION); this artifact did not, and there is nothing "
+            "in the file to recover it from."
+        )
 
     state = ProprioState(
         t=t,
         q=_floats(config["q"], f"robot_config[{str(config_id)!r}].q"),
         qd=_floats(config["qd"], f"robot_config[{str(config_id)!r}].qd"),
-        # `robot_config` stores `q` and `qd` and nothing else, so this artifact
-        # records no base velocity. `None` says that; zero would say the base
-        # was standing still, which is a different claim and one no row here
-        # supports (issue #150; docs/mobile-base.md §4 item 4 puts the base on
-        # this row in Tier 3, with the schema bump that needs).
+        # `robot_config` stores the base's *pose* since issue #166 and still no
+        # base velocity, so this artifact records none. `None` says that; zero
+        # would say the base was standing still, which is a different claim and
+        # one no row here supports (issue #150). The refusal above is what stops
+        # the two absences compounding: a configuration that states a pose never
+        # reaches this line, so a `None` velocity here is only ever a bolted
+        # base's (docs/mobile-base.md §3 and §4 item 4).
         base_vel=None,
     )
     return simplify_geometry(

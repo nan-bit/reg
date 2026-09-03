@@ -92,7 +92,7 @@ from reg.graph import (
     build,
 )
 from reg.identity import RunIdentity
-from reg.kinematics import ORIGIN_FRAME, link_polygons
+from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
 from reg.scenarios import SCENARIOS
 from reg.sim import provenance, simulate
 from reg.stream import read_frames, write_frames
@@ -608,7 +608,7 @@ def test_every_edge_carries_the_layer_its_type_implies(tmp_path: Path) -> None:
     }
 
 
-def test_layer_b_is_exactly_the_entity_naming_edges() -> None:
+def test_layer_b_is_exactly_the_entity_naming_edges(tmp_path: Path) -> None:
     """The vocabulary itself, independent of any run. A new edge type added
     without a layer decision fails here rather than in a query months later.
 
@@ -619,7 +619,29 @@ def test_layer_b_is_exactly_the_entity_naming_edges() -> None:
     entity-naming edge is Layer B and can be nothing else — and the type whose
     layer varies is enumerated rather than derived, so adding a second one is a
     decision somebody has to make here.
+
+    **AND THE VOCABULARY IS NOT THE WHOLE OF IT (issue #166).** Everything above
+    is a statement about `EDGE_SPECS`, and there is a way into Layer B that no
+    entry in that table can express: a `robot_config` row that states a
+    `base_pose`. Where the base is in the room comes from localization, which is
+    outside the robot on the structural argument in docs/sufficiency.md §5.6 —
+    and an edge resting on such a row names **no `Entity`**, carries no
+    perception-derived `Limits`, and arrives under field names (`base_pose`,
+    `x`, `y`, `theta`) that no world-word check would ever hold against. This
+    test could not see that case until the schema could hold one, so the second
+    half below constructs it: the same edge type, over a configuration that
+    states where the base was, must refuse the `A`.
+
+    The positive control is the first `open_edge` in it — the identical edge over
+    a configuration with no pose is still Layer A — so what is asserted is a
+    refusal about the pose and not a store that has stopped writing edges.
     """
+    _assert_edge_vocabulary_layers()
+    _assert_a_room_frame_pose_is_layer_b(tmp_path)
+
+
+def _assert_edge_vocabulary_layers() -> None:
+    """The `EDGE_SPECS` half of the test above."""
     varies_with_provenance = {"HAS_ENVELOPE"}
     for edge_type, spec in store.EDGE_SPECS.items():
         layers = store.possible_layers(edge_type)
@@ -641,6 +663,121 @@ def test_layer_b_is_exactly_the_entity_naming_edges() -> None:
                 f"Layer A — it may be {sorted(layers)}. A type whose layer varies "
                 "needs a reason recorded, not a widened set."
             )
+
+
+def _unsigned_declaration() -> Declaration:
+    """A syntactically valid declaration, unsigned. The store holds no keys.
+
+    `reg.store` cannot check a MAC and deliberately does not try, so an unsigned
+    record is enough to give a `DECLARED` edge an endpoint — and building one by
+    hand keeps this test off the scenario fixtures, which take a simulation to
+    produce a record whose signature nothing here reads.
+    """
+    return Declaration(
+        declaration_id="dec_posed_0",
+        seq=0,
+        t_issued=0.0,
+        horizon=0.2,
+        action_class="hold",
+        declared_envelope=envelope_wkb(Point(0.0, 0.0).buffer(0.4)),
+        prev_hash=GENESIS_HASH,
+        mac=UNSIGNED_MAC,
+    )
+
+
+def _posed_artifact(path: Path) -> sqlite3.Connection:
+    """A hand-built store holding one bolted config and one that states a pose.
+
+    Hand-built because nothing in `reg/` writes a posed configuration yet — the
+    raw stream has no base columns and the fixtures are all bolted down
+    (docs/mobile-base.md §7, Tier 4). An unexercised rule is one that drifts, so
+    the artifact this rule is about is constructed here rather than waited for.
+
+    `record_tables=True` so the attestation edges have endpoints to be refused
+    against, and no `meta[base_frame]`: this is a run whose base moved, and an
+    artifact that also claimed its base was bolted somewhere would be making two
+    different claims about one run.
+    """
+    conn = store.create(path, record_tables=True)
+    poses = (("cfg_bolted", None), ("cfg_posed", "1.200000,-0.400000,0.300000"))
+    for config_id, pose in poses:
+        store.insert_robot_config(
+            conn,
+            config_id,
+            "0.000000,0.000000",
+            "0.000000,0.000000",
+            base_pose=pose,
+            base_pose_source=None if pose is None else "localized",
+        )
+    for envelope_id, config_id, digest in (
+        ("env_bolted", "cfg_bolted", _HASH_A),
+        ("env_posed", "cfg_posed", _HASH_B),
+    ):
+        store.insert_envelope(
+            conn,
+            envelope_id,
+            envelope_hash=digest,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id=config_id,
+            horizon=0.2,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+    return conn
+
+
+def _assert_a_room_frame_pose_is_layer_b(tmp_path: Path) -> None:
+    """The case `EDGE_SPECS` cannot express, with its negative.
+
+    Three assertions and the middle one is the point:
+
+    1. the control — a `HAS_ENVELOPE` edge over a configuration that states no
+       pose is Layer A, which is every artifact this repository builds;
+    2. the same edge over a configuration that states one is **refused** as
+       Layer A, and the refusal names the pose rather than the edge type;
+    3. and Layer B is accepted for it, so what was refused is the tag and not
+       the write.
+    """
+    conn = _posed_artifact(tmp_path / "posed.sqlite")
+    try:
+        assert store.open_edge(
+            conn, "HAS_ENVELOPE", "cfg_bolted", "env_bolted", 0.0, layer="A"
+        )
+
+        with pytest.raises(store.StoreError, match="base_pose") as excinfo:
+            store.open_edge(
+                conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="A"
+            )
+        message = str(excinfo.value)
+        assert "cfg_posed" in message, message
+        assert "Layer A" in message or "layer 'A'" in message, message
+
+        assert store.open_edge(
+            conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="B"
+        )
+
+        # And it reaches through the envelope, which is the half that would be
+        # missed: a DECLARED edge names no configuration, it names the region —
+        # but the region was computed from one, and the envelope row says which.
+        # This one has no Layer B to fall back to, because `DECLARED` is layer
+        # `A` by its type, so the write is refused rather than relabelled:
+        # reclassifying the attestation edges is a change to what the project
+        # claims (docs/sufficiency.md §2, §5.8) and not a call site's to make.
+        declaration = _unsigned_declaration()
+        store.insert_declaration(conn, declaration)
+        with pytest.raises(store.StoreError, match="base_pose") as refusal:
+            store.open_edge(
+                conn, "DECLARED", declaration.declaration_id, "env_posed", 0.0
+            )
+        assert "refused rather than relabelled" in str(refusal.value)
+        # The control again: the same edge over the bolted region is written.
+        assert store.open_edge(
+            conn, "DECLARED", declaration.declaration_id, "env_bolted", 0.0
+        )
+    finally:
+        conn.close()
 
 
 def test_geometry_round_trips_through_wkb(tmp_path: Path) -> None:
@@ -893,7 +1030,14 @@ def test_human_radius_has_no_default() -> None:
 def seeded(tmp_path: Path):
     """A store with one node of each kind, so edge tests have endpoints."""
     conn = store.create(tmp_path / "store.sqlite", record_tables=True)
-    store.insert_robot_config(conn, "cfg_0", "0.000000,0.000000", "0.000000,0.000000")
+    store.insert_robot_config(
+        conn,
+        "cfg_0",
+        "0.000000,0.000000",
+        "0.000000,0.000000",
+        base_pose=None,
+        base_pose_source=None,
+    )
     store.insert_envelope(
         conn,
         "env_0",
@@ -989,11 +1133,25 @@ def test_an_edge_to_a_missing_node_is_refused(seeded) -> None:
 def test_a_content_id_reused_for_different_contents_is_refused(seeded) -> None:
     """Node ids are content hashes. A collision would merge two histories."""
     with pytest.raises(store.StoreError, match="different"):
-        store.insert_robot_config(seeded, "cfg_0", "9.999999,0.000000", "0.0,0.0")
+        store.insert_robot_config(
+            seeded,
+            "cfg_0",
+            "9.999999,0.000000",
+            "0.0,0.0",
+            base_pose=None,
+            base_pose_source=None,
+        )
 
 
 def test_reinserting_an_identical_node_is_a_no_op(seeded) -> None:
-    store.insert_robot_config(seeded, "cfg_0", "0.000000,0.000000", "0.000000,0.000000")
+    store.insert_robot_config(
+        seeded,
+        "cfg_0",
+        "0.000000,0.000000",
+        "0.000000,0.000000",
+        base_pose=None,
+        base_pose_source=None,
+    )
     assert seeded.execute("SELECT count(*) AS n FROM robot_config").fetchone()["n"] == 1
 
 
@@ -1916,6 +2074,372 @@ def test_envelope_at_refuses_when_the_config_it_names_is_gone(tmp_path: Path) ->
             graph.envelope_at(conn, row["t_start"])
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------
+# THE BASE POSE REACHES THE ARTIFACT (issue #166, docs/mobile-base.md §4 item 4)
+#
+# Nothing in `reg/` writes a posed configuration: the raw stream has no base
+# columns and every fixture is bolted down, so the mobile artifact these tests
+# are about is built by hand or made by editing a bolted one. That is deliberate
+# and it is the same arrangement issues #149 and #150 left their types under —
+# an unexercised contract drifts, and the direction it drifts in is the one
+# where a room-frame number quietly reads as a Layer A one.
+# --------------------------------------------------------------------------
+
+
+def test_the_artifact_states_the_frame_its_radii_are_measured_about(
+    tmp_path: Path,
+) -> None:
+    """A retained `outer_radius` is a radius about a centre, and the file names it.
+
+    Before this it was a radius about the origin by there being no other
+    possibility rather than by anything the artifact said — which is a fact about
+    the code that wrote it, not about the file, and it stops being true the
+    moment a row can say the base was elsewhere.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        assert (
+            store.get_meta(conn, store.META_BASE_FRAME)
+            == "0.000000,0.000000,0.000000"
+        )
+        envelope_id = conn.execute(
+            "SELECT n.node_id AS id FROM envelope e "
+            "JOIN node n ON n.node_key = e.envelope_key "
+            "WHERE e.outer_radius IS NOT NULL ORDER BY e.envelope_key LIMIT 1"
+        ).fetchone()["id"]
+        assert graph.envelope_frame(conn, envelope_id) == ORIGIN_FRAME
+    finally:
+        conn.close()
+
+
+def test_a_radius_whose_frame_the_artifact_does_not_state_is_could_not_evaluate(
+    tmp_path: Path,
+) -> None:
+    """**THE NEGATIVE.** The absence must not resolve to the origin.
+
+    An artifact that states neither a per-configuration pose nor a base frame
+    holds radii about a point nothing in it names. Reading those as radii about
+    `(0, 0)` is the one answer this whole column may not produce for a robot that
+    could have been somewhere else, so it is a refusal — and the refusal names
+    the key that is missing, which is what a reader has to go and find.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        envelope_id = conn.execute(
+            "SELECT n.node_id AS id FROM envelope e "
+            "JOIN node n ON n.node_key = e.envelope_key "
+            "WHERE e.outer_radius IS NOT NULL ORDER BY e.envelope_key LIMIT 1"
+        ).fetchone()["id"]
+        # Written past `put_meta`, which will not overwrite one artifact's
+        # provenance with another's: the failure being modelled is a file that
+        # arrived without the key, not a build that dropped it.
+        conn.execute("DELETE FROM meta WHERE key = ?", (store.META_BASE_FRAME,))
+        conn.commit()
+        with pytest.raises(graph.GraphQueryError, match=store.META_BASE_FRAME):
+            graph.envelope_frame(conn, envelope_id)
+
+        # And a frame nobody can parse is the same answer, not a fallback.
+        # Written past `put_meta` for the same reason as the DELETE above.
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, 'somewhere')",
+            (store.META_BASE_FRAME,),
+        )
+        conn.commit()
+        with pytest.raises(
+            graph.GraphQueryError, match="not a comma-separated list"
+        ):
+            graph.envelope_frame(conn, envelope_id)
+
+        # ...and so is one that parses but is not three numbers: a frame with
+        # two coordinates places nothing either.
+        conn.execute(
+            "UPDATE meta SET value = '0.0,0.0' WHERE key = ?",
+            (store.META_BASE_FRAME,),
+        )
+        conn.commit()
+        with pytest.raises(graph.GraphQueryError, match="x,y,theta"):
+            graph.envelope_frame(conn, envelope_id)
+    finally:
+        conn.close()
+
+
+def test_a_posed_configuration_states_its_own_frame(tmp_path: Path) -> None:
+    """And where a configuration says where the base was, that is the centre.
+
+    The Layer B half of the same reader. `envelope_frame` hands back a
+    `BaseFrame` — a frame, deliberately not a `BasePose`, because
+    `reg.kinematics` is Layer A and may not import a room-frame pose — and the
+    provenance stays attached to the pose, where it is a provenance *of*
+    something, in `store.config_base_pose`.
+    """
+    conn = _posed_artifact(tmp_path / "posed.sqlite")
+    try:
+        assert graph.envelope_frame(conn, "env_posed") == BaseFrame(
+            x=1.2, y=-0.4, theta=0.3
+        )
+        assert store.config_base_pose(conn, "cfg_posed") == (
+            "1.200000,-0.400000,0.300000",
+            "localized",
+        )
+        assert store.config_base_pose(conn, "cfg_bolted") is None
+    finally:
+        conn.close()
+
+
+def test_a_radius_is_stored_with_its_frame_or_it_is_not_stored(seeded) -> None:
+    """The schema-level half: no configuration, no radius.
+
+    A `computed` envelope stored with its outer bracket and nothing naming the
+    configuration it came from is a length in metres about a point nobody can
+    place, and it would still compare against every declared region and every
+    bound as though it meant something. Refused in Python and by the schema, so
+    a hand-written `INSERT` cannot get past it either.
+    """
+    with pytest.raises(store.StoreError, match="no config_id"):
+        store.insert_envelope(
+            seeded,
+            "env_frameless",
+            envelope_hash=_HASH_C,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id=None,
+            horizon=0.2,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        seeded.execute(
+            "INSERT INTO envelope (envelope_key, envelope_hash, area, "
+            "geometry_wkb, horizon, source, outer_area, outer_radius) "
+            "VALUES (98, X'" + _HASH_C.upper() + "', 0.25, X'00', 0.2, "
+            "'computed', 0.5, 0.95)"
+        )
+
+
+def test_the_pose_reads_back_the_digits_it_was_given(seeded) -> None:
+    """Text, for the reason `q` is text, and with no quantizer between.
+
+    Two things are asserted and the second is the one that keeps the distance
+    error budget honest (docs/lossiness.md): the column round-trips the exact
+    characters it was handed, and a pose that differs by far less than
+    `DISTANCE_TOL_M` is stored as itself rather than rounded into its
+    neighbour. A frame with a quantum of its own would be a third error term in
+    a budget that is exactly saturated.
+    """
+    pose = "1.234567,-0.000001,3.141593"
+    store.insert_robot_config(
+        seeded,
+        "cfg_posed",
+        "0.100000,0.200000",
+        "0.000000,0.000000",
+        base_pose=pose,
+        base_pose_source="dead_reckoned",
+    )
+    assert store.config_base_pose(seeded, "cfg_posed") == (pose, "dead_reckoned")
+
+    nearby = "1.234568,-0.000001,3.141593"
+    assert abs(float(nearby.split(",")[0]) - float(pose.split(",")[0])) < DISTANCE_TOL_M
+    store.insert_robot_config(
+        seeded,
+        "cfg_posed_nearby",
+        "0.100000,0.200000",
+        "0.000000,0.000000",
+        base_pose=nearby,
+        base_pose_source="dead_reckoned",
+    )
+    assert store.config_base_pose(seeded, "cfg_posed_nearby") == (
+        nearby,
+        "dead_reckoned",
+    )
+
+
+def test_a_pose_without_a_provenance_is_refused_and_so_is_the_reverse(
+    seeded,
+) -> None:
+    """NEGATIVE, both directions, and the vocabulary with them.
+
+    A room-frame pose whose provenance nobody stated is what `reg.types.BasePose`
+    exists to make impossible; a provenance with no pose describes the failure
+    modes of nothing; and a provenance string outside `PoseSource` is a value
+    nothing downstream can read, which must not be stored as though it were one.
+    """
+    for pose, source in (
+        ("1.0,2.0,0.0", None),
+        (None, "localized"),
+    ):
+        with pytest.raises(store.StoreError, match="Both, or neither"):
+            store.insert_robot_config(
+                seeded,
+                f"cfg_{pose}_{source}",
+                "0.0,0.0",
+                "0.0,0.0",
+                base_pose=pose,
+                base_pose_source=source,
+            )
+    with pytest.raises(store.StoreError, match="not in the vocabulary"):
+        store.insert_robot_config(
+            seeded,
+            "cfg_unknown_source",
+            "0.0,0.0",
+            "0.0,0.0",
+            base_pose="1.0,2.0,0.0",
+            base_pose_source="guessed",
+        )
+    assert store.node_counts(seeded)["RobotConfig"] == 1, (
+        "a refused configuration was half-written, so the refusals above are "
+        "reports about a row that exists"
+    )
+
+
+def test_a_run_cannot_claim_both_a_bolted_base_and_a_pose(tmp_path: Path) -> None:
+    """The two frame statements are exclusive, and the store says so.
+
+    *The base was bolted here* is a mounting fact about the whole run; *the base
+    was there at this instant, and a localizer says so* is a room-frame estimate.
+    An artifact making both leaves every reader of a retained `outer_radius` to
+    pick which centre it is about, which is the ambiguity the frame was added to
+    remove.
+    """
+    conn = store.create(tmp_path / "bolted.sqlite", record_tables=False)
+    try:
+        store.put_meta(conn, store.META_BASE_FRAME, "0.000000,0.000000,0.000000")
+        with pytest.raises(store.StoreError, match=store.META_BASE_FRAME):
+            store.insert_robot_config(
+                conn,
+                "cfg_posed",
+                "0.0,0.0",
+                "0.0,0.0",
+                base_pose="1.0,2.0,0.0",
+                base_pose_source="localized",
+            )
+        # The control: with no such claim in the file, the same row is written.
+        conn.execute("DELETE FROM meta WHERE key = ?", (store.META_BASE_FRAME,))
+        assert store.insert_robot_config(
+            conn,
+            "cfg_posed",
+            "0.0,0.0",
+            "0.0,0.0",
+            base_pose="1.0,2.0,0.0",
+            base_pose_source="localized",
+        )
+    finally:
+        conn.close()
+
+
+def test_envelope_at_refuses_to_recompute_for_a_base_that_moved(
+    tmp_path: Path,
+) -> None:
+    """**THE REFUSAL THIS SCHEMA BUMP IS FOR.** The recompute argument's condition.
+
+    `geometry_wkb` may be NULL because the polygon is a deterministic function of
+    the configuration the row names plus four numbers in `meta`. Every term in
+    that function is body-frame, so for a configuration that states a pose the
+    same inputs describe the same arm **somewhere else** — and recomputing from
+    them would hand back the region a robot at the origin could reach, as the
+    region in force, with nothing in the answer to say otherwise.
+
+    The artifact is made mobile the way one would arrive: by editing a built
+    file, because nothing in `reg/` writes a posed configuration yet. The
+    positive control is the same call before the edit.
+    """
+    n_frames = 8
+    csv = _write_stream(tmp_path / "slide.csv", _sliding_frames(n_frames))
+    out = tmp_path / "slide.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        row = conn.execute(
+            "SELECT edge.t_start AS t_start, e.config_key AS config_key "
+            "FROM envelope e JOIN edge ON edge.dst_key = e.envelope_key "
+            "WHERE e.geometry_wkb IS NULL AND edge.type = 'HAS_ENVELOPE' "
+            "ORDER BY edge.t_start"
+        ).fetchone()
+        assert row is not None, "precondition failed: nothing was discarded"
+        assert graph.envelope_at(conn, row["t_start"]).area > 0.0
+
+        conn.execute(
+            "UPDATE robot_config SET base_pose = ?, base_pose_source = ? "
+            "WHERE config_key = ?",
+            ("2.500000,1.000000,0.000000", "localized", row["config_key"]),
+        )
+        conn.commit()
+        with pytest.raises(graph.GraphQueryError, match="base_pose") as excinfo:
+            graph.envelope_at(conn, row["t_start"])
+        assert "retain the polygon" in str(excinfo.value), str(excinfo.value)
+    finally:
+        conn.close()
+
+
+def test_the_version_gate_says_what_changed(tmp_path: Path) -> None:
+    """A refusal a reader can act on names the change, not just the number.
+
+    "This build understands version 10" says their build is wrong and not *what
+    about the file* they would have been wrong about — which is the half that
+    tells them whether anything they have can read it. Three-valued, like every
+    other gate here: a version this build cannot place says so rather than
+    describing a span it cannot see the ends of.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        conn.execute(
+            "UPDATE meta SET value = ? WHERE key = ?",
+            ("9", store.META_SCHEMA_VERSION),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(store.StoreError) as excinfo:
+        store.connect(out)
+    message = str(excinfo.value)
+    assert "v10" in message, message
+    assert "base_pose" in message and "base_frame" in message, message
+
+    conn = sqlite3.connect(out)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "UPDATE meta SET value = ? WHERE key = ?",
+            ("banana", store.META_SCHEMA_VERSION),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(store.StoreError, match="cannot say what changed"):
+        store.connect(out)
+
+
+def test_every_schema_version_since_the_first_names_what_it_changed() -> None:
+    """A bump that forgets its line narrows the refusal above without saying so.
+
+    Version 1 has no line because there is nothing before it to have changed;
+    every version after it does, and the message `connect` writes is built from
+    exactly these.
+    """
+    assert set(store.SCHEMA_CHANGES) == set(range(2, store.SCHEMA_VERSION + 1)), (
+        "SCHEMA_CHANGES does not name every version from 2 to "
+        f"{store.SCHEMA_VERSION}. The version gate quotes this table, so a "
+        "missing line is a refusal that cannot say what a reader would have got "
+        "wrong."
+    )
+    assert all(
+        isinstance(line, str) and line.strip() for line in store.SCHEMA_CHANGES.values()
+    )
 
 
 def test_an_envelope_with_neither_geometry_nor_config_is_refused(seeded) -> None:
@@ -3367,9 +3891,12 @@ def test_the_retained_bracket_is_a_fixed_base_bracket_and_cannot_pretend_otherwi
     geometry, on the argument that the region is a deterministic function of the
     `robot_config` a row names plus the horizon it stores. Since issue #163 the
     outer set also reads the base's four bounds and the state's base velocity —
-    and `robot_config` has columns for neither, so `reg.graph` reconstructs
-    states with `base_vel=None` and the demo world's limits state four zeros.
-    The argument therefore still holds, and it holds *conditionally*.
+    and `robot_config` has a column for the *pose* since issue #166 and still
+    none for the velocity, so `reg.graph` reconstructs states with
+    `base_vel=None` and the demo world's limits state four zeros. The argument
+    therefore still holds, and it holds *conditionally*. The condition is now
+    also enforced at the read: `envelope_at` refuses a configuration that states
+    a pose rather than recomputing it at the origin.
 
     This asserts the condition and asserts that breaking it is loud. Give the
     same reconstruction a robot that can drive and `outer_envelope` refuses,
@@ -4348,7 +4875,11 @@ def test_the_record_layer_refuses_rather_than_answering_from_a_missing_table(
                 call()
 
         # And the edge layer, which is the other way in: a FOLLOWS or a DECLARED
-        # edge resolves its endpoints through the same tables.
+        # edge resolves its endpoints through the same tables. A *declared*
+        # region, because that is what a DECLARED edge points at: the policy's
+        # own claim, stored whole, with no configuration behind it and therefore
+        # no outer bracket (issue #82) and no frame a radius would be measured
+        # about (issue #166).
         store.insert_envelope(
             conn,
             "env_0",
@@ -4357,9 +4888,9 @@ def test_the_record_layer_refuses_rather_than_answering_from_a_missing_table(
             geometry=Point(0.0, 0.0).buffer(0.5),
             config_id=None,
             horizon=0.2,
-            source="computed",
-            outer_area=0.5,
-            outer_radius=0.95,
+            source="declared",
+            outer_area=None,
+            outer_radius=None,
         )
         with pytest.raises(store.StoreError, match="attestation_records"):
             store.open_edge(conn, "DECLARED", "dec_0", "env_0", 0.0)
@@ -4693,7 +5224,14 @@ def test_one_id_cannot_name_two_different_kinds_of_node(seeded) -> None:
     with pytest.raises(store.StoreError, match="already the id of a"):
         store.insert_entity(seeded, "cfg_0", "crate", geometry=Point(3.0, 0.0).buffer(0.2))
     with pytest.raises(store.StoreError, match="already the id of a"):
-        store.insert_robot_config(seeded, "env_0", "0.0,0.0", "0.0,0.0")
+        store.insert_robot_config(
+            seeded,
+            "env_0",
+            "0.0,0.0",
+            "0.0,0.0",
+            base_pose=None,
+            base_pose_source=None,
+        )
     # And nothing was half-written: the RobotConfig is still a RobotConfig.
     assert store.node_key(seeded, "cfg_0") is not None
     assert (

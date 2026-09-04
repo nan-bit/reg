@@ -4,8 +4,10 @@
 **Tiers 1, 2 and 3 have landed; §3's construction landed 2026-09-02 (issue
 #163), §1's refusal landed 2026-09-02 (issue #164), §4's two `declare.py`
 defects were fixed 2026-09-02 (issue #165) and §4's schema work landed
-2026-09-02 (issue #166); Tier 4's fixtures have not, and no robot in this
-repository moves** — the build order in §7 says per
+2026-09-02 (issue #166); Tier 4 has started — a scenario can express a driven
+base since 2026-09-04 (issue #177) — but its fixtures have not landed, so no
+registered scenario in this repository drives and nothing here has moved a robot
+yet** — the build order in §7 says per
 tier which is which, and it is the authority, not this line ·
 normative for the mobile track only; where it touches what the project may
 claim, it defers to [`sufficiency.md`](sufficiency.md) and
@@ -511,6 +513,46 @@ enforcer around it, and that needs the pose on `robot_config` (this tier) and
 mobile fixtures (Tier 4) before it means anything.
 
 **Tier 4 — fixtures.** Mobile scenarios beside the eleven arm fixtures.
+
+*A scenario can drive, and states where its pose came from — done, 2026-09-04,
+issue #177.* `Scenario` carries `base_waypoints`, knots of `(x, y, theta)`
+interpolated as the joint ones are and integrated under `base_v_max`,
+`base_a_max`, `base_omega_max` and `base_alpha_max` exactly as the joints are
+integrated under `qdd_max` — the issue #96 argument one frame out, and it
+matters more here than it did there, because since #164 the outer envelope is
+the *only* term a mobile robot is VETOed against. Beside the trajectory the
+fixture states **three things it is not allowed to omit**: a
+[`PoseSource`](../reg/types.py) for the poses it writes, a `VelocitySource` for
+the body-frame rates, and a `(metres, radians)` jitter pair. A simulator's base
+pose is ground truth, which is the status `human_pos` already has; writing it
+without a provenance would put an unlabelled room-frame pose into the stream and
+leave every reader to assume one, and the only party that knows whether a pose
+was dead-reckoned or localized is whoever produced it — issue #84's argument,
+one type over. Stating a provenance with no trajectory is refused as the
+contradiction it is, and a scenario with no trajectory is a **fixed-base
+scenario**, said by `Scenario.drives` rather than by a pose at the origin, which
+is a mounting fact no `PoseSource` describes (#150).
+
+*What that change cost elsewhere, because it is a refusal and not a feature.*
+`reg.graph.build` now **refuses a stream whose frames state a base pose**. It
+writes `base_pose` NULL on every `robot_config` row it produces, so building one
+of these would turn a run whose base drove into an artifact saying no base pose
+was recorded — same row count, every check green, and every envelope in it
+readable as the region a robot at `meta[base_frame]` could reach. Issue #166
+built the refusal for the half of that path it could see (`_recompute` refuses a
+config that states a pose); this is the half in front of it, which never fired
+before because nothing wrote the pose. `base_vel` is not refused: it is
+body-frame, Layer A, and `outer_envelope` reads it correctly (#163).
+
+*What remains in this tier.* The room-containment rework and the fixtures
+themselves (issue #184): a driving base's *body* has to stay in the room, which
+`World` checks today for the human and the obstacles and not for a base that
+moves. Then the pose reaching `robot_config` for real — with the layer tag on
+every edge resting on it following (`reg.store.open_edge`), and a run whose base
+moved retaining its geometry rather than promising a recomputation that cannot
+be honest — which is what turns the refusal above back into a build. No
+registered scenario drives until those land, so `expected_header(2, 3)` is still
+the 24 columns Claim 1 is priced on and no published figure has moved.
 
 ## See also
 

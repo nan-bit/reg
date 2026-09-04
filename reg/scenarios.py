@@ -48,7 +48,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from reg.types import StateFrame
+from reg.types import (
+    BasePose,
+    BaseVelocity,
+    PoseSource,
+    StateFrame,
+    VelocitySource,
+)
 from reg.world import DEMO_WORLD, World
 
 #: 50 Hz, from docs/plan.md Phase 1. Stated there, not invented here — and it is
@@ -92,6 +98,31 @@ class Scenario:
     space the robot cannot reach. Each defaults to the not-applicable value and
     none of them is a threshold: they say what this fixture's policy does, in the
     same way `declared_q_bounds` already says what `declared_violation`'s does.
+
+    THE BASE (issue #177, docs/mobile-base.md §7 Tier 4)
+    ----------------------------------------------------
+    Four more fields describe the **base**, and they arrive or are absent
+    together: `base_waypoints` and, required whenever it is present,
+    `base_pose_source`, `base_vel_source` and `base_jitter`. A scenario with a
+    base trajectory **drives**; one without is a **fixed-base scenario**, and
+    the `drives` property is what says so, rather than a pose at the origin
+    standing in for the statement (see `states`).
+
+    **The two provenances are required and neither is inferred.** A simulator's
+    base pose is ground truth, which is exactly the status `human_pos` has, and
+    writing it without a provenance would put an unlabelled room-frame pose into
+    the stream and leave every reader to assume one. There is no correct value
+    to guess: only the party that produced a pose knows whether it was
+    dead-reckoned or localized, and only the party that produced a rate knows
+    whether it came off wheel encoders or out of visual odometry. That is
+    `Limits.source`'s argument (issue #84) for `reg.types.PoseSource` and
+    `reg.types.VelocitySource` — the fixture states which case it is modelling,
+    and `reg.stream` carries both into the artifact.
+
+    **Stating one without a trajectory is a contradiction and is refused.** A
+    `base_pose_source` on a fixture whose base never moves describes the
+    provenance of a pose nothing writes; guessing which half the author meant is
+    how a fixture silently stops being the run its fields describe.
     """
 
     name: str
@@ -158,6 +189,37 @@ class Scenario:
     #: time. It is a claim about the run, not a switch: nothing here changes what
     #: the fixture does.
     fault: str | None = None
+    #: The base's scripted room-frame path: knots of `(x, y, theta)` in metres
+    #: and radians, interpolated exactly as `joint_waypoints` is and integrated
+    #: under the base's own bounds exactly as the joints are (see `states`).
+    #:
+    #: `None` is **this is a fixed-base scenario** — the eleven fixtures, whose
+    #: base is bolted to the origin. It is not "the base was at the origin": for
+    #: a bolted base that is a mounting fact rather than a pose anybody
+    #: estimated, `reg.types.PoseSource` has no member for a mounting fact, and
+    #: the frames record `base_pose=None` accordingly (issue #150).
+    base_waypoints: tuple[Waypoint, ...] | None = None
+    #: What the base poses this fixture writes inherit, and over what horizon
+    #: (`reg.types.PoseSource`). **Required when `base_waypoints` is present, no
+    #: default, no inference** — and refused when it is absent, because a
+    #: provenance for a pose nothing writes describes nothing.
+    base_pose_source: PoseSource | None = None
+    #: Whether the body-frame rates this fixture writes were measured on the
+    #: robot or estimated from something perceived (`reg.types.VelocitySource`).
+    #: Required and refused on exactly the terms `base_pose_source` is: the two
+    #: are separate claims about the run and neither can be inferred from the
+    #: other, which is why `reg.stream` gives each block its own column.
+    base_vel_source: VelocitySource | None = None
+    #: The bounded per-waypoint perturbation the seed applies to the base path,
+    #: as `(metres, radians)`: the first bounds `x` and `y`, the second `theta`.
+    #:
+    #: A **pair** and not one number, for the reason `reg.types.BaseVelocity`
+    #: keeps its units in separate fields: a single jitter would put metres and
+    #: radians under one bound, where nothing would catch the mistake. Required
+    #: alongside a trajectory for the reason `q_jitter` and `human_jitter` are
+    #: required — a fixture that did not state its own jitter would be claiming
+    #: an invented number as a fixture parameter.
+    base_jitter: tuple[float, float] | None = None
     dt: float = DEFAULT_DT
 
     def __post_init__(self) -> None:
@@ -218,6 +280,129 @@ class Scenario:
                     )
 
         self._check_policy()
+        self._check_base()
+
+    @property
+    def drives(self) -> bool:
+        """Whether this fixture's base moves. `False` is a **fixed-base scenario**.
+
+        Stated as a property rather than left to be inferred from a pose at the
+        origin, because those are different facts and only one of them is in the
+        artifact: a fixed-base run records `base_pose=None`, which says *this
+        run recorded no base pose*, and a run whose base is at the origin
+        throughout would say the pose was estimated and found to be there. The
+        eleven fixtures are the first case (issue #150, issue #177).
+        """
+        return self.base_waypoints is not None
+
+    def _check_base(self) -> None:
+        """The base trajectory and its two provenances, or their joint absence.
+
+        Nothing here is inferred in either direction. A trajectory without a
+        `PoseSource` would put an unlabelled room-frame pose into the stream —
+        the thing `reg.types.BasePose` exists to make impossible, arriving one
+        layer up — and a `PoseSource` without a trajectory is a provenance for a
+        pose nothing writes, which is a fixture whose author meant one of two
+        things nobody can recover.
+        """
+        companions = (
+            ("base_pose_source", self.base_pose_source),
+            ("base_vel_source", self.base_vel_source),
+            ("base_jitter", self.base_jitter),
+        )
+        if self.base_waypoints is None:
+            for label, value in companions:
+                if value is not None:
+                    raise ValueError(
+                        f"{self.name}: states {label}={value!r} and no "
+                        "base_waypoints. A base this fixture never drives has no "
+                        "pose in the stream for that to be a statement about, so "
+                        "one of the two is wrong and guessing which is worse: "
+                        "dropping the field would lose a trajectory somebody "
+                        "meant to write, and inventing a trajectory would make "
+                        "the run a different one."
+                    )
+            return
+
+        self._check_waypoints("base_waypoints", self.base_waypoints, 3)
+
+        for label, value, enum in (
+            ("base_pose_source", self.base_pose_source, PoseSource),
+            ("base_vel_source", self.base_vel_source, VelocitySource),
+        ):
+            if value is None:
+                raise ValueError(
+                    f"{self.name}: drives the base and states no {label}. It is "
+                    f"required with no default: a {enum.__name__} is what the "
+                    "artifact records about where these numbers came from, and "
+                    "the only party that knows is whoever produced them. "
+                    f"Valid values: {[m.value for m in enum]}."
+                )
+            if not isinstance(value, enum):
+                raise TypeError(
+                    f"{self.name}: {label} must be a {enum.__name__}, got "
+                    f"{value!r}. A string is not a provenance somebody stated — "
+                    "it is one nobody checked, reaching the stream as one "
+                    "somebody did."
+                )
+
+        if self.base_jitter is None:
+            raise ValueError(
+                f"{self.name}: drives the base and states no base_jitter. It is "
+                "required for the reason q_jitter and human_jitter are: the "
+                "seed perturbs every scripted path in this fixture, and a bound "
+                "nobody stated would be an invented fixture parameter every "
+                "figure downstream inherits. State (metres, radians); (0.0, "
+                "0.0) is a base path this fixture does not perturb, said out "
+                "loud."
+            )
+        if (
+            not isinstance(self.base_jitter, tuple)
+            or len(self.base_jitter) != 2
+            or not all(_is_number(v) for v in self.base_jitter)
+        ):
+            raise ValueError(
+                f"{self.name}: base_jitter must be a (metres, radians) pair, got "
+                f"{self.base_jitter!r}. One number would put two units under one "
+                "bound, which is the mistake `reg.types.BaseVelocity` keeps its "
+                "fields apart to prevent."
+            )
+        for label, value in (
+            ("base_jitter[0] (metres)", float(self.base_jitter[0])),
+            ("base_jitter[1] (radians)", float(self.base_jitter[1])),
+        ):
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"{self.name}: {label} must be finite and >= 0, got {value}"
+                )
+
+        # A SCRIPT THE ROBOT'S OWN LIMITS SAY IT CANNOT EXECUTE (issue #177).
+        #
+        # `states` integrates the base under these four bounds exactly as it
+        # integrates the arm under `qdd_max`, so a zero anywhere in them does
+        # not produce a refusal downstream — it produces a base that never
+        # leaves its first knot while the fixture's name and waypoints say it
+        # drove somewhere. Both speed bounds pin the base outright; both
+        # acceleration bounds pin it at rest, which is the same thing arriving
+        # one derivative up. All four are named because which one is zero is
+        # what the author has to fix, and a bolted base states four zeros
+        # (`reg.world.LIMITS`) and carries no trajectory at all.
+        limits = self.world.limits
+        bolted = [
+            name
+            for name in limits.BASE_BOUND_FIELDS
+            if float(getattr(limits, name)) == 0.0
+        ]
+        if bolted:
+            raise ValueError(
+                f"{self.name}: carries base_waypoints, but this world's Limits "
+                f"state {', '.join(f'{n}=0.0' for n in bolted)} — a base that "
+                "cannot execute the script. A zero speed bound pins the base and "
+                "a zero acceleration bound pins it at rest, so the run would "
+                "record a base parked at its first knot under a fixture that "
+                "says it drove. A bolted base states four zeros and no "
+                "base_waypoints; a driving one states four positive bounds."
+            )
 
     def _check_policy(self) -> None:
         """The policy-behaviour fields. Each refusal is a fixture nobody could read.
@@ -348,6 +533,16 @@ class Scenario:
         `seed` is required and has no default: an audit artifact whose seed was
         chosen for it by a library is not reproducible in any way that matters,
         because nothing downstream can tell which seed it was.
+
+        **The base, for a fixture that drives one (issue #177).** Every frame
+        carries a `BasePose` — room-frame, Layer B, stamped with this
+        scenario's `base_pose_source` — and a `BaseVelocity`, which is
+        body-frame, Layer A, and stamped with its `base_vel_source`. A
+        fixed-base fixture carries `None` for both, and that is the statement
+        *this run recorded no base*, not *the base was at the origin*: for a
+        bolted base that is a mounting fact rather than a pose anybody
+        estimated, and `PoseSource` has no member for a mounting fact
+        (issue #150).
         """
         if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
             raise TypeError(
@@ -356,6 +551,16 @@ class Scenario:
             )
         q_times, q_values = self._knots(self.joint_waypoints, self.q_jitter, seed, 0)
         h_times, h_values = self._knots(self.human_waypoints, self.human_jitter, seed, 1)
+        b_times = b_values = None
+        if self.drives:
+            # Stream 2, its own generator: adding a base knot must not shift the
+            # arm or the human, for the reason `_knots` gives.
+            b_times, b_values = self._knots(
+                self.base_waypoints,
+                (self.base_jitter[0], self.base_jitter[0], self.base_jitter[1]),
+                seed,
+                2,
+            )
 
         # THE ARM IS RATE-LIMITED; THE HUMAN IS NOT (issue #96).
         #
@@ -392,10 +597,38 @@ class Scenario:
         # a frame whose qd is the velocity it *arrived* with would poison every
         # envelope built from it. `test_velocity_is_the_slope_of_the_interpolant`
         # is the gate, and it caught this integrator the first time round.
+        #
+        # THE BASE IS RATE-LIMITED TOO, AND FOR THE SAME REASON (issue #177).
+        #
+        # The paragraph above is about `qdd_max`; every word of it holds one
+        # frame out, for `base_a_max` and `base_alpha_max`. Since issue #163 the
+        # base's own motion is inside `reg.envelope.outer_envelope`, and since
+        # issue #164 that envelope is the *only* term in the bound a mobile
+        # robot is VETOed against — `reg.enforce.computed_bound` refuses for a
+        # base that can drive, because a workspace disc is finite only while the
+        # base is bolted down. So a fixture whose base teleports along its script
+        # is a fixture the bound makes no promise about, and it would produce
+        # VETOes against policies telling the literal truth. The base integrates
+        # its script instead, and what the frames record is the trajectory the
+        # base *executed*.
+        #
+        # It integrates in the room frame and reports body-frame rates, which is
+        # exact rather than approximate: `base_v_max`, `base_a_max`,
+        # `base_omega_max` and `base_alpha_max` are magnitude bounds
+        # (`reg.types.Limits`), magnitudes are invariant under rotation, and
+        # `omega` is the same number in both frames. Clipping `(vx, vy)`
+        # radially is the nearest-point projection onto a disc, which is
+        # non-expansive, so capping the speed after capping the acceleration
+        # cannot push the step back over `base_a_max * dt`.
         limits = self.world.limits
         q_ref0, _ = _sample(q_times, q_values, 0.0)
         q_cur = np.array(q_ref0, dtype=float)
         qd_cur = np.zeros(len(limits.qd_max), dtype=float)
+        if self.drives:
+            base_ref0, _ = _sample(b_times, b_values, 0.0)
+            pose_cur = np.array(base_ref0, dtype=float)
+            v_cur = np.zeros(2, dtype=float)
+            omega_cur = 0.0
 
         for k in range(self.n_frames):
             t = k * self.dt
@@ -412,21 +645,72 @@ class Scenario:
             q.setflags(write=False)
             qd.setflags(write=False)
             pos, vel = _sample(h_times, h_values, t)
+
+            base_pose = base_vel = None
+            if self.drives:
+                pose_ref_next, _ = _sample(b_times, b_values, nxt)
+                v_cur = _cap(
+                    v_cur
+                    + _cap(
+                        (pose_ref_next[:2] - pose_cur[:2]) / self.dt - v_cur,
+                        limits.base_a_max * self.dt,
+                    ),
+                    limits.base_v_max,
+                )
+                want_omega = (pose_ref_next[2] - pose_cur[2]) / self.dt
+                omega_cur = float(
+                    np.clip(
+                        omega_cur
+                        + np.clip(
+                            want_omega - omega_cur,
+                            -limits.base_alpha_max * self.dt,
+                            limits.base_alpha_max * self.dt,
+                        ),
+                        -limits.base_omega_max,
+                        limits.base_omega_max,
+                    )
+                )
+                theta = float(pose_cur[2])
+                base_pose = BasePose(
+                    x=float(pose_cur[0]),
+                    y=float(pose_cur[1]),
+                    theta=theta,
+                    source=self.base_pose_source,
+                )
+                # Room-frame rate rotated into the body frame by -theta: the
+                # velocity a wheel encoder on *this* base would read while the
+                # base is pointing where the pose above says it is. The pose the
+                # rotation uses is the one being reported, so
+                # `pose[k+1] == pose[k] + R(theta[k]) @ v_body[k] * dt` holds
+                # exactly — the base's half of the invariant the arm's `qd`
+                # carries, and the reason `reg.envelope.base_motion_bounds` can
+                # read this rate and predict where the base actually goes.
+                cos_t, sin_t = np.cos(theta), np.sin(theta)
+                base_vel = BaseVelocity(
+                    vx=float(cos_t * v_cur[0] + sin_t * v_cur[1]),
+                    vy=float(-sin_t * v_cur[0] + cos_t * v_cur[1]),
+                    omega=omega_cur,
+                    source=self.base_vel_source,
+                )
+                pose_cur = pose_cur + np.array(
+                    [v_cur[0] * self.dt, v_cur[1] * self.dt, omega_cur * self.dt]
+                )
+
             yield StateFrame(
                 t=t,
                 q=q,
                 qd=qd,
                 human_pos=pos,
                 human_vel=vel,
-                # Every fixture here is a fixed arm: there is no base to have a
-                # velocity, and *the base is at the origin* is a mounting fact
+                # A fixed-base fixture is a fixed arm: there is no base to have
+                # a velocity, and *the base is at the origin* is a mounting fact
                 # rather than a pose anybody estimated, so there is no
                 # `PoseSource` that would honestly describe one. Both are
-                # recorded as not-recorded (issue #150). Mobile fixtures are
-                # Tier 4 of docs/mobile-base.md §7 and arrive with the stream
-                # columns that carry them.
-                base_vel=None,
-                base_pose=None,
+                # recorded as not-recorded (issue #150). A fixture that drives
+                # fills both, above, and `reg.stream` grows the two optional
+                # blocks that carry them (issue #176).
+                base_vel=base_vel,
+                base_pose=base_pose,
                 objects=self.world.obstacles,
             )
 
@@ -442,10 +726,39 @@ class Scenario:
         """
         times = np.array([wp.t for wp in waypoints], dtype=float)
         values = np.array([wp.value for wp in waypoints], dtype=float)
-        if jitter > 0.0:
+        scale = np.asarray(jitter, dtype=float)
+        if scale.ndim == 0:
+            # The scalar path, untouched. `rng.uniform` dispatches on whether
+            # its bounds are scalars, so routing the joint and human draws
+            # through the array branch below could move the numbers every
+            # published figure is measured on — for a change that is supposed
+            # to leave the eleven fixtures byte-identical.
+            if jitter > 0.0:
+                rng = np.random.default_rng([seed, stream])
+                values = values + rng.uniform(-jitter, jitter, size=values.shape)
+            return times, values
+        # Per-column bounds, for a path whose columns are not all in the same
+        # unit — the base's `(x, y, theta)`. One number would bound metres and
+        # radians together (`Scenario.base_jitter`).
+        if np.any(scale > 0.0):
             rng = np.random.default_rng([seed, stream])
-            values = values + rng.uniform(-jitter, jitter, size=values.shape)
+            values = values + rng.uniform(-scale, scale, size=values.shape)
         return times, values
+
+
+def _cap(vector: np.ndarray, bound: float) -> np.ndarray:
+    """`vector`, scaled down radially until its length is at most `bound`.
+
+    The nearest point of the disc of radius `bound`, which is what makes it
+    composable: projection onto a convex set is non-expansive, so applying this
+    twice — once to an acceleration step and once to the speed that results —
+    cannot violate the first bound in service of the second. `bound` is a
+    magnitude and is never negative (`reg.types.Limits` refuses one).
+    """
+    length = float(np.hypot(vector[0], vector[1]))
+    if length <= bound or length == 0.0:
+        return np.asarray(vector, dtype=float)
+    return np.asarray(vector, dtype=float) * (bound / length)
 
 
 def _sample(times: np.ndarray, values: np.ndarray, t: float) -> tuple[np.ndarray, np.ndarray]:

@@ -31,6 +31,19 @@ paths give identical bytes.
 non-zero naming every valid name. Defaulting to one of them would produce a
 complete, plausible, byte-identical-on-rerun artifact of the wrong situation.
 
+THE BASE BLOCKS ARE NOT A FLAG HERE (issue #177)
+------------------------------------------------
+A scenario that drives its base yields frames carrying a `BasePose` and a
+`BaseVelocity`, and `reg.stream.write_frames` derives the header from the
+frames — so the two optional blocks issue #176 defined appear in the artifact
+for a driving scenario and are absent for a fixed-base one, with nothing in this
+file deciding it. That is deliberate: a switch here could write a mobile run out
+as a fixed-base file, or grow eleven bolted-down fixtures a set of columns they
+have nothing to put in, and either would move `expected_header(2, 3)` — the 24
+columns Claim 1's published figures are measured on. What this file adds is the
+provenance block above them, whose version already records that a header with no
+base columns is a statement about the *run* (see `PROVENANCE_VERSION`).
+
 ON `--seed` HAVING A DEFAULT
 ----------------------------
 CLAUDE.md forbids inventing defaults, and the reason it gives is precise: an

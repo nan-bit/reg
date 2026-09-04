@@ -143,8 +143,10 @@ class BaseFrame:
 #: origin, unrotated. **Not a default.** It is written out at each call site on
 #: purpose, so that `grep ORIGIN_FRAME` is the list of places this repository
 #: assumes a base that does not move — which is what docs/mobile-base.md §4
-#: says did not exist, and what Tier 3 has to visit. `reg.world.BASE_XY` is the
-#: room-coordinate restatement of the same mounting fact.
+#: says did not exist, and what Tier 3 has to visit. Since issue #184 it is the
+#: *only* statement of it: `reg.world.BASE_XY` was a room-coordinate restatement
+#: of the same mounting fact, read in two places and parameterising nothing, and
+#: a fact restated in a second place is a fact two places can disagree about.
 ORIGIN_FRAME = BaseFrame(x=0.0, y=0.0, theta=0.0)
 
 

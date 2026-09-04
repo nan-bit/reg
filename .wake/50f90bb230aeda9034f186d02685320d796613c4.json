@@ -1,0 +1,206 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "184-1788548824958416103-3062943",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "harness": "wake-runner",
+      "harness_version": "v0.4.6 (57c73c13e)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "8b492927d7510dd195f7da02720543212a0cec3b377901ab5cac57d015e332b3",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "77e500314d6bf74449a73ba6b78b845789ff5f3e72470e3bd65746deb4c3af27",
+        "authored_by": "788a56200ecfcdccd9dfd07fb823b480e449bad80e1f37cd978abe07a95ecc70",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "d89993cf2ddfac57722aef25d99c765be79a6ce73de3bc99a72639281100852f",
+        "concluded": "e0b42750479b519bdebda8c85b5eec7377044adff0530ce84499cf4c584f6360",
+        "coverage": "721118009bda282a02262742261024ec8330affbc2db6d279fd9cfcbd09cc90e",
+        "declared": "0b2f6a921735a03ec6a2575f98c10dea2b3c160f4733eb32d8e35208971f1d6f",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "52f11620e397f867b7d9f19e48caeb64658356a6b5d17138c00dd9feaf5d7ad6",
+        "out_of_scope": "b263b76491332954456eb6d090d443bc3ea662049594f9481f872580735979b1",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "15e9e93131a73b2c95e5ec0e88255a06f3737fec91e7e0eb059c671e02e15c1a",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "50f90bb230aeda9034f186d02685320d796613c4",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/mobile-base.md",
+        "reg/kinematics.py",
+        "reg/scenarios.py",
+        "reg/world.py",
+        "tests/test_scenarios.py"
+      ],
+      "edge_kinds": [
+        "file-reference",
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/mobile-base.md",
+        "reg/bench.py",
+        "reg/chain.py",
+        "reg/commit.py",
+        "reg/declare.py",
+        "reg/enforce.py",
+        "reg/envelope.py",
+        "reg/graph.py",
+        "reg/kinematics.py",
+        "reg/query.py",
+        "reg/scenarios.py",
+        "reg/sim.py",
+        "reg/store.py",
+        "reg/viz.py",
+        "reg/world.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_declare.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_kinematics.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_layout.py",
+        "tests/test_personal_data.py",
+        "tests/test_prior_art.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py",
+        "tests/test_sim_cli.py",
+        "tests/test_stream.py",
+        "tests/test_viz.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 48
+      },
+      "changed_unreadable": [
+        "docs/mobile-base.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 1
+      },
+      "unresolved_edges": [
+        {
+          "at": "reg/chain.py:493",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "reg/commit.py:443",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1257",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1259",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "docs/mobile-base.md",
+        "reg/scenarios.py",
+        "reg/world.py",
+        "tests/test_graph.py",
+        "tests/test_scenarios.py",
+        "tests/test_viz.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 184,
+    "out_of_scope": [
+      "reg/bench.py",
+      "reg/chain.py",
+      "reg/commit.py",
+      "reg/declare.py",
+      "reg/enforce.py",
+      "reg/envelope.py",
+      "reg/graph.py",
+      "reg/kinematics.py",
+      "reg/query.py",
+      "reg/sim.py",
+      "reg/store.py",
+      "reg/viz.py",
+      "scripts/check_bench_determinism.py",
+      "tests/test_air_gap_framing.py",
+      "tests/test_baseline_stream_description.py",
+      "tests/test_bench.py",
+      "tests/test_bench_determinism.py",
+      "tests/test_chain.py",
+      "tests/test_commit.py",
+      "tests/test_declare.py",
+      "tests/test_enforce.py",
+      "tests/test_envelope.py",
+      "tests/test_incumbent_encoding.py",
+      "tests/test_kinematics.py",
+      "tests/test_layer_boundary.py",
+      "tests/test_layout.py",
+      "tests/test_personal_data.py",
+      "tests/test_prior_art.py",
+      "tests/test_published_figures.py",
+      "tests/test_query.py",
+      "tests/test_sim_cli.py",
+      "tests/test_stream.py"
+    ],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "out-of-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "50f90bb230aeda9034f186d02685320d796613c4"
+      },
+      "name": "auto/issue-184"
+    }
+  ]
+}

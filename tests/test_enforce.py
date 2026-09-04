@@ -595,39 +595,88 @@ def test_the_computed_bound_refuses_a_robot_whose_base_can_drive(field: str) -> 
 def test_the_computed_bound_refusal_is_not_a_pass_at_any_call_site() -> None:
     """The refusal reaches every caller as a could-not-evaluate, never as "it fits".
 
-    `computed_bound` has two callers that are not `horizon_bound`, and both of
-    them would be a silent clear if they absorbed the refusal:
-
-    * `envelope_excess` returns *metres beyond the bound*, so swallowing the
-      refusal into `0.0` would say a declaration fits a disc that does not exist.
-    * `Enforcer.__init__` computes the disc once and names it in every
-      `envelope_overclaim` reason it writes. An enforcer built anyway would
-      quote an arm-only number for a vehicle in a signed accusation.
-
-    Neither does. Both raise, which is `reg/enforce.py`'s three-valued vocabulary
+    `envelope_excess` returns *metres beyond the bound*, so swallowing the
+    refusal into `0.0` would say a declaration fits a disc that does not exist.
+    It does not: it raises, which is `reg/enforce.py`'s three-valued vocabulary
     for a finding about the caller rather than about the robot (module header,
     issue #106).
+
+    **`Enforcer.__init__` used to be the second half of this test and is not
+    any more (issue #189).** It was here because the constructor called
+    `computed_bound` unconditionally and so inherited the refusal, and the
+    reasoning offered for keeping it — the class names the disc in every
+    `envelope_overclaim` reason it writes — turned out to describe a
+    parenthetical rather than the bound anything is refused against. So the
+    constructor stopped *asking* for a disc for a robot that has none, which is
+    not the same as absorbing the answer: it never calls `computed_bound` for a
+    driven base, and there is no `except` anywhere that could turn the refusal
+    into a number. `test_no_code_path_catches_the_computed_bound_refusal` is
+    what asserts the second half of that against the source, and
+    `test_an_enforcer_over_a_driven_base_has_no_workspace_disc` the first.
     """
     region = shapely.from_wkb(HOME_WKB)
     with pytest.raises(EnforcementError, match="base_v_max"):
         envelope_excess(region, MOBILE_LIMITS)
 
-    with pytest.raises(EnforcementError, match="base_v_max"):
-        Enforcer(
-            MOBILE_LIMITS,
-            key=ENFORCEMENT_KEY,
-            policy_key=POLICY_KEY,
-            watchdog_period_s=WATCHDOG_S,
-            t_start=T_START,
-            substep_dt=SUBSTEP_DT_S,
-            id_prefix="fixture",
-        )
-
-    # The positive control: the identical calls against the bolted-down limits
-    # evaluate, so the refusals above are about the base bounds and not about
-    # the region, the keys or the parameters.
+    # The positive control: the identical call against the bolted-down limits
+    # evaluates, so the refusal above is about the base bounds and not about
+    # the region.
     assert envelope_excess(region, LIMITS) < 0.0
     assert enforcer().bound == pytest.approx(computed_bound(LIMITS), abs=1e-12)
+
+
+def test_no_code_path_catches_the_computed_bound_refusal() -> None:
+    """Asserted against the source, the way the `declare/` import boundary is.
+
+    Issue #189 lets an `Enforcer` be built for a driven base. The way that must
+    *not* have been done is by wrapping `computed_bound` in a `try` and
+    substituting something when it refuses — a rescued refusal is the invented
+    default this repository exists to refuse, and it would be invisible in every
+    verdict downstream. The way it *was* done is by not calling the function for
+    a robot it is not true of, which this test distinguishes from the other one:
+    a call inside a `try` body fails here even if the handler re-raises today,
+    because the handler is one edit away from not doing so.
+
+    Walks every module in `reg/`, not just this one, because "no code path"
+    is a statement about the package rather than about the file the change
+    happened to land in.
+    """
+    offenders = []
+    for path in sorted(pathlib.Path(reg.enforce.__file__).parent.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
+                continue
+            for guarded in node.body:
+                for call in ast.walk(guarded):
+                    if (
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Name)
+                        and call.func.id == "computed_bound"
+                    ):
+                        offenders.append(f"{path.name}:{call.lineno}")
+    assert not offenders, (
+        f"computed_bound is called inside a try block at {offenders}. Its "
+        "refusal is the could-not-evaluate for a robot with no workspace disc "
+        "(issue #164); catching it produces a bound nobody stated, which VETOes "
+        "while looking principled. Widening this is not a refactor."
+    )
+
+    # The positive control for the walk itself: it does find a call it is
+    # looking for when one is inside a `try`, so a green result above means
+    # "none present" rather than "the matcher never matches".
+    planted = ast.parse("try:\n    computed_bound(limits)\nexcept Exception:\n    pass\n")
+    found = [
+        call
+        for node in ast.walk(planted)
+        if isinstance(node, ast.Try)
+        for guarded in node.body
+        for call in ast.walk(guarded)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "computed_bound"
+    ]
+    assert len(found) == 1
 
 
 def test_the_computed_bound_contains_every_body_of_every_fixture() -> None:
@@ -1041,6 +1090,183 @@ def test_the_horizon_bound_rests_on_the_outer_envelope_alone_for_a_driven_base()
     assert horizon_bound(
         bolted, LIMITS, HORIZON_S, SUBSTEP_DT_S
     ) < computed_bound(LIMITS)
+
+
+# --------------------------------------------------------------------------
+# An enforcer over a robot that drives (issue #189).
+#
+# Until #189 `Enforcer.__init__` ended with `self._bound = computed_bound(limits)`,
+# so a `Limits` with any nonzero base bound could not be constructed against at
+# all and no mobile scenario could produce a verdict of any kind. That refusal
+# was never an asserted behaviour — it fell out of #164's — and the reading
+# behind it was wrong in one specific way: the disc is not the bound `offer`
+# refuses declarations against. That is `horizon_bound`, which exists for both
+# kinds of robot. The disc is a parenthetical in one reason string, and for a
+# driven base the parenthetical is rewritten rather than dropped.
+# --------------------------------------------------------------------------
+
+#: The state the driven-base enforcer is offered declarations against: the arm
+#: at full extension and the base rolling forward at its own limit. `base_vel`
+#: is required rather than incidental — `horizon_bound` refuses a mobile robot
+#: whose state records none, which the test above this section pins.
+MOBILE_DRIVING = dataclasses.replace(
+    proprio(Q_EXTENDED, 0.0),
+    base_vel=BaseVelocity(
+        vx=MOBILE_LIMITS.base_v_max, vy=0.0, omega=0.0,
+        source=VelocitySource.PROPRIOCEPTIVE,
+    ),
+)
+
+
+def mobile_enforcer(**overrides: object) -> Enforcer:
+    """`enforcer()` over a robot whose base can drive. Same parameters otherwise."""
+    kwargs: dict[str, object] = dict(
+        key=ENFORCEMENT_KEY,
+        policy_key=POLICY_KEY,
+        watchdog_period_s=WATCHDOG_S,
+        t_start=T_START,
+        substep_dt=SUBSTEP_DT_S,
+        id_prefix="fixture",
+    )
+    kwargs.update(overrides)
+    return Enforcer(MOBILE_LIMITS, **kwargs)  # type: ignore[arg-type]
+
+
+def test_an_enforcer_over_a_driven_base_has_no_workspace_disc() -> None:
+    """It constructs, and `bound` is `None` — the could-not-evaluate, not a number.
+
+    The replacement for the construction refusal issue #189 removed. `None`
+    means *no horizon-free radius exists for this robot* (#164), and the two
+    halves are asserted together on purpose: a `bound` of `None` on a robot that
+    could not be built would be vacuous, and a robot that builds while reporting
+    an arm-only disc would be the failure the old refusal was protecting against.
+
+    The fixed-base half is the control. It is unchanged, to the last bit.
+    """
+    assert mobile_enforcer().bound is None, (
+        "the enforcer over a driven base reports a workspace disc. There is no "
+        "horizon-free radius for a vehicle, so whatever number this is, nobody "
+        "stated it."
+    )
+    assert enforcer().bound == pytest.approx(computed_bound(LIMITS), abs=1e-12)
+
+    # And #164's refusal is untouched by the construction succeeding: asking
+    # `computed_bound` itself for this robot's disc still says there is none.
+    with pytest.raises(EnforcementError, match="base_v_max"):
+        computed_bound(MOBILE_LIMITS)
+
+
+def test_a_driven_base_overclaim_is_refused_on_the_horizon_bound_alone() -> None:
+    """The VETO a mobile robot can now receive, and what the reason has to say.
+
+    Three things, and the third is the one that would go unnoticed:
+
+    * the fault is `envelope_overclaim`, so a mobile overclaim lands in the same
+      taxonomy slot as a fixed-base one rather than in a new one;
+    * the reason names the horizon-limited bound this robot was actually refused
+      against — the only bound it has;
+    * the reason says **there is no workspace disc**, and names the fields that
+      made it so. Truncating the parenthetical instead would leave a mobile VETO
+      reading exactly like a fixed-base VETO whose disc went unmentioned, and an
+      operator cannot tell those apart. The arm-only number must not appear at
+      all: it is not true of this robot, and a signed accusation quoting it
+      would be quoting a bound over a set the robot leaves.
+    """
+    e = mobile_enforcer()
+    v = e.offer(declaration(envelope=HUGE_WKB), MOBILE_DRIVING)
+    assert v is not None
+    assert (v.outcome, v.fault) == ("VETO", "envelope_overclaim")
+    assert e.open_declaration is None
+    assert e.is_passivated
+
+    radius = horizon_bound(MOBILE_DRIVING, MOBILE_LIMITS, HORIZON_S, SUBSTEP_DT_S)
+    arm_only = computed_bound(LIMITS)
+    assert radius > arm_only, (
+        "the driven base's horizon bound does not exceed the arm-only disc, so "
+        "the assertions below cannot tell the two numbers apart and would pass "
+        "for the wrong reason."
+    )
+    reason = e.reason(v.verdict_id) or ""
+    assert f"{radius:.4f} m" in reason, (
+        f"the reason does not name the bound this declaration was refused "
+        f"against. Got: {reason}"
+    )
+    assert "there is no workspace disc for this robot" in reason, (
+        f"the reason does not say the disc is absent, so this VETO is "
+        f"indistinguishable from a fixed-base one. Got: {reason}"
+    )
+    for field in Limits.BASE_BOUND_FIELDS:
+        assert f"{field}={float(getattr(MOBILE_LIMITS, field))}" in reason, (
+            f"the reason does not state {field}, so a caller who wrote a "
+            f"datasheet number down by accident cannot find it. Got: {reason}"
+        )
+    assert f"{arm_only:.4f} m" not in reason, (
+        f"the arm-only workspace disc appears in a mobile robot's VETO. It is "
+        f"not a bound over anything this robot occupies. Got: {reason}"
+    )
+
+
+def test_a_truthful_declaration_for_a_driven_base_is_permitted() -> None:
+    """POSITIVE CONTROL. The new path can clear as well as VETO.
+
+    Without this, `test_a_driven_base_overclaim_is_refused_on_the_horizon_bound_
+    alone` is equally consistent with an enforcer that refuses every declaration
+    a vehicle offers — which is what a bound of zero, or a `None` read as one,
+    would produce. The declared region here is the one the fixed-base tests use,
+    and it is inside the mobile bound by a margin larger than any rounding.
+    """
+    region = shapely.from_wkb(HOME_WKB)
+    radius = horizon_bound(MOBILE_DRIVING, MOBILE_LIMITS, HORIZON_S, SUBSTEP_DT_S)
+    furthest = reg.enforce._furthest_vertex(region, ORIGIN_FRAME, "test")
+    assert radius - furthest > 0.01, (
+        f"the truthful fixture clears the bound by only {radius - furthest:.4f} "
+        "m; that is close enough to the boundary that this control would turn "
+        "on floating point rather than on the check."
+    )
+
+    e = mobile_enforcer()
+    d = declaration(envelope=HOME_WKB)
+    assert e.offer(d, MOBILE_DRIVING) is None, (
+        "a truthful declaration for a driven base was refused, so the mobile "
+        "path VETOes everything and the overclaim test above proves nothing."
+    )
+    assert e.open_declaration == d
+    assert not e.is_passivated
+    # It adjudicates too, so what the construction bought is a working enforcer
+    # rather than one that can only accept. The arm is at `Q_HOME`, which is
+    # what the declared envelope was built around, and the base is still
+    # driving — a verdict for a robot in motion, which is the whole point.
+    acting = dataclasses.replace(
+        proprio(Q_HOME, 0.2), base_vel=MOBILE_DRIVING.base_vel
+    )
+    assert e.adjudicate(acting).outcome == "PERMIT"
+
+
+def test_a_fixed_base_overclaim_reason_is_unchanged_by_the_mobile_path() -> None:
+    """Byte-identical, asserted as an equality against the wording written out.
+
+    Issue #189's requirement that the mobile case be added *beside* the fixed one
+    rather than *through* it. `envelope_overclaim` is the only reason string the
+    change touches, and this pins its fixed-base form in full: the numbers come
+    from the functions that produce them, so the test does not re-derive the
+    answer, and every word between them is a literal, so a rewording fails here
+    rather than in whatever reads these reasons months later.
+    """
+    e = enforcer()
+    v = e.offer(declaration(envelope=HUGE_WKB), AT_EXTENDED)
+    assert v is not None
+
+    radius = horizon_bound(AT_EXTENDED, LIMITS, HORIZON_S, SUBSTEP_DT_S)
+    excess = (
+        reg.enforce._furthest_vertex(shapely.from_wkb(HUGE_WKB), ORIGIN_FRAME, "test")
+        - radius
+    )
+    assert e.reason(v.verdict_id) == (
+        f"the declared region reaches {excess:.4f} m beyond the independently "
+        f"computed bound of {radius:.4f} m for a {HORIZON_S:.4f} s window from "
+        f"this pose (the workspace disc, which has no horizon in it, is "
+        f"{computed_bound(LIMITS):.4f} m)"
+    )
 
 
 def test_horizon_excess_is_never_less_than_envelope_excess() -> None:

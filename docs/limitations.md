@@ -867,11 +867,19 @@ came from somewhere unusual produces an artifact indistinguishable from one whos
 did not, and no query can be written that would find it.
 
 **What it does not cost, today.** Nothing in this repository. No fixture is
-mobile — `reg.world.LIMITS` states four base bounds of zero, every fixture frame
-records `base_vel=None`, and `reg.enforce.Enforcer` refuses to construct for a
-driven base at all (issue #164) — so no artifact this repository builds carries a
+mobile — `reg.world.LIMITS` states four base bounds of zero and every fixture
+frame records `base_vel=None` — so no artifact this repository builds carries a
 base velocity of either provenance, and every layer tag on every edge in every
-fixture is the tag it was. No published figure moves: the stream's velocity block
+fixture is the tag it was. *This paragraph used to add a third reason, that
+`reg.enforce.Enforcer` refuses to construct for a driven base at all (issue
+#164), and since issue #189 that is false: an enforcer constructs for one and
+adjudicates it, resting on `horizon_bound` alone, and `Enforcer.bound` is `None`
+for it because there is no workspace disc to report.* The entry is unaffected —
+the reason nothing here carries a mistagged base velocity was always the
+fixtures, and the enforcer's refusal was a belt beside that brace. What #189
+changes is that the belt is gone: the first mobile fixture (mobile-base.md §7
+Tier 4) will produce artifacts this entry is about, rather than failing to build
+at all, so the gap below stops being hypothetical the moment one lands. No published figure moves: the stream's velocity block
 is optional, `expected_header(2, 3)` is the 24 columns Claim 1 is priced on, and
 `base_vel_source` appears only in a header no fixture writes.
 

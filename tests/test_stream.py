@@ -1030,3 +1030,104 @@ def test_a_non_numeric_base_cell_is_refused(tmp_path) -> None:
     bad.write_text(LINE_TERMINATOR.join(lines) + LINE_TERMINATOR)
     with pytest.raises(StreamFormatError, match="not finite"):
         list(read_frames(bad))
+
+
+# --------------------------------------------------------------------------
+# A SCENARIO'S OWN FRAMES THROUGH THIS CODEC (issue #177)
+#
+# Everything above builds frames by hand, which is the right way to test a
+# format: it is what lets a case exist that no producer writes yet. What it
+# cannot check is that the producer and the codec agree — and since issue #177
+# there is one, so a driving scenario is written and read back here rather than
+# a hand-assembled approximation of one.
+# --------------------------------------------------------------------------
+
+
+def driving_scenario():
+    """A scenario whose base drives, on a `Limits` that permits it.
+
+    Built here rather than imported from `SCENARIOS`: no registered fixture
+    drives, because Claim 1 is priced on eleven bolted arms and a twelfth that
+    moved would change what the baseline is measured over (docs/mobile-base.md
+    §7 Tier 4).
+    """
+    from reg.scenarios import Scenario, Waypoint
+    from reg.types import LimitSource, Limits
+    from reg.world import DEMO_WORLD, ROOM, World
+
+    limits = Limits(
+        q_min=np.array([-np.pi, -2.6]),
+        q_max=np.array([np.pi, 2.6]),
+        qd_max=np.array([2.0, 2.5]),
+        qdd_max=np.array([8.0, 10.0]),
+        link_lengths=np.array([0.5, 0.4]),
+        source=LimitSource.PROPRIOCEPTIVE,
+        link_radius=0.05,
+        base_v_max=0.8,
+        base_a_max=1.2,
+        base_omega_max=1.0,
+        base_alpha_max=2.0,
+    )
+    return Scenario(
+        name="probe_drives",
+        description="constructed by a test",
+        world=World(
+            room=ROOM,
+            obstacles=DEMO_WORLD.obstacles,
+            limits=limits,
+            human_radius=DEMO_WORLD.human_radius,
+        ),
+        duration=1.0,
+        joint_waypoints=(Waypoint(0.0, (0.0, 0.0)), Waypoint(1.0, (0.5, 0.5))),
+        human_waypoints=(Waypoint(0.0, (2.0, 0.0)), Waypoint(1.0, (2.0, 0.5))),
+        q_jitter=0.0,
+        human_jitter=0.0,
+        base_waypoints=(
+            Waypoint(0.0, (0.0, 0.0, 0.0)),
+            Waypoint(1.0, (0.4, 0.2, 0.3)),
+        ),
+        base_pose_source=PoseSource.LOCALIZED,
+        base_vel_source=VelocitySource.DERIVED,
+        base_jitter=(0.01, 0.005),
+    )
+
+
+def test_a_driving_scenarios_stream_round_trips(tmp_path) -> None:
+    """**The acceptance criterion, end to end.** A scenario that drives is
+    written and read back as the run it was: the same poses, the same
+    body-frame rates, and both provenances intact.
+
+    Both, and not just the pose. `base_pose_source` and `base_vel_source` are
+    separate claims about the run — where the robot was, against whether the
+    rates beside it came off wheel encoders or out of visual odometry — and
+    neither is recoverable from the other, which is why the format gives each
+    block its own column (issue #176) and why this fixture states two different
+    members.
+    """
+    want = tuple(driving_scenario().states(seed=0))
+    path = write_frames(want, tmp_path / "driving.csv")
+    got = list(read_frames(path))
+
+    assert_frames_close(got, want)
+    assert {f.base_pose.source for f in got} == {PoseSource.LOCALIZED}
+    assert {f.base_vel.source for f in got} == {VelocitySource.DERIVED}
+    # The header grew exactly the two blocks and nothing else.
+    assert path.read_text(encoding="utf-8").splitlines()[0].split(",") == (
+        expected_header(2, 3, base_vel=True, base_pose=True)
+    )
+
+
+def test_a_fixed_base_scenarios_stream_is_still_twenty_four_columns(tmp_path) -> None:
+    """**The half Claim 1 is priced on.** A scenario that does not drive writes
+    the header it has always written — 24 columns for the two-joint,
+    three-obstacle fixture — so the gzipped baseline every published figure is
+    divided by does not move because a *different* fixture can now carry a base.
+    """
+    from reg.scenarios import SCENARIOS
+
+    scn = SCENARIOS["contact"]
+    path = write_frames(scn.states(seed=0), tmp_path / "fixed.csv")
+    header = path.read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert header == expected_header(2, 3)
+    assert len(header) == 24
+    assert all(f.base_pose is None and f.base_vel is None for f in read_frames(path))

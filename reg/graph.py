@@ -1087,15 +1087,18 @@ class _FrameNodes:
     def config(self) -> str:
         """The `RobotConfig` row for this frame. It states no base pose.
 
-        `None` and not the origin (issue #166). The raw stream this builder reads
-        has no base columns at all (`reg.stream`), so nothing in the file was
-        ever told where the base was — and *not recorded* is what the artifact
-        must say, on the same terms `base_vel=None` says it. Where the base was
-        bolted is `meta[base_frame]`, which is a mounting fact about the run
-        rather than a per-frame estimate, and it is written once.
+        `None` and not the origin (issue #166). Every stream that reaches this
+        builder states no base pose — since issue #177 that is enforced rather
+        than implied, because `reg.stream` grew columns for one (#176) and
+        `reg.scenarios` can now fill them: `_refuse_a_stream_this_builder_cannot_carry`
+        turns a stream that does state one into a refusal, so a `None` here is
+        only ever a base nothing was told about. *Not recorded* is what the
+        artifact must say then, on the same terms `base_vel=None` says it. Where
+        the base was bolted is `meta[base_frame]`, which is a mounting fact about
+        the run rather than a per-frame estimate, and it is written once.
 
-        A producer arrives with the mobile fixtures (docs/mobile-base.md §7,
-        Tier 4). Until then the pose reaches the artifact through
+        A producer arrives with the rest of docs/mobile-base.md §7 Tier 4. Until
+        then the pose reaches the artifact through
         `reg.store.insert_robot_config` and through nothing here.
         """
         return store.insert_robot_config(
@@ -1719,6 +1722,50 @@ def _entity_set(
 # --------------------------------------------------------------------------
 
 
+def _refuse_a_stream_this_builder_cannot_carry(
+    frames: tuple[StateFrame, ...], csv_path: str | os.PathLike[str]
+) -> None:
+    """Refuse a stream whose frames state a base pose. Could-not-evaluate, loudly.
+
+    `reg.stream` can carry a room-frame base pose since issue #176 and
+    `reg.scenarios` can produce one since issue #177, and this builder still
+    writes `base_pose=None` on every `robot_config` row (`_FrameNodes.config`).
+    Building anyway would turn a run whose base drove into an artifact that says
+    *no base pose was recorded* — the same header, the same row count, every
+    check downstream green, and every envelope in it read as the region a robot
+    at `meta[base_frame]` could reach. Issue #166 built the refusal for the half
+    of that path it could see (`_recompute` refuses a config that states a pose);
+    this is the half in front of it, and without it that refusal never fires
+    because nothing ever writes the pose.
+
+    Carrying the pose properly is the rest of docs/mobile-base.md §7 Tier 4:
+    the pose has to reach `robot_config`, the layer tag on every edge resting on
+    it has to follow (issue #166, `reg.store.open_edge`), and a run whose base
+    moved has to retain its geometry rather than promise a recomputation that
+    cannot be honest. Until that lands this is a could-not-evaluate, and the
+    rule is that it must not resolve to a parsed artifact.
+
+    `base_vel` is **not** refused. It is body-frame and Layer A, it reaches the
+    envelope through `StateFrame.proprio()`, and `reg.envelope.outer_envelope`
+    reads it and is the term every mobile VETO rests on (issue #163) — a stream
+    that carries it is a stream this builder uses correctly.
+    """
+    posed = [i for i, frame in enumerate(frames) if frame.base_pose is not None]
+    if not posed:
+        return
+    raise GraphBuildError(
+        f"{csv_path}: {len(posed)} frame(s) state a base pose (first at frame "
+        f"{posed[0]}, t={frames[posed[0]].t}), and this builder cannot carry "
+        "one — every robot_config row it writes states base_pose NULL, which "
+        "reads as 'this run recorded no base pose'. Building would drop where "
+        "the base was and leave every envelope in the artifact looking like the "
+        "region a robot at meta[base_frame] could reach, with nothing "
+        "downstream able to tell. Refusing instead: docs/mobile-base.md §7 "
+        "Tier 4 is where the pose reaches the artifact, and until then this is "
+        "a could-not-evaluate."
+    )
+
+
 def build(
     csv_path: str | os.PathLike[str],
     out_path: str | os.PathLike[str],
@@ -1834,6 +1881,7 @@ def build(
             "exists to make cheap."
         )
     frames = tuple(read_frames(csv_path))
+    _refuse_a_stream_this_builder_cannot_carry(frames, csv_path)
     period = _frame_period(frames, csv_path)
     # How many distinct instants this run's frames can be addressed at, which is
     # `len(frames)` at or below `TIME_BASE_MAX_RATE_HZ` and fewer above it. Not a

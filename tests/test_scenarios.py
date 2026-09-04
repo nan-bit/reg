@@ -47,7 +47,14 @@ from reg.scenarios import (
     scenario,
 )
 from reg.kinematics import ORIGIN_FRAME, link_polygons
-from reg.types import Limits, Obstacle, ProprioState
+from reg.types import (
+    Limits,
+    LimitSource,
+    Obstacle,
+    PoseSource,
+    ProprioState,
+    VelocitySource,
+)
 from reg.world import BASE_XY, DEMO_WORLD, LIMITS, ROOM, Room, World
 
 #: Several seeds, fixed. Every semantic claim a scenario name makes must hold for
@@ -886,3 +893,349 @@ def test_an_out_of_vocabulary_action_class_is_allowed_and_is_the_point() -> None
 def test_scenarios_are_frozen() -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         scenario("contact").duration = 1.0  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------
+# THE BASE (issue #177, docs/mobile-base.md §7 Tier 4)
+#
+# A scenario can express a driven base, and no scenario in `SCENARIOS` does. So
+# the fixture this section is written against is built here, on a `Limits` whose
+# four base bounds are positive — `reg.world.LIMITS` states four zeros, which is
+# the bolted arm every registered fixture runs on, and driving one is refused.
+#
+# The two halves are asserted together on purpose. What is easy to get right is
+# that a driving scenario produces poses; what is easy to get wrong is that a
+# fixed-base one keeps producing exactly what it produced before, and the second
+# is the half every published figure in this repository depends on.
+# --------------------------------------------------------------------------
+
+#: A `Limits` that can drive, identical to `reg.world.LIMITS` in its arm. The
+#: four base numbers are fixture parameters stated here, not measurements: this
+#: file needs a base that can execute a script, and `Scenario` refuses one that
+#: cannot (`test_a_trajectory_on_a_bolted_base_is_refused`).
+MOBILE_LIMITS = Limits(
+    q_min=np.array([-np.pi, -2.6]),
+    q_max=np.array([np.pi, 2.6]),
+    qd_max=np.array([2.0, 2.5]),
+    qdd_max=np.array([8.0, 10.0]),
+    link_lengths=np.array([0.5, 0.4]),
+    source=LimitSource.PROPRIOCEPTIVE,
+    link_radius=0.05,
+    base_v_max=0.8,
+    base_a_max=1.2,
+    base_omega_max=1.0,
+    base_alpha_max=2.0,
+)
+
+MOBILE_WORLD = World(
+    room=ROOM,
+    obstacles=DEMO_WORLD.obstacles,
+    limits=MOBILE_LIMITS,
+    human_radius=DEMO_WORLD.human_radius,
+)
+
+
+def _driving(**overrides) -> Scenario:
+    """The probe scenario with a base that drives. Overridable like `_scenario`."""
+    kwargs = dict(
+        name="probe_drives",
+        description="constructed by a test",
+        world=MOBILE_WORLD,
+        duration=2.0,
+        joint_waypoints=(Waypoint(0.0, (0.0, 0.0)), Waypoint(2.0, (0.5, 0.5))),
+        human_waypoints=(Waypoint(0.0, (2.0, 0.0)), Waypoint(2.0, (2.0, 0.5))),
+        q_jitter=0.0,
+        human_jitter=0.0,
+        base_waypoints=(
+            Waypoint(0.0, (0.0, 0.0, 0.0)),
+            Waypoint(1.0, (0.4, 0.2, 0.3)),
+            Waypoint(2.0, (0.8, 0.0, 0.0)),
+        ),
+        base_pose_source=PoseSource.DEAD_RECKONED,
+        base_vel_source=VelocitySource.PROPRIOCEPTIVE,
+        base_jitter=(0.01, 0.005),
+    )
+    kwargs.update(overrides)
+    return Scenario(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("name", EXPECTED_NAMES)
+def test_every_registered_fixture_is_fixed_base_and_records_no_base(name: str) -> None:
+    """**The half that must not move.** Claim 1 is priced on eleven bolted arms.
+
+    Two statements, and the second is the one a reader should not have to take
+    on trust: none of the eleven drives, and *therefore* every frame records
+    `base_pose=None` and `base_vel=None` — which is what keeps their streams at
+    `expected_header(2, 3)`'s 24 columns and every published figure where it
+    was. `None` here is "this run recorded no base", not "the base was at the
+    origin": for a bolted base that is a mounting fact and `PoseSource` has no
+    member for one (issue #150).
+    """
+    scn = scenario(name)
+    assert scn.drives is False
+    assert scn.base_waypoints is None
+    assert (scn.base_pose_source, scn.base_vel_source, scn.base_jitter) == (
+        None,
+        None,
+        None,
+    )
+    frames = list(scn.states(seed=0))
+    assert all(f.base_pose is None and f.base_vel is None for f in frames)
+
+
+def test_a_driving_scenario_carries_a_pose_and_a_rate_on_every_frame() -> None:
+    """The positive this issue exists for, and both provenances survive it."""
+    scn = _driving()
+    assert scn.drives is True
+    frames = list(scn.states(seed=0))
+    assert len(frames) == scn.n_frames
+    assert all(f.base_pose is not None and f.base_vel is not None for f in frames)
+    assert {f.base_pose.source for f in frames} == {PoseSource.DEAD_RECKONED}
+    assert {f.base_vel.source for f in frames} == {VelocitySource.PROPRIOCEPTIVE}
+    # It actually goes somewhere: a "driving" fixture whose base never leaves
+    # its first knot would satisfy every assertion above.
+    assert abs(frames[-1].base_pose.x - frames[0].base_pose.x) > 0.5
+
+
+def test_the_base_velocity_is_the_one_that_carries_the_base_to_the_next_frame() -> None:
+    """`base_vel[k]` is the rate that reaches frame k+1, in the base's own frame.
+
+    The exact counterpart of `test_velocity_is_the_slope_of_the_interpolant` for
+    the arm, and it is load-bearing for the same reason: since issue #163
+    `reg.envelope.base_motion_bounds` reads this rate to bound where the base
+    can get to, so a frame reporting the velocity it *arrived* with would poison
+    every outer envelope built from it — and since issue #164 that outer set is
+    the only term a mobile robot is VETOed against.
+
+    The rotation is the other half of the statement. `BaseVelocity` is
+    body-frame; rotating it by the pose's own heading has to land exactly on the
+    next pose, or the two halves of the frame describe different runs.
+    """
+    frames = list(_driving().states(seed=0))
+    dt = _driving().dt
+    for a, b in zip(frames, frames[1:]):
+        theta = a.base_pose.theta
+        vx = np.cos(theta) * a.base_vel.vx - np.sin(theta) * a.base_vel.vy
+        vy = np.sin(theta) * a.base_vel.vx + np.cos(theta) * a.base_vel.vy
+        assert b.base_pose.x == pytest.approx(a.base_pose.x + vx * dt, abs=1e-12)
+        assert b.base_pose.y == pytest.approx(a.base_pose.y + vy * dt, abs=1e-12)
+        assert b.base_pose.theta == pytest.approx(
+            a.base_pose.theta + a.base_vel.omega * dt, abs=1e-12
+        )
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_the_executed_base_trajectory_obeys_the_bases_own_bounds(seed: int) -> None:
+    """The base is rate-limited, as the arm has been since issue #96.
+
+    A base that teleported along its script would be a base the outer envelope
+    makes no promise about, and `reg.enforce` has no second bound to fall back
+    on for a robot that drives (`computed_bound` refuses; docs/mobile-base.md
+    §1). So what the frames record is the trajectory the base *executed*, and
+    all four bounds hold on it — including the two accelerations, which are what
+    a script with a corner in it would otherwise violate at the corner.
+    """
+    scn = _driving()
+    limits = scn.world.limits
+    frames = list(scn.states(seed))
+    speeds = [float(np.hypot(f.base_vel.vx, f.base_vel.vy)) for f in frames]
+    assert max(speeds) <= limits.base_v_max + 1e-12
+    assert max(abs(f.base_vel.omega) for f in frames) <= limits.base_omega_max + 1e-12
+
+    for a, b in zip(frames, frames[1:]):
+        # Body frame and room frame agree on the *magnitude* of the step, which
+        # is what the bound bounds, so this compares the two body-frame vectors
+        # after rotating both into the room.
+        va = _room_frame(a)
+        vb = _room_frame(b)
+        assert float(np.hypot(*(vb - va))) <= limits.base_a_max * scn.dt + 1e-12
+        assert abs(b.base_vel.omega - a.base_vel.omega) <= (
+            limits.base_alpha_max * scn.dt + 1e-12
+        )
+
+
+def _room_frame(frame) -> np.ndarray:
+    """A frame's body-frame base velocity, rotated into the room."""
+    theta = frame.base_pose.theta
+    return np.array(
+        [
+            np.cos(theta) * frame.base_vel.vx - np.sin(theta) * frame.base_vel.vy,
+            np.sin(theta) * frame.base_vel.vx + np.cos(theta) * frame.base_vel.vy,
+        ]
+    )
+
+
+def test_the_seed_perturbs_the_base_path_and_reproduces_it() -> None:
+    """`base_jitter` is a real input, and the run is still a function of the seed.
+
+    Both halves matter: a jitter that changed nothing would be a fixture
+    parameter that is decoration, and a base path that differed between two runs
+    of one seed would make the artifact irreproducible in the one dimension this
+    issue added.
+    """
+    first = [f.base_pose.x for f in _driving().states(seed=0)]
+    again = [f.base_pose.x for f in _driving().states(seed=0)]
+    other = [f.base_pose.x for f in _driving().states(seed=7)]
+    assert first == again
+    assert first != other
+    unperturbed = [f.base_pose.x for f in _driving(base_jitter=(0.0, 0.0)).states(0)]
+    assert unperturbed != first
+    # And a base path nobody perturbs is still a function of the seed only
+    # through the arm and the human, so two seeds agree on it.
+    assert unperturbed == [
+        f.base_pose.x for f in _driving(base_jitter=(0.0, 0.0)).states(7)
+    ]
+
+
+def test_the_base_knots_draw_from_their_own_stream() -> None:
+    """Adding a base waypoint must not shift the arm or the human.
+
+    `_knots` gives every scripted path its own generator for this reason: two
+    runs of "the same" scenario that differ in the human's walk because someone
+    added a base knot are incomparable for a reason invisible in the diff.
+    """
+    short = [
+        (f.q.tolist(), f.human_pos.tolist()) for f in _driving().states(seed=0)
+    ]
+    longer = _driving(
+        base_waypoints=(
+            Waypoint(0.0, (0.0, 0.0, 0.0)),
+            Waypoint(0.5, (0.2, 0.1, 0.15)),
+            Waypoint(1.0, (0.4, 0.2, 0.3)),
+            Waypoint(2.0, (0.8, 0.0, 0.0)),
+        )
+    )
+    assert [
+        (f.q.tolist(), f.human_pos.tolist()) for f in longer.states(seed=0)
+    ] == short
+
+
+# --- the negatives ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "match"),
+    [
+        ("base_pose_source", "no base_pose_source"),
+        ("base_vel_source", "no base_vel_source"),
+        ("base_jitter", "no base_jitter"),
+    ],
+)
+def test_a_base_trajectory_missing_its_companion_is_refused(
+    field: str, match: str
+) -> None:
+    """**NEGATIVE, and the one this issue is named for.**
+
+    A simulator's base pose is ground truth, exactly as `human_pos` is. Writing
+    it with no provenance would put an unlabelled room-frame pose into the
+    stream and leave every reader to assume one, and there is no value to guess:
+    only whoever produced a pose knows whether it was dead-reckoned or
+    localized. `Limits.source`'s argument (issue #84), one type over — so the
+    refusal names what is missing rather than filling it in.
+    """
+    with pytest.raises(ValueError, match=match):
+        _driving(**{field: None})
+
+
+@pytest.mark.parametrize(
+    "field", ["base_pose_source", "base_vel_source", "base_jitter"]
+)
+def test_a_companion_with_no_base_trajectory_is_refused(field: str) -> None:
+    """**NEGATIVE.** The contradiction in the other direction.
+
+    A `PoseSource` on a fixture whose base never moves is the provenance of a
+    pose nothing writes. Two things could have been meant — a trajectory that
+    was not written, or a field that should not be there — and both repairs
+    change what the run is, so neither is guessed at.
+    """
+    value = {
+        "base_pose_source": PoseSource.LOCALIZED,
+        "base_vel_source": VelocitySource.DERIVED,
+        "base_jitter": (0.01, 0.005),
+    }[field]
+    with pytest.raises(ValueError, match=f"states {field}="):
+        _scenario(**{field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("base_pose_source", "dead_reckoned"),
+        ("base_vel_source", "proprioceptive"),
+    ],
+)
+def test_a_provenance_that_is_a_string_is_refused(field: str, value: str) -> None:
+    """**NEGATIVE.** The string is the value the enum member *writes*, which is
+    what makes it the plausible mistake: it would reach `reg.stream` looking
+    like a provenance somebody stated and be the one thing nobody checked."""
+    with pytest.raises(TypeError, match=field):
+        _driving(**{field: value})
+
+
+def test_a_trajectory_on_a_bolted_base_is_refused() -> None:
+    """**NEGATIVE.** `reg.world.LIMITS` states four zeros, and `states` integrates
+    the base under them — so a fixture scripted on it would record a base parked
+    at its first knot while its name and waypoints say it drove. The refusal
+    names the fields, because which of the four is zero is what the author fixes.
+    """
+    with pytest.raises(ValueError, match="base_v_max=0.0"):
+        _driving(world=DEMO_WORLD)
+
+
+@pytest.mark.parametrize(
+    "field", ["base_v_max", "base_a_max", "base_omega_max", "base_alpha_max"]
+)
+def test_each_base_bound_is_checked_and_not_just_the_speed(field: str) -> None:
+    """**NEGATIVE, one bound at a time.** A zero speed bound pins the base
+    outright; a zero acceleration bound pins it at rest, which is the same
+    outcome one derivative up. A check that only looked at the two speeds would
+    pass a fixture whose base can never start moving."""
+    with pytest.raises(ValueError, match=f"{field}=0.0"):
+        _driving(
+            world=dataclasses.replace(
+                MOBILE_WORLD,
+                limits=dataclasses.replace(MOBILE_LIMITS, **{field: 0.0}),
+            )
+        )
+
+
+def test_a_base_waypoint_of_the_wrong_width_is_refused() -> None:
+    """**NEGATIVE.** `(x, y)` is the human's shape, not the base's: a base
+    waypoint is a *pose*, and numpy would broadcast the short one into a
+    trajectory nobody wrote."""
+    with pytest.raises(ValueError, match="expected 3"):
+        _driving(
+            base_waypoints=(Waypoint(0.0, (0.0, 0.0)), Waypoint(2.0, (0.8, 0.0)))
+        )
+
+
+def test_a_base_path_that_does_not_span_the_run_is_refused() -> None:
+    """**NEGATIVE.** The base path is held to every rule the joint path is: it
+    starts at 0.0, ends at `duration`, and its knots advance."""
+    with pytest.raises(ValueError, match="duration"):
+        _driving(
+            base_waypoints=(
+                Waypoint(0.0, (0.0, 0.0, 0.0)),
+                Waypoint(1.5, (0.8, 0.0, 0.0)),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (0.01, "must be a \\(metres, radians\\) pair"),
+        ((0.01,), "must be a \\(metres, radians\\) pair"),
+        ((0.01, 0.01, 0.01), "must be a \\(metres, radians\\) pair"),
+        ((-0.01, 0.0), "must be finite and >= 0"),
+        ((0.0, float("nan")), "must be finite and >= 0"),
+    ],
+)
+def test_a_base_jitter_that_is_not_two_bounds_is_refused(
+    value: object, match: str
+) -> None:
+    """**NEGATIVE.** One number would bound metres and radians together, which is
+    the mistake `reg.types.BaseVelocity` keeps its fields apart to prevent — and
+    nothing downstream could catch it, because both are floats."""
+    with pytest.raises(ValueError, match=match):
+        _driving(base_jitter=value)

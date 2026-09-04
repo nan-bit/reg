@@ -688,10 +688,14 @@ def _unsigned_declaration() -> Declaration:
 def _posed_artifact(path: Path) -> sqlite3.Connection:
     """A hand-built store holding one bolted config and one that states a pose.
 
-    Hand-built because nothing in `reg/` writes a posed configuration yet — the
-    raw stream has no base columns and the fixtures are all bolted down
-    (docs/mobile-base.md §7, Tier 4). An unexercised rule is one that drifts, so
-    the artifact this rule is about is constructed here rather than waited for.
+    Hand-built because nothing in `reg/` writes a posed configuration yet. The
+    raw stream has carried base columns since issue #176 and a scenario can fill
+    them since issue #177, but `build` refuses such a stream rather than
+    dropping the pose into a NULL column
+    (`test_a_stream_that_states_a_base_pose_is_refused`), and every registered
+    fixture is bolted down (docs/mobile-base.md §7, Tier 4). An unexercised rule
+    is one that drifts, so the artifact this rule is about is constructed here
+    rather than waited for.
 
     `record_tables=True` so the attestation edges have endpoints to be refused
     against, and no `meta[base_frame]`: this is a run whose base moved, and an
@@ -5274,5 +5278,125 @@ def test_dropping_a_node_kind_takes_its_identity_with_it(tmp_path: Path) -> None
         assert store.node_counts(conn)["Envelope"] == 0
         with pytest.raises(store.StoreError, match="not a node kind"):
             store.drop_nodes(conn, "Timestep")
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------
+# A STREAM THIS BUILDER CANNOT CARRY (issue #177, docs/mobile-base.md §7 Tier 4)
+#
+# `reg.stream` grew columns for a base pose in issue #176 and `reg.scenarios`
+# can fill them since issue #177, and this builder still writes `base_pose`
+# NULL on every `robot_config` row. Those two facts together are the failure
+# mode: a run whose base drove would become an artifact saying no base pose was
+# recorded, with the same row count and every check downstream green.
+#
+# Issue #166 built the refusal for the half of that path it could see —
+# `_recompute` refuses a config that states a pose — and it never fires, because
+# nothing writes one. This is the half in front of it.
+# --------------------------------------------------------------------------
+
+
+def _posed_frame(frame_id: int, x: float):
+    """A frame that states where the base was. Layer B, and unwritable here."""
+    from reg.types import BasePose, PoseSource
+
+    return StateFrame(
+        t=frame_id * DT,
+        q=np.array(Q_HELD, dtype=float),
+        qd=np.array(QD_HELD, dtype=float),
+        human_pos=np.array([2.0, 0.0], dtype=float),
+        human_vel=np.array([0.0, 0.0], dtype=float),
+        base_vel=None,
+        base_pose=BasePose(x=x, y=0.0, theta=0.0, source=PoseSource.DEAD_RECKONED),
+        objects=(OBSTACLE,),
+    )
+
+
+def test_a_stream_that_states_a_base_pose_is_refused(tmp_path: Path) -> None:
+    """**NEGATIVE.** Refusing is the could-not-evaluate; building is the lie.
+
+    Everything this builder writes about geometry is in the base's own frame —
+    `q`, `qd`, the limits, the four numbers in `meta` — so an artifact built
+    from these frames would report every envelope as the region a robot at
+    `meta[base_frame]` could reach, for a robot that was somewhere else. That is
+    not a looser answer than the right one; it is an answer about somewhere
+    else, and nothing downstream could tell, because the artifact would be
+    indistinguishable from a bolted run's.
+    """
+    csv = _write_stream(
+        tmp_path / "posed.csv", [_posed_frame(i, 0.05 * i) for i in range(6)]
+    )
+    with pytest.raises(GraphBuildError, match="cannot carry"):
+        _build(csv, tmp_path / "posed.sqlite")
+    assert not (tmp_path / "posed.sqlite").exists()
+
+
+def test_a_stream_that_states_only_a_base_velocity_still_builds(
+    tmp_path: Path,
+) -> None:
+    """**The positive control for the refusal above**, and it is not a formality:
+    a check that refused every base column would be refusing the half this
+    project *can* carry.
+
+    `base_vel` is body-frame and Layer A. It reaches the envelope through
+    `StateFrame.proprio()`, and `reg.envelope.outer_envelope` reads it — since
+    issue #163 it is inside the bound every VETO for a mobile robot rests on. A
+    stream carrying it is one this builder uses correctly, so it builds.
+    """
+    from reg.types import BaseVelocity, VelocitySource
+
+    frames = [
+        replace_base_vel(
+            _frame(i, (2.0, 0.0)),
+            BaseVelocity(
+                vx=0.0, vy=0.0, omega=0.0, source=VelocitySource.PROPRIOCEPTIVE
+            ),
+        )
+        for i in range(6)
+    ]
+    csv = _write_stream(tmp_path / "moving.csv", frames)
+    out = tmp_path / "moving.sqlite"
+    _build(csv, out)
+    assert out.exists()
+
+
+def replace_base_vel(frame: StateFrame, base_vel) -> StateFrame:
+    """`frame` with its base velocity replaced. `StateFrame` is frozen."""
+    return StateFrame(
+        t=frame.t,
+        q=frame.q,
+        qd=frame.qd,
+        human_pos=frame.human_pos,
+        human_vel=frame.human_vel,
+        base_vel=base_vel,
+        base_pose=frame.base_pose,
+        objects=frame.objects,
+    )
+
+
+def test_a_fixed_base_build_still_states_no_pose_on_any_config(
+    tmp_path: Path,
+) -> None:
+    """The other side of the refusal, and the half every published figure rests
+    on: nothing issue #177 added reaches a bolted run's artifact.
+
+    Every `robot_config` row states `base_pose` NULL and `base_pose_source`
+    NULL, which is what those rows have said since issue #166 — *this run
+    recorded no base pose*, and never *the base was at the origin*.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 8)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        row = conn.execute(
+            "SELECT count(*) AS n, count(base_pose) AS posed, "
+            "count(base_pose_source) AS sourced FROM robot_config"
+        ).fetchone()
+        assert row["n"] > 0, "precondition failed: no configs to check"
+        assert row["posed"] == 0
+        assert row["sourced"] == 0
     finally:
         conn.close()

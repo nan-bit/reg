@@ -5,7 +5,9 @@
 #163), §1's refusal landed 2026-09-02 (issue #164), §4's two `declare.py`
 defects were fixed 2026-09-02 (issue #165) and §4's schema work landed
 2026-09-02 (issue #166); Tier 4 has started — a scenario can express a driven
-base since 2026-09-04 (issue #177) — but its fixtures have not landed, so no
+base since 2026-09-04 (issue #177), and since 2026-09-04 (issue #184) the room
+containment check follows that base's whole executed path and covers the arm
+sweeping over it — but its fixtures have not landed, so no
 registered scenario in this repository drives and nothing here has moved a robot
 yet** — the build order in §7 says per
 tier which is which, and it is the authority, not this line ·
@@ -313,6 +315,14 @@ There is no model of a robot pose anywhere in the tree today: `affine_transform`
 `docs/`. `reg.world.BASE_XY` is read in two places and is documentation, not a
 parameter.
 
+*`BASE_XY` is gone — removed 2026-09-04, issue #184, and the count above is why
+it could be.* Two read sites and no parameter is a symbol whose only job was to
+restate a mounting fact, and restating a fact in a second place is how the two
+drift. [`reg.kinematics.ORIGIN_FRAME`](../reg/kinematics.py) is the statement
+now, and `grep ORIGIN_FRAME` is meant to be the list of places this repository
+assumes a base that does not move — which is the list this section was written
+to produce. What follows is the survey as written on 2026-08-31.
+
 Two pieces survive untouched and they bound the work: `_sector` already takes an
 explicit centre, and `reachable_joint_box` and `_reach` are pure joint-space. The
 base-relative half of the envelope construction is reusable as it stands.
@@ -544,10 +554,41 @@ config that states a pose); this is the half in front of it, which never fired
 before because nothing wrote the pose. `base_vel` is not refused: it is
 body-frame, Layer A, and `outer_envelope` reads it correctly (#163).
 
-*What remains in this tier.* The room-containment rework and the fixtures
-themselves (issue #184): a driving base's *body* has to stay in the room, which
-`World` checks today for the human and the obstacles and not for a base that
-moves. Then the pose reaching `robot_config` for real — with the layer tag on
+*The room holds the whole robot, for the whole run — done, 2026-09-04, issue
+#184.* `World.__post_init__` used to assert that the room contained the module
+constant `BASE_XY` as a point of zero radius, and both halves of that stopped
+working at once. **The subject** was wrong even for a bolted arm: a point test
+passes a robot whose links sweep through a wall, which is the fixture bug the
+check exists to catch, and it was only tolerable while the fixtures were
+hand-placed against a stated 1.20 m reach. **The place** was wrong for a base
+that drives: the question is whether the robot stays in the room *over the run*,
+a driven base has a path, and a `World` never sees a trajectory — a constructor
+answering the question it can reach rather than the one that matters is a check
+that has stopped checking. So the geometry stays in `World` as
+`room_excursion`, which tests the disc the body can occupy and *reports* rather
+than raises, and the check is `Scenario`'s, in two halves that are not the same
+half written twice:
+
+- **At construction**, the scripted knots — inflated by the metres half of
+  `base_jitter`, because the seed moves each knot by up to that much and a
+  fixture has to hold for every seed. A fixed-base fixture is finished here: it
+  has one pose for the whole run and it is `ORIGIN_FRAME`.
+- **Per frame, in `states`**, the pose that frame records. This is the half the
+  acceptance criterion is about, and it cannot be folded into the first: the room
+  is convex, so a straight line between two knots that both fit cannot leave it,
+  and checking the interpolated *script* would be the waypoint check written at
+  greater length. What leaves the room between two waypoints is the trajectory
+  the base **executes**, which lags its reference and overshoots every corner
+  under `base_a_max` and `base_alpha_max` (the §7 Tier 4 integrator, above).
+
+The refusal names the instant and the part — which frame, which second, which
+seed, which wall, and whether the *base* crossed it or only the disc its body can
+occupy, which are different fixture bugs with different repairs. None of the
+eleven arm fixtures is refused by the widened check and every artifact is
+byte-identical; no published figure moved.
+
+*What remains in this tier.* The fixtures themselves. Then the pose reaching
+`robot_config` for real — with the layer tag on
 every edge resting on it following (`reg.store.open_edge`), and a run whose base
 moved retaining its geometry rather than promising a recomputation that cannot
 be honest — which is what turns the refusal above back into a build. No

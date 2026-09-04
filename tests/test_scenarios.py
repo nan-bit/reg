@@ -31,6 +31,7 @@ nothing (issue #22).
 from __future__ import annotations
 
 import dataclasses
+import itertools
 
 import numpy as np
 import pytest
@@ -55,7 +56,8 @@ from reg.types import (
     ProprioState,
     VelocitySource,
 )
-from reg.world import BASE_XY, DEMO_WORLD, LIMITS, ROOM, Room, World
+import reg.world
+from reg.world import DEMO_WORLD, LIMITS, ROOM, Room, World
 
 #: Several seeds, fixed. Every semantic claim a scenario name makes must hold for
 #: all of them — the seed perturbs waypoints, it does not change the situation.
@@ -106,7 +108,11 @@ TRANSPORT_FAULTS = {"unattributed", "replay_or_reorder", "watchdog_expiry"}
 # the fixture would eventually call. Nine lines is a cheap price for that.
 # --------------------------------------------------------------------------
 def link_polygons(q: np.ndarray, limits: Limits) -> list[Polygon]:
-    points = [np.asarray(BASE_XY, dtype=float)]
+    # The bolted base, from `reg.kinematics.ORIGIN_FRAME` rather than from a
+    # literal: since issue #184 that is this repository's only statement of
+    # where a base that does not move is, and `grep ORIGIN_FRAME` is meant to
+    # be the list of places the assumption is made.
+    points = [np.array([ORIGIN_FRAME.x, ORIGIN_FRAME.y], dtype=float)]
     angle = 0.0
     for j, length in enumerate(limits.link_lengths):
         angle += float(q[j])
@@ -669,16 +675,91 @@ def test_room_contains_circle_is_inclusive_of_the_wall() -> None:
     assert not ROOM.contains_circle(ROOM.x_max - 0.1, 0.0, 0.25)
 
 
-def test_world_rejects_a_world_the_robot_is_not_in() -> None:
-    """The base is fixed at the origin by reg/kinematics.py; a room that does not
-    contain it describes a robot mounted outside its own room."""
-    with pytest.raises(ValueError, match="robot base"):
-        World(
-            room=Room(x_min=5.0, y_min=5.0, x_max=6.0, y_max=6.0),
-            obstacles=(),
-            limits=LIMITS,
-            human_radius=0.25,
-        )
+def test_a_world_the_robot_is_not_in_is_not_the_worlds_to_refuse() -> None:
+    """**The check moved, and this pins where it did not stay** (issue #184).
+
+    `World.__post_init__` used to refuse this. It cannot: the question is
+    whether the robot stays in the room *over the run*, a driven base has a
+    path, and a `World` never sees a trajectory. Constructing one is now legal
+    and says nothing either way — what refuses it is `Scenario`, over every
+    pose the run records, and the two tests below are that refusal.
+
+    Written as an assertion rather than deleted so that a future
+    `World.__post_init__` growing the check back has something to fail.
+    """
+    stranded = World(
+        room=Room(x_min=5.0, y_min=5.0, x_max=6.0, y_max=6.0),
+        obstacles=(),
+        limits=LIMITS,
+        human_radius=0.25,
+    )
+    assert stranded.room_excursion(0.0, 0.0, slack=0.0) is not None
+
+
+def test_the_world_module_no_longer_states_where_the_base_is() -> None:
+    """**`BASE_XY` is gone, and this is what keeps it gone** (issue #184).
+
+    It was a module constant restating a mounting fact that
+    `reg.kinematics.ORIGIN_FRAME` already stated, read in two places and
+    parameterising nothing — and a fact written down twice is a fact two places
+    can disagree about. `grep ORIGIN_FRAME` is meant to be the whole list of
+    places this repository assumes a base that does not move
+    ([`docs/mobile-base.md`](../docs/mobile-base.md) §4), which it stops being
+    the moment a second statement exists.
+
+    Asserted rather than left implicit because nothing else fails when the
+    constant comes back: it would simply be a second answer, agreeing with the
+    first until someone changes one of them.
+    """
+    assert not hasattr(reg.world, "BASE_XY"), (
+        "reg.world.BASE_XY is back. Where a bolted base is is "
+        "reg.kinematics.ORIGIN_FRAME's to say, and saying it twice is how the "
+        "two drift apart."
+    )
+
+
+def test_room_excursion_names_which_part_of_the_robot_left_and_by_how_much() -> None:
+    """The geometry the two refusals are made of, and its message.
+
+    A refusal that says only "outside the room" makes a fixture author bisect by
+    hand, so the excursion carries the wall, the overshoot and — the distinction
+    that decides which fixture bug it is — whether the *base* crossed the wall
+    or only the disc its body can occupy.
+    """
+    inside = DEMO_WORLD.room_excursion(0.0, 0.0, slack=0.0)
+    assert inside is None
+
+    # Base inside the room, arm sweeping out of it: x_max is 3.0 and the body
+    # can occupy 0.95 m about the base, so 2.5 is 0.45 m too close to the wall.
+    sweeps_out = DEMO_WORLD.room_excursion(2.5, 0.0, slack=0.0)
+    assert sweeps_out is not None
+    assert sweeps_out.wall == "x_max"
+    assert sweeps_out.wall_value == ROOM.x_max
+    assert sweeps_out.base_outside is False
+    assert sweeps_out.overshoot_m == pytest.approx(0.45)
+    assert "arm sweeps out of the room" in sweeps_out.describe()
+
+    # The base itself past the same wall. Both parts are outside, and the
+    # message has to say the stronger of the two things.
+    base_out = DEMO_WORLD.room_excursion(3.2, 0.0, slack=0.0)
+    assert base_out is not None
+    assert base_out.base_outside is True
+    assert base_out.base_overshoot_m == pytest.approx(0.2)
+    assert "the base itself is outside the room" in base_out.describe()
+
+    # `slack` is what a caller checking a *scripted* knot leaves for the jitter,
+    # and it is the difference between fitting and not.
+    assert DEMO_WORLD.room_excursion(2.05, 0.0, slack=0.0) is None
+    assert DEMO_WORLD.room_excursion(2.05, 0.0, slack=0.02) is not None
+
+
+def test_room_excursion_refuses_a_slack_that_shrinks_the_robot() -> None:
+    """**NEGATIVE.** A negative slack is a smaller robot, which passes a fixture
+    that does not fit — the one direction this may not be wrong in."""
+    with pytest.raises(ValueError, match="negative slack"):
+        DEMO_WORLD.room_excursion(0.0, 0.0, slack=-0.1)
+    with pytest.raises(ValueError, match="not finite"):
+        DEMO_WORLD.room_excursion(float("nan"), 0.0, slack=0.0)
 
 
 def test_world_rejects_an_obstacle_outside_the_room() -> None:
@@ -1239,3 +1320,249 @@ def test_a_base_jitter_that_is_not_two_bounds_is_refused(
     nothing downstream could catch it, because both are floats."""
     with pytest.raises(ValueError, match=match):
         _driving(base_jitter=value)
+
+
+# --------------------------------------------------------------------------
+# THE ROOM HOLDS THE WHOLE ROBOT, FOR THE WHOLE RUN (issue #184)
+#
+# `World.__post_init__` used to assert that the room contained `BASE_XY` as a
+# point of zero radius. That check could not answer its own question once a base
+# can drive — a `World` never sees a trajectory — and it was checking the wrong
+# subject even for a bolted arm, because an arm sweeping through a wall passes a
+# point test. It is `Scenario`'s now, in two halves, and both halves are here:
+# the scripted knots at construction, and the *executed* pose per frame.
+#
+# The second half is the one that cannot be folded into the first. The room is
+# convex and `contains_circle` is a convex condition, so a straight line between
+# two knots that both fit cannot leave the room — checking the interpolated
+# script would be the waypoint check written at greater length. What leaves the
+# room between two waypoints is the trajectory the base *executes*, which lags
+# its reference and overshoots every corner under `base_a_max`.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", EXPECTED_NAMES)
+def test_every_registered_fixture_holds_its_whole_robot(name: str) -> None:
+    """**The half that must not move.** The eleven still construct, unchanged.
+
+    They are built at import, so a refusal would already have been a collection
+    error — this asserts the geometry the widened check now rests on rather than
+    the fact that the import worked: the demo room holds the whole workspace
+    disc about the bolted base, not merely the mounting point.
+    """
+    scn = scenario(name)
+    assert scn.drives is False
+    assert scn.world.room_excursion(ORIGIN_FRAME.x, ORIGIN_FRAME.y, slack=0.0) is None
+
+
+def test_a_fixed_base_scenario_whose_room_excludes_the_base_is_refused() -> None:
+    """**NEGATIVE.** The refusal `World` used to make, where it lives now.
+
+    A fixed-base scenario has one pose for the whole run and it is
+    `ORIGIN_FRAME`, so the whole question is answerable at construction — and a
+    room that does not contain it describes a robot mounted outside its own
+    room, which is a fixture bug and not a runtime condition.
+    """
+    stranded = World(
+        room=Room(x_min=1.0, y_min=-1.5, x_max=6.0, y_max=2.0),
+        obstacles=(),
+        limits=LIMITS,
+        human_radius=0.25,
+    )
+    with pytest.raises(ValueError, match="the base itself is outside the room"):
+        _scenario(world=stranded)
+
+
+def test_a_fixed_base_scenario_whose_arm_sweeps_out_of_the_room_is_refused() -> None:
+    """**NEGATIVE, and the widening this issue is half named for.**
+
+    The base is inside this room and the old point-of-zero-radius check passed
+    it. The arm does not fit: `x_max` is 0.5 m from the base and the body can
+    occupy 0.95 m about it, so the links sweep through the wall.
+    """
+    narrow = World(
+        room=Room(x_min=-2.0, y_min=-1.5, x_max=0.5, y_max=2.0),
+        obstacles=(),
+        limits=LIMITS,
+        human_radius=0.25,
+    )
+    with pytest.raises(ValueError, match="arm sweeps out of the room"):
+        _scenario(
+            world=narrow,
+            human_waypoints=(Waypoint(0.0, (0.0, 0.0)), Waypoint(2.0, (0.0, 0.5))),
+        )
+
+
+def test_a_base_waypoint_whose_arm_sweeps_out_of_the_room_is_refused() -> None:
+    """**NEGATIVE.** The same widening, for a knot on a driven path.
+
+    2.5 m is 0.5 m from `x_max`, so the base is well inside the room and the arm
+    is not. The refusal names the knot's time, because which one to move is what
+    the author has to know.
+    """
+    with pytest.raises(ValueError, match=r"base waypoint at t=1.0 leaves the room"):
+        _driving(
+            base_waypoints=(
+                Waypoint(0.0, (0.0, 0.0, 0.0)),
+                Waypoint(1.0, (2.5, 0.0, 0.0)),
+                Waypoint(2.0, (0.0, 0.0, 0.0)),
+            )
+        )
+
+
+def test_a_base_waypoint_only_the_jitter_pushes_out_is_refused() -> None:
+    """**NEGATIVE.** The bound has to hold for every seed, not for the nominal
+    knots — the argument `test_rejects_a_command_that_only_jitter_pushes_out_of_limits`
+    makes for the arm, one path over. 2.05 m puts the workspace disc exactly on
+    `x_max`; any jitter in metres takes it through."""
+    grazing = (
+        Waypoint(0.0, (0.0, 0.0, 0.0)),
+        Waypoint(1.0, (1.0, 0.0, 0.0)),
+        Waypoint(2.0, (2.05, 0.0, 0.0)),
+    )
+    _driving(base_waypoints=grazing, base_jitter=(0.0, 0.05))
+    with pytest.raises(ValueError, match="base_jitter"):
+        _driving(base_waypoints=grazing, base_jitter=(0.02, 0.05))
+
+
+#: A base sluggish enough to overshoot visibly: `MOBILE_LIMITS` with
+#: `base_a_max` cut to 0.25 m/s^2. Stated as a fixture parameter, like every
+#: other number in this file.
+#:
+#: The overshoot is *lag paid back*, not braking distance, and the difference
+#: matters because a reader who expects the latter will not believe the numbers.
+#: `states` steers the base at the reference one frame ahead, so while 0.25
+#: m/s^2 keeps it behind a 0.4 m/s script the error accumulates; by the time the
+#: loop has closed it, the base is carrying 0.755 m/s into a corner where the
+#: script reverses. Measured: it crosses its own reference at about t=3.4 s and
+#: coasts to x=2.528 at t=6.34 s, half a metre past a knot at x=2.0, before
+#: coming back.
+SLOW_TO_STOP_LIMITS = dataclasses.replace(MOBILE_LIMITS, base_a_max=0.25)
+SLOW_TO_STOP_WORLD = dataclasses.replace(MOBILE_WORLD, limits=SLOW_TO_STOP_LIMITS)
+
+#: There and back, turning round at x=2.0 — a knot 0.05 m inside what the room
+#: holds, so every knot fits and what the base does between them is what does
+#: not.
+OVERSHOOTING_BASE_PATH = (
+    Waypoint(0.0, (0.0, 0.0, 0.0)),
+    Waypoint(5.0, (2.0, 0.0, 0.0)),
+    Waypoint(10.0, (0.0, 0.0, 0.0)),
+)
+
+#: The same robot in a room far too large to refuse it, so that the executed
+#: path can be *watched* rather than only refused: `states` raises at the first
+#: offending frame, which is exactly the frame after which there is nothing left
+#: to observe.
+PERMISSIVE_WORLD = dataclasses.replace(
+    SLOW_TO_STOP_WORLD, room=Room(x_min=-50.0, y_min=-50.0, x_max=50.0, y_max=50.0)
+)
+
+
+def _overshooting(**overrides) -> Scenario:
+    kwargs = dict(
+        duration=10.0,
+        world=SLOW_TO_STOP_WORLD,
+        joint_waypoints=(Waypoint(0.0, (0.0, 0.0)), Waypoint(10.0, (0.5, 0.5))),
+        human_waypoints=(Waypoint(0.0, (2.0, 0.0)), Waypoint(10.0, (2.0, 0.5))),
+        base_waypoints=OVERSHOOTING_BASE_PATH,
+        base_jitter=(0.0, 0.0),
+    )
+    kwargs.update(overrides)
+    return _driving(**kwargs)
+
+
+def test_every_knot_of_the_overshooting_path_is_inside_the_room() -> None:
+    """Guards the two tests below: if a knot were already out, each would pass
+    for the wrong reason — as a waypoint check, which is the thing that is not
+    enough."""
+    scn = _overshooting()
+    for wp in scn.base_waypoints:
+        x, y, _ = wp.value
+        assert scn.world.room_excursion(x, y, slack=0.0) is None
+
+
+def test_the_overshooting_path_leaves_the_room_and_comes_back() -> None:
+    """**The situation the refusal below is a refusal of**, shown rather than
+    asserted about a message.
+
+    Run in a room that holds the whole manoeuvre, then measured against the demo
+    room's geometry: the executed path is inside, then outside, then inside
+    again — an excursion that begins and ends between the same two waypoints and
+    is invisible to every check on the knots. That is the criterion in issue
+    #184 stated as a trajectory. `states` raises at the first offending frame,
+    so the refusal test cannot show the *return*; this one can, and without it
+    "leaves the room and returns" would be a claim no test makes.
+    """
+    scn = _overshooting(world=PERMISSIVE_WORLD)
+    outside = [
+        SLOW_TO_STOP_WORLD.room_excursion(f.base_pose.x, f.base_pose.y, slack=0.0)
+        is not None
+        for f in scn.states(seed=0)
+    ]
+    assert not outside[0], "it starts inside"
+    assert not outside[-1], "and it ends inside"
+    assert any(outside), "and it is outside in between — otherwise nothing to catch"
+    # Exactly one contiguous excursion: leaves once, returns once. `groupby`
+    # over the booleans is the run-length encoding.
+    runs = [flag for flag, _ in itertools.groupby(outside)]
+    assert runs == [False, True, False], f"expected one excursion, got {runs}"
+
+
+def test_a_base_that_leaves_the_room_between_two_waypoints_is_refused() -> None:
+    """**NEGATIVE, and the one this issue is named for.**
+
+    Every knot of this path is inside the room and the fixture therefore
+    constructs. What leaves it is the trajectory the base *executes* — the
+    excursion the test above watches, half a metre past a knot with 0.05 m of
+    clearance. No check on the waypoints can see that, and no check on the
+    interpolated *script* can either: the room is convex, so a straight line
+    between two knots that both fit cannot leave it.
+
+    The refusal has to name the instant and the part. A fixture author holding
+    "outside the room" and 501 frames is bisecting by hand.
+    """
+    scn = _overshooting()
+    with pytest.raises(ValueError, match="the base leaves the room at t=") as caught:
+        list(scn.states(seed=0))
+    message = str(caught.value)
+    # Which part: here the base is well inside and its reach is not, which is a
+    # different fixture bug from a base mounted outside its room.
+    assert "arm sweeps out of the room" in message
+    assert "seed 0" in message
+    # Which instant: strictly inside the run and not on a knot. Deliberately not
+    # a fixed time — pinning 4.4 s would make this a golden value for the
+    # integrator rather than a statement about the check. It fires *before* the
+    # turn at t=5.0, because the base overtakes its own reference on the
+    # approach; the refusal only has to be mid-interpolation, not late.
+    moment = float(message.split("at t=")[1].split(" s")[0])
+    assert 0.0 < moment < scn.duration
+    knots = [wp.t for wp in scn.base_waypoints]
+    assert all(abs(moment - knot) > 1e-9 for knot in knots), (
+        f"{moment} is a knot of {knots}; a refusal landing on one would be a "
+        "waypoint check reporting itself late, which is not what this rests on"
+    )
+
+
+def test_a_driving_fixture_that_stays_in_the_room_runs_to_the_end() -> None:
+    """**The positive the negative above needs.** A check that only ever refuses
+    is not a check.
+
+    The same room, the same integrator and the same shape of manoeuvre, with the
+    overshoot inside the clearance instead of past it: `MOBILE_LIMITS` brakes at
+    1.2 m/s^2, and the turn is at x=1.5 rather than 2.0, so the base runs a few
+    centimetres past a knot with 0.55 m to spare. Every frame is produced and
+    every one of them holds the whole robot.
+    """
+    scn = _overshooting(
+        world=MOBILE_WORLD,
+        base_waypoints=(
+            Waypoint(0.0, (0.0, 0.0, 0.0)),
+            Waypoint(5.0, (1.5, 0.0, 0.0)),
+            Waypoint(10.0, (0.0, 0.0, 0.0)),
+        ),
+    )
+    frames = list(scn.states(seed=0))
+    assert len(frames) == scn.n_frames
+    assert max(f.base_pose.x for f in frames) > 1.5, "it does reach the turn"
+    for f in frames:
+        assert scn.world.room_excursion(f.base_pose.x, f.base_pose.y, slack=0.0) is None

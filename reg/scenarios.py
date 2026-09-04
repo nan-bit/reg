@@ -48,6 +48,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from reg.kinematics import ORIGIN_FRAME
 from reg.types import (
     BasePose,
     BaseVelocity,
@@ -281,6 +282,7 @@ class Scenario:
 
         self._check_policy()
         self._check_base()
+        self._check_room()
 
     @property
     def drives(self) -> bool:
@@ -403,6 +405,68 @@ class Scenario:
                 "says it drove. A bolted base states four zeros and no "
                 "base_waypoints; a driving one states four positive bounds."
             )
+
+    def _check_room(self) -> None:
+        """The whole robot is in the room — the check `World` used to make.
+
+        `World.__post_init__` asserted that the room contained `BASE_XY`, a
+        module constant, as a point of zero radius. Both halves of that were
+        wrong once a base can drive (issue #184), and they were wrong in
+        different ways.
+
+        **The subject.** A point of zero radius passes a robot whose links sweep
+        through a wall. `World.room_excursion` tests the disc the body can
+        occupy instead, so what is checked is the robot rather than its mounting
+        point, and a fixture whose arm leaves the room is refused.
+
+        **The place.** A `World` never sees a trajectory, so a constructor
+        cannot ask whether a driven base's whole *path* stays inside. Here it
+        can — but only half of it can be answered at construction, and the split
+        below is not tidiness:
+
+        - A **fixed-base** fixture has one pose for the whole run, and it is
+          `reg.kinematics.ORIGIN_FRAME` — the frame this repository places a
+          bolted arm at. One check, at construction, covering every frame.
+        - A **driving** fixture's scripted knots are checked here, inflated by
+          the metres half of `base_jitter` because the seed moves each knot by
+          up to that much and the fixture has to hold for every seed. That is
+          all a constructor can do, and it is **not** the acceptance criterion:
+          the room is convex and `contains_circle` is a convex condition, so a
+          straight line between two knots that both fit cannot leave the room.
+          Checking the interpolated *scripted* path would therefore be exactly
+          this waypoint check written at greater length.
+
+        The path that can leave the room between two knots is the **executed**
+        one, which lags and overshoots its script under the base's own
+        acceleration bounds, and which is a function of the seed. `states`
+        checks that one, per frame, and it is the half that catches a base
+        leaving the room and returning between two waypoints.
+        """
+        if not self.drives:
+            excursion = self.world.room_excursion(
+                ORIGIN_FRAME.x, ORIGIN_FRAME.y, slack=0.0
+            )
+            if excursion is not None:
+                raise ValueError(
+                    f"{self.name}: this is a fixed-base scenario, so its robot is "
+                    f"bolted at {ORIGIN_FRAME} for the whole run — and "
+                    f"{excursion.describe()}. A room that does not contain the "
+                    "robot describes a robot mounted outside its own room; the "
+                    "room has to be expressed in coordinates that hold it."
+                )
+            return
+
+        jitter_m = float(self.base_jitter[0])
+        for wp in self.base_waypoints:
+            x, y, _theta = (float(v) for v in wp.value)
+            excursion = self.world.room_excursion(x, y, slack=jitter_m)
+            if excursion is not None:
+                raise ValueError(
+                    f"{self.name}: base waypoint at t={wp.t} leaves the room once "
+                    f"base_jitter={jitter_m} m is applied — {excursion.describe()}. "
+                    "This is the scripted knot; the trajectory the base executes "
+                    "is checked per frame in `states`, and overshoots this one."
+                )
 
     def _check_policy(self) -> None:
         """The policy-behaviour fields. Each refusal is a fixture nobody could read.
@@ -648,6 +712,31 @@ class Scenario:
 
             base_pose = base_vel = None
             if self.drives:
+                # THE ROOM CHECK, ON THE POSE THIS FRAME RECORDS (issue #184).
+                #
+                # `_check_room` checked the scripted knots at construction, and
+                # that is not this: the base integrates its script under
+                # `base_a_max` and `base_alpha_max`, so the executed path lags
+                # its reference and overshoots at every corner. A base that
+                # leaves the room and comes back between two waypoints is
+                # invisible to any check on the waypoints — the room is convex,
+                # so a straight line between two knots that fit cannot leave it
+                # — and it is exactly what this catches, at the frame it
+                # happens on. `slack=0.0`: the jitter is already in `pose_cur`.
+                excursion = self.world.room_excursion(
+                    float(pose_cur[0]), float(pose_cur[1]), slack=0.0
+                )
+                if excursion is not None:
+                    raise ValueError(
+                        f"{self.name}: the base leaves the room at t={t:g} s "
+                        f"(frame {k} of {self.n_frames}, seed {seed}) — "
+                        f"{excursion.describe()}. Every scripted knot is inside "
+                        "the room, or this fixture would not have constructed; "
+                        "what leaves it is the trajectory the base *executes*, "
+                        "which lags its script and overshoots the corners under "
+                        "base_a_max and base_alpha_max. Move the knot, slow the "
+                        "script, or state a room that holds the manoeuvre."
+                    )
                 pose_ref_next, _ = _sample(b_times, b_values, nxt)
                 v_cur = _cap(
                     v_cur

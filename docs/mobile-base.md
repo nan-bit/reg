@@ -7,7 +7,9 @@ defects were fixed 2026-09-02 (issue #165) and §4's schema work landed
 2026-09-02 (issue #166); Tier 4 has started — a scenario can express a driven
 base since 2026-09-04 (issue #177), and since 2026-09-04 (issue #184) the room
 containment check follows that base's whole executed path and covers the arm
-sweeping over it — but its fixtures have not landed, so no
+sweeping over it, and since 2026-09-04 (issue #189) an `Enforcer` constructs for
+a driven base and adjudicates one, resting on `horizon_bound` alone — but its
+fixtures have not landed, so no
 registered scenario in this repository drives and nothing here has moved a robot
 yet** — the build order in §7 says per
 tier which is which, and it is the authority, not this line ·
@@ -460,7 +462,8 @@ pose provenance beside `LimitSource`; an explicit base frame in
 `forward_kinematics`. The layer-boundary allowlist and `sufficiency.md` move in
 the same commit as the first of these, because the test requires it.
 
-**Tier 3 — the envelope and the bound. Complete, 2026-09-02.** The body-frame outer envelope with the
+**Tier 3 — the envelope and the bound. Complete, 2026-09-02; the enforcer over a
+driven base followed on 2026-09-04 (issue #189).** The body-frame outer envelope with the
 base states and a rewritten soundness argument — **done, 2026-09-02, issue
 #163**, and its looseness is [`limitations.md`](limitations.md) §10;
 `computed_bound` refusing and `horizon_bound` on the outer envelope alone —
@@ -515,12 +518,29 @@ second is replaced by
 all four fields. Nothing in this repository changed behaviour: every fixture
 states four zeros, and no published figure moved.
 
-*What Tier 3's refusal does **not** buy.* `Enforcer` refuses to construct for a
-driven base, because it names the workspace disc in every `envelope_overclaim`
-reason it writes and there is no honest number to put there. The bound itself is
-available for one — `horizon_bound`, `horizon_excess` — so what is missing is the
-enforcer around it, and that needs the pose on `robot_config` (this tier) and
-mobile fixtures (Tier 4) before it means anything.
+*The enforcer runs on a robot that drives — done, 2026-09-04, issue #189.* This
+entry previously read "what Tier 3's refusal does **not** buy: `Enforcer` refuses
+to construct for a driven base, because it names the workspace disc in every
+`envelope_overclaim` reason it writes and there is no honest number to put
+there." The first clause was true and the second was the wrong reason for it.
+The disc is **not** the bound `Enforcer.offer` refuses declarations against —
+that is `horizon_bound(state, limits, window, substep_dt)`, recomputed per offer
+and resting on `outer_envelope` alone for a vehicle since #164. The disc appeared
+in one place: the parenthetical an `envelope_overclaim` reason ends with. So the
+constructor stopped asking `computed_bound` for a disc the robot does not have,
+`Enforcer.bound` became `float | None` with `None` meaning *no horizon-free
+radius exists for this robot*, and the parenthetical was **rewritten** for the
+mobile case rather than dropped — it names the fields that made the workspace
+unbounded, in the shape §1's refusal already uses, because a mobile VETO that
+simply went quiet about the disc would read like a fixed-base one whose disc went
+unmentioned and an operator cannot tell those apart. #164's refusal is untouched
+and is not caught anywhere: `computed_bound` is not called for a driven base at
+all, which `tests/test_enforce.py::test_no_code_path_catches_the_computed_bound_refusal`
+asserts against the source of every module in `reg/`. Nothing in this repository
+changed behaviour — every fixture is still bolted down, every fixed-base reason
+string is byte-identical and pinned as an equality, and no published figure
+moved. What it buys is the thing Tier 4 needs: a mobile scenario can now produce
+a verdict, so a mobile fault fixture is a fixture and not a wish.
 
 **Tier 4 — fixtures.** Mobile scenarios beside the eleven arm fixtures.
 

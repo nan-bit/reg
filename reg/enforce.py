@@ -697,6 +697,18 @@ def _driven_base_fields(limits: Limits) -> tuple[str, ...]:
     )
 
 
+def _stated_base_bounds(limits: Limits, fields: tuple[str, ...]) -> str:
+    """`base_v_max=0.8, base_omega_max=1.2` — the fields, with what was stated.
+
+    Shared by `computed_bound`'s refusal and by the `envelope_overclaim` reason
+    an `Enforcer` over a driven base writes (issue #189), so the two name the
+    unbounding fields in the same shape by construction rather than by anybody
+    keeping two format strings in step. Which fields to render is the caller's
+    to decide — normally `_driven_base_fields(limits)`.
+    """
+    return ", ".join(f"{name}={float(getattr(limits, name))}" for name in fields)
+
+
 def computed_bound(limits: Limits) -> float:
     """Radius of the workspace disc, metres. **Only for a base that cannot move.**
 
@@ -741,7 +753,7 @@ def computed_bound(limits: Limits) -> float:
         )
     driven = _driven_base_fields(limits)
     if driven:
-        stated = ", ".join(f"{name}={float(getattr(limits, name))}" for name in driven)
+        stated = _stated_base_bounds(limits, driven)
         raise EnforcementError(
             f"there is no workspace disc for this robot: {stated}, so the base "
             "can move and the workspace is unbounded — given enough time it "
@@ -1130,15 +1142,23 @@ class Enforcer:
 
     Args:
         limits: the robot. The bound is computed from this and nothing else.
-            **A `Limits` with a driven base is refused here** (issue #164):
-            `computed_bound` has no workspace disc for one, and this class names
-            that disc in every `envelope_overclaim` reason it writes. Refusing to
-            construct is the could-not-evaluate — an enforcer that quietly
-            reported an arm-only disc for a vehicle would neither VETO honestly
-            nor clear honestly. The horizon-limited bound itself is available
-            for a driven base through `horizon_bound`; wiring an `Enforcer`
-            around it needs mobile fixtures and a base pose on `robot_config`,
-            which is docs/mobile-base.md §7 Tier 3's remainder and Tier 4.
+            **A `Limits` with a driven base is accepted, and the enforcer over
+            one rests on `horizon_bound` alone** (issue #189). That is not a
+            weakening of issue #164's refusal: `computed_bound` still has no
+            workspace disc for a vehicle, it is not called for one here, and its
+            refusal is not caught or worked around. What changed is the reading
+            of what the disc was for. It is not the bound `offer` VETOes on —
+            that is `horizon_bound(state, limits, window, substep_dt)`, which
+            exists for both kinds of robot and since #164 rests on
+            `reg.envelope.outer_envelope` alone when the base can drive. The
+            disc appears in one place, as the parenthetical an
+            `envelope_overclaim` reason ends with, and for a driven base that
+            parenthetical is **rewritten** to say no disc exists and to name the
+            field that made it so — not dropped, because a mobile VETO that
+            simply went quiet about the disc would read like a fixed-base one
+            whose disc happened to go unmentioned, and an operator cannot tell
+            those apart. `bound` is then `None`, and `None` is the
+            could-not-evaluate rather than a number nobody stated.
         key: the **enforcement** key. Signs verdicts and acknowledgments;
             `reg.chain.sign` refuses any other role.
         policy_key: the key declarations are verified under, or `None` for "no
@@ -1220,9 +1240,37 @@ class Enforcer:
         self._watchdog_period_s = watchdog_period_s
         self._substep_dt = substep_dt
         self._id_prefix = id_prefix
-        # Refuses a driven base, and the refusal is deliberately not caught:
-        # issue #164. See the `limits` argument above.
-        self._bound = computed_bound(limits)
+        #: The base actuation bounds this robot states as nonzero, empty for a
+        #: bolted-down one. Read once, because `Limits` is frozen.
+        self._driven_base = _driven_base_fields(limits)
+        #: The workspace disc, or `None` for a robot that has none. **Not** the
+        #: bound `offer` refuses declarations against — see `bound` and the
+        #: `limits` argument above. `computed_bound` is called only for the
+        #: robot it is true of, so its refusal is never raised here and there is
+        #: nothing to catch: issue #164's could-not-evaluate stays a refusal at
+        #: every call site that asks for a disc, and this one stops asking.
+        self._bound: float | None = (
+            None if self._driven_base else computed_bound(limits)
+        )
+        #: The parenthetical every `envelope_overclaim` reason ends with. Fixed
+        #: for the life of the enforcer, and different **in kind** rather than
+        #: merely absent for a driven base (issue #189). The mobile wording is
+        #: `computed_bound`'s own refusal, shortened to a clause: same opening,
+        #: same rendering of the fields, so an operator who has read one
+        #: recognises the other.
+        self._disc_note = (
+            (
+                "there is no workspace disc for this robot: "
+                f"{_stated_base_bounds(limits, self._driven_base)}, so the base "
+                "can move and the workspace is unbounded, and this bound rests "
+                "on reg.envelope.outer_envelope alone"
+            )
+            if self._driven_base
+            else (
+                "the workspace disc, which has no horizon in it, is "
+                f"{self._bound:.4f} m"
+            )
+        )
 
         self._t_start = _finite(t_start, "t_start")
         #: When the declaration channel was last heard from. Receipt, not
@@ -1282,8 +1330,22 @@ class Enforcer:
         return self._open
 
     @property
-    def bound(self) -> float:
-        """The independently computed bound, metres. See `computed_bound`."""
+    def bound(self) -> float | None:
+        """The workspace disc's radius, metres, or `None` if there is none.
+
+        `None` means **no horizon-free radius exists for this robot** (issue
+        #164): its base can drive, so given enough time it reaches everywhere
+        and `sum(link_lengths) + link_radius` is a bound over a set it does not
+        contain. It is the could-not-evaluate, not "not computed yet" and not a
+        failure — the third state never resolves to the first, so a reader that
+        substitutes a number here has manufactured the bound this project
+        refuses to invent.
+
+        Either way it is **not** the bound declarations are refused against.
+        That is `horizon_bound(state, limits, window, substep_dt)`, recomputed
+        per `offer` from the pose it is given, which exists for both kinds of
+        robot. See `computed_bound` and docs/mobile-base.md §1.
+        """
         return self._bound
 
     @property
@@ -1454,8 +1516,7 @@ class Enforcer:
                 "envelope_overclaim",
                 f"the declared region reaches {excess:.4f} m beyond the "
                 f"independently computed bound of {radius:.4f} m for a "
-                f"{window:.4f} s window from this pose (the workspace disc, "
-                f"which has no horizon in it, is {self._bound:.4f} m)",
+                f"{window:.4f} s window from this pose ({self._disc_note})",
             )
 
         if self.is_passivated and not self._is_acknowledged():

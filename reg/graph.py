@@ -31,9 +31,11 @@ the consequence — the polygons were the artifact, and the artifact was 20-30x
 
 So the geometry is discarded on a stated rule (`GEOMETRY_RETENTION`,
 docs/lossiness.md Discarded #9) and recovered by recomputation
-(`envelope_at`). This is the lossiness contract's own logic applied where it had
-not been: the polygon is a deterministic function of `(q, qd, horizon,
-n_samples, seed, substep_dt)`, every one of which the artifact already stores, so
+(`envelope_at`) **on the environment the artifact records, and nowhere else**
+(issue #201, `RECOMPUTE_ENVIRONMENT_KEYS`). This is the lossiness contract's own
+logic applied where it had not been: the polygon is a deterministic function of
+`(q, qd, horizon, n_samples, seed, substep_dt)`, every one of which the artifact
+already stores, so
 storing it per frame was storing the same information twice — once cheaply and
 once expensively. **Every one of those terms is body-frame, which is why the
 argument is now stated with its condition** (issue #166): it holds for a base
@@ -325,6 +327,7 @@ __all__ = [
     "OCCURRENCE_RETENTION",
     "OCCURRENCE_TIME_RESOLUTION_S",
     "OCCURRENCE_VERDICT_EVENTS",
+    "RECOMPUTE_ENVIRONMENT_KEYS",
     "TIME_BASE_COLLAPSED",
     "TIME_BASE_DOMAIN",
     "TIME_BASE_RESOLVED",
@@ -338,6 +341,7 @@ __all__ = [
     "envelope_frame",
     "main",
     "quantize_occurrence_time",
+    "recompute_environment_differences",
     "recorded_environment",
     "recorder_version",
 ]
@@ -804,6 +808,38 @@ META_LIMITS_BASE_BOUNDS = "limits_base_bounds"
 #: could-not-evaluate, and resolving it to the clean case is exactly the
 #: mislabelling this key exists to make visible.
 META_LIMITS_SOURCE = "limits_source"
+
+#: The environment keys a recomputation must agree with the artifact on before
+#: `envelope_at` will recompute a discarded polygon (issue #201). **A subset of
+#: `reg.store.ENVIRONMENT_KEYS`, and the difference between the two lists is a
+#: decision rather than an oversight.**
+#:
+#: The file records six keys; four of them trigger the refusal — the platform's
+#: system and machine, shapely's version and GEOS's. Those are what issue #175
+#: measured a divergence across and what runs the polygon arithmetic:
+#: `reg.envelope.compute_envelope` unions link polygons and
+#: `reg.tolerances.simplify_geometry` runs Douglas-Peucker, both in GEOS through
+#: shapely, and libm is the platform's.
+#:
+#: **The interpreter and numpy are recorded and are not triggers.** A different
+#: Python patch release is in the file for a reader who needs it, and making it
+#: a trigger would make every artifact unrecomputable on any machine that has
+#: been patched — which teaches whoever meets the refusal to switch it off, and
+#: a check that gets switched off buys nothing. numpy is the same call and it is
+#: the weaker one, stated rather than left to be discovered: `numpy.cos` and
+#: `numpy.sin` place every link endpoint in `reg.kinematics`, so a numpy
+#: difference *can* move the geometry, and this guard does not act on it. The
+#: file states the version either way, so a reader who has a reason to care can
+#: compare it themselves; what they cannot do is have this reader refuse for
+#: them. That is the same shape as the C library hole
+#: (`reg.store.ENVIRONMENT_KEYS`): matching on this list is necessary for a
+#: bit-identical recomputation and is not sufficient.
+RECOMPUTE_ENVIRONMENT_KEYS = (
+    store.META_ENV_PLATFORM_SYSTEM,
+    store.META_ENV_PLATFORM_MACHINE,
+    store.META_ENV_SHAPELY,
+    store.META_ENV_GEOS,
+)
 
 
 class GraphBuildError(Exception):
@@ -3168,10 +3204,11 @@ def recorded_environment(conn) -> dict[str, str]:
     """The environment this artifact says its geometry was computed in (#200).
 
     The reader half of `reg.store.build_environment`. It reports what the file
-    states and it decides nothing: comparing this against the environment of
-    whoever is recomputing — and reporting a could-not-evaluate when the two
-    differ — is the guard that depends on this issue and is deliberately not
-    here. `envelope_at` behaves exactly as it did before these keys existed.
+    states and it decides nothing: the comparison against the environment of
+    whoever is recomputing is `recompute_environment_differences` below, and
+    acting on it is `envelope_at`'s (issue #201). This function stays a reader,
+    because a caller who wants to know what the file says — to print it, to
+    compare two artifacts, to file it in a report — is not asking to be refused.
 
     Args:
         conn: an open artifact (`reg.store.connect`).
@@ -3218,6 +3255,123 @@ def recorded_environment(conn) -> dict[str, str]:
     return {key: stated[key] for key in store.ENVIRONMENT_KEYS}
 
 
+def recompute_environment_differences(conn) -> tuple[tuple[str, str, str], ...]:
+    """Where this interpreter disagrees with the artifact about the environment.
+
+    The comparison `envelope_at` refuses on (issue #201), exposed on its own so
+    a reader can ask the question without asking for a polygon. It compares
+    `RECOMPUTE_ENVIRONMENT_KEYS` — see there for why that is four keys and not
+    the six the file records.
+
+    **It reports a difference and never a cause.** A key that differs says the
+    two environments are not the same one; it does not say that this is what
+    moved the geometry, and no caller may read it that way. Attribution needs a
+    differ — `diffoscope` is one and this project has no analogue
+    (docs/prior-art.md §27).
+
+    Args:
+        conn: an open artifact (`reg.store.connect`).
+
+    Returns:
+        One `(key, recorded, running)` triple per differing key, in
+        `RECOMPUTE_ENVIRONMENT_KEYS` order. Empty means every compared key
+        agrees — which is a pass on this check and not a guarantee of
+        bit-identity, because the C library is not among the keys and numpy is
+        not among the triggers.
+
+    Raises:
+        GraphQueryError: the artifact states no environment, or only part of
+            one, or an empty value (`recorded_environment` decides that and its
+            refusal is passed through unchanged); or this interpreter cannot say
+            what *it* computes geometry with. All of them are
+            could-not-evaluate, and the second is why `store.build_environment`
+            is translated rather than allowed to surface as a `StoreError`: a
+            reader that cannot state its own environment has not found a
+            mismatch, and a caller catching one exception type must not miss it.
+    """
+    recorded = recorded_environment(conn)
+    try:
+        running = store.build_environment()
+    except store.StoreError as exc:
+        raise GraphQueryError(
+            "this interpreter cannot say what environment it would recompute "
+            "in, so it cannot be compared with the one the artifact states: "
+            f"{exc} That is a could-not-evaluate about the reader and not a "
+            "finding about the file."
+        ) from exc
+    return tuple(
+        (key, recorded[key], running[key])
+        for key in RECOMPUTE_ENVIRONMENT_KEYS
+        if recorded[key] != running[key]
+    )
+
+
+def _refuse_a_recomputation_off_the_recording_environment(
+    conn, envelope_id: str
+) -> None:
+    """Refuse to recompute `envelope_id` unless this is the recording machine.
+
+    Issue #201, and the acting half of issue #200's recording. The retention
+    argument for a discarded polygon is that it is a deterministic function of
+    the row and four numbers in `meta`; issue #175 measured that the function is
+    the platform's, so recomputing somewhere else answers a question this file
+    cannot settle — a polygon that disagrees with the artifact's own
+    `envelope_hash` would be *the geometry moved* and *this is a different
+    machine* at once, and those call for opposite responses.
+
+    **It refuses rather than warning.** A recomputed polygon that reaches a
+    caller under a warning is a polygon that reaches a query result, and by then
+    nothing downstream carries the qualifier.
+
+    Three states, and the third never resolves to either of the others
+    (`CLAUDE.md`, *a check must be able to fail*):
+
+    * the compared keys agree — return, and `envelope_at` recomputes exactly as
+      it did before this guard existed;
+    * one or more differ — refuse, naming each key and both values;
+    * the artifact states no environment, or part of one — refuse *differently*,
+      because nothing was compared. Every artifact built before issue #200 is in
+      this state, and reporting it as a mismatch would be a finding about a file
+      that never made the claim.
+    """
+    try:
+        differences = recompute_environment_differences(conn)
+    except GraphQueryError as exc:
+        raise GraphQueryError(
+            f"envelope {envelope_id!r} was discarded as recomputable, and the "
+            "environment that would have to be matched to recompute it cannot "
+            f"be compared: {exc} This is the third state and it is neither of "
+            "the other two: nothing was compared, so it is not a mismatch, and "
+            "an environment nobody stated is not evidence that this is the "
+            "machine that computed the polygon. Every artifact written before "
+            "reg recorded an environment (issue #200) reads this way, and it is "
+            "a could-not-evaluate rather than a defect in the file. The "
+            "retained polygons in it are evidence in their own right and are "
+            "unaffected."
+        ) from exc
+    if not differences:
+        return
+    stated = "; ".join(
+        f"the artifact says {key}={recorded!r} and this interpreter is "
+        f"{running!r}"
+        for key, recorded, running in differences
+    )
+    raise GraphQueryError(
+        f"envelope {envelope_id!r} was discarded as recomputable, and this is "
+        f"not the environment the artifact says computed it: {stated}. "
+        "Recomputing here would return a polygon nobody could attribute: a "
+        "disagreement with the geometry this run recorded would be *the "
+        "geometry moved* and *this is a different machine* at the same time, "
+        "and issue #175 measured that the second happens. So it is a "
+        "could-not-evaluate, not a failure of the artifact and not a pass. "
+        "**This names which key differs and not which difference would move "
+        "the geometry** — a version list is not a differ (docs/prior-art.md "
+        "§27), and nothing here has compared any geometry. Recompute on the "
+        "environment the file names, or read the polygons it retained, which "
+        "are returned whatever machine asks for them."
+    )
+
+
 def envelope_at(conn, t: float) -> BaseGeometry:
     """The envelope in force at `t`: read back, or recomputed. Same answer.
 
@@ -3228,6 +3382,16 @@ def envelope_at(conn, t: float) -> BaseGeometry:
     is the gate on "same answer" — it blanks a stored geometry and asserts the
     recomputed polygon is identical, at zero tolerance. If that ever fails, the
     discard is not lossless and this whole approach is wrong.
+
+    **Since issue #201 the recomputation is conditional on the environment**,
+    and only the recomputation: a retained polygon is returned unchanged on any
+    machine, because it is evidence in its own right and nothing about where it
+    is read recomputes it. A discarded one is recomputed only where the artifact
+    says its geometry was computed
+    (`_refuse_a_recomputation_off_the_recording_environment`), and anywhere else
+    it is a could-not-evaluate — which is what makes this function's "same
+    answer" claim above hold on the machine it is claimed about and refuse
+    rather than weaken everywhere else.
 
     Args:
         conn: an open artifact (`reg.store.connect`).
@@ -3247,7 +3411,10 @@ def envelope_at(conn, t: float) -> BaseGeometry:
             order is not retained (Unanswerable #5); or the geometry was
             discarded and something needed to recompute it is not in the file.
             Every one is a could-not-evaluate, and none of them resolves to some
-            other frame's polygon.
+            other frame's polygon. Since issue #201 there is one more, and it is
+            about the reader rather than the file: the geometry was discarded and
+            this is not the environment the artifact records, or the artifact
+            records none to compare against.
     """
     t = quantize_time(t)
     edges = store.read_edges(conn, edge_type="HAS_ENVELOPE")
@@ -3342,6 +3509,22 @@ def envelope_at(conn, t: float) -> BaseGeometry:
             "in the file to recover it from."
         )
 
+    # Read before the environment is compared, so that a file missing one of
+    # them refuses for *that* reason on every machine (issue #201's ordering,
+    # below). These are the same values the call at the bottom is given.
+    limits = _limits_from_meta(conn)
+    n_samples = _meta_int(conn, META_N_SAMPLES)
+    seed = _meta_int(conn, META_ENVELOPE_SEED)
+    substep_dt = _meta_float(conn, META_SUBSTEP_DT)
+
+    # LAST, AND THE ORDER IS THE POINT (issue #201). Every refusal above says
+    # this file holds nothing to recompute this row from, which is true on every
+    # machine; reporting *wrong machine* for one of them would tell a reader
+    # that the recording environment would have answered, and it would not. This
+    # one is reached only once every input is present, and it is the only one
+    # that is about where the reader is standing rather than about the file.
+    _refuse_a_recomputation_off_the_recording_environment(conn, envelope_id)
+
     state = ProprioState(
         t=t,
         q=_floats(config["q"], f"robot_config[{str(config_id)!r}].q"),
@@ -3358,11 +3541,11 @@ def envelope_at(conn, t: float) -> BaseGeometry:
     return simplify_geometry(
         compute_envelope(
             state,
-            _limits_from_meta(conn),
+            limits,
             horizon=float(row["horizon"]),
-            n_samples=_meta_int(conn, META_N_SAMPLES),
-            seed=_meta_int(conn, META_ENVELOPE_SEED),
-            substep_dt=_meta_float(conn, META_SUBSTEP_DT),
+            n_samples=n_samples,
+            seed=seed,
+            substep_dt=substep_dt,
         )
     )
 

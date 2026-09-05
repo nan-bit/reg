@@ -884,10 +884,12 @@ def test_a_stream_with_no_provenance_leaves_the_key_absent(tmp_path: Path) -> No
 # Builds sense (docs/prior-art.md §27): a discarded polygon is retained as "a
 # deterministic function of the row and four numbers in meta", and issue #175
 # measured that the function is the platform's. These tests are about the
-# recording only. Refusing to recompute off the recording environment is the
-# work that depends on this and is deliberately not here — `envelope_at` is
-# unchanged, and `test_envelope_at_recomputes_the_stored_polygon_exactly` above
-# is the gate that says so.
+# recording only — what is written, what is deliberately not written, and what a
+# reader does with a file that states none. Acting on the record is issue #201's
+# and its tests are further down, under THE RECOMPUTATION IS CONDITIONAL ON THE
+# ENVIRONMENT; the two are kept apart because a test that built an artifact and
+# asserted a refusal would go green whether the keys were right or merely
+# present.
 # --------------------------------------------------------------------------
 
 
@@ -2338,6 +2340,361 @@ def test_envelope_at_refuses_when_the_config_it_names_is_gone(tmp_path: Path) ->
             graph.envelope_at(conn, row["t_start"])
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------
+# THE RECOMPUTATION IS CONDITIONAL ON THE ENVIRONMENT (issue #201)
+#
+# The acting half of issue #200's recording, and docs/self-describing.md gap 2.
+# A discarded polygon is retained as "a deterministic function of the row and
+# four numbers in meta"; issue #175 measured that the function is the
+# platform's, so recomputing somewhere else answers a question the file cannot
+# settle. These tests are about the three states and about what the refusal is
+# allowed to say — it names the key that differs and never claims that key is
+# what moved the geometry, because a version list is not a differ
+# (docs/prior-art.md §27).
+# --------------------------------------------------------------------------
+
+
+def _restate_meta(path: Path, **values: str) -> None:
+    """Rewrite meta keys behind reg's back, to synthesise a foreign artifact.
+
+    Raw SQL for `_forget_meta`'s reason, and one more: what is being simulated
+    is a file *this machine did not write*, which is the only artifact whose
+    recomputation this guard is about and the one thing a test running on the
+    recording machine cannot otherwise obtain. Rebuilding on a second platform
+    inside the suite is not available; editing the record the guard reads is the
+    same input from the guard's point of view.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        for key, value in values.items():
+            updated = conn.execute(
+                "UPDATE meta SET value = ? WHERE key = ?", (value, key)
+            ).rowcount
+            assert updated == 1, f"precondition failed: no meta row {key!r}"
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _discarded_envelope(path: Path) -> tuple[float, str]:
+    """`(t_start, envelope_id)` of a retained row whose polygon was discarded.
+
+    The precondition every test below has: a `GEOMETRY_RETENTION` artifact in
+    which something is actually recomputed. A fixture that stored every polygon
+    would let all of them pass against a guard that never ran.
+    """
+    conn = store.connect(path)
+    try:
+        row = conn.execute(
+            "SELECT edge.t_start AS t_start, node.node_id AS envelope_id "
+            "FROM envelope e "
+            "JOIN edge ON edge.dst_key = e.envelope_key "
+            "JOIN node ON node.node_key = e.envelope_key "
+            "WHERE e.geometry_wkb IS NULL AND edge.type = 'HAS_ENVELOPE' "
+            "ORDER BY edge.t_start"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None, "precondition failed: nothing was discarded"
+    return float(row["t_start"]), str(row["envelope_id"])
+
+
+def _sliding_artifact(tmp_path: Path, name: str = "slide") -> Path:
+    csv = _write_stream(tmp_path / f"{name}.csv", _sliding_frames(8))
+    out = tmp_path / f"{name}.sqlite"
+    _build(csv, out)
+    return out
+
+
+def test_a_recompute_on_the_recording_environment_answers_as_it_always_did(
+    tmp_path: Path,
+) -> None:
+    """**THE CRY-WOLF CONTROL, and it is the first test for a reason.**
+
+    A guard that refused on the machine that built the file would refuse every
+    artifact this repository makes, and whoever met it would switch it off
+    within a week — which costs every refusal it would have been right about.
+    So the unedited artifact is asked for a discarded polygon and must answer,
+    with the same geometry `test_envelope_at_recomputes_the_stored_polygon_exactly`
+    pins, and `recompute_environment_differences` must report nothing.
+    """
+    out = _sliding_artifact(tmp_path)
+    t, _ = _discarded_envelope(out)
+
+    conn = store.connect(out)
+    try:
+        assert graph.recompute_environment_differences(conn) == ()
+        polygon = graph.envelope_at(conn, t)
+    finally:
+        conn.close()
+    assert not polygon.is_empty
+    assert polygon.area > 0.0
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        store.META_ENV_PLATFORM_SYSTEM,
+        store.META_ENV_PLATFORM_MACHINE,
+        store.META_ENV_SHAPELY,
+        store.META_ENV_GEOS,
+    ],
+)
+def test_a_recompute_off_the_recording_environment_is_refused(
+    tmp_path: Path, key: str
+) -> None:
+    """**THE NEGATIVE.** Each triggering key, one at a time.
+
+    Parametrized rather than written once for the platform, because the four are
+    a decision (`graph.RECOMPUTE_ENVIRONMENT_KEYS`) and a test that only edited
+    `env_platform_machine` would go green for a guard that compared the machine
+    and nothing else — which is the guard somebody refactoring this would leave
+    behind. The refusal must name the key and *both* values: a reader told only
+    that the environments differ cannot tell which way to go.
+    """
+    out = _sliding_artifact(tmp_path)
+    t, envelope_id = _discarded_envelope(out)
+    _restate_meta(out, **{key: "not-this-machine"})
+
+    conn = store.connect(out)
+    try:
+        differences = graph.recompute_environment_differences(conn)
+        assert [name for name, _, _ in differences] == [key]
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.envelope_at(conn, t)
+    finally:
+        conn.close()
+
+    message = str(excinfo.value)
+    assert key in message
+    assert "not-this-machine" in message  # what the file says
+    assert store.build_environment()[key] in message  # what this reader is
+    assert envelope_id in message
+
+
+def test_the_refusal_does_not_say_which_difference_moved_the_geometry(
+    tmp_path: Path,
+) -> None:
+    """The overclaim check, and it is the whole reason this is a separate test.
+
+    A version comparison establishes that two environments are not the same one.
+    It does not establish that the key it names is what a differing polygon
+    would be attributable to — `diffoscope` exists because a version list does
+    not give that (docs/prior-art.md §27), and nothing in this path has compared
+    any geometry at all. So the wording is held to the weaker claim: the refusal
+    may say the environments differ and must not report a cause, and it must not
+    present itself as a finding *about the artifact* either, because the file is
+    exactly as sound as it was before this reader opened it.
+    """
+    out = _sliding_artifact(tmp_path)
+    t, _ = _discarded_envelope(out)
+    _restate_meta(out, **{store.META_ENV_GEOS: "0.0.0"})
+
+    conn = store.connect(out)
+    try:
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.envelope_at(conn, t)
+    finally:
+        conn.close()
+
+    message = str(excinfo.value).lower()
+    # Positively: the disclaimer is in the refusal a reader actually sees, not
+    # only in a docstring they will not open.
+    assert "could-not-evaluate" in message
+    assert "not a differ" in message
+    assert "not which difference would move the geometry" in message
+    # And negatively: no vocabulary that attributes the difference to a cause,
+    # or the disagreement to the file. Nothing on this path has compared any
+    # geometry, so the refusal cannot be reporting a defect in one.
+    for overclaim in (
+        "caused",
+        "because the",
+        "corrupt",
+        "tampered",
+        "the geometry changed",
+        "is wrong",
+        "invalid",
+    ):
+        assert overclaim not in message, (
+            f"the refusal says {overclaim!r}, which attributes something this "
+            "comparison of version strings cannot attribute"
+        )
+
+
+def test_a_python_or_numpy_difference_alone_still_recomputes(tmp_path: Path) -> None:
+    """The decision, pinned in the direction that is easy to widen by accident.
+
+    Both keys are recorded and neither triggers. For the interpreter that is the
+    cry-wolf argument in its sharpest form: a patch release would make every
+    artifact unrecomputable on any machine that has been updated. For numpy it
+    is the *weaker* half and it is pinned here so it is stated rather than
+    discovered — `numpy.cos` and `numpy.sin` place every link endpoint in
+    `reg.kinematics`, so a numpy difference can move the geometry and this guard
+    does not act on it. Whoever changes that changes this test deliberately,
+    which is the point of it existing.
+    """
+    out = _sliding_artifact(tmp_path)
+    t, _ = _discarded_envelope(out)
+    _restate_meta(
+        out,
+        **{
+            store.META_ENV_PYTHON: "3.11.0",
+            store.META_ENV_NUMPY: "0.0.1",
+        },
+    )
+
+    conn = store.connect(out)
+    try:
+        assert graph.recompute_environment_differences(conn) == ()
+        assert graph.envelope_at(conn, t).area > 0.0
+        # And the file still states them, which is what a reader who *does* care
+        # about numpy has instead of a refusal.
+        assert graph.recorded_environment(conn)[store.META_ENV_NUMPY] == "0.0.1"
+    finally:
+        conn.close()
+
+
+def test_an_artifact_recording_no_environment_is_a_distinct_third_state(
+    tmp_path: Path,
+) -> None:
+    """Every artifact written before issue #200 reads this way.
+
+    It is neither of the other two and the refusal has to say so: nothing was
+    compared, so it is not a mismatch — reporting one would be a finding about a
+    file that never made the claim — and an environment nobody stated is not
+    evidence that this is the machine that computed the polygon, so it is not a
+    match either. The distinction is asserted against the *mismatch* wording
+    rather than against a bare `raises`, because a guard that collapsed the
+    third state into the second would pass a test that only checked something
+    was raised.
+    """
+    out = _sliding_artifact(tmp_path)
+    t, envelope_id = _discarded_envelope(out)
+    _forget_meta(out, *store.ENVIRONMENT_KEYS)
+
+    conn = store.connect(out)
+    try:
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.envelope_at(conn, t)
+    finally:
+        conn.close()
+
+    message = str(excinfo.value)
+    assert envelope_id in message
+    assert "third state" in message
+    assert "cannot be compared" in message
+    # Not the mismatch case: nothing may claim this reader's environment differs
+    # from one the file never stated.
+    assert "not the environment the artifact says computed it" not in message
+    assert store.META_ENV_GEOS in message  # it names what is absent
+
+
+def test_an_artifact_stating_half_an_environment_refuses_the_recompute_too(
+    tmp_path: Path,
+) -> None:
+    """Five keys of six is the third state as well, and the missing one is GEOS.
+
+    The interesting shape, because the keys that remain look like an environment
+    to anything reading them one at a time — including to a comparison that
+    iterated over what it found rather than over the list somebody keeps.
+    """
+    out = _sliding_artifact(tmp_path)
+    t, _ = _discarded_envelope(out)
+    _forget_meta(out, store.META_ENV_GEOS)
+
+    conn = store.connect(out)
+    try:
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.envelope_at(conn, t)
+    finally:
+        conn.close()
+    message = str(excinfo.value)
+    assert "third state" in message
+    assert store.META_ENV_GEOS in message
+
+
+def test_a_retained_polygon_is_returned_whatever_environment_asks(
+    tmp_path: Path,
+) -> None:
+    """The guard is about recomputation and about nothing else.
+
+    A stored polygon is evidence in its own right: it was computed at build time
+    and the bytes in the file are what a reader draws and cites. Refusing to
+    hand it over because the reader is on another machine would withdraw
+    evidence over a condition that does not apply to it — and it would make
+    every artifact unreadable off the recording machine, which is the opposite
+    of what this artifact is for. The same edited file refuses the discarded row
+    two lines later, so what this pins is the *difference* between the two
+    paths and not an artifact that happens to answer everything.
+    """
+    out = _sliding_artifact(tmp_path)
+    conn = store.connect(out)
+    try:
+        stored = {}
+        for edge in store.read_edges(conn, edge_type="HAS_ENVELOPE"):
+            row = store.envelope_row(conn, str(edge["dst_id"]))
+            if row["geometry_wkb"] is not None:
+                stored[float(edge["t_start"])] = store.from_wkb(row["geometry_wkb"])
+    finally:
+        conn.close()
+    assert stored, "precondition failed: no geometry was stored at all"
+
+    t_discarded, _ = _discarded_envelope(out)
+    _restate_meta(out, **{store.META_ENV_PLATFORM_MACHINE: "vax-11/780"})
+
+    conn = store.connect(out)
+    try:
+        for t, polygon in stored.items():
+            assert shapely.equals_exact(
+                graph.envelope_at(conn, t), polygon, tolerance=0.0
+            )
+        with pytest.raises(graph.GraphQueryError, match="vax-11/780"):
+            graph.envelope_at(conn, t_discarded)
+    finally:
+        conn.close()
+
+
+def test_a_reader_that_cannot_state_its_own_environment_refuses(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The fourth way this can go, and it is about the reader.
+
+    An interpreter that cannot say what it computes geometry with has not found
+    a mismatch — it has failed to make the comparison — and the two must not
+    read alike. It is also the case that would otherwise leave `store.StoreError`
+    escaping a query function, which a caller handling `GraphQueryError` would
+    not catch: an unhandled exception type is a could-not-evaluate that arrives
+    as a crash.
+    """
+    out = _sliding_artifact(tmp_path)
+    t, _ = _discarded_envelope(out)
+
+    def _no_version() -> str:
+        raise RuntimeError("no GEOS here")
+
+    monkeypatch.setattr(store, "_geos_version_text", _no_version)
+    conn = store.connect(out)
+    try:
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.envelope_at(conn, t)
+    finally:
+        conn.close()
+    message = str(excinfo.value)
+    assert "this interpreter cannot say" in message
+    assert "no GEOS here" in message
+
+
+def test_the_triggering_keys_are_a_subset_of_the_recorded_ones(
+    tmp_path: Path,
+) -> None:
+    """A key that triggers a refusal and is not written is a refusal nobody can
+    satisfy: it would compare an absent value against a present one on the
+    recording machine itself. Held against `store.ENVIRONMENT_KEYS` rather than
+    against a second list, for the reason that list exists."""
+    assert set(graph.RECOMPUTE_ENVIRONMENT_KEYS) <= set(store.ENVIRONMENT_KEYS)
+    assert set(graph.RECOMPUTE_ENVIRONMENT_KEYS) != set(store.ENVIRONMENT_KEYS)
 
 
 # --------------------------------------------------------------------------

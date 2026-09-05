@@ -1,12 +1,13 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
-**Status:** a design document; tiers 0 and 1 of §8 have landed, and tier 2's
-first half — the environment **recorded**, not yet acted on — landed with issue
-#200 · written 2026-09-05, tier 1's findings folded in 2026-09-05, tier 2's
-recording half 2026-09-05 · normative over nothing yet; where it touches what
-the project may claim it defers to [`sufficiency.md`](sufficiency.md) and
-[`limitations.md`](limitations.md) until those files carry the change · the build
-order in §8 is the authority on what is proposed versus decided
+**Status:** a design document; tiers 0, 1 and 2 of §8 have landed — tier 2 in
+two halves, the environment **recorded** (issue #200) and then **acted on**
+(issue #201, the recompute path refuses off the recording environment) · written
+2026-09-05, tier 1's findings folded in 2026-09-05, tier 2 2026-09-05 · normative
+over nothing yet; where it touches what the project may claim it defers to
+[`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
+those files carry the change · the build order in §8 is the authority on what is
+proposed versus decided
 
 **§1 is now carried by [`limitations.md`](limitations.md) §12** (issue #198), which
 is where the three gaps are normative. The table below is the same finding stated
@@ -37,7 +38,7 @@ document's statement of the same three, for the argument it goes on to make.*
 | # | what an auditor cannot do with the file alone | why | where it is recorded now |
 |---|---|---|---|
 | 1 | Check a `layer` tag | The tag is written; what it was computed **from** is not | `sufficiency.md` §5.6, §5.9 |
-| 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **half-closed by issue #200**: it now records them, and nothing yet acts on them | `limitations.md` §1 |
+| 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **closed in the weaker form by issues #200 and #201**: it records them, and `envelope_at` refuses to recompute where they differ. What is left is that a refusal is not an attribution | `limitations.md` §1 |
 | 3 | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` are retained, not the boundary | `limitations.md` §2, §3 |
 
 **Gap 1 — a tag that is asserted rather than checkable.** `envelope_layer` takes
@@ -55,15 +56,35 @@ platform's: tables captured on one architecture differ in their last bits on
 another. So an auditor who recomputes and disagrees cannot distinguish *wrong
 machine* from *the geometry moved* — and those are opposite findings.
 
-*Half-closed, 2026-09-05 (issue #200).* `meta` now carries the six keys §3's
-first row asks for — `reg.store.ENVIRONMENT_KEYS`, read off the running
-interpreter and read back by `reg.graph.recorded_environment` — with
-`SCHEMA_VERSION` at 11 and its note beside the others. **Recording is not
-acting.** `envelope_at` recomputes exactly as it did before; a reader that
-ignores the environment still gets the pre-#200 answer, and the guard that
-reports could-not-evaluate off the recording environment is the issue that
-depends on this one. The split was deliberate: writing the data and using it are
-different work, and the second changes what a query answers.
+*Closed in the weaker form, 2026-09-05 (issues #200 and #201).* `meta` carries
+the six keys §3's first row asks for — `reg.store.ENVIRONMENT_KEYS`, read off the
+running interpreter and read back by `reg.graph.recorded_environment` — with
+`SCHEMA_VERSION` at 11 and its note beside the others. **And the reader now acts
+on them.** `reg.graph.envelope_at` refuses to recompute a discarded polygon off
+the recording environment, comparing four of the six —
+`reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`: the platform's system and machine,
+shapely and GEOS — and naming the key that differs and both values. It **refuses
+rather than warning**, because a recomputed polygon that reaches a caller under a
+warning is a polygon that reaches a query result. Three states and the third
+never resolves to the first: the keys agree and the recomputation happens exactly
+as before; one differs and it is a could-not-evaluate; the artifact states no
+environment — everything built before #200 — and it is a *different*
+could-not-evaluate, because nothing was compared.
+
+**What is not closed, and the sentence is load-bearing.** The refusal names the
+key and does not say which difference moved the geometry; nothing in that path
+compares any geometry. This is the **weaker half of attribution** — an
+unresolvable disagreement becomes a stated one — and `diffoscope` is what the
+other half looks like ([`prior-art.md`](prior-art.md) §27). The interpreter and
+numpy are recorded and are not triggers, which is a decision taken in issue
+#201's grooming: a patch release would make every artifact unrecomputable on any
+machine that has been updated, and a check that fires on the expected shape of
+the world is a check that gets switched off. numpy is the weaker call of the two
+and is stated rather than left to be discovered, because `numpy.cos` and
+`numpy.sin` place every link endpoint.
+
+The split into two issues was deliberate: writing the data and using it are
+different work, and only the second changes what a query answers.
 
 **Gap 3 — a radius where the question wants a region.** A stored envelope row
 answers *not at that distance*. It cannot answer *not at that point*, because the
@@ -100,7 +121,7 @@ its own basis must be refused, and one whose basis is intact must not be.
 
 | addition | what it buys | cost |
 |---|---|---|
-| **Environment** in `meta`: shapely and GEOS versions, platform, Python — **landed, issue #200**, as six keys: those four, plus numpy, plus the platform's system and machine separately | Gap 2, in the weaker form below. A recomputation that disagrees becomes a could-not-evaluate rather than an unresolvable one | six rows; schema bump to 11; **no published figure moved** |
+| **Environment** in `meta`: shapely and GEOS versions, platform, Python — **landed, issue #200**, as six keys: those four, plus numpy, plus the platform's system and machine separately; **acted on, issue #201**, by `envelope_at` over four of them | Gap 2, in the weaker form below. A recomputation that disagrees becomes a could-not-evaluate rather than an unresolvable one — and off the recording environment it is refused before it can disagree | six rows; schema bump to 11; **no published figure moved**; a recompute off the recording environment stops returning a polygon |
 | **Layer basis** per tagged edge: the inputs the tag was computed from, each with its provenance | Gap 1, and the tag becomes checkable rather than trusted | a row per input per tagged edge |
 | **The outer boundary**, retained rather than projected | Gap 3 | bytes, and the published figures move |
 
@@ -357,17 +378,20 @@ what it changed, and the changes are to this document's §2, §3, §4 and §7, n
 the tiers below. Everything downstream depended on it, per the rule that prior art
 wins.
 
-**Tier 2 — the environment in `meta`. The recording half landed** (issue #200):
-six keys — Python, numpy, shapely, GEOS, and the platform's system and machine —
-written by `reg.store.build_environment` from the running interpreter, read by
-`reg.graph.recorded_environment`, `SCHEMA_VERSION` at 11 with its note, and no
-published figure moved. **What remains is the half that acts:** a recomputation
-guard that reports could-not-evaluate off the recording environment rather than a
-pass or a failure, on the pattern issue #175 established for the bit-identity
-tables. The split is on the seam this build order is cut along — writing the data
-and using it are different work, and only the second changes what a query
-answers. Tier 3 is unblocked by the half that landed; nothing else here was
-waiting on it.
+**Tier 2 — the environment in `meta`. Landed, in two halves.** The recording
+(issue #200): six keys — Python, numpy, shapely, GEOS, and the platform's system
+and machine — written by `reg.store.build_environment` from the running
+interpreter, read by `reg.graph.recorded_environment`, `SCHEMA_VERSION` at 11 with
+its note, and no published figure moved. The acting (issue #201):
+`reg.graph.envelope_at` refuses to recompute a discarded polygon off the
+recording environment, comparing `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — the
+platform's system and machine, shapely and GEOS — and reporting a
+could-not-evaluate rather than a pass or a failure, on the pattern issue #175
+established for the bit-identity tables. An artifact stating no environment is a
+third state distinct from both. The split was on the seam this build order is cut
+along — writing the data and using it are different work, and only the second
+changes what a query answers. Tier 3 was unblocked by the first half; nothing
+else here was waiting on either.
 
 **Tier 3 — the cold-read test.** §2, against the fixtures, with its negative. It
 can be written the moment tier 2 lands and it is what makes the rest checkable.

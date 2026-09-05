@@ -363,8 +363,8 @@ What breaks, worst first:
    needed a `SCHEMA_VERSION` bump.
 
    It has one. `robot_config` carries `base_pose` and `base_pose_source`, `meta`
-   carries `base_frame` for a run whose base was bolted, `SCHEMA_VERSION` is 10
-   and the gate names what changed. `envelope_at` **refuses** a posed
+   carries `base_frame` for a run whose base was bolted, `SCHEMA_VERSION` was
+   bumped to 10 and the gate names what changed. `envelope_at` **refuses** a posed
    configuration rather than recomputing it at the origin, and a retained
    `outer_radius` requires the config that states its frame. The claim change
    came with it and it is the part that was not in the issue title: an edge

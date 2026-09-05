@@ -338,6 +338,7 @@ __all__ = [
     "envelope_frame",
     "main",
     "quantize_occurrence_time",
+    "recorded_environment",
     "recorder_version",
 ]
 
@@ -2673,11 +2674,15 @@ def _write_provenance(
     checkable if the artifact says what produced it."
 
     Nothing that varies between two runs of the same command may enter here — no
-    path, no clock, no hostname. The source stream's own provenance block is
-    copied in verbatim, which is where the scenario name and the simulator seed
-    come from; if the stream carries none, the key is *absent* rather than empty,
-    because "the source said nothing" and "the source said nothing useful" are
-    both could-not-evaluate and neither is a default.
+    path, no clock, no hostname. The environment block (issue #200) is not an
+    exception to that either: two runs of the same command on one machine record
+    the same six strings, and what it deliberately does *not* record is the
+    hostname, the path and the user, all of which differ between two checkouts on
+    one machine while nothing about the geometry differs. The source stream's own
+    provenance block is copied in verbatim, which is where the scenario name and
+    the simulator seed come from; if the stream carries none, the key is *absent*
+    rather than empty, because "the source said nothing" and "the source said
+    nothing useful" are both could-not-evaluate and neither is a default.
 
     The run start is the one absolute time in the file and it is not an
     exception to that rule (issue #83): it is **declared by the caller**, not
@@ -2687,6 +2692,19 @@ def _write_provenance(
     "no date element" deviation could be closed without giving anything up.
     """
     store.put_meta(conn, "reg_version", __version__)
+
+    # ...and what it ran on (issue #200). `reg_version` says which code computed
+    # the geometry; these six say what that code was computing *with*, which is
+    # the other half of the retention argument for a discarded polygon: it is a
+    # deterministic function of the row and four numbers in meta, and issue #175
+    # measured that the function is the platform's. Without them an auditor who
+    # recomputes and disagrees cannot tell "wrong machine" from "the geometry
+    # moved", and those are opposite findings. Read from the running interpreter
+    # by `reg.store.build_environment`, never passed in — see there for the
+    # buildinfo this is adopted from, the in-meta placement stated as a
+    # deviation from it, and the C library it cannot record.
+    for key, value in store.build_environment().items():
+        store.put_meta(conn, key, value)
 
     # Absolute time and identity, first, because they are what tells a reader
     # *which* run everything below belongs to.
@@ -3144,6 +3162,60 @@ def envelope_frame(conn, envelope_id: str) -> BaseFrame:
             "about a point it names."
         )
     return BaseFrame(x=values[0], y=values[1], theta=values[2])
+
+
+def recorded_environment(conn) -> dict[str, str]:
+    """The environment this artifact says its geometry was computed in (#200).
+
+    The reader half of `reg.store.build_environment`. It reports what the file
+    states and it decides nothing: comparing this against the environment of
+    whoever is recomputing — and reporting a could-not-evaluate when the two
+    differ — is the guard that depends on this issue and is deliberately not
+    here. `envelope_at` behaves exactly as it did before these keys existed.
+
+    Args:
+        conn: an open artifact (`reg.store.connect`).
+
+    Returns:
+        Every key in `reg.store.ENVIRONMENT_KEYS` to the value the file states,
+        in that order. Comparable directly against `store.build_environment()`.
+
+    Raises:
+        GraphQueryError: the artifact states no environment, states only part of
+            one, or states an empty value for a key. All three are
+            **could-not-evaluate**, and the third is why an empty string is
+            refused rather than returned: a file whose machine is `''` would
+            compare unequal to every recomputing environment and would read as a
+            mismatch — a *finding* about the artifact — when what is true is that
+            the file never said. The absence never resolves to the reader's own
+            environment, which is the failure this reader exists to make
+            impossible: it would turn "built somewhere else" into "built here".
+    """
+    stated = store.all_meta(conn)
+    missing = [key for key in store.ENVIRONMENT_KEYS if key not in stated]
+    if missing:
+        present = [key for key in store.ENVIRONMENT_KEYS if key in stated]
+        raise GraphQueryError(
+            f"this artifact states no {missing} in its meta table, so it does "
+            "not say what its geometry was computed with"
+            + (f" (it states {present})" if present else "")
+            + ". A discarded polygon is recomputable on an argument that holds "
+            "within one architecture and was measured not to hold across them "
+            "(issue #175), so an environment nobody recorded is a "
+            "could-not-evaluate. Reading it as this reader's own environment "
+            "would turn a recomputation somewhere else into one made here."
+        )
+    empty = [key for key in store.ENVIRONMENT_KEYS if not stated[key].strip()]
+    if empty:
+        raise GraphQueryError(
+            f"this artifact states {empty} as empty text. An environment key "
+            "that says nothing is not an environment: it compares unequal to "
+            "every recomputing environment, so it would read as a machine "
+            "mismatch — a finding about the artifact — when the fact is that "
+            "the file never said. reg.store.build_environment refuses to write "
+            "one, so this file was not written by it."
+        )
+    return {key: stated[key] for key in store.ENVIRONMENT_KEYS}
 
 
 def envelope_at(conn, t: float) -> BaseGeometry:

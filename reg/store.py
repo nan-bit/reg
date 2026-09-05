@@ -162,17 +162,30 @@ writes a clock, a path, a hostname or a `rowid` derived from anything but
 insertion order, and `tests/test_graph.py` builds the same stream twice and
 compares bytes. If you add a column, add one whose value is a function of the
 input stream.
+
+`build_environment` is the one block that is a function of the *machine* rather
+than of the stream, and it does not weaken that (issue #200). Two builds on one
+machine record the same six strings, which is the whole of what CLAUDE.md rule 2
+claims — determinism *within* an architecture — and it is why the record is a
+version and a machine class rather than a hostname or a path, both of which
+differ between two checkouts on one machine while nothing about the geometry
+does. Across machines the values differ, and that is the point: the file says
+which machine, so a recomputation that disagrees can be told from one run
+somewhere else.
 """
 
 from __future__ import annotations
 
 import os
+import platform
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import numpy
 import shapely
 from shapely.geometry.base import BaseGeometry
 
@@ -184,6 +197,14 @@ __all__ = [
     "META_SCHEMA_VERSION",
     "META_FRAME_PERIOD",
     "META_BASE_FRAME",
+    "META_ENV_PYTHON",
+    "META_ENV_NUMPY",
+    "META_ENV_SHAPELY",
+    "META_ENV_GEOS",
+    "META_ENV_PLATFORM_SYSTEM",
+    "META_ENV_PLATFORM_MACHINE",
+    "ENVIRONMENT_KEYS",
+    "build_environment",
     "HASH_BYTES",
     "PAGE_SIZE",
     "ENVELOPE_SOURCES",
@@ -322,7 +343,24 @@ __all__ = [
 #: base was bolted at the origin from one that never said where its radii are
 #: measured from, and `connect` refusing it is that could-not-evaluate rather
 #: than an origin assumed on the file's behalf.
-SCHEMA_VERSION = 10
+#:
+#: 11: `meta` gained the six environment keys — the interpreter, numpy, shapely,
+#: GEOS and the platform's system and machine (issue #200,
+#: docs/self-describing.md gap 2). No table and no column changed, and the bump
+#: is not for the keys: it is for what a reader does with a NULL
+#: `geometry_wkb`. A v10 reader recomputes a discarded polygon and returns it as
+#: the region in force, on an argument — *it is a deterministic function of the
+#: row and four numbers in `meta`* — that issue #175 measured to be true only
+#: **within** an architecture. Meeting a v11 file it would ignore the environment
+#: the file records, recompute anyway, and hand back a region whose disagreement
+#: with the stored one it cannot attribute; the file contains exactly what would
+#: have told it not to. That is the confident wrong answer, and it is the same
+#: shape as v10's: a recomputation that is sound under a condition, run where the
+#: condition does not hold. In the other direction a v11 reader meeting a v10
+#: file cannot tell an artifact built on its own platform from one built
+#: somewhere else, and `connect` refusing it is that could-not-evaluate rather
+#: than this machine assumed on the file's behalf.
+SCHEMA_VERSION = 11
 
 #: What each version changed, one line each, keyed by the version it arrived in.
 #: The comment block above is the argument; this is the part a **refusal** can
@@ -353,6 +391,10 @@ SCHEMA_CHANGES: dict[int, str] = {
     "frame it is measured about — so an envelope is no longer recomputable "
     "from q and qd alone and a radius is no longer a radius about an "
     "unstated centre",
+    11: "meta gained the environment the geometry was computed in — the "
+    "interpreter, numpy, shapely, GEOS and the platform's system and machine "
+    "— so a recomputation that disagrees with a stored polygon can be told "
+    "from one run on a different machine",
 }
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
@@ -381,6 +423,89 @@ META_FRAME_PERIOD = "frame_period_s"
 #: localizer says so* — and an artifact making both would leave every reader to
 #: pick one.
 META_BASE_FRAME = "base_frame"
+
+#: The environment the geometry in this artifact was computed in (issue #200).
+#:
+#: **This is a buildinfo, and the word is borrowed rather than coined.** The
+#: Reproducible Builds project defines a build as reproducible *given the same
+#: source, build environment and build instructions* — reproducibility is a
+#: property relative to a **stated** environment, not one an artifact has by
+#: itself — and the environment record is a **buildinfo**, a plain key–value
+#: block naming the dependencies and their versions *as far as the build
+#: actually uses them* (docs/prior-art.md §27). C2PA carries the same idea one
+#: layer up in `claim_generator_info`, which records a claim generator's name,
+#: version and operating system inside the hash-bound manifest (§28). The
+#: content below is adopted from that practice and not derived here: a list
+#: reasoned out from first principles would be the same list with no provenance
+#: and nobody maintaining it.
+#:
+#: **The deviation, stated as one.** A buildinfo is deliberately *a separate
+#: build product*, so that an archive can distribute it beside the artifact to
+#: whoever wants to rebuild. These keys go **inside** `meta` instead, and the
+#: reason is Claim 2: audit questions are answered from the graph alone, with no
+#: access to anything else, which is a stronger requirement than the practice
+#: has. The pattern is docs/prior-art.md §5's PROFIsafe deviation — a deliberate
+#: departure, stated precisely, with its reason. What it costs is that the
+#: environment is inside the thing it describes: it cannot be handed to a
+#: rebuilder without the artifact, and it is descriptive `meta` rather than
+#: anything the chain signs, so a party who can rewrite the file can rewrite its
+#: environment too (docs/self-describing.md §7 question 3 holds that decision).
+#:
+#: **Why each key and not the others.** The rule is the practice's own: minimise
+#: to what the computation depends on rather than enumerate the world. Each one
+#: below is here because a change in it can change the geometry:
+#:
+#: * `env_python_version` — CPython's `math.sin`, `math.cos` and `math.hypot`
+#:   place every arc vertex in `reg.envelope`, and `float.__repr__` renders every
+#:   number `reg.graph` writes into this table.
+#: * `env_numpy_version` — `np.cos` and `np.sin` in
+#:   `reg.kinematics.forward_kinematics` place every link endpoint, and numpy's
+#:   loops for them have changed between releases.
+#: * `env_shapely_version` — the layer that buffers, simplifies and encodes
+#:   every polygon in the file.
+#: * `env_geos_version` — the C library that actually does the union, the
+#:   intersection and the area, and it is **not** implied by the shapely version:
+#:   two wheels of one shapely release bundle different GEOS builds.
+#: * `env_platform_system` and `env_platform_machine` — the pair issue #175
+#:   measured a divergence across. Hex-float tables captured on x86_64 Linux
+#:   differ in their last bits on arm64 Darwin, because `sin`, `cos` and a GEOS
+#:   build are the platform's and not IEEE-754's.
+#:
+#: **What is left out, and one omission is load-bearing.** No hostname, no build
+#: path, no user, no locale, no timezone, no umask: nothing here reads one — the
+#: single absolute time in an artifact is declared by the caller (issue #83) —
+#: so recording them would enumerate rather than minimise, and each would vary
+#: between two checkouts on one machine without anything about the geometry
+#: varying. **The C library version is the omission that would change the
+#: geometry and is left out anyway.** `math.sin` is glibc's on Linux, so two
+#: builds agreeing on all six keys can still have been linked against different
+#: libms; `platform.libc_ver()` cannot be used to close that, because it reports
+#: `('', '')` on macOS and under musl, and a key that is empty on some platforms
+#: would mean both *this build could not tell* and *this platform has no glibc*
+#: — while a build that refused when it came back empty would refuse to write an
+#: artifact on those platforms at all. So the hole is stated rather than papered
+#: over: matching environments here are a necessary condition for a
+#: bit-identical recomputation and not a sufficient one
+#: (docs/lossiness.md *Discarded* #9, docs/limitations.md §1).
+META_ENV_PYTHON = "env_python_version"
+META_ENV_NUMPY = "env_numpy_version"
+META_ENV_SHAPELY = "env_shapely_version"
+META_ENV_GEOS = "env_geos_version"
+META_ENV_PLATFORM_SYSTEM = "env_platform_system"
+META_ENV_PLATFORM_MACHINE = "env_platform_machine"
+
+#: The buildinfo's keys, in the order `build_environment` reports them. A reader
+#: consults this rather than a second list of its own: an environment block that
+#: is missing one key is a could-not-evaluate, and it can only be seen to be
+#: missing against a list somebody keeps.
+ENVIRONMENT_KEYS = (
+    META_ENV_PYTHON,
+    META_ENV_NUMPY,
+    META_ENV_SHAPELY,
+    META_ENV_GEOS,
+    META_ENV_PLATFORM_SYSTEM,
+    META_ENV_PLATFORM_MACHINE,
+)
 
 #: How wide an `envelope_hash` is, in bytes. `reg.envelope.envelope_hash` is a
 #: SHA-256, so this is 32 — and it is checked on the way in rather than assumed,
@@ -1503,6 +1628,92 @@ def all_meta(conn: sqlite3.Connection) -> dict[str, str]:
     """The whole provenance block, in key order."""
     rows = conn.execute("SELECT key, value FROM meta ORDER BY key").fetchall()
     return {str(r["key"]): str(r["value"]) for r in rows}
+
+
+def _geos_version_text() -> str:
+    """`shapely.geos_version` as `major.minor.patch`.
+
+    The tuple rather than `shapely.geos_capi_version_string`: the CAPI string
+    names the ABI, and two GEOS releases whose arithmetic differs can share one.
+    A tuple that is not three integers is a refusal — a GEOS this build cannot
+    name is exactly the thing the key exists to record.
+    """
+    version = shapely.geos_version
+    if not isinstance(version, tuple) or len(version) != 3:
+        raise StoreError(
+            f"shapely.geos_version is {version!r}, not a three-part version "
+            "tuple. This build cannot say which GEOS computed its geometry."
+        )
+    try:
+        return ".".join(str(int(part)) for part in version)
+    except (TypeError, ValueError) as exc:
+        raise StoreError(
+            f"shapely.geos_version is {version!r}, whose parts are not "
+            "integers. This build cannot say which GEOS computed its geometry."
+        ) from exc
+
+
+def build_environment() -> dict[str, str]:
+    """The environment this interpreter would compute geometry in (issue #200).
+
+    A **buildinfo** in the Reproducible Builds sense — see `ENVIRONMENT_KEYS`
+    above for what is in it, why each key is there, why the placement in `meta`
+    is a stated deviation from that practice, and which omission is load-bearing.
+
+    Every value is read from the **running interpreter**. Nothing here is a
+    parameter and nothing may become one: an environment passed in is an
+    environment a caller can state wrongly, and the whole use of the record is
+    to be compared against the environment of whoever recomputes. It is also why
+    there is no default anywhere below.
+
+    This function does not decide anything. It records, and the guard that
+    refuses to recompute off the recording environment is separate work
+    (docs/self-describing.md §8, tier 2's second half). `reg.graph.envelope_at`
+    behaves exactly as it did before this key block existed.
+
+    Returns:
+        `ENVIRONMENT_KEYS` to their values, in that order, every key present.
+
+    Raises:
+        StoreError: a probe raised, or reported something that is not a non-empty
+            string. That is a could-not-evaluate and it is loud: an artifact
+            recording five of six keys, or one recording an empty string for the
+            machine, would read as an environment somebody stated. The failure
+            names the key and the expression that could not answer, because
+            "the environment could not be read" does not tell whoever sees it
+            what to go and look at.
+    """
+    probes: tuple[tuple[str, str, Callable[[], object]], ...] = (
+        (META_ENV_PYTHON, "platform.python_version()", platform.python_version),
+        (META_ENV_NUMPY, "numpy.__version__", lambda: numpy.__version__),
+        (META_ENV_SHAPELY, "shapely.__version__", lambda: shapely.__version__),
+        (META_ENV_GEOS, "shapely.geos_version", _geos_version_text),
+        (META_ENV_PLATFORM_SYSTEM, "platform.system()", platform.system),
+        (META_ENV_PLATFORM_MACHINE, "platform.machine()", platform.machine),
+    )
+    recorded: dict[str, str] = {}
+    for key, expression, probe in probes:
+        try:
+            value = probe()
+        except StoreError:
+            raise
+        except Exception as exc:
+            raise StoreError(
+                f"meta[{key!r}] cannot be written: {expression} raised "
+                f"{type(exc).__name__}: {exc}. The environment a geometry was "
+                "computed in is not a thing to guess at."
+            ) from exc
+        if not isinstance(value, str) or not value.strip():
+            raise StoreError(
+                f"meta[{key!r}] cannot be written: {expression} reported "
+                f"{value!r}. This interpreter cannot say what it computes "
+                "geometry with, which is a could-not-evaluate — and an artifact "
+                "stating no environment must say so by having no environment "
+                "block at all, not by carrying an empty one that reads as a "
+                "fact somebody recorded."
+            )
+        recorded[key] = value
+    return recorded
 
 
 # --------------------------------------------------------------------------

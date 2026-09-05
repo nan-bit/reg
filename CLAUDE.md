@@ -71,9 +71,14 @@ there, rather than a pass or a failure, when it runs anywhere else;
 and the negatives that feed the same comparison a real divergence stay ungated,
 because a mechanism that turned that into a could-not-evaluate would be worse
 than the red suite it replaces. `docs/limitations.md` §1 carries the cost one
-level up: an artifact records neither the platform nor the shapely and GEOS
-versions it was built with, so an assessor's recomputation that disagrees cannot
-be read as *wrong machine* rather than *the geometry moved*.
+level up, and since issue #200 an artifact **states the environment it was built
+in** — `reg.store.ENVIRONMENT_KEYS`, a buildinfo in `meta`: the interpreter,
+numpy, shapely, GEOS and the platform's system and machine. That is recording and
+not acting. Nothing yet refuses to recompute off the recording environment, so an
+assessor's recomputation that disagrees becomes a could-not-evaluate they can
+state rather than one they cannot resolve; it does not become *attributable*, and
+equal environments are necessary and not sufficient, because the C library cannot
+be read portably and is not among the keys.
 
 **3. Enforcement must not trust the policy.** `reg/enforce.py` computes its own
 bound and imports from `declare/` no further than the dataclass. A constraint

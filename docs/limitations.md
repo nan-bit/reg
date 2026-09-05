@@ -30,10 +30,14 @@ recorded in each artifact under `meta['envelope_geometry_retention']`.
 shapely version*. `reg.envelope.compute_envelope` unions sampled link polygons and
 `reg.tolerances.simplify_geometry` runs Douglas–Peucker over the result; both are
 GEOS operations, and GEOS is entitled to change its output in a release. So an
-assessor opening a five-year-old artifact against a newer shapely may get a polygon
-that differs from the one that was computed at build time — and on a discarded frame
-there is nothing in the file to notice the difference against. The frames that
-*kept* their geometry are the exception: there the stored polygon is authoritative
+assessor opening a five-year-old artifact against a newer shapely would get a
+polygon that differs from the one that was computed at build time — and on a
+discarded frame there is nothing in the file to notice the difference against.
+*Since issue #201 that assessor gets a refusal instead*, because shapely's
+version and GEOS's are two of the four keys the recompute path compares (below);
+the limitation is unchanged, and what a reader meets is now a stated
+could-not-evaluate rather than a number nothing qualifies. The frames that *kept*
+their geometry are the exception: there the stored polygon is authoritative
 and a recomputation that disagrees with it is detectable, which is exactly what
 `tests/test_graph.py::test_envelope_at_recomputes_the_stored_polygon_exactly`
 checks. Those frames are the ends of the run and the transitions an incident report
@@ -63,10 +67,15 @@ and
 parametrizations differed in their last bits on arm64 Darwin (issue #175).
 
 **The cost of that axis, in the same two directions.** An assessor recomputing a
-discarded envelope from a five-year-old artifact on a different architecture can
-get a polygon that differs from the one built at the time, for a reason the
-artifact does not record and cannot state. On a *stored* frame the disagreement
-is visible — `shapely.equals_exact(..., tolerance=0.0)` is what
+discarded envelope from a five-year-old artifact on a different architecture got
+a polygon that differed from the one built at the time, for a reason the artifact
+did not record and could not state. It records the reason since issue #200 and
+refuses the recomputation since issue #201, so on a discarded frame that assessor
+now meets a named could-not-evaluate instead of the number. What follows is the
+cost that remains — which is the whole of it on a *stored* frame, because a
+stored polygon is handed over on any machine and the refusal does not apply to
+it. There the disagreement is visible — `shapely.equals_exact(...,
+tolerance=0.0)` is what
 `tests/test_graph.py::test_envelope_at_recomputes_the_stored_polygon_exactly`
 compares with, deliberately at zero tolerance — and it is visible as a bare
 disagreement: nothing distinguishes *the geometry moved* from *this is a
@@ -95,13 +104,44 @@ Builds sense, adopted rather than invented ([`prior-art.md`](prior-art.md) §27)
 and putting it inside `meta` rather than beside the artifact is a stated
 deviation from that practice with Claim 2 as its reason.
 
-**Recording is not acting, and the difference is this section's.** Nothing yet
-refuses to recompute off the recording environment; `envelope_at` behaves exactly
-as it did before, so a reader who ignores the keys gets the pre-#200 answer. The
-guard is separate work ([`self-describing.md`](self-describing.md) §8, tier 2's
-second half). What the record does buy is that a disagreement can be turned into
-a could-not-evaluate rather than left unresolvable — and it buys neither
-portability nor attribution: it does not say *which* library moved the geometry.
+**And since issue #201 the record is acted on: the recompute path refuses.**
+`reg.graph.envelope_at` no longer answers with a recomputed polygon off the
+environment the artifact records. It compares four of the six keys —
+`reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`: the platform's system and machine,
+shapely and GEOS — and where any of them differs it raises, naming the key and
+both values. **It refuses rather than warning**, because a recomputed polygon
+that reaches a caller under a warning is a polygon that reaches a query result,
+and nothing downstream carries the qualifier.
+
+*What that changes for a reader, in three parts.*
+
+- **What used to be a number is now a refusal.** Before, an assessor on another
+  machine got a polygon, and the paragraphs above are the reason they could not
+  tell whether it was the one the run computed. They now get a
+  could-not-evaluate that names the difference — which is a worse answer and a
+  true one, and per *a check must be able to fail* the third state never
+  resolves to the first.
+- **Only recomputation is conditional.** A retained polygon is returned on any
+  machine: it was computed at build time, it is evidence in its own right, and
+  the condition does not apply to it. So an artifact stays readable everywhere;
+  what stops at the machine boundary is the part that was always conditional and
+  did not say so.
+- **The interpreter and numpy are recorded and do not trigger it.** A Python
+  patch release would make every artifact unrecomputable on any machine that has
+  been updated, which teaches whoever meets the refusal to switch it off. numpy
+  is the weaker call and is stated rather than left to be found: `numpy.cos` and
+  `numpy.sin` place every link endpoint, so a numpy difference *can* move the
+  geometry and this guard does not act on it. The file states both versions
+  either way, so a reader with a reason to care can compare them; what they
+  cannot do is have the reader refuse for them.
+
+**What the refusal still does not buy, and the wording is held to it.** It says
+the environments differ and names the key. It does not say which difference moved
+the geometry — nothing in that path has compared any geometry, and attribution
+needs a differ, which `diffoscope` is and this project has no analogue of
+([`prior-art.md`](prior-art.md) §27). So this is the **weaker half of
+attribution**: an unresolvable disagreement becomes a stated could-not-evaluate,
+and not an answer about which library is responsible.
 
 **What a claim would need instead, for this axis.** The same versioned,
 specified-output geometry kernel the paragraph above asks for, plus correctly
@@ -962,15 +1002,18 @@ the measurement and what a claim would need; the point here was that the fact
 lived in prose and not in the file, which is why the disagreement was unresolvable
 rather than merely unresolved.
 
-**This one is half-closed, 2026-09-05 (issue #200).** The environment is now
-*in the file* — shapely, GEOS, numpy, the interpreter and the platform,
-`reg.store.ENVIRONMENT_KEYS`, `SCHEMA_VERSION` 11 — so the fact no longer lives
-only here. What has not changed is that **nothing acts on it**: `envelope_at`
-recomputes as before, and the guard that reports a could-not-evaluate off the
-recording environment is the follow-up. So this row stays in the table with its
-question narrowed: an auditor can now ask the file *which machine built this*
-and get an answer, and still cannot ask *the code that reads artifacts* to refuse
-a recomputation somewhere else. The other two rows are untouched.
+**This one is closed in the weaker form, 2026-09-05 (issues #200 and #201).**
+The environment is *in the file* — shapely, GEOS, numpy, the interpreter and the
+platform, `reg.store.ENVIRONMENT_KEYS`, `SCHEMA_VERSION` 11 — and since #201 the
+code that reads artifacts **acts on it**: `envelope_at` refuses to recompute a
+discarded polygon off the recording environment, naming the key that differs and
+both values (§1). So the question in the table is answered in the only direction
+a version comparison can answer it: an auditor is told *this is not that machine*
+and is not told *which library moved the geometry*, because a version list is not
+a differ. What remains, and is why this row does not leave the table, is that the
+refusal is a could-not-evaluate rather than an attribution, and that matching
+environments are necessary and not sufficient — the C library is not among the
+keys. The other two rows are untouched.
 
 *3 — the pointwise question requires a recomputation, which routes back through
 2.* A stored `envelope` row retains `outer_area` and `outer_radius`, not a
@@ -1001,7 +1044,8 @@ and the verdicts are untouched.
 
 **What a claim would need in order not to inherit this.** That the file carry
 what the prose carries, which is [`self-describing.md`](self-describing.md) §3 and
-its build order in §8: the recording environment in `meta` (tier 2), a cold-read
+its build order in §8: the recording environment in `meta` and the guard that
+acts on it (tier 2, landed with issues #200 and #201), a cold-read
 test that fails when a tag disagrees with its own basis (tier 3), the layer basis
 per tagged edge (tier 4), and the outer boundary retained rather than projected
 (tier 5, a decision and not a task, because it moves published figures). Tier 1 —

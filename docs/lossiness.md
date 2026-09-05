@@ -403,10 +403,20 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    machine, so the disagreement can be **turned into a could-not-evaluate instead
    of an unresolvable one**. It does not make recomputation portable, and it does
    not say *which* library moved the geometry — `diffoscope` exists because a
-   version list does not give that, and nothing here proposes building one. Nor
-   does it act: `envelope_at` recomputes exactly as it did before, and a guard that
-   refuses to recompute off the recording environment is separate work
-   ([`self-describing.md`](self-describing.md) §8). One hole is stated rather than
+   version list does not give that, and nothing here proposes building one.
+
+   **And since issue #201 it acts.** `reg.graph.envelope_at` will not recompute a
+   discarded polygon off the recording environment: it compares the platform's
+   system and machine, shapely's version and GEOS's
+   (`reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`, four of the six recorded keys) and
+   refuses where any of them differs, naming the key and both values. So this
+   clause of the contract now has a reader that enforces its precondition rather
+   than one that assumes it — **a discarded polygon is recoverable on the
+   environment the file names, and is a stated could-not-evaluate anywhere else.**
+   The retained polygons are unaffected and are returned on any machine; they are
+   evidence in their own right, and the precondition is not about them.
+
+   One hole is stated rather than
    papered over — the C library is not recorded, because `platform.libc_ver()`
    reports nothing on macOS and under musl, so two artifacts can agree on all six
    keys and still have been linked against different libms. Matching environments

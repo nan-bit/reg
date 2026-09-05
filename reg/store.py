@@ -1666,10 +1666,11 @@ def build_environment() -> dict[str, str]:
     to be compared against the environment of whoever recomputes. It is also why
     there is no default anywhere below.
 
-    This function does not decide anything. It records, and the guard that
-    refuses to recompute off the recording environment is separate work
-    (docs/self-describing.md §8, tier 2's second half). `reg.graph.envelope_at`
-    behaves exactly as it did before this key block existed.
+    This function does not decide anything. It records. Deciding is
+    `reg.graph.envelope_at`'s, which since issue #201 refuses to recompute a
+    discarded polygon where the running environment differs from the one written
+    here on `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — four of the six below, and
+    that function is where the difference between the two lists is argued.
 
     Returns:
         `ENVIRONMENT_KEYS` to their values, in that order, every key present.

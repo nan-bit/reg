@@ -44,6 +44,14 @@ columns Claim 1's published figures are measured on. What this file adds is the
 provenance block above them, whose version already records that a header with no
 base columns is a statement about the *run* (see `PROVENANCE_VERSION`).
 
+Since issue #178 there are runs that take that path: `reg.scenarios` registers
+three mobile fixtures, and `python -m reg.sim --scenario mobile_transit --out
+runs/mobile.csv` writes a stream with both blocks in it. They are resolved
+through `reg.scenarios.scenario` rather than looked up in `SCENARIOS`, because
+they are deliberately not in that mapping — it is what `reg.bench --all` prices
+and Claim 1 stays a fixed-arm claim. `--list` prints both groups under headings;
+a fixture this command declined to name would be one nobody could run.
+
 ON `--seed` HAVING A DEFAULT
 ----------------------------
 CLAUDE.md forbids inventing defaults, and the reason it gives is precise: an
@@ -65,7 +73,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from reg import __version__
-from reg.scenarios import SCENARIOS, Scenario, scenario
+from reg.scenarios import MOBILE_SCENARIOS, SCENARIOS, Scenario, scenario
 from reg.stream import FLOAT_PRECISION, read_comments, write_frames
 
 #: Usage errors exit with argparse's own code, so the shell sees one convention.
@@ -172,7 +180,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--scenario",
         metavar="NAME",
-        help=f"one of: {', '.join(SCENARIOS)}",
+        help=(
+            f"one of: {', '.join(SCENARIOS)}; or one of the mobile fixtures "
+            f"{', '.join(MOBILE_SCENARIOS)}. Run --list for what each is for."
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -202,16 +213,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.list:
-        for name, scn in SCENARIOS.items():
-            print(name)
-            print(
-                textwrap.fill(
-                    scn.description,
-                    width=76,
-                    initial_indent="    ",
-                    subsequent_indent="    ",
+        # Both registries, labelled. `MOBILE_SCENARIOS` is kept out of
+        # `SCENARIOS` so that nothing prices a mobile run beside the eleven
+        # Claim 1 is measured on (`reg.scenarios`), and that is a decision about
+        # *benchmarking*: a fixture this command declines to name is a fixture
+        # nobody can run, which would be a second, unstated decision.
+        for heading, registry in (
+            ("the fixed-base fixtures", SCENARIOS),
+            ("the mobile fixtures (docs/mobile-base.md §7)", MOBILE_SCENARIOS),
+        ):
+            print(f"# {heading}")
+            for name, scn in registry.items():
+                print(name)
+                print(
+                    textwrap.fill(
+                        scn.description,
+                        width=76,
+                        initial_indent="    ",
+                        subsequent_indent="    ",
+                    )
                 )
-            )
         return EXIT_OK
 
     # Both are required, but not `required=True`: that would make `--list`
@@ -235,9 +256,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {exc.args[0]}", file=sys.stderr)
         return EXIT_USAGE
 
+    # Resolved rather than looked up in `SCENARIOS`: not every runnable
+    # scenario is registered there — the mobile fixtures and the generated
+    # `long_run_<n>` are not — and a banner that indexed the registry would
+    # raise `KeyError` on a run `simulate` had just written to disk.
     print(
         f"wrote {path}: scenario={args.scenario} seed={args.seed} "
-        f"frames={SCENARIOS[args.scenario].n_frames} bytes={path.stat().st_size}"
+        f"frames={scenario(args.scenario).n_frames} bytes={path.stat().st_size}"
     )
     return EXIT_OK
 

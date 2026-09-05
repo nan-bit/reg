@@ -22,7 +22,7 @@ import sys
 import numpy as np
 import pytest
 
-from reg.scenarios import SCENARIOS, scenario
+from reg.scenarios import MOBILE_SCENARIOS, MOBILE_WORLD, SCENARIOS, scenario
 from reg.sim import (
     DEFAULT_SEED,
     EXIT_OK,
@@ -358,35 +358,28 @@ def test_list_needs_no_other_argument(capsys) -> None:
 
 
 def driving_scenario():
-    """A scenario whose base drives. Not a registered one: no fixture in
-    `SCENARIOS` drives, because Claim 1 is priced on eleven bolted arms
-    (docs/mobile-base.md §7 Tier 4)."""
-    from reg.scenarios import Scenario, Waypoint
-    from reg.types import LimitSource, Limits, PoseSource, VelocitySource
-    from reg.world import DEMO_WORLD, ROOM, World
+    """A scenario whose base drives, constructed here rather than shipped.
 
-    limits = Limits(
-        q_min=np.array([-np.pi, -2.6]),
-        q_max=np.array([np.pi, 2.6]),
-        qd_max=np.array([2.0, 2.5]),
-        qdd_max=np.array([8.0, 10.0]),
-        link_lengths=np.array([0.5, 0.4]),
-        source=LimitSource.PROPRIOCEPTIVE,
-        link_radius=0.05,
-        base_v_max=0.8,
-        base_a_max=1.2,
-        base_omega_max=1.0,
-        base_alpha_max=2.0,
-    )
+    Not a registered one, and since issue #178 that is a narrower statement than
+    it was: three fixtures in `reg.scenarios.MOBILE_SCENARIOS` drive, and none of
+    them is in `SCENARIOS`, because Claim 1 is priced on the eleven bolted arms
+    (docs/mobile-base.md §7 Tier 4). This one stays because the tests below are
+    about the *producer* deciding nothing — a one-second run with no jitter in
+    the arm is the cheapest thing that makes the header question answerable, and
+    the shipped fixtures are exercised through the CLI further down.
+
+    Its robot is `MOBILE_WORLD`, imported rather than rebuilt: the four base
+    numbers used to be spelled out again here, and a second copy of them would
+    let this probe and the shipped fixtures drift into two different vehicles
+    without anything going red.
+    """
+    from reg.scenarios import Scenario, Waypoint
+    from reg.types import PoseSource, VelocitySource
+
     return Scenario(
         name="probe_drives",
         description="a base that drives, constructed by a test",
-        world=World(
-            room=ROOM,
-            obstacles=DEMO_WORLD.obstacles,
-            limits=limits,
-            human_radius=DEMO_WORLD.human_radius,
-        ),
+        world=MOBILE_WORLD,
         duration=1.0,
         joint_waypoints=(Waypoint(0.0, (0.0, 0.0)), Waypoint(1.0, (0.5, 0.5))),
         human_waypoints=(Waypoint(0.0, (2.0, 0.0)), Waypoint(1.0, (2.0, 0.5))),
@@ -469,3 +462,139 @@ def test_no_registered_scenario_grows_a_base_column(tmp_path, name: str) -> None
     assert header == expected_header(2, 3)
     assert len(header) == 24
     assert not any(column.startswith("base_") for column in header)
+
+
+# --------------------------------------------------------------------------
+# THE MOBILE FIXTURES THROUGH THIS CLI (issue #178, docs/mobile-base.md §7)
+#
+# The probe above is a scenario this file builds; these are the three the
+# package ships, and the difference is the whole of Tier 4. The issue's own
+# command is `python -m reg.sim --scenario <mobile> --out ...`, so what is
+# asserted here is that command: it exits zero, it writes a stream with both
+# base blocks, the stream reads back as the run, and it says what it wrote.
+#
+# The last of those is not a formality. `main` used to print its banner from
+# `SCENARIOS[args.scenario]`, which is a registry the mobile fixtures and the
+# generated `long_run_<n>` are deliberately not in — so the command wrote the
+# file and then raised `KeyError` describing it. Both are pinned below.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", list(MOBILE_SCENARIOS))
+def test_every_mobile_fixture_can_be_written_and_read(tmp_path, name: str) -> None:
+    """The issue's command, end to end, for each of the three.
+
+    The header is `expected_header(2, 3, base_vel=True, base_pose=True)` — the
+    two optional blocks of issue #176, which `write_frames` derives from the
+    frames rather than from a flag — and every frame comes back stating both.
+    """
+    path = run(tmp_path, name=name, out=f"{name}.csv")
+    scn = MOBILE_SCENARIOS[name]
+
+    assert header_line(path).split(",") == expected_header(
+        2, 3, base_vel=True, base_pose=True
+    )
+    got = list(read_frames(path))
+    want = list(scn.states(0))
+    assert len(got) == len(want) == scn.n_frames
+    for a, b in zip(got, want):
+        assert a.base_pose is not None and a.base_vel is not None
+        assert a.base_pose.x == pytest.approx(b.base_pose.x, abs=1e-6)
+        assert a.base_pose.y == pytest.approx(b.base_pose.y, abs=1e-6)
+        assert a.base_pose.theta == pytest.approx(b.base_pose.theta, abs=1e-6)
+        assert a.base_vel.vx == pytest.approx(b.base_vel.vx, abs=1e-6)
+        assert a.base_vel.vy == pytest.approx(b.base_vel.vy, abs=1e-6)
+        assert a.base_vel.omega == pytest.approx(b.base_vel.omega, abs=1e-6)
+        assert a.base_pose.source is scn.base_pose_source
+        assert a.base_vel.source is scn.base_vel_source
+
+    fields = parse_provenance(path)
+    assert fields["scenario"] == name
+    assert fields["seed"] == "0"
+    assert fields["frames"] == str(scn.n_frames)
+
+
+@pytest.mark.parametrize("name", list(MOBILE_SCENARIOS))
+def test_a_mobile_fixture_is_byte_identical_on_two_writes(tmp_path, name: str) -> None:
+    """CLAUDE.md rule 2, over the columns this tier added. Same seed, same bytes."""
+    a = run(tmp_path, name=name, seed=0, out=f"{name}-a.csv")
+    b = run(tmp_path, name=name, seed=0, out=f"{name}-b.csv")
+    assert a.read_bytes() == b.read_bytes()
+
+
+@pytest.mark.parametrize("name", list(MOBILE_SCENARIOS))
+def test_each_mobile_fixture_differs_between_seeds(tmp_path, name: str) -> None:
+    """The seed is a real input to a mobile run too, and for `mobile_frozen_arm`
+    it is the only place that can be checked: that fixture states `q_jitter=0.0`
+    on purpose, so what the seed moves there is the human and the base path. A
+    `--seed` flag recorded in a stream it did not change is a lie in the
+    artifact.
+    """
+    scn = MOBILE_SCENARIOS[name]
+    assert scn.q_jitter > 0.0 or scn.human_jitter > 0.0 or scn.base_jitter != (0.0, 0.0)
+
+    a = run(tmp_path, name=name, seed=0, out=f"{name}-0.csv")
+    b = run(tmp_path, name=name, seed=1, out=f"{name}-1.csv")
+    assert a.read_bytes() != b.read_bytes()
+
+
+def test_the_banner_describes_a_run_that_is_not_in_the_registry(
+    tmp_path, capsys
+) -> None:
+    """**The regression this section exists for.**
+
+    `main` resolves the scenario it just simulated rather than indexing
+    `SCENARIOS`, so it can describe a run that registry does not hold. Fed a
+    mobile fixture and a generated long run — the two kinds `scenario()`
+    resolves and `SCENARIOS` does not — it must report the frame count of each
+    instead of raising over a file it has already written.
+    """
+    for name in ("mobile_transit", "long_run_60"):
+        path = tmp_path / f"{name}.csv"
+        assert main(["--scenario", name, "--seed", "0", "--out", str(path)]) == EXIT_OK
+        line = capsys.readouterr().out.strip()
+        assert f"scenario={name}" in line, line
+        assert f"frames={scenario(name).n_frames}" in line, line
+        assert path.exists()
+
+
+def test_list_names_the_mobile_fixtures_and_says_they_are_a_second_group(
+    capsys,
+) -> None:
+    """A fixture nothing lists is a fixture nobody can run.
+
+    `--list` is how a reader finds out what `--scenario` accepts, so keeping the
+    mobile fixtures out of `SCENARIOS` — which is about what `reg.bench` prices
+    — must not also keep them out of this. Both groups appear, and each under a
+    heading, because a flat list of fourteen names would say the two sets are
+    interchangeable and docs/mobile-base.md §7 is that they are not.
+    """
+    assert main(["--list"]) == EXIT_OK
+    out = capsys.readouterr().out
+    for name in list(SCENARIOS) + list(MOBILE_SCENARIOS):
+        assert name in out, name
+    assert "the fixed-base fixtures" in out
+    assert "the mobile fixtures" in out
+    for scn in MOBILE_SCENARIOS.values():
+        # The description is what says which claim the fixture is for, so the
+        # listing has to carry it rather than the name alone.
+        assert scn.description.split(".")[0][:40] in " ".join(out.split())
+
+
+def test_an_unknown_mobile_name_names_the_mobile_fixtures_in_its_refusal(
+    tmp_path, capsys
+) -> None:
+    """NEGATIVE. A typo in a mobile name must not read as 'no such thing'.
+
+    The refusal already listed the eleven; a reader who mistyped `mobile_transit`
+    and got back only the fixed-base names would reasonably conclude the fixture
+    does not exist.
+    """
+    path = tmp_path / "never.csv"
+    code = main(["--scenario", "mobile_transt", "--out", str(path), "--seed", "0"])
+
+    assert code == EXIT_USAGE
+    err = capsys.readouterr().err
+    for name in list(SCENARIOS) + list(MOBILE_SCENARIOS):
+        assert name in err, name
+    assert not path.exists(), "a refused run must not leave an artifact behind"

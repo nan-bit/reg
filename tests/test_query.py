@@ -2492,3 +2492,242 @@ def test_no_answer_cites_a_surrogate_key(attested) -> None:
             )
             cited += 1
     assert cited, "no answer cited an identifier, so nothing above was checked"
+
+
+# ==========================================================================
+# THE STANDARD QUESTIONS, PUT TO A MOBILE ARTIFACT (issue #178, §7 Tier 4)
+#
+# Everything above asks a bolted arm. `mobile_transit` is the first fixture in
+# this repository whose base drives, and the acceptance criterion of that tier
+# is that an artifact built from one can be *read back and queried* — which is
+# a claim about this module, not about the builder.
+#
+# The claim the fixture itself exists for is the one docs/sufficiency.md §5.6
+# makes: *can the robot reach this configuration* is Layer A and unchanged by a
+# drive, and *can the robot reach this room coordinate* is Layer B and has two
+# different answers in one run. `reachable_entities` is exactly that question,
+# and asked over the first second and over the last it must give exactly those
+# two answers.
+#
+# The second test here is the one that could rot quietly. Every distance in a
+# mobile artifact is measured from where the base was, and a builder that
+# placed the envelope but left the *body* at the origin would produce a file
+# that parses, answers every question, and is wrong about all of them. So the
+# separation answers are checked against a recomputation from the raw stream
+# that places the body at each frame's pose — and against one that does not,
+# which must disagree.
+# ==========================================================================
+
+#: `mobile_transit` at the builder's own horizon rather than `_FAST`'s 0.05.
+#: The room-frame claim is about the arm's *forward reachable set*, and at a
+#: 50 ms horizon that set is barely larger than the arm — the human is never in
+#: it, and `reachable_entities` would answer the empty set at both ends of the
+#: run for a reason that is about the parameter and not about the drive.
+_MOBILE_FAST = {
+    "horizon": 0.2,
+    "n_samples": 4,
+    "envelope_seed": 0,
+    "substep_dt": 0.05,
+    "occurrence_resolution_s": graph.OCCURRENCE_TIME_RESOLUTION_S,
+}
+
+#: The scene questions every artifact must be able to answer. The record-layer
+#: queries (`declared_bound`, `violations`, `verdicts`) are deliberately not
+#: here: this build is handed no record stream, so their could-not-evaluate is
+#: the honest answer and asserting `ANSWERED` for them would be asserting a bug.
+MOBILE_SCENE_QUERIES = (
+    "separation_timeline",
+    "min_separation",
+    "time_of_closest_approach",
+    "did_contact_occur",
+    "frames_at_risk",
+    "first_envelope_intersection",
+    "reachable_entities",
+)
+
+
+@pytest.fixture(scope="module")
+def mobile_built(tmp_path_factory) -> tuple[Path, Path]:
+    """One real build of `mobile_transit`: `(csv, sqlite)`.
+
+    Not through `bench.run_scenario`, which is the benchmark harness and would
+    price a run this repository does not price (docs/mobile-base.md §7:
+    **Claim 1 stays a fixed-arm claim**). The producer and the builder are the
+    same two calls that harness makes; what is skipped is the measurement.
+    """
+    from reg.sim import simulate
+
+    work = tmp_path_factory.mktemp("mobile-query")
+    scn = scenario("mobile_transit")
+    csv, out = work / "mobile.csv", work / "mobile.sqlite"
+    simulate(scn.name, 0, csv)
+    graph.build(
+        csv,
+        out,
+        scn.world.limits,
+        identity=TEST_IDENTITY,
+        human_radius=scn.world.human_radius,
+        horizon=_MOBILE_FAST["horizon"],
+        n_samples=_MOBILE_FAST["n_samples"],
+        seed=_MOBILE_FAST["envelope_seed"],
+        substep_dt=_MOBILE_FAST["substep_dt"],
+        occurrence_resolution_s=_MOBILE_FAST["occurrence_resolution_s"],
+    )
+    return csv, out
+
+
+@pytest.mark.parametrize("name", MOBILE_SCENE_QUERIES)
+def test_every_scene_question_is_answered_by_a_mobile_artifact(
+    mobile_built, name: str
+) -> None:
+    """The acceptance criterion: the standard questions, against a run that drove.
+
+    `ANSWERED` and not merely "did not raise". A could-not-evaluate here would
+    be the honest report of a file that cannot answer, and that is exactly the
+    outcome this tier has to rule out — an artifact of a mobile run that parses
+    and answers nothing is the failure docs/mobile-base.md §7 says
+    `GEOMETRY_RETENTION`'s posed clause exists to prevent.
+    """
+    arguments = {
+        "separation_timeline": (graph.HUMAN_ENTITY_ID,),
+        "min_separation": (graph.HUMAN_ENTITY_ID,),
+        "time_of_closest_approach": (graph.HUMAN_ENTITY_ID,),
+        "did_contact_occur": (graph.HUMAN_ENTITY_ID,),
+        "frames_at_risk": (graph.HUMAN_ENTITY_ID, THRESHOLD_M),
+        "first_envelope_intersection": (graph.HUMAN_ENTITY_ID,),
+        "reachable_entities": (0.0, 5.0),
+    }
+    answer = _ask(mobile_built[1], getattr(query, name), *arguments[name])
+    assert answer.verdict == ANSWERED, f"{name}: {answer.reason}"
+    assert answer.value is not None
+
+
+def test_the_room_frame_answer_changes_because_the_base_drove(mobile_built) -> None:
+    """**The claim `mobile_transit` exists for, asked of the artifact**
+    (docs/sufficiency.md §5.6).
+
+    One person, standing still for the whole run. Over the first second the
+    reachable set names nobody; over the last it names them. The arm is not the
+    difference — it is folded for the transit and presented on arrival, and both
+    configurations are ones the robot could adopt anywhere — the difference is a
+    room-frame pose the robot did not measure.
+
+    Both halves are asserted, and the first is the one that makes the second
+    mean anything: a query that named the human over every window would satisfy
+    the second on its own.
+    """
+    artifact = mobile_built[1]
+    early = _ask(artifact, query.reachable_entities, 0.0, 1.0)
+    late = _ask(artifact, query.reachable_entities, 4.0, 5.0)
+
+    assert early.verdict == ANSWERED and late.verdict == ANSWERED
+    assert graph.HUMAN_ENTITY_ID in early.value.declared, (
+        "the human is not even declared in this artifact, so an empty early "
+        "answer would mean the entity is missing rather than out of reach"
+    )
+    assert early.value.entity_ids == (), (
+        f"the human is reachable over the first second ({early.value.entity_ids}); "
+        "this run is supposed to start from a pose that could not reach them"
+    )
+    assert graph.HUMAN_ENTITY_ID in late.value.entity_ids, (
+        f"the human is not reachable over the last second ({late.value.entity_ids}); "
+        "the drive did not change the answer and the fixture claims nothing"
+    )
+
+    first = _ask(artifact, query.first_envelope_intersection, graph.HUMAN_ENTITY_ID)
+    assert first.verdict == ANSWERED
+    assert first.value.t_first is not None and first.value.t_first > 1.0, (
+        "the envelope meets the human before the transit is under way"
+    )
+
+
+def _separation_from_csv(
+    csv_path: Path, limits, human_radius: float, *, posed: bool
+) -> list[tuple[float, float]]:
+    """The body-to-human distance per frame, recomputed from the raw stream.
+
+    `posed=True` places the body at each frame's own base pose, which is what a
+    room-frame separation *is* for a robot that drove; `posed=False` leaves it
+    at the origin, which is what the same code says for a bolted arm. The second
+    is here to be the negative: it is the timeline a builder that forgot the
+    pose would produce, and the check below is only a check if it can tell the
+    two apart.
+
+    Deliberately not `bench.ground_truth_from_csv` — that function places every
+    body at `ORIGIN_FRAME`, which is correct for the eleven and is the *wrong*
+    of these two answers here.
+
+    **The whole timeline rather than its minimum**, and that is not a
+    generalization for its own sake: over this fixture the two minima happen to
+    fall within a centimetre of each other — the arm at full stretch from the
+    origin very nearly reaches a person the driven robot reaches comfortably —
+    so a check on the minimum alone would be one coincidence away from passing
+    for a builder that had dropped the pose entirely.
+    """
+    import numpy as np
+    from shapely.geometry import Point
+    from shapely.ops import unary_union
+
+    from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
+    from reg.stream import read_frames
+
+    out: list[tuple[float, float]] = []
+    for frame in read_frames(csv_path):
+        base = ORIGIN_FRAME
+        if posed:
+            pose = frame.base_pose
+            base = BaseFrame(x=pose.x, y=pose.y, theta=pose.theta)
+        body = unary_union(link_polygons(np.asarray(frame.q, dtype=float), limits, base))
+        human = Point(*(float(v) for v in frame.human_pos)).buffer(human_radius)
+        out.append((float(frame.t), float(body.distance(human))))
+    assert out, f"{csv_path} yielded no frames"
+    return out
+
+
+def test_the_separation_a_mobile_artifact_reports_is_measured_from_where_it_drove(
+    mobile_built,
+) -> None:
+    """**The half that would rot quietly**, and its negative in one test.
+
+    The separation timeline in a mobile artifact must agree, frame for frame,
+    with a recomputation that places the robot's body at the pose each frame
+    recorded — and must *disagree* with the same recomputation at the origin.
+    Without the second half this is a check that cannot fail in the direction
+    that matters: an artifact whose separations were all measured for a robot at
+    (0, 0) would still answer every question in this module, and every answer
+    would be about a robot that was somewhere else.
+    """
+    csv, artifact = mobile_built
+    scn = scenario("mobile_transit")
+    answer = _ask(artifact, query.separation_timeline, graph.HUMAN_ENTITY_ID)
+    assert answer.verdict == ANSWERED, answer.reason
+
+    reported = {round(t, 6): d for t, d in answer.value.samples}
+    at_the_pose = _separation_from_csv(
+        csv, scn.world.limits, scn.world.human_radius, posed=True
+    )
+    at_the_origin = _separation_from_csv(
+        csv, scn.world.limits, scn.world.human_radius, posed=False
+    )
+    assert len(reported) == len(at_the_pose), (
+        f"the artifact answers {len(reported)} frames and the stream has "
+        f"{len(at_the_pose)}"
+    )
+
+    for t, truth in at_the_pose:
+        got = reported[round(t, 6)]
+        assert abs(got - truth) <= DISTANCE_TOL_M, (
+            f"t={t}: the artifact reports {got} m and the stream says "
+            f"{truth:.4f} m from where the base actually was"
+        )
+
+    disagreements = [
+        t
+        for t, wrong in at_the_origin
+        if abs(reported[round(t, 6)] - wrong) > DISTANCE_TOL_M
+    ]
+    assert len(disagreements) > len(at_the_origin) // 2, (
+        f"the artifact agrees with a body left at the origin on all but "
+        f"{len(disagreements)} of {len(at_the_origin)} frames, which is what a "
+        "builder that dropped the base pose would produce"
+    )

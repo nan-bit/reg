@@ -42,6 +42,9 @@ from reg.enforce import FAULTS
 from reg.envelope import compute_envelope, outer_envelope
 from reg.scenarios import (
     DEFAULT_DT,
+    MOBILE_LIMITS,
+    MOBILE_SCENARIOS,
+    MOBILE_WORLD,
     SCENARIOS,
     Scenario,
     Waypoint,
@@ -80,6 +83,22 @@ EXPECTED_NAMES = [
     "envelope_overclaim",
     "out_of_vocabulary_action",
 ]
+
+#: The three mobile fixtures (issue #178), in `MOBILE_SCENARIOS` and
+#: deliberately not in `SCENARIOS` — see `test_the_mobile_fixtures_are_a_second
+#: _catalogue_and_not_an_addition_to_the_first`. They are held to every generic
+#: invariant in this file that is about a *run* rather than about a bolted base:
+#: monotonic time, determinism under seed, joint limits, the room, the
+#: obstacles, the arm's acceleration bound. A fixture that drove would be a poor
+#: place to start relaxing any of those.
+MOBILE_NAMES = [
+    "mobile_transit",
+    "mobile_frozen_arm",
+    "mobile_overclaim",
+]
+
+#: Every fixture in the package, for the invariants that hold of both kinds.
+ALL_NAMES = EXPECTED_NAMES + MOBILE_NAMES
 
 #: The six faults in `reg.enforce.FAULTS` that are about what a declaration
 #: *meant*. Each one has a fixture, which is the claim issue #46 makes.
@@ -270,20 +289,20 @@ def test_scenario_lookup_names_the_alternatives_when_it_fails() -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_every_scenario_produces_frames(name: str) -> None:
     got = frames(name, seed=0)
     sc = scenario(name)
     assert len(got) == sc.n_frames > 1
     assert len(got) == int(round(sc.duration / sc.dt)) + 1
     for f in got:
-        assert f.q.shape == (len(DEMO_WORLD.limits.link_lengths),)
+        assert f.q.shape == (len(sc.world.limits.link_lengths),)
         assert f.qd.shape == f.q.shape
         assert f.human_pos.shape == (2,)
         assert f.human_vel.shape == (2,)
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_timestamps_are_monotonic_at_the_stated_dt(name: str) -> None:
     sc = scenario(name)
     times = np.array([f.t for f in sc.states(seed=0)])
@@ -291,10 +310,10 @@ def test_timestamps_are_monotonic_at_the_stated_dt(name: str) -> None:
     assert np.all(np.diff(times) > 0.0)
     assert np.allclose(np.diff(times), sc.dt, atol=1e-12)
     assert times[-1] == pytest.approx(sc.duration, abs=1e-12)
-    assert sc.dt == DEFAULT_DT  # all six fixtures run at the plan's 50 Hz
+    assert sc.dt == DEFAULT_DT  # every fixture here runs at the plan's 50 Hz
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 @pytest.mark.parametrize("seed", SEEDS)
 def test_same_seed_produces_identical_frames(name: str, seed: int) -> None:
     """Same seed, same bytes — compared field by field, not by summary."""
@@ -308,9 +327,15 @@ def test_same_seed_produces_identical_frames(name: str, seed: int) -> None:
         assert np.array_equal(a.human_pos, b.human_pos)
         assert np.array_equal(a.human_vel, b.human_vel)
         assert a.objects == b.objects
+        # The base too, for a fixture that has one. `BasePose` and
+        # `BaseVelocity` are frozen dataclasses of floats, so equality is
+        # exact — which is what determinism means here — and `None == None`
+        # keeps the eleven asserting what they always asserted.
+        assert a.base_pose == b.base_pose
+        assert a.base_vel == b.base_vel
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_a_different_seed_produces_a_different_run(name: str) -> None:
     """Negative test for the seed itself: if it changed nothing, determinism
     would be trivially true and the seed recorded with each run would be
@@ -324,7 +349,7 @@ def test_a_different_seed_produces_a_different_run(name: str) -> None:
     assert differs, f"{name}: seed 0 and seed 1 gave identical runs"
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_velocity_is_the_slope_of_the_interpolant(name: str) -> None:
     """Within a segment, position must be the integral of the reported velocity.
     A frame whose qd does not match its own trajectory would poison every
@@ -339,7 +364,7 @@ def test_velocity_is_the_slope_of_the_interpolant(name: str) -> None:
         assert np.allclose(b.human_pos - a.human_pos, a.human_vel * sc.dt, atol=1e-12)
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_no_fixture_commands_more_acceleration_than_the_arm_has(name: str) -> None:
     """**THE PLANT THE OUTER BOUND ASSUMES** (issue #96).
 
@@ -398,7 +423,7 @@ def test_the_outer_bound_contains_the_body_it_promises_to(name: str) -> None:
             )
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_frame_arrays_are_read_only(name: str) -> None:
     """A record that can be edited after the fact is not evidence."""
     f = next(scenario(name).states(seed=0))
@@ -619,32 +644,38 @@ def test_the_silent_windows_say_when_the_policy_is_quiet() -> None:
     assert close_at - open_at > 0.5
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 @pytest.mark.parametrize("seed", SEEDS)
 def test_commands_stay_within_the_physical_limits(name: str, seed: int) -> None:
+    # The scenario's own limits, not the module's: the mobile fixtures run on a
+    # `Limits` whose arm is identical and whose base is not, and a test that
+    # reached past the fixture for its bounds would be checking the wrong robot
+    # the moment those two arms differ.
+    limits = scenario(name).world.limits
     for f in scenario(name).states(seed):
-        assert np.all(f.q >= LIMITS.q_min), f"{name}: q below q_min at t={f.t}"
-        assert np.all(f.q <= LIMITS.q_max), f"{name}: q above q_max at t={f.t}"
+        assert np.all(f.q >= limits.q_min), f"{name}: q below q_min at t={f.t}"
+        assert np.all(f.q <= limits.q_max), f"{name}: q above q_max at t={f.t}"
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_the_human_stays_in_the_room_and_clear_of_the_obstacles(name: str) -> None:
     """Obstacles are static scenery here; a human walking through one would make
     every separation answer about that entity meaningless."""
+    world = scenario(name).world
     for f in scenario(name).states(seed=11):
         x, y = float(f.human_pos[0]), float(f.human_pos[1])
-        assert ROOM.contains_circle(x, y, DEMO_WORLD.human_radius)
+        assert world.room.contains_circle(x, y, world.human_radius)
         for obs in f.objects:
-            gap = float(np.hypot(x - obs.cx, y - obs.cy)) - obs.radius - DEMO_WORLD.human_radius
+            gap = float(np.hypot(x - obs.cx, y - obs.cy)) - obs.radius - world.human_radius
             assert gap > 0.0, f"{name}: human overlaps {obs.entity_id} at t={f.t}"
 
 
-@pytest.mark.parametrize("name", EXPECTED_NAMES)
+@pytest.mark.parametrize("name", ALL_NAMES)
 def test_every_frame_carries_the_worlds_obstacles(name: str) -> None:
     """The plan logs static objects per frame on purpose: the raw stream must be
     inflated honestly, or Claim 1 compares against a baseline nobody would log."""
     for f in scenario(name).states(seed=0):
-        assert f.objects == DEMO_WORLD.obstacles
+        assert f.objects == scenario(name).world.obstacles
         assert isinstance(f.objects, tuple)
 
 
@@ -990,30 +1021,12 @@ def test_scenarios_are_frozen() -> None:
 # is the half every published figure in this repository depends on.
 # --------------------------------------------------------------------------
 
-#: A `Limits` that can drive, identical to `reg.world.LIMITS` in its arm. The
-#: four base numbers are fixture parameters stated here, not measurements: this
-#: file needs a base that can execute a script, and `Scenario` refuses one that
-#: cannot (`test_a_trajectory_on_a_bolted_base_is_refused`).
-MOBILE_LIMITS = Limits(
-    q_min=np.array([-np.pi, -2.6]),
-    q_max=np.array([np.pi, 2.6]),
-    qd_max=np.array([2.0, 2.5]),
-    qdd_max=np.array([8.0, 10.0]),
-    link_lengths=np.array([0.5, 0.4]),
-    source=LimitSource.PROPRIOCEPTIVE,
-    link_radius=0.05,
-    base_v_max=0.8,
-    base_a_max=1.2,
-    base_omega_max=1.0,
-    base_alpha_max=2.0,
-)
-
-MOBILE_WORLD = World(
-    room=ROOM,
-    obstacles=DEMO_WORLD.obstacles,
-    limits=MOBILE_LIMITS,
-    human_radius=DEMO_WORLD.human_radius,
-)
+# `MOBILE_LIMITS` and `MOBILE_WORLD` are imported from `reg.scenarios` rather
+# than built here (issue #178). They were built here while nothing in the
+# package drove; the three mobile fixtures now run on exactly this robot, and a
+# second copy of its four base numbers in the test file would let the probe
+# scenario below and the shipped fixtures drift into two different vehicles
+# without anything going red.
 
 
 def _driving(**overrides) -> Scenario:
@@ -1566,3 +1579,395 @@ def test_a_driving_fixture_that_stays_in_the_room_runs_to_the_end() -> None:
     assert max(f.base_pose.x for f in frames) > 1.5, "it does reach the turn"
     for f in frames:
         assert scn.world.room_excursion(f.base_pose.x, f.base_pose.y, slack=0.0) is None
+
+
+# --------------------------------------------------------------------------
+# THE THREE MOBILE FIXTURES (issue #178, docs/mobile-base.md §7 Tier 4)
+#
+# Everything above this point tests a base that *can* drive against a scenario
+# built inside this file. These are the shipped ones, and the difference is the
+# whole of Tier 4: a claim demonstrated against a fixture constructed by its own
+# test is a claim about the test.
+#
+# What is asserted here is what each fixture's own comment says it is for, plus
+# the two halves that hold of all three: the catalogue is a second one rather
+# than an addition to the first (which is what keeps Claim 1 a fixed-arm claim),
+# and the executed base trajectory obeys the bounds the outer envelope's
+# soundness argument assumes.
+#
+# The fault each one does or does not produce needs the real enforcer over the
+# real declarations and lives in `tests/test_enforce.py`, as it does for the
+# eleven.
+# --------------------------------------------------------------------------
+
+
+def test_the_mobile_catalogue_is_exactly_the_three_named_fixtures() -> None:
+    """Three, each named for the claim it exercises, each keyed by its own name."""
+    assert list(MOBILE_SCENARIOS) == MOBILE_NAMES
+    for key, scn in MOBILE_SCENARIOS.items():
+        assert scn.name == key
+        assert scn.drives is True
+        assert scn.world is MOBILE_WORLD
+        # Resolvable by name, or a stream naming one could not be rebuilt:
+        # the robot's `Limits` and the human's radius are not columns
+        # (`reg.graph._resolve_world`).
+        assert scenario(key) is scn
+
+
+def test_the_mobile_fixtures_are_a_second_catalogue_and_not_an_addition_to_the_first() -> None:
+    """**The half every published figure depends on** (docs/mobile-base.md §5).
+
+    `SCENARIOS` is what `reg.bench --all` prices and what docs/retention.md is
+    measured over, and Claim 1 stays a fixed-arm claim. A mobile fixture in that
+    mapping would be priced beside the eleven by arithmetic rather than by
+    argument — and it writes a wider stream besides, so the gzip baseline every
+    ratio is divided by would move too.
+
+    Both directions are asserted. The eleven are still the eleven and none of
+    them drives; the three are resolvable and none of them is registered.
+    """
+    assert list(SCENARIOS) == EXPECTED_NAMES
+    assert set(SCENARIOS) & set(MOBILE_SCENARIOS) == set()
+    assert not any(scenario(name).drives for name in EXPECTED_NAMES)
+    assert all(scenario(name).drives for name in MOBILE_NAMES)
+
+
+def test_the_benchmark_refuses_to_price_a_mobile_fixture(capsys) -> None:
+    """**NEGATIVE, and the one that keeps Claim 1 a fixed-arm claim.**
+
+    Keeping the three out of `SCENARIOS` is only worth something if the thing
+    that iterates `SCENARIOS` also refuses them by name — otherwise
+    `reg.bench --scenario mobile_transit` would produce a row in the same table
+    as the eleven, and a mobile artifact's bytes would have been reported beside
+    figures they are not comparable to (a driving run writes the two optional
+    base blocks, so the gzipped baseline every ratio is divided by is a
+    different file).
+
+    The control is the other half: a fixed-base name is still accepted, so this
+    is a refusal of *these* fixtures and not a benchmark that has stopped
+    accepting `--scenario` at all.
+    """
+    from reg import bench
+
+    parser = bench._parser()
+    with pytest.raises(SystemExit):
+        bench._selected(parser.parse_args(["--scenario", "mobile_transit"]), parser)
+    err = capsys.readouterr().err
+    assert "unknown scenario" in err, err
+
+    accepted = bench._selected(parser.parse_args(["--scenario", "contact"]), parser)
+    assert accepted == ["contact"], (
+        "the benchmark no longer accepts a fixed-base fixture either, so the "
+        "refusal above says nothing about the mobile ones"
+    )
+
+
+def test_an_unknown_name_names_the_mobile_fixtures_too() -> None:
+    """A typo in a mobile name must not read as 'that fixture does not exist'."""
+    with pytest.raises(KeyError, match="unknown scenario") as refusal:
+        scenario("mobile_transt")
+    message = refusal.value.args[0]
+    for name in MOBILE_NAMES:
+        assert name in message, message
+
+
+@pytest.mark.parametrize("name", MOBILE_NAMES)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_mobile_fixture_records_a_pose_and_a_rate_on_every_frame(
+    name: str, seed: int
+) -> None:
+    """A driving fixture writes both blocks, with both provenances, throughout.
+
+    A run that recorded a pose on some frames and not others is refused by
+    `reg.stream` and again by `reg.graph.build` (issue #191), because where a
+    run recorded a pose is a whole-run fact. Nothing here should ever produce
+    one, and this is where that is checked at the source.
+    """
+    scn = scenario(name)
+    got = list(scn.states(seed))
+    assert len(got) == scn.n_frames
+    for f in got:
+        assert f.base_pose is not None and f.base_vel is not None
+        assert f.base_pose.source is scn.base_pose_source
+        assert f.base_vel.source is scn.base_vel_source
+
+
+@pytest.mark.parametrize("name", MOBILE_NAMES)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_every_mobile_fixture_executes_a_trajectory_its_base_could_execute(
+    name: str, seed: int
+) -> None:
+    """All four base bounds, on the trajectory the frames actually record.
+
+    The same property `test_the_executed_base_trajectory_obeys_the_bases_own_
+    bounds` asserts of the probe scenario, on the shipped ones — and it is
+    load-bearing here for the reason issue #164 makes it load-bearing: since
+    `computed_bound` refuses a robot that drives, every VETO in a mobile run
+    rests on `reg.envelope.outer_envelope`, whose soundness argument assumes a
+    plant that respects exactly these four numbers.
+    """
+    scn = scenario(name)
+    limits = scn.world.limits
+    got = list(scn.states(seed))
+    assert max(np.hypot(f.base_vel.vx, f.base_vel.vy) for f in got) <= (
+        limits.base_v_max + 1e-12
+    )
+    assert max(abs(f.base_vel.omega) for f in got) <= limits.base_omega_max + 1e-12
+    for a, b in zip(got, got[1:]):
+        step = float(np.hypot(*(_room_frame(b) - _room_frame(a))))
+        assert step <= limits.base_a_max * scn.dt + 1e-12
+        assert abs(b.base_vel.omega - a.base_vel.omega) <= (
+            limits.base_alpha_max * scn.dt + 1e-12
+        )
+
+
+@pytest.mark.parametrize("name", MOBILE_NAMES)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_no_mobile_fixture_drives_at_its_own_speed_cap(name: str, seed: int) -> None:
+    """**The trap this tier walked into, kept shut.**
+
+    A base capped at exactly `base_v_max` is legal in memory and unbuildable on
+    disk: `reg.stream` writes at `FLOAT_PRECISION` decimals, so a rate at the cap
+    can round back a fraction over it, and `reg.envelope.base_motion_bounds`
+    then refuses the state — correctly, because its displacement bound is an
+    upper bound only while `|v0| <= v_max`. The first draft of `mobile_transit`
+    saturated, wrote a clean stream, and could not be built from it.
+
+    So the margin is asserted against the quantum the stream is written at
+    rather than against a number chosen here: half an ulp of the last written
+    decimal is the most the round trip can move a component, and a fixture with
+    a hundred of those in hand cannot be pushed over its own cap by rounding.
+    """
+    from reg.stream import FLOAT_PRECISION
+
+    scn = scenario(name)
+    limits = scn.world.limits
+    quantum = 0.5 * 10.0 ** (-FLOAT_PRECISION)
+    speed = max(float(np.hypot(f.base_vel.vx, f.base_vel.vy)) for f in scn.states(seed))
+    assert limits.base_v_max - speed > 100.0 * quantum, (
+        f"{name} at seed {seed} peaks at {speed} m/s against a cap of "
+        f"{limits.base_v_max}; that is inside the rounding of the stream it "
+        "will be written to, and the build will refuse the state it reads back"
+    )
+
+
+@pytest.mark.parametrize("name", MOBILE_NAMES)
+def test_the_outer_bound_contains_the_driven_body_it_promises_to(name: str) -> None:
+    """**The soundness test that matters most for a robot that drives** (#164).
+
+    `test_the_outer_bound_contains_the_body_it_promises_to` asks this of the
+    eleven, where the bound is floored by a workspace disc anyway. Here there is
+    no floor: `computed_bound` refuses this robot, so the outer set is the only
+    thing standing between a declaration and a VETO, and the promise it makes is
+    that the body cannot leave it within the horizon.
+
+    The comparison is in the body frame of the frame the bound was computed at,
+    because that is the frame `outer_envelope` returns its set in: the body at a
+    later frame is placed at that frame's *room* pose and then carried back
+    through the earlier pose. Both halves of the base's motion are in that
+    transform — the metres it drove and the radians it turned — so a bound that
+    had forgotten either would fail here.
+    """
+    scn = scenario(name)
+    got = list(scn.states(seed=0))
+    horizon = 0.2
+    span = int(round(horizon / scn.dt))
+    for i in range(0, len(got) - span, max(1, span // 2)):
+        outer = outer_envelope(
+            got[i].proprio(), scn.world.limits, horizon=horizon, base=ORIGIN_FRAME
+        )
+        for j in range(i, i + span + 1):
+            body = _in_the_frame_of(got[j], got[i], scn.world.limits)
+            escaped = body.difference(outer).area
+            assert escaped == 0.0, (
+                f"{name}: the body at frame {j} escapes the outer set computed "
+                f"at frame {i} by {escaped:.6f} m^2. For this robot that set is "
+                "the whole bound (issue #164), so what escapes it is what a "
+                "VETO would have failed to catch."
+            )
+
+
+def _in_the_frame_of(later, earlier, limits) -> Polygon:
+    """`later`'s body, in the body frame `earlier`'s outer envelope is stated in.
+
+    Room-frame placement of the later configuration, then the inverse of the
+    earlier pose. Written out rather than taken from `reg.graph._place` and
+    inverted, because the point of the test is to compose the transform from the
+    poses the *frames* record.
+    """
+    from shapely.affinity import affine_transform
+
+    body = unary_union(link_polygons(np.asarray(later.q, dtype=float), limits))
+    for pose, sign in ((later.base_pose, +1.0), (earlier.base_pose, -1.0)):
+        theta = sign * float(pose.theta)
+        cos, sin = float(np.cos(theta)), float(np.sin(theta))
+        if sign > 0.0:
+            body = affine_transform(
+                body, (cos, -sin, sin, cos, float(pose.x), float(pose.y))
+            )
+        else:
+            body = affine_transform(body, (1.0, 0.0, 0.0, 1.0, -float(pose.x), -float(pose.y)))
+            body = affine_transform(body, (cos, -sin, sin, cos, 0.0, 0.0))
+    return body
+
+
+# --- mobile_transit: the room-frame answer is Layer B -----------------------
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_the_transit_fixture_reaches_a_coordinate_its_starting_base_could_not(
+    seed: int,
+) -> None:
+    """**The claim `mobile_transit` exists for** (docs/sufficiency.md §5.6).
+
+    Three statements about one stationary person, and the middle one is the
+    fixture:
+
+    1. From the base pose the run *starts* at, they are outside the workspace
+       disc — the set of every configuration of the arm with no horizon in it —
+       so no Layer A question asked at t=0 puts the robot near them.
+    2. From the base pose the run *ends* at, they are inside the arm's forward
+       reachable set, computed from proprioception and placed at the pose.
+    3. Nothing touches them, so this is a reachability claim and not a contact
+       one.
+
+    What changed between 1 and 2 is a room-frame pose the robot did not measure,
+    which is exactly why the room-frame answer is Layer B and the body-frame one
+    is not.
+    """
+    scn = scenario("mobile_transit")
+    got = list(scn.states(seed))
+    first, last = got[0], got[-1]
+
+    start_gap = (
+        float(np.hypot(first.human_pos[0] - first.base_pose.x,
+                       first.human_pos[1] - first.base_pose.y))
+        - scn.world.max_reach
+        - scn.world.human_radius
+    )
+    assert start_gap > 0.0, (
+        "the person is inside the workspace disc at the first frame, so the run "
+        "does not begin from a pose that could not reach them"
+    )
+
+    inside = _human_in_the_envelope(last, scn)
+    assert inside, (
+        "the person is not inside the reachable envelope at the last frame, so "
+        "the drive did not change the answer and the fixture claims nothing"
+    )
+    assert not _human_in_the_envelope(first, scn), (
+        "the person is already inside the envelope at the first frame"
+    )
+
+    for f in got:
+        assert _body_clearance(f, scn) > 0.0, (
+            f"mobile_transit contacts the person at t={f.t}; it is a "
+            "reachability fixture and `contact` is a different one"
+        )
+
+
+def _human_in_the_envelope(frame, scn) -> bool:
+    """Whether the human disc meets the room-frame envelope at one frame.
+
+    The envelope is the body-frame set `compute_envelope` returns placed at the
+    frame's own pose — `reg.graph` does exactly this and for the reason
+    docs/mobile-base.md §2 gives. Four samples, which is the corner count for
+    this arm: the sampled set only grows with more, so a positive found here is
+    a positive at any resolution the builder uses.
+    """
+    from shapely.affinity import affine_transform
+
+    env = compute_envelope(
+        frame.proprio(), scn.world.limits, horizon=0.2, n_samples=4, seed=0
+    )
+    pose = frame.base_pose
+    cos, sin = float(np.cos(pose.theta)), float(np.sin(pose.theta))
+    env = affine_transform(env, (cos, -sin, sin, cos, float(pose.x), float(pose.y)))
+    return env.intersects(_human_disc(frame, scn))
+
+
+def _human_disc(frame, scn) -> Polygon:
+    return Point(float(frame.human_pos[0]), float(frame.human_pos[1])).buffer(
+        scn.world.human_radius
+    )
+
+
+def _body_clearance(frame, scn) -> float:
+    """Metres between the robot's placed body and the human disc at one frame."""
+    from shapely.affinity import affine_transform
+
+    body = unary_union(
+        link_polygons(np.asarray(frame.q, dtype=float), scn.world.limits)
+    )
+    pose = frame.base_pose
+    cos, sin = float(np.cos(pose.theta)), float(np.sin(pose.theta))
+    body = affine_transform(body, (cos, -sin, sin, cos, float(pose.x), float(pose.y)))
+    return float(body.distance(_human_disc(frame, scn)))
+
+
+# --- mobile_frozen_arm: driving is not reaching -----------------------------
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_the_frozen_arm_fixture_freezes_its_arm_and_drives_its_base(seed: int) -> None:
+    """The arrangement, checked at the source. Both halves, because one is not it.
+
+    A run whose arm crept would not be a frozen arm, and a run whose base sat
+    still would not be driving. `q_jitter=0.0` is what makes the first true and
+    it is stated on the fixture rather than left to be noticed here.
+    """
+    scn = scenario("mobile_frozen_arm")
+    assert scn.q_jitter == 0.0
+    got = list(scn.states(seed))
+    for f in got:
+        assert np.array_equal(f.q, got[0].q), f"the arm moved at t={f.t}"
+        assert not np.any(f.qd), f"the arm has a velocity at t={f.t}"
+    assert abs(got[-1].base_pose.x - got[0].base_pose.x) > 0.9
+    assert abs(got[-1].base_pose.theta - got[0].base_pose.theta) > 0.5
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_driving_is_not_reaching_over_a_run_that_actually_drove(seed: int) -> None:
+    """**The claim `mobile_frozen_arm` exists for** (issue #165, §4 item 6).
+
+    `reg.declare._classify` reads `reach` against `retract` off the arm's own
+    extension, measured in the body frame and blind to the base. Before issue
+    #165 it measured from the room origin, which is the same number for a bolted
+    arm and a different one for a vehicle: drive forward with a frozen arm and
+    the tip's distance from the origin grows, so the interval was recorded as a
+    `reach` the robot never made.
+
+    This is that regression put to a run rather than to a constructed pair of
+    frames — the base poses handed to the classifier are the ones the fixture
+    recorded. The tip travels most of a metre through the room; the extension
+    does not move by one bit; the classification is `traverse`, which is what
+    the vocabulary has for a body that moved and an arm that did not.
+    """
+    import reg.declare
+    from reg.kinematics import BaseFrame, forward_kinematics
+
+    scn = scenario("mobile_frozen_arm")
+    limits = scn.world.limits
+    got = list(scn.states(seed))
+    configs = np.array([np.asarray(f.q, dtype=float) for f in got])
+    bases = tuple(
+        BaseFrame(x=f.base_pose.x, y=f.base_pose.y, theta=f.base_pose.theta)
+        for f in got
+    )
+
+    # The room really did move the end effector, or there is nothing to be blind
+    # to. Measured from the origin, which is what the defective version used.
+    from_origin = [
+        float(np.linalg.norm(forward_kinematics(f.q, limits, base)[-1][1]))
+        for f, base in zip(got, bases)
+    ]
+    assert from_origin[-1] - from_origin[0] > 0.5
+
+    # And the arm's own extension did not, to the bit.
+    extensions = {reg.declare._extension(config, limits) for config in configs}
+    assert len(extensions) == 1
+
+    assert reg.declare._classify(configs, limits, bases) == "traverse", (
+        "a frozen arm on a driving base is a traverse; `reach` here would mean "
+        "the classifier is reading the base's motion as the arm's"
+    )

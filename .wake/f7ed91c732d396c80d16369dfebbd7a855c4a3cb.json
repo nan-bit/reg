@@ -1,0 +1,185 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "191-1788567223471428896-3062943",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "harness": "wake-runner",
+      "harness_version": "v0.4.6 (57c73c13e)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "8b492927d7510dd195f7da02720543212a0cec3b377901ab5cac57d015e332b3",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "8c2150693bb9fc9f5a807f1370afdfcf7882a93337a1b1eb4e8158006473afff",
+        "authored_by": "788a56200ecfcdccd9dfd07fb823b480e449bad80e1f37cd978abe07a95ecc70",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "66804116af113f7f212007ffac02017d7d4494a83b509c13fcae4c32b329abc9",
+        "concluded": "03b3596452370eae4dd2ebeeb006515a33cebba348c76b27c38898332d0c1feb",
+        "coverage": "686755c75d784e98e951722d806dbe6c022593c57f68b912aaf249d59ba57440",
+        "declared": "4ecd211ca17a14f626590e17e9c3c61ed11ca54aa2d96e66a7aeadd25f7ed453",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "70260742c2952154c84e2ea9f68b1a7397f49b6d343da1ed284093c0bd72c742",
+        "out_of_scope": "b785c8cc92aaadf2890e5b5818224b7a3c001630a99d7e71d1b635c47b9ed595",
+        "preceding": "b92b09cf3ddb325b1ea1192f7ac79ca26598bd725126d954ae8cf8bf3a6a7bdf",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "cb4df021dafd12853b399e54be16395692761d34e6cd86149f1cb3d8cb73efa6",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "f7ed91c732d396c80d16369dfebbd7a855c4a3cb",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/README.md",
+        "docs/lossiness.md",
+        "docs/mobile-base.md",
+        "docs/sufficiency.md",
+        "reg/graph.py",
+        "tests/test_graph.py"
+      ],
+      "edge_kinds": [
+        "file-reference",
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/README.md",
+        "docs/lossiness.md",
+        "docs/mobile-base.md",
+        "docs/sufficiency.md",
+        "reg/bench.py",
+        "reg/graph.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_enforce.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_layout.py",
+        "tests/test_personal_data.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_readme.py",
+        "tests/test_tolerances.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 48
+      },
+      "changed_unreadable": [
+        "docs/README.md",
+        "docs/lossiness.md",
+        "docs/mobile-base.md",
+        "docs/sufficiency.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 4
+      },
+      "unresolved_edges": [
+        {
+          "at": "reg/chain.py:493",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "reg/commit.py:443",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1257",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1259",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "README.md",
+        "docs/README.md",
+        "docs/lossiness.md",
+        "docs/mobile-base.md",
+        "docs/plan.md",
+        "docs/retention.md",
+        "docs/sensor-baseline.md",
+        "reg/graph.py",
+        "tests/test_graph.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 191,
+    "out_of_scope": [
+      "docs/sufficiency.md",
+      "reg/bench.py",
+      "scripts/check_bench_determinism.py",
+      "tests/test_baseline_stream_description.py",
+      "tests/test_bench.py",
+      "tests/test_bench_determinism.py",
+      "tests/test_chain.py",
+      "tests/test_commit.py",
+      "tests/test_enforce.py",
+      "tests/test_incumbent_encoding.py",
+      "tests/test_layer_boundary.py",
+      "tests/test_layout.py",
+      "tests/test_personal_data.py",
+      "tests/test_published_figures.py",
+      "tests/test_query.py",
+      "tests/test_readme.py",
+      "tests/test_tolerances.py"
+    ],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 2,
+      "state": "gap",
+      "unrecorded": [
+        "a2b666d5d5332c0291f08a1c8d248448c4e37f0f",
+        "eb9d6b090c91d078eaba4cd94c2be0998aa9eb97"
+      ]
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "out-of-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "f7ed91c732d396c80d16369dfebbd7a855c4a3cb"
+      },
+      "name": "auto/issue-191"
+    }
+  ]
+}

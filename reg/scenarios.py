@@ -1,5 +1,5 @@
-"""The eleven named scenario fixtures, and one generated long run. **Layer B** —
-this is simulator ground truth.
+"""The eleven named scenario fixtures, three mobile ones and one generated long
+run. **Layer B** — this is simulator ground truth.
 
 These are the fixtures everything downstream is measured against, so they come
 first (docs/plan.md, Phase 1). They are hand-authored and small on purpose:
@@ -24,6 +24,16 @@ fixed by the module constants below rather than drawn. It is not in `SCENARIOS`
 — there is no single frame count that would be the right one to register — but
 `scenario()` resolves its generated names, so a stream that says
 `scenario=long_run_3000` in its provenance block can still be rebuilt.
+
+The **three mobile fixtures** (issue #178, docs/mobile-base.md §7 Tier 4) are
+the first runs here in which the robot drives, and each one exists to make one
+claim of that track exercisable: `mobile_transit` that the room-frame answer is
+Layer B and the base pose reaches the artifact, `mobile_frozen_arm` that driving
+is not reaching, and `mobile_overclaim` that for a robot with no workspace disc
+a VETO rests on the outer reachable set and on nothing else. They are in
+`MOBILE_SCENARIOS` rather than in `SCENARIOS`, and the block comment above
+`MOBILE_LIMITS` is where that split is argued — in one line, **Claim 1 stays a
+fixed-arm claim** and a mobile run is not priced beside the eleven.
 
 What a scenario is: a fixed set of joint waypoints and a fixed human path,
 linearly interpolated at a fixed timestep. **No planner, no controller, no
@@ -52,11 +62,13 @@ from reg.kinematics import ORIGIN_FRAME
 from reg.types import (
     BasePose,
     BaseVelocity,
+    Limits,
+    LimitSource,
     PoseSource,
     StateFrame,
     VelocitySource,
 )
-from reg.world import DEMO_WORLD, World
+from reg.world import DEMO_WORLD, HUMAN_RADIUS, OBSTACLES, ROOM, World
 
 #: 50 Hz, from docs/plan.md Phase 1. Stated there, not invented here — and it is
 #: a field on `Scenario`, so a caller that needs another rate says so.
@@ -1280,27 +1292,395 @@ if len(SCENARIOS) != len(_ALL):  # pragma: no cover - construction-time invarian
     )
 
 
+# --------------------------------------------------------------------------
+# THE THREE MOBILE FIXTURES (issue #178, docs/mobile-base.md §7 Tier 4)
+#
+# The eleven above are bolted to the origin. These three drive, and they are the
+# first runs in this repository in which anything does.
+#
+# WHY THEY ARE NOT IN `SCENARIOS`, WHICH IS THE FIRST THING TO EXPLAIN.
+# `SCENARIOS` is what `reg.bench --all` prices and what every published figure
+# in docs/retention.md is measured over, and **Claim 1 stays a fixed-arm claim**
+# (docs/mobile-base.md §5): the mobile track is exploratory and unbenchmarked.
+# A mobile run also writes a wider stream — `reg.stream` derives the header from
+# the frames, so a driving run grows the two optional base blocks and stops
+# being the 24-column `expected_header(2, 3)` that Claim 1's gzip baseline is
+# divided by. Registering these beside the eleven would therefore move published
+# figures by arithmetic rather than by argument. So they live in their own
+# mapping, `scenario()` resolves them, and nothing that iterates `SCENARIOS`
+# sees them — the same split `long_run` already uses, for a different reason.
+#
+# WHAT THAT COSTS AND WHERE IT IS PAID. A reader of `reg.sim --list` sees both
+# groups, labelled, because a fixture nothing lists is a fixture nobody runs.
+#
+# THE FIXTURE LIST IS ARGUED, NOT ENUMERATED. Each of the three exists to make
+# one claim of this track exercisable, and the comment above it says which. A
+# fourth motion nobody can name a reason for would not be a fixture.
+#
+# Geometry to keep in your head, as for the eleven: the arm and the room are
+# unchanged — links 0.5 + 0.4, body radius 0.05, human disc 0.25, room
+# x in [-2, 3] and y in [-1.5, 2]. What is new is that the base is somewhere,
+# so every distance below is stated from *the base at that instant* and the
+# workspace disc travels with it.
+# --------------------------------------------------------------------------
+
+#: The same arm on a base that can drive. Identical to `reg.world.LIMITS` in
+#: every arm field — same links, same `qd_max`, same `qdd_max` — so that a
+#: difference between a mobile run and a fixed-base one is the base and not a
+#: second robot.
+#:
+#: The four base numbers are **fixture parameters stated here, not
+#: measurements**, exactly as `reg.world.LIMITS`'s four zeros are: a bolted arm
+#: states four zeros because that is a fact about its mounting, and this vehicle
+#: states four positive bounds because that is a fact about this fixture's
+#: robot. They are of the order a small indoor differential-drive base has —
+#: walking pace, a metre per second per second — and nothing downstream may read
+#: them as a datasheet.
+#:
+#: `PROPRIOCEPTIVE` for the reason `reg.world.LIMITS` gives (issue #84): these
+#: are the robot's own numbers and a function of nothing measured, so every
+#: `HAS_ENVELOPE` edge computed from them is Layer A *as far as the limits are
+#: concerned*. That is not the whole story for a mobile run and must not be read
+#: as one — an envelope over a configuration that states a base pose is Layer B
+#: whatever this field says, because the pose came from outside the robot
+#: (docs/sufficiency.md §5.8, issue #191).
+MOBILE_LIMITS = Limits(
+    q_min=np.array([-np.pi, -2.6]),
+    q_max=np.array([np.pi, 2.6]),
+    qd_max=np.array([2.0, 2.5]),
+    qdd_max=np.array([8.0, 10.0]),
+    link_lengths=np.array([0.5, 0.4]),
+    source=LimitSource.PROPRIOCEPTIVE,
+    link_radius=0.05,
+    base_v_max=0.8,
+    base_a_max=1.2,
+    base_omega_max=1.0,
+    base_alpha_max=2.0,
+)
+
+#: `reg.world.DEMO_WORLD` with the vehicle in it: the same room, the same three
+#: obstacles, the same human. Only `limits` differs, so the mobile fixtures and
+#: the eleven share a scene and a difference between them is the robot.
+#:
+#: **Built here rather than in `reg.world`** because `DEMO_WORLD` is the world
+#: every published figure is measured in and a second world beside it invites
+#: the two to be compared; this one belongs with the three fixtures that use it
+#: and with the comment above saying why they are not priced.
+MOBILE_WORLD = World(
+    room=ROOM,
+    obstacles=OBSTACLES,
+    limits=MOBILE_LIMITS,
+    human_radius=HUMAN_RADIUS,
+)
+
+# THE CLAIM: the room-frame answer is Layer B, and the base pose is in the
+# artifact (docs/sufficiency.md §5.6, issue #191).
+#
+# A person stands still in the room for five seconds and never moves. At the
+# pose the run starts from they are 1.51 m from the base — 0.31 m outside the
+# 1.20 m at which the *workspace disc* and their own disc first touch, and the
+# workspace disc is the whole set the arm could occupy in any configuration
+# with no horizon in it — so no question about the arm, asked at t=0, puts the
+# robot anywhere near them. The base then drives 0.79 m, the arm unfolds, and
+# the same person is inside the arm's forward reachable set for the last 1.5 s
+# of the run with the bodies clear by 6 cm.
+#
+# That is the distinction §5.6 is about, made concrete: *can the robot reach
+# this configuration* is Layer A and unchanged by the drive, and *can the robot
+# reach this room coordinate* has two different answers in one run and both of
+# them depend on a pose the robot did not measure. It is also the fixture that
+# proves an artifact built from a mobile run can be read back and queried — the
+# poses are on `robot_config`, the retained geometry is the room-frame envelope,
+# and the INTERSECTS edge exists because of where the base drove.
+MOBILE_TRANSIT = Scenario(
+    name="mobile_transit",
+    description=(
+        "A person stands still and the robot drives to them, arm folded, then "
+        "unfolds it. At the base pose the run starts from they are outside the "
+        "workspace disc entirely — no configuration of the arm reaches them, at "
+        "any horizon — and after a 0.79 m transit they are inside the arm's "
+        "forward reachable set for the last third of the run, bodies clear by "
+        "about 6 cm. The room-frame case: the same question about the same "
+        "coordinate has two answers in one run, and what changed is a pose "
+        "nothing on the robot measured."
+    ),
+    world=MOBILE_WORLD,
+    duration=5.0,
+    # Folded for the transit, then unfolded and held. THE FOLD IS LOAD-BEARING
+    # and was not the first draft: with the arm out throughout, its bearing from
+    # the base sweeps one way while the human's bearing sweeps the other, the
+    # two cross halfway through the drive, and the fixture makes contact — a
+    # `contact` fixture with a mobile base, which is not what this one claims.
+    # Carrying the arm in and presenting it on arrival is also what a vehicle
+    # does, and it puts the whole approach in the base's motion where this
+    # fixture's claim is.
+    #
+    # The presenting pose is `approach_and_retreat`'s midpoint mirrored about
+    # the y-axis — that fixture reaches up and to the *left* and this base
+    # drives to the right — which is where the (0.41, 0.86) relative placement
+    # of the human below comes from. A mirrored arm has a mirrored geometry, so
+    # the 0.11 m of body clearance that placement was chosen for is the same
+    # number here.
+    joint_waypoints=(
+        Waypoint(0.0, (1.20, -2.20)),
+        Waypoint(2.5, (1.20, -2.20)),
+        Waypoint(3.5, (0.74, -0.20)),
+        Waypoint(5.0, (0.74, -0.20)),
+    ),
+    # Parked at (1.02, 0.60) for the whole run: 1.51 m from the starting base
+    # and 1.01 m from where it settles, which is (0.43, 0.90) in the base's own
+    # frame at the end — the mirrored placement above, a few centimetres out.
+    # Measured across five seeds: the bodies never come closer than 6 cm and the
+    # person is inside the envelope on the last 75 frames of the run.
+    human_waypoints=(
+        Waypoint(0.0, (1.02, 0.60)),
+        Waypoint(5.0, (1.02, 0.60)),
+    ),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    # Straight along +x: a trapezoid, easing in over the first second and out
+    # over the last. THE SHAPE IS NOT DECORATION AND IT IS NOT TASTE.
+    #
+    # The base integrates this script under `base_a_max` rather than following
+    # it (see `states`), so a reference that starts or stops abruptly builds a
+    # position lag the integrator then closes at full acceleration — which
+    # overshoots in *speed* until it hits `base_v_max`, and leaves the executed
+    # path ringing about the target for the rest of the run. Both halves of that
+    # are a problem here and the first is the one that bites:
+    #
+    # **A base at exactly `base_v_max` writes a stream that will not build.**
+    # `reg.stream` writes at `FLOAT_PRECISION` decimals, so a body-frame rate
+    # capped at exactly 0.8 m/s can round back a fraction of a micrometre per
+    # second *over* it, and `reg.envelope.base_motion_bounds` correctly refuses
+    # a state outside its own limits — its displacement bound is an upper bound
+    # only while `|v0| <= v_max`. That refusal is right and the fixture is what
+    # has to change: a mobile fixture keeps clear of its own speed cap, and the
+    # margin has to be much larger than the quantum rather than merely nonzero.
+    # This profile peaks at 0.56 m/s against a cap of 0.80.
+    #
+    # And with it the base settles within a centimetre of 0.59 m and stays,
+    # which is what makes "it arrived, and then the person was reachable"
+    # something a reader can see rather than infer.
+    base_waypoints=(
+        Waypoint(0.0, (-0.20, -0.30, 0.0)),
+        Waypoint(1.0, (-0.05, -0.30, 0.0)),
+        Waypoint(2.5, (0.50, -0.30, 0.0)),
+        Waypoint(3.0, (0.59, -0.30, 0.0)),
+        Waypoint(5.0, (0.59, -0.30, 0.0)),
+    ),
+    # Dead reckoning, because that is what a base with wheel encoders and no
+    # map has and it is the weaker of the two — an artifact built from this run
+    # says its poses drift, which is the honest claim for a simulator that
+    # localizes nothing (docs/mobile-base.md §5: no perceiver is built).
+    base_pose_source=PoseSource.DEAD_RECKONED,
+    # The rates are the vehicle's own, off its wheels: Layer A, and what
+    # `reg.envelope.base_motion_bounds` reads.
+    base_vel_source=VelocitySource.PROPRIOCEPTIVE,
+    # A centimetre and five milliradians, the same order as the arm's 0.01 rad.
+    # Far smaller than the 0.31 m the claim above has in hand, so the fixture is
+    # the same fixture at every seed.
+    base_jitter=(0.01, 0.005),
+)
+
+# THE CLAIM: driving is not reaching (issue #165, docs/mobile-base.md §4 item 6).
+#
+# The arm holds one configuration for the whole run — `q_jitter=0.0`, said out
+# loud, because a seed that perturbed the two knots independently would unfreeze
+# it and there would be no frozen arm to make the claim about. The base drives a
+# metre and turns 0.6 rad under it, so the end effector's distance from the
+# *room origin* nearly doubles while the arm's own extension does not change by
+# one bit.
+#
+# `reg.declare._extension` is the measurement that has to be blind to that, and
+# it was not until issue #165: it took the base frame and subtracted it back,
+# which is exact in real arithmetic and not in floating point, so the same
+# frozen arm classified `traverse` on one machine and `retract` on another.
+# This run is what makes that regression visible in a *fixture* rather than in a
+# constructed pair of base frames — a run where the base really drove, whose
+# poses a test can hand straight to the classifier.
+#
+# AND IT SURFACES A GAP, WHICH IS WHAT A FIRST FIXTURE IS FOR. Run the scripted
+# policy over this run and every declaration comes back `hold`, not `traverse`.
+# That is not this fixture drifting: `reg.declare.emit_declarations` passes
+# `ORIGIN_FRAME` to `_classify` for every run, because a policy sees a
+# `ProprioState` and a base *pose* is Layer B — so with the configurations
+# identical the classifier takes its `hold` branch, and `hold` is exactly what
+# that function's own docstring says a driving robot is not. Nothing here is
+# wrong to fix it: the honest repair is for the policy to dead-reckon its own
+# frames from `base_vel`, which is a Layer A quantity it does hold, and that is
+# a decision about what the scripted policy is, not a fixture parameter. It is
+# recorded in docs/mobile-base.md §7 as something this tier does not support,
+# and the test beside this fixture asserts the claim that *is* true of the run —
+# no declaration in it is a `reach`, at any seed.
+MOBILE_FROZEN_ARM = Scenario(
+    name="mobile_frozen_arm",
+    description=(
+        "The arm holds one configuration — straight out along the body's own "
+        "+x — while the base drives a metre and turns 0.6 rad under it. The end "
+        "effector travels most of a metre through the room and the arm extends "
+        "by nothing, which is the whole distinction: driving is not reaching, "
+        "and an action class read off the tip's distance from the room origin "
+        "would call this run a `reach` it never made."
+    ),
+    world=MOBILE_WORLD,
+    duration=3.0,
+    # Straight out and held. Two identical knots, which is what a frozen arm is.
+    joint_waypoints=(
+        Waypoint(0.0, (0.00, 0.00)),
+        Waypoint(3.0, (0.00, 0.00)),
+    ),
+    human_waypoints=_parked(3.0),
+    # ZERO, AND IT IS A STATEMENT RATHER THAN AN OMISSION. Every other fixture
+    # here perturbs its joint knots; this one must not, because `_knots` draws
+    # per knot and a perturbed pair would leave the arm creeping between two
+    # slightly different configurations — a fixture named for a frozen arm whose
+    # arm is not frozen. The seed is still a real input to this run: it moves
+    # the human and it moves the base path, and two seeds give two different
+    # runs (`base_jitter` below).
+    q_jitter=0.0,
+    human_jitter=0.01,
+    # Forward and turning at the same time, because the two halves of "the tip
+    # moved and the arm did not" are translation and rotation and a fixture that
+    # only translated would leave the second untested.
+    base_waypoints=(
+        Waypoint(0.0, (0.00, -0.30, 0.00)),
+        Waypoint(1.5, (0.55, -0.30, 0.30)),
+        Waypoint(3.0, (1.00, -0.30, 0.60)),
+    ),
+    base_pose_source=PoseSource.DEAD_RECKONED,
+    base_vel_source=VelocitySource.PROPRIOCEPTIVE,
+    base_jitter=(0.01, 0.005),
+)
+
+# THE CLAIM, AND THE FAULT: every VETO for a mobile robot rests on
+# `reg.envelope.outer_envelope` alone (issue #164, docs/mobile-base.md §1).
+#
+# `envelope_overclaim` above is the same policy behaviour on a bolted arm, and
+# there the refutation is cheap: `reg.enforce.computed_bound` returns the
+# 0.95 m workspace disc from `Limits` alone, with no `q`, no `qd` and no horizon
+# in it, and a padded claim past it is refused on arithmetic nobody can argue
+# with. For this robot that function **refuses**, naming the base bounds that
+# made the workspace unbounded, so the 0.95 m disc does not exist to refute
+# anything: the only bound left is the radial projection of the horizon-limited
+# outer reachable set, which over this run measures 1.12 m at rest and up to
+# 1.34 m at speed — bigger than the arm's disc, because the vehicle can drive
+# out of it, and not a constant, because the vehicle's speed is not one.
+#
+# So this fixture is the one that makes #164's refusal more than an assertion.
+# The policy pads its declared region by 60 cm, the padded claim reaches about
+# 1.50 m from the base, and the VETO that follows rests on `outer_envelope`'s
+# soundness argument and on nothing else. It is also the taxonomy negative this
+# tier needs: a mobile fixture set in which nothing ever goes wrong would
+# exercise the happy path of a mechanism whose entire purpose is the unhappy
+# one.
+MOBILE_OVERCLAIM = Scenario(
+    name="mobile_overclaim",
+    description=(
+        "A driving robot whose policy pads every declared region by 60 cm 'to "
+        "be safe'. On a bolted arm the padding is refuted by the workspace disc; "
+        "this robot has no workspace disc — its base can drive, so given enough "
+        "time it reaches everywhere — and `reg.enforce.computed_bound` refuses "
+        "to invent one. The declaration is refused against the radial "
+        "projection of the horizon-limited outer reachable set and against "
+        "nothing else, which is the first VETO in this repository that rests on "
+        "that argument alone."
+    ),
+    world=MOBILE_WORLD,
+    duration=2.0,
+    # `envelope_overclaim`'s arm, unchanged: near-straight throughout, so the
+    # unpadded region is honest about what the arm sweeps and what is out of
+    # bounds is the padding and only the padding.
+    joint_waypoints=(
+        Waypoint(0.0, (-0.30, 0.40)),
+        Waypoint(1.0, (0.30, 0.20)),
+        Waypoint(2.0, (-0.30, 0.40)),
+    ),
+    human_waypoints=_parked(2.0),
+    q_jitter=0.01,
+    human_jitter=0.01,
+    # A short straight transit. The base is beside the point here — what this
+    # fixture is about is what the policy claimed — but it has to be driving,
+    # because a base at rest with four positive bounds is still a robot
+    # `computed_bound` refuses and the fixture would then be making its claim
+    # about a vehicle that never moved.
+    base_waypoints=(
+        Waypoint(0.0, (0.00, -0.30, 0.0)),
+        Waypoint(2.0, (0.70, -0.30, 0.0)),
+    ),
+    base_pose_source=PoseSource.DEAD_RECKONED,
+    base_vel_source=VelocitySource.PROPRIOCEPTIVE,
+    base_jitter=(0.01, 0.005),
+    # 60 cm. Measured rather than picked: over this run the bound this robot is
+    # refused against runs 1.12-1.34 m — it is a function of where the arm is
+    # and how fast the base is going, so it moves declaration to declaration —
+    # and the unpadded region reaches about 0.90 m. At 60 cm every declaration
+    # in the run overclaims, by 0.16 to 0.38 m at every seed tried, which is far
+    # enough from the boundary that the fault turns on the claim rather than on
+    # floating point. `envelope_overclaim`'s 25 cm would not do: it clears the
+    # 0.95 m disc a bolted arm is refused against, but against a bound that is
+    # larger and moving it lands at 1.15 m — over the first declaration's 1.12 m
+    # and under every later one's — so the run would refuse one declaration and
+    # accept four. That is itself the point being made: the two bounds are
+    # different objects, and the mobile one is neither the arm's disc nor a
+    # constant.
+    declared_margin_m=0.60,
+    fault="envelope_overclaim",
+)
+
+_MOBILE: tuple[Scenario, ...] = (
+    MOBILE_TRANSIT,
+    MOBILE_FROZEN_ARM,
+    MOBILE_OVERCLAIM,
+)
+
+#: The mobile fixtures, name to definition. **Deliberately not merged into
+#: `SCENARIOS`** — see the block comment above. `scenario()` resolves both, so a
+#: stream whose provenance block says `scenario=mobile_transit` can be rebuilt,
+#: and nothing that iterates `SCENARIOS` prices a run that drove.
+MOBILE_SCENARIOS: dict[str, Scenario] = {s.name: s for s in _MOBILE}
+
+if len(MOBILE_SCENARIOS) != len(_MOBILE):  # pragma: no cover - construction-time
+    raise RuntimeError(
+        "two mobile scenarios share a name; one silently replaced the other"
+    )
+
+_shared = set(SCENARIOS) & set(MOBILE_SCENARIOS)
+if _shared:  # pragma: no cover - construction-time invariant
+    raise RuntimeError(
+        f"{sorted(_shared)}: a name is in both SCENARIOS and MOBILE_SCENARIOS. "
+        "`scenario()` resolves the first, so the second would be unreachable by "
+        "name and a stream naming it would rebuild as the wrong run."
+    )
+del _shared
+
+
 def scenario(name: str) -> Scenario:
     """Look up a scenario, failing with the list of names rather than a KeyError.
 
     A caller that mistypes a name should not get an empty result set that reads
     like 'nothing happened in that run'.
 
-    `long_run_<n>` resolves to `long_run(n)` even though it is not in
-    `SCENARIOS`: a stream's provenance block records the scenario *name*, and a
-    name nothing can resolve would make a long run the one kind of stream whose
-    world cannot be recovered from the file (`reg.graph._resolve_world`).
+    **Three registries, one lookup.** `MOBILE_SCENARIOS` and the generated
+    `long_run_<n>` resolve here even though neither is in `SCENARIOS`, and for
+    one reason: a stream's provenance block records the scenario *name*, so a
+    name this function cannot resolve is a stream whose world — the robot's
+    `Limits` and the human's radius, neither of which is a column — cannot be
+    recovered from the file (`reg.graph._resolve_world`). Keeping the mobile
+    fixtures out of `SCENARIOS` is about what is *priced* (see the block comment
+    above `MOBILE_LIMITS`); it must not be about what can be rebuilt.
     """
-    try:
-        return SCENARIOS[name]
-    except KeyError:
-        pass
+    for registry in (SCENARIOS, MOBILE_SCENARIOS):
+        try:
+            return registry[name]
+        except KeyError:
+            pass
     generated = _long_run_from_name(name)
     if generated is not None:
         return generated
     raise KeyError(
-        f"unknown scenario {name!r}; known scenarios are {list(SCENARIOS)}, plus "
-        f"the generated {LONG_RUN_PREFIX}<frames> (e.g. {LONG_RUN_PREFIX}3000)"
+        f"unknown scenario {name!r}; known scenarios are {list(SCENARIOS)}, the "
+        f"mobile fixtures {list(MOBILE_SCENARIOS)}, plus the generated "
+        f"{LONG_RUN_PREFIX}<frames> (e.g. {LONG_RUN_PREFIX}3000)"
     )
 
 

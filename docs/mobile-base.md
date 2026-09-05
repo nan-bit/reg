@@ -1,20 +1,22 @@
 # The mobile base — what moving the robot does to the argument
 
 **Status:** a design document, and no longer entirely one · written 2026-08-31 ·
-**Tiers 1, 2 and 3 have landed; §3's construction landed 2026-09-02 (issue
+**Tiers 1, 2, 3 and 4 have landed; §3's construction landed 2026-09-02 (issue
 #163), §1's refusal landed 2026-09-02 (issue #164), §4's two `declare.py`
 defects were fixed 2026-09-02 (issue #165) and §4's schema work landed
-2026-09-02 (issue #166); Tier 4 has started — a scenario can express a driven
+2026-09-02 (issue #166); a scenario can express a driven
 base since 2026-09-04 (issue #177), and since 2026-09-04 (issue #184) the room
 containment check follows that base's whole executed path and covers the arm
 sweeping over it, and since 2026-09-04 (issue #189) an `Enforcer` constructs for
 a driven base and adjudicates one, resting on `horizon_bound` alone, and since
 2026-09-05 (issue #191) the pose reaches `robot_config` and a run whose base
-moved retains its geometry — but its
-fixtures have not landed, so no
-registered scenario in this repository drives and nothing here has moved a robot
-yet** — the build order in §7 says per
-tier which is which, and it is the authority, not this line ·
+moved retains its geometry; Tier 4 completed 2026-09-05 (issue #178) with the
+three mobile fixtures, so this repository has runs in which a robot drives and
+an artifact built from one — but they are a second catalogue and none of them is
+priced, so `SCENARIOS` is still the eleven bolted arms and Claim 1 is still a
+fixed-arm claim** — the build order in §7 says per
+tier which is which and what the track still does not support, and it is the
+authority, not this line ·
 normative for the mobile track only; where it touches what the project may
 claim, it defers to [`sufficiency.md`](sufficiency.md) and
 [`limitations.md`](limitations.md) until those files carry the change themselves
@@ -565,7 +567,9 @@ string is byte-identical and pinned as an equality, and no published figure
 moved. What it buys is the thing Tier 4 needs: a mobile scenario can now produce
 a verdict, so a mobile fault fixture is a fixture and not a wish.
 
-**Tier 4 — fixtures.** Mobile scenarios beside the eleven arm fixtures.
+**Tier 4 — fixtures. Complete, 2026-09-05.** Mobile scenarios beside the
+eleven arm fixtures — and *beside* is literal: a second catalogue, not an
+addition to the first.
 
 *A scenario can drive, and states where its pose came from — done, 2026-09-04,
 issue #177.* `Scenario` carries `base_waypoints`, knots of `(x, y, theta)`
@@ -687,11 +691,97 @@ the three CI does not pin — was re-measured too, with
 `python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0`, and that report
 is byte-identical as well.
 
-*What remains in this tier.* The fixtures themselves — a registered scenario that
-drives, and the mobile fault fixtures beside it. No registered scenario drives
-until they land, so `expected_header(2, 3)` is still the 24 columns Claim 1 is
-priced on, and **Claim 1 stays a fixed-arm claim**: no mobile artifact is priced,
-benchmarked or reported beside the fixed-arm figures.
+*The fixtures, and with them the tier — done, 2026-09-05, issue #178.* Three
+scenarios drive: `mobile_transit`, `mobile_frozen_arm` and `mobile_overclaim`.
+They are the first runs in this repository in which anything has moved a robot,
+and each exists to make one claim of this track exercisable rather than to cover
+a motion:
+
+- **`mobile_transit` — the room-frame answer is Layer B, and the pose is in the
+  artifact** (§2, [`sufficiency.md`](sufficiency.md) §5.6, issue #191). A person
+  stands still for five seconds. From the pose the run starts at they are
+  outside the *workspace disc* — the set of every configuration of the arm, with
+  no horizon in it — so no question about the arm asked at t=0 puts the robot
+  near them; after a 0.79 m transit they are inside the arm's forward reachable
+  set, bodies clear by about 6 cm. One question, one coordinate, two answers in
+  one run, and what changed is a pose nothing on the robot measured. Built into
+  an artifact it is also the demonstration that a mobile run survives the
+  builder: `reachable_entities` names nobody over the first second and names the
+  human over the last.
+- **`mobile_frozen_arm` — driving is not reaching** (§4 item 6, issue #165). The
+  arm holds one configuration, `q_jitter=0.0` so that no seed unfreezes it,
+  while the base drives a metre and turns 0.6 rad. The end effector crosses most
+  of a metre of room and the arm's extension does not move by one bit. Handed
+  the poses the run recorded, `reg.declare._classify` says `traverse`.
+- **`mobile_overclaim` — the bound rests on the outer envelope alone** (§1,
+  issue #164), and it is this tier's **fault** in the taxonomy sense. The policy
+  pads every declared region by 60 cm. On a bolted arm that padding is refuted
+  by `computed_bound`'s 0.95 m workspace disc; for this robot that function
+  *refuses*, naming the base bounds that made the workspace unbounded, so the
+  only bound left is the radial projection of the horizon-limited outer
+  reachable set — 1.12 m at rest and up to 1.34 m at speed over this run, larger
+  than the arm's disc because the vehicle can drive out of it, and not a
+  constant because its speed is not one. Every declaration in the run is VETOed
+  against that and against nothing else. A mobile fixture set in which nothing
+  ever went wrong would exercise the happy path of a mechanism whose entire
+  purpose is the unhappy one.
+
+*They are a second catalogue, not an addition to the first, and that is the half
+every published figure depends on.* They live in
+`reg.scenarios.MOBILE_SCENARIOS`; `SCENARIOS` is still exactly the eleven.
+`reg.scenarios.scenario()` resolves both, because a stream's provenance block
+records a *name* and a name nothing can resolve is a run whose world cannot be
+recovered from the file — but nothing that **iterates** `SCENARIOS` sees a
+mobile fixture, so `reg.bench --all` prices the eleven it always priced and
+`reg.bench --scenario mobile_transit` is refused by name. `reg.sim --list`
+prints both groups under headings, because a fixture nothing lists is a fixture
+nobody can run. **Claim 1 stays a fixed-arm claim**: no mobile artifact is
+priced, benchmarked or reported beside the fixed-arm figures, and
+[`retention.md`](retention.md)'s figures were neither re-measured nor extended.
+Every one of the eleven writes the 24-column `expected_header(2, 3)` it always
+wrote, every artifact built from one is byte-identical to what it was before
+this change, and **no published figure moved**.
+
+*What the track supports now that this has landed.* A robot that drives can be
+simulated, streamed, built, adjudicated and queried end to end: `python -m
+reg.sim --scenario mobile_transit --out runs/mobile.csv` writes a stream with
+both base blocks in it, `reg.graph.build` turns it into an artifact whose every
+`robot_config` row states the pose its frame stated and whose every
+`HAS_ENVELOPE` edge is Layer B, and `reg.query` answers the standard questions
+against that artifact — separation, closest approach, contact, the timeline,
+frames at risk, the first envelope intersection and the reachable set — with no
+could-not-evaluate among them. An `Enforcer` adjudicates the run, and a VETO in
+it rests on `outer_envelope` alone.
+
+*What it still does not, and the first one is a gap this tier surfaced rather
+than a decision it took.*
+
+- **The scripted policy cannot say `traverse`.** `reg.declare.emit_declarations`
+  passes `ORIGIN_FRAME` to the classifier for every run, because a policy sees a
+  `ProprioState` and a base pose is Layer B — so over `mobile_frozen_arm` every
+  declaration comes back `hold`, which is exactly what §4 item 6 says a driving
+  robot is not doing. Nothing here is wrong to fix it in the fixture: the honest
+  repair is for the policy to dead-reckon its own frames from `base_vel`, a
+  Layer A quantity it does hold, and that is a decision about what the scripted
+  policy *is*.
+  `tests/test_enforce.py::test_no_declaration_over_a_driving_base_is_a_reach`
+  pins the half that is settled — no declaration in that run is a `reach` — and
+  records the rest.
+- **No perceiver is built** (§5). The fixtures state
+  `PoseSource.DEAD_RECKONED`, which is the honest label for a simulator that
+  localizes nothing, and there is no localization error model behind it: the
+  `(metres, radians)` jitter is fixture noise, not a drift process, so nothing
+  here supports a claim about how far a dead-reckoned pose has drifted by the
+  end of a run.
+- **No mobile figure is published.** These three are not benchmarked, and the
+  size of a mobile artifact is not a number this repository reports beside the
+  fixed-arm curve. It is not comparable: a driving run writes the two optional
+  base blocks, so the gzipped baseline every ratio is divided by is a different
+  file.
+- **The bound is still radially incomplete** ([`limitations.md`](limitations.md)
+  §2 and §3), and a mobile run does not change that — it detects a declaration
+  reaching further than the robot can get in the window, not one pointing where
+  the robot cannot turn in time.
 
 ## See also
 

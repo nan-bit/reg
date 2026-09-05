@@ -93,7 +93,7 @@ from reg.graph import (
 )
 from reg.identity import RunIdentity
 from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
-from reg.scenarios import SCENARIOS
+from reg.scenarios import MOBILE_SCENARIOS, SCENARIOS
 from reg.sim import provenance, simulate
 from reg.stream import read_frames, write_frames
 from reg.tolerances import (
@@ -5948,3 +5948,217 @@ def test_a_fixed_base_build_still_states_no_pose_on_any_config(
         assert row["sourced"] == 0
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------
+# A SHIPPED MOBILE FIXTURE, BUILT (issue #178, docs/mobile-base.md §7 Tier 4)
+#
+# Everything above about a base pose is asserted against a stream this file
+# writes by hand, which is the right shape for a property: six frames, one thing
+# varying, and the failure named in the assertion. What none of it can say is
+# that the command in the issue works — `python -m reg.sim --scenario <mobile>`
+# then `reg.graph.build` — because until Tier 4 there was no mobile fixture to
+# point it at.
+#
+# So this section is deliberately not those tests again with a longer stream.
+# It builds the fixtures the package ships, through the producer they ship with,
+# and asserts the four things that would make such an artifact a lie about the
+# run: a pose that did not arrive, a `meta[base_frame]` beside it, an envelope
+# row with nothing in it, and a Layer A tag on a region placed by a perceiver.
+# --------------------------------------------------------------------------
+
+#: Envelope parameters for the mobile builds below. Coarser than `_FAST` in
+#: `substep_dt` and no coarser in samples: these are 251- and 151-frame streams
+#: rather than the six-frame ones above, and nothing here is about envelope
+#: fidelity — what is under test is whether the pose survives the build.
+_MOBILE_FAST = {"horizon": 0.1, "n_samples": 4, "seed": 0, "substep_dt": 0.05}
+
+
+def _build_mobile(name: str, tmp_path: Path, **overrides):
+    """Simulate one shipped mobile fixture and build it. Returns `(csv, out)`.
+
+    Through `reg.sim.simulate` rather than `write_frames` directly, because the
+    acceptance criterion is about that command: a producer that could not write
+    one of these would fail here rather than in a file this test wrote itself.
+    The robot is the fixture's own — `MOBILE_WORLD`'s `Limits`, which is not
+    this module's `LIMITS` — since a build handed the bolted arm's bounds would
+    be an artifact of a different robot.
+    """
+    scn = MOBILE_SCENARIOS[name]
+    csv = tmp_path / f"{name}.csv"
+    out = tmp_path / f"{name}.sqlite"
+    simulate(name, SIM_SEED, csv)
+    build(
+        csv,
+        out,
+        scn.world.limits,
+        identity=TEST_IDENTITY,
+        human_radius=scn.world.human_radius,
+        **{**_MOBILE_FAST, **overrides},
+    )
+    return csv, out
+
+
+@pytest.fixture(scope="module")
+def transit_artifact(tmp_path_factory) -> Path:
+    """One build of `mobile_transit`, shared: the stream is 251 frames."""
+    work = tmp_path_factory.mktemp("mobile")
+    return _build_mobile("mobile_transit", work)[1]
+
+
+@pytest.mark.parametrize("name", list(MOBILE_SCENARIOS))
+def test_every_mobile_fixture_builds_an_artifact_that_states_where_it_drove(
+    tmp_path: Path, name: str
+) -> None:
+    """The acceptance criterion, per fixture: the run reaches the file.
+
+    Every `robot_config` row states the pose its frame stated — checked against
+    the stream rather than against the scenario, because the stream is what the
+    builder read — and no row states a pose the run did not record. The poses
+    differ, or a builder that wrote the first one on every row would pass.
+    """
+    csv, out = _build_mobile(name, tmp_path)
+
+    written = {
+        f"{f.base_pose.x:.6f},{f.base_pose.y:.6f},{f.base_pose.theta:.6f}"
+        for f in read_frames(csv)
+    }
+    assert len(written) > 1, f"precondition failed: {name}'s base did not move"
+
+    rows = _config_rows(out)
+    assert rows, "the build retained no configuration at all"
+    assert {str(row["base_pose"]) for row in rows} <= written, (
+        "a configuration states a pose that is in no frame of the stream"
+    )
+    assert len({row["base_pose"] for row in rows}) > 1, (
+        "every retained configuration states the same pose, so this artifact "
+        "does not record a base that moved"
+    )
+    for row in rows:
+        assert row["base_pose_source"] == "dead_reckoned", row["config_id"]
+
+    conn = store.connect(out)
+    try:
+        assert store.get_meta(conn, store.META_BASE_FRAME) is None, (
+            "a run whose base drove states no meta[base_frame]: bolted here and "
+            "localized there are two claims about one run"
+        )
+    finally:
+        conn.close()
+
+
+def test_a_bolted_fixture_built_the_same_way_states_its_base_frame_instead(
+    tmp_path: Path,
+) -> None:
+    """**The control, and it is one of the eleven.**
+
+    Same producer, same builder, same parameters — a fixture that does not
+    drive. `None` is not the origin: its configurations say *nobody recorded
+    where the base was*, and the mounting fact lives once in
+    `meta[base_frame]`. Without this the test above would pass for a builder
+    that had started writing a pose on every artifact it produced.
+    """
+    csv = tmp_path / "contact.csv"
+    out = tmp_path / "contact.sqlite"
+    simulate("contact", SIM_SEED, csv)
+    build(
+        csv,
+        out,
+        LIMITS,
+        identity=TEST_IDENTITY,
+        human_radius=HUMAN_RADIUS,
+        **_MOBILE_FAST,
+    )
+
+    rows = _config_rows(out)
+    assert rows
+    assert {row["base_pose"] for row in rows} == {None}
+    assert {row["base_pose_source"] for row in rows} == {None}
+
+    conn = store.connect(out)
+    try:
+        assert store.get_meta(conn, store.META_BASE_FRAME) == "0.000000,0.000000,0.000000"
+    finally:
+        conn.close()
+
+
+def test_a_mobile_fixtures_envelope_edges_are_layer_b_and_carry_their_geometry(
+    transit_artifact: Path,
+) -> None:
+    """The two rules issue #191 built, over a fixture rather than a probe.
+
+    A `HAS_ENVELOPE` edge over a posed configuration is Layer B whatever
+    `Limits.source` says — `MOBILE_LIMITS` is `PROPRIOCEPTIVE`, so an artifact
+    that read the layer off the limits alone would tag every one of these `A`
+    and the file would claim a room-frame region on the robot's own authority.
+    And every posed envelope carries its polygon, because nothing in the file
+    can recompute one: every term of the recomputation is body-frame and
+    `envelope_at` refuses a posed configuration.
+    """
+    edges = _edges(transit_artifact, edge_type="HAS_ENVELOPE")
+    assert edges, "the build wrote no HAS_ENVELOPE edge"
+    assert {row["layer"] for row in edges} == {"B"}
+
+    rows = _envelope_rows_with_pose(transit_artifact)
+    assert rows, "the build retained no envelope at all"
+    for row in rows:
+        assert row["base_pose"] is not None, row["envelope_id"]
+        assert row["geometry_wkb"] is not None, (
+            f"envelope {row['envelope_id']} states base_pose={row['base_pose']} "
+            "and carries no geometry, so nothing in the file can recover it"
+        )
+
+
+def test_a_mobile_fixtures_retained_regions_are_in_the_room_it_drove_through(
+    transit_artifact: Path,
+) -> None:
+    """**What makes the artifact worth keeping.** The region is where the robot was.
+
+    `mobile_transit` starts near `x = -0.2` and settles near `x = 0.59`, so a
+    builder that retained the *body-frame* envelope would store polygons about
+    the origin for a robot that was somewhere else — the failure issue #166's
+    refusal exists to stop, arriving through the stored path and looking exactly
+    like a right answer. Each retained polygon is required to sit about the
+    pose its own row states, within the arm's reach, and the run's polygons are
+    required to move as far as the base did.
+    """
+    rows = _envelope_rows_with_pose(transit_artifact)
+    reach = float(np.sum(MOBILE_SCENARIOS["mobile_transit"].world.limits.link_lengths))
+
+    centres = []
+    for row in rows:
+        x, y, _theta = (float(v) for v in str(row["base_pose"]).split(","))
+        polygon = store.from_wkb(row["geometry_wkb"])
+        centroid = polygon.centroid
+        assert Point(x, y).distance(centroid) <= reach, (
+            f"envelope {row['envelope_id']} is centred {Point(x, y).distance(centroid):.3f} m "
+            f"from the pose its row states; a region about the wrong point is "
+            "not a looser answer than the right one"
+        )
+        centres.append(centroid.x)
+
+    assert max(centres) - min(centres) > 0.5, (
+        "every retained region sits at the same x, so the stored geometry did "
+        "not follow the base across the room"
+    )
+
+
+def test_two_builds_of_a_mobile_fixture_are_byte_identical(tmp_path: Path) -> None:
+    """CLAUDE.md rule 2, on the path this tier added.
+
+    A mobile artifact holds a polygon per posed configuration where a bolted one
+    holds a handful, so it exercises far more of the geometry writer — and
+    geometry is where a non-deterministic build would show up first.
+    """
+    csv, first = _build_mobile("mobile_frozen_arm", tmp_path)
+    second = tmp_path / "again.sqlite"
+    scn = MOBILE_SCENARIOS["mobile_frozen_arm"]
+    build(
+        csv,
+        second,
+        scn.world.limits,
+        identity=TEST_IDENTITY,
+        human_radius=scn.world.human_radius,
+        **_MOBILE_FAST,
+    )
+    assert first.read_bytes() == second.read_bytes()

@@ -90,7 +90,7 @@ from reg.envelope import (
     outer_radius,
 )
 from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
-from reg.scenarios import SCENARIOS, Scenario
+from reg.scenarios import MOBILE_SCENARIOS, SCENARIOS, Scenario
 from reg.types import (
     BaseVelocity,
     Limits,
@@ -2185,6 +2185,11 @@ def declarations_for(
     default: it is silent inside `silent_windows`, it pads its region by
     `declared_margin_m`, and it stamps `declared_action_class` if the fixture
     says it has one. Everything else is `reg.declare.emit_declarations`.
+
+    The robot is the **fixture's own** (`scenario.world.limits`) rather than this
+    file's `LIMITS` (issue #178). For the eleven the two are the same object; for
+    a mobile fixture they are not, and a policy handed the bolted arm's `Limits`
+    would declare a region for a robot that is not the one in the run.
     """
     speaking = [state for state in states if not scenario.silent_at(state.t)]
     if not speaking:
@@ -2194,7 +2199,7 @@ def declarations_for(
         return ()
     declarations = emit_declarations(
         speaking,
-        LIMITS,
+        scenario.world.limits,
         key=POLICY_KEY,
         replan_interval_s=FIXTURE_REPLAN_S,
         horizon_s=FIXTURE_HORIZON_S,
@@ -2219,7 +2224,11 @@ def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
     pending = {round(d.t_issued, 9): d for d in declarations}
 
     e = Enforcer(
-        LIMITS,
+        # The fixture's own robot, as in `declarations_for`: an enforcer given
+        # the bolted arm's `Limits` would compute its bound for a robot that
+        # cannot drive, which for a mobile fixture is the one mistake this whole
+        # track is about.
+        scenario.world.limits,
         key=ENFORCEMENT_KEY,
         policy_key=POLICY_KEY,
         watchdog_period_s=FIXTURE_WATCHDOG_S,
@@ -2713,6 +2722,242 @@ def test_a_fault_fixtures_verdict_stream_is_deterministic(name: str) -> None:
     """Same seed, same verdicts, same MACs, same chain head. CLAUDE.md rule 2."""
     first = run_scenario(SCENARIOS[name], 0)
     second = run_scenario(SCENARIOS[name], 0)
+    assert first.verdicts == second.verdicts
+    assert first.enforcer.head_hash == second.enforcer.head_hash
+    assert first.declarations == second.declarations
+
+
+# ==========================================================================
+# THE MOBILE FIXTURES, ADJUDICATED END TO END (issue #178, §7 Tier 4)
+#
+# Everything above adjudicates a bolted arm. `computed_bound` refuses a robot
+# whose base can drive (issue #164), so for these three there is no workspace
+# disc under the bound at all — every VETO rests on the radial projection of
+# `reg.envelope.outer_envelope` and on nothing else, and that is the claim this
+# section exists to make more than an assertion.
+#
+# The same three questions the eleven are asked, in the same order: does the
+# compliant run stay permitted, does the fault fixture produce its fault, and
+# does taking the fault away leave a clean run.
+# ==========================================================================
+
+#: The mobile fixtures that must produce nothing, selected by what they say
+#: about themselves rather than by name, exactly as `COMPLIANT` is.
+MOBILE_COMPLIANT = [name for name, s in MOBILE_SCENARIOS.items() if s.fault is None]
+
+#: And the ones that must produce exactly one. The response is the taxonomy's,
+#: written out rather than derived — a table computed from the code under test
+#: would agree with it by construction.
+MOBILE_FAULT_RESPONSE: dict[str, str] = {"mobile_overclaim": "VETO"}
+
+
+def test_the_mobile_fault_table_covers_every_mobile_fault_fixture() -> None:
+    """Guards the tests below, as `test_the_fault_table_covers_every_fault_fixture`
+    guards theirs: a fixture missing from the table is a fixture nothing
+    adjudicates, and the suite would go green over it.
+
+    It also asserts the thing the issue asks for in the taxonomy sense — at
+    least one mobile fixture produces a fault. A mobile fixture set in which
+    nothing ever goes wrong would exercise the happy path of a mechanism whose
+    entire purpose is the unhappy one.
+    """
+    named = {name for name, s in MOBILE_SCENARIOS.items() if s.fault is not None}
+    assert named == set(MOBILE_FAULT_RESPONSE)
+    assert named, "no mobile fixture produces a fault"
+    assert set(MOBILE_FAULT_RESPONSE.values()) <= set(OUTCOMES)
+    for name in named:
+        assert MOBILE_SCENARIOS[name].fault in FAULTS
+    assert set(MOBILE_COMPLIANT) & named == set()
+    assert len(MOBILE_COMPLIANT) + len(named) == len(MOBILE_SCENARIOS)
+
+
+@pytest.mark.parametrize("name", MOBILE_COMPLIANT)
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_a_compliant_mobile_fixture_is_permitted_throughout(name: str, seed: int) -> None:
+    """**The positive control, and it is not a formality for a robot that drives.**
+
+    These declare exactly the region their own configurations sweep, which is a
+    true statement about themselves — and the bound they are checked against is
+    the outer set alone, which for a vehicle carries the base's own motion. If
+    this goes red the bound is crying wolf at a policy telling the literal
+    truth, and the answer is not a wider tolerance.
+    """
+    scenario = MOBILE_SCENARIOS[name]
+    assert scenario.fault is None
+    assert scenario.declared_q_bounds is None
+    assert scenario.declared_margin_m is None
+    assert scenario.silent_windows == ()
+
+    run = run_scenario(scenario, seed)
+    assert run.declarations, "a run with no declarations permits nothing"
+    assert not run.refusals
+    for v in run.actions:
+        assert v.outcome == "PERMIT", (
+            f"{name} t={v.t}: an honest declaration from a driving robot "
+            f"produced {v.outcome}/{v.fault}."
+        )
+    assert not run.enforcer.is_passivated
+
+
+@pytest.mark.parametrize("name", sorted(MOBILE_FAULT_RESPONSE))
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_a_mobile_fault_fixture_produces_the_fault_it_is_named_for(
+    name: str, seed: int
+) -> None:
+    """Real declarations, the real enforcer, a robot that drives."""
+    scenario = MOBILE_SCENARIOS[name]
+    run = run_scenario(scenario, seed)
+    hits = [v for v in run.verdicts if v.fault == scenario.fault]
+    assert hits, (
+        f"{name} produced no {scenario.fault!r} verdict at seed {seed}; it "
+        f"produced {sorted(run.faults) or 'nothing'}."
+    )
+    assert hits[0].outcome == MOBILE_FAULT_RESPONSE[name]
+    assert run.faults == {scenario.fault}, (
+        f"{name} produced {sorted(run.faults)}; a fixture that produces two "
+        "faults cannot be the fixture either of them is demonstrated against."
+    )
+    assert run.faults.isdisjoint(
+        {"unattributed", "replay_or_reorder", "watchdog_expiry"}
+    ), "the channel in a semantic fixture is clean"
+    for v in run.verdicts:
+        assert verify_verdict(v, ENFORCEMENT_KEY).state is MacState.VALID
+
+
+@pytest.mark.parametrize("name", sorted(MOBILE_FAULT_RESPONSE))
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_arranging_the_mobile_fault_away_leaves_a_run_that_is_permitted(
+    name: str, seed: int
+) -> None:
+    """NEGATIVE. The fault is caused by what the fixture says causes it.
+
+    Same trajectory, same base, same seed, same enforcer — with the padding
+    taken away. Every frame is permitted, so what the bound refused was the
+    claim and not the drive. A bound that had become unsound for a moving base
+    would fail here rather than in the test above, which is the direction that
+    matters: this one catches a check that has started crying wolf.
+    """
+    compliant = dataclasses.replace(
+        MOBILE_SCENARIOS[name],
+        declared_q_bounds=None,
+        declared_margin_m=None,
+        declared_action_class=None,
+        silent_windows=(),
+        fault=None,
+    )
+    run = run_scenario(compliant, seed)
+    assert not run.refusals
+    assert run.faults == set()
+    assert all(v.outcome == "PERMIT" for v in run.actions)
+
+
+def test_the_mobile_veto_rests_on_the_outer_envelope_and_on_nothing_else() -> None:
+    """**The claim `mobile_overclaim` exists for** (issue #164, §1).
+
+    Four statements, and the fixture is the only place they can all be made
+    about one run:
+
+    1. This robot has no workspace disc at all — `computed_bound` refuses it,
+       naming the fields that made the workspace unbounded.
+    2. Every declaration in the run is refused anyway, against a bound that is
+       exactly `horizon_bound(state, limits, window, substep)` for the pose the
+       policy was in — which for this robot *is* the outer set's radius, with no
+       second term and no floor.
+    3. That bound is **larger** than the 0.95 m disc a bolted arm would have
+       been refused against, so nothing here is the arm's disc wearing a
+       different name: the vehicle can drive out of the disc, and the bound says
+       so.
+    4. The reason an operator reads names the mobile case in so many words.
+    """
+    scenario = MOBILE_SCENARIOS["mobile_overclaim"]
+    limits = scenario.world.limits
+    states = {round(f.t, 9): f.proprio() for f in scenario.states(0)}
+
+    with pytest.raises(EnforcementError, match="no workspace disc"):
+        computed_bound(limits)
+
+    run = run_scenario(scenario, 0)
+    assert len(run.refusals) == len(run.declarations) > 0, (
+        "every declaration in this run overclaims, so every one is refused"
+    )
+    arm_disc = computed_bound(LIMITS)
+    for declaration, refusal in zip(run.declarations, run.refusals):
+        state = states[round(declaration.t_issued, 9)]
+        window = declaration.t_issued + declaration.horizon - state.t
+        radius = horizon_bound(state, limits, window, SUBSTEP_DT_S)
+        outer = outer_radius(
+            outer_envelope(state, limits, window, ORIGIN_FRAME, SUBSTEP_DT_S),
+            ORIGIN_FRAME,
+        )
+        assert radius == outer, (
+            "the bound this VETO rests on is not the outer set's radius, so "
+            "something else is under it"
+        )
+        assert radius > arm_disc, (
+            f"the bound is {radius:.4f} m, no larger than the {arm_disc:.4f} m "
+            "disc a bolted arm has — a mobile bound pinned at an arm's disc is "
+            "the defect issue #164 removed"
+        )
+        excess = _furthest_vertex_of(declaration) - radius
+        assert excess > 0.01, (
+            f"{declaration.declaration_id} reaches only {excess:.4f} m past the "
+            "bound; that close to the boundary the fault would turn on floating "
+            "point rather than on the claim"
+        )
+        reason = run.enforcer.reason(refusal.verdict_id)
+        assert "no workspace disc for this robot" in reason, reason
+        assert "outer_envelope alone" in reason, reason
+
+
+def _furthest_vertex_of(declaration) -> float:
+    """How far the declared region reaches from the body origin, metres."""
+    return max(
+        float(math.hypot(x, y))
+        for x, y in declaration.envelope().exterior.coords
+    )
+
+
+@pytest.mark.parametrize("seed", FIXTURE_SEEDS)
+def test_no_declaration_over_a_driving_base_is_a_reach(seed: int) -> None:
+    """**The claim `mobile_frozen_arm` exists for, at the policy** (issue #165).
+
+    The arm holds one configuration for the whole run while the base drives a
+    metre and turns 0.6 rad, so the end effector crosses the room and the arm
+    extends by nothing. No declaration this policy signs may call that a
+    `reach`: `reach` is a claim about the arm, and reading it off the tip's
+    distance from the room origin is the defect #165 fixed.
+
+    What the run does produce is `hold`, and that is recorded rather than
+    asserted away. `reg.declare.emit_declarations` passes `ORIGIN_FRAME` to the
+    classifier for every run — the policy sees a `ProprioState` and a base pose
+    is Layer B — so with the configurations identical it takes the `hold`
+    branch, which is exactly what that function's docstring says a driving robot
+    is not. The honest repair is for the policy to dead-reckon its own frames
+    from `base_vel`, and that is a decision about what the scripted policy is:
+    docs/mobile-base.md §7 records it as something this tier does not support.
+    `tests/test_scenarios.py::test_driving_is_not_reaching_over_a_run_that_
+    actually_drove` asserts the half that is settled — handed the run's real
+    poses, the classifier says `traverse`.
+    """
+    run = run_scenario(MOBILE_SCENARIOS["mobile_frozen_arm"], seed)
+    assert run.declarations
+    classes = {d.action_class for d in run.declarations}
+    assert "reach" not in classes, (
+        f"a frozen arm on a driving base was declared {sorted(classes)}; the "
+        "base's motion has reached a claim about the arm"
+    )
+    assert classes == {"hold"}, (
+        f"expected the gap this fixture surfaces and got {sorted(classes)} — if "
+        "this is now {'traverse'} the policy has learned to dead-reckon and the "
+        "docstring above, and docs/mobile-base.md §7, are out of date"
+    )
+
+
+@pytest.mark.parametrize("name", sorted(MOBILE_SCENARIOS))
+def test_a_mobile_fixtures_verdict_stream_is_deterministic(name: str) -> None:
+    """Same seed, same verdicts, same MACs, same chain head. CLAUDE.md rule 2."""
+    first = run_scenario(MOBILE_SCENARIOS[name], 0)
+    second = run_scenario(MOBILE_SCENARIOS[name], 0)
     assert first.verdicts == second.verdicts
     assert first.enforcer.head_hash == second.enforcer.head_hash
     assert first.declarations == second.declarations

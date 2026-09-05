@@ -1,0 +1,181 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "178-1788583636644562945-3062943",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "harness": "wake-runner",
+      "harness_version": "v0.4.6 (57c73c13e)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "8b492927d7510dd195f7da02720543212a0cec3b377901ab5cac57d015e332b3",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "7fe6da16b17cd808347779b06987ee17303a49b55d3da952e6d743239b907c4e",
+        "authored_by": "788a56200ecfcdccd9dfd07fb823b480e449bad80e1f37cd978abe07a95ecc70",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "aec867ec3ce74e405d2ff552b02abb5b13e7d88f4cdae108543b41245911e067",
+        "concluded": "4697d1502bfc6a7b8da931af5dec899398d4ddd31810ed459f61b6003197d735",
+        "coverage": "721118009bda282a02262742261024ec8330affbc2db6d279fd9cfcbd09cc90e",
+        "declared": "4088b1013b27b9e4ebddee09e742749160222b02f159b5b75f31efa0b7e8381c",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "01d54579da446ae1e75cda808cd188438834fa6249b151269db0f9123c9ddc61",
+        "out_of_scope": "cf1ecb78de98d67db23daed29095681ef57d2bbdb4d7fa793a892772eebad3a4",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "7744dcac8471f385e168aaa2164e8929767f5ab9d1d5c24ccaf1e4c629684ffb",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "036d8d77ed2fa2e02e74aae2e5fb007878473f6c",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/mobile-base.md",
+        "reg/scenarios.py",
+        "reg/sim.py",
+        "tests/test_enforce.py",
+        "tests/test_graph.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py",
+        "tests/test_sim_cli.py"
+      ],
+      "edge_kinds": [
+        "file-reference",
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/mobile-base.md",
+        "reg/bench.py",
+        "reg/graph.py",
+        "reg/scenarios.py",
+        "reg/sim.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_declare.py",
+        "tests/test_enforce.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_layout.py",
+        "tests/test_personal_data.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py",
+        "tests/test_sim_cli.py",
+        "tests/test_stream.py",
+        "tests/test_viz.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 48
+      },
+      "changed_unreadable": [
+        "docs/mobile-base.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 1
+      },
+      "unresolved_edges": [
+        {
+          "at": "reg/chain.py:493",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "reg/commit.py:443",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1257",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1259",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "docs/mobile-base.md",
+        "reg/scenarios.py",
+        "reg/sim.py",
+        "tests/test_enforce.py",
+        "tests/test_graph.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py",
+        "tests/test_sim_cli.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 178,
+    "out_of_scope": [
+      "reg/bench.py",
+      "reg/graph.py",
+      "scripts/check_bench_determinism.py",
+      "tests/test_baseline_stream_description.py",
+      "tests/test_bench.py",
+      "tests/test_bench_determinism.py",
+      "tests/test_chain.py",
+      "tests/test_commit.py",
+      "tests/test_declare.py",
+      "tests/test_incumbent_encoding.py",
+      "tests/test_layer_boundary.py",
+      "tests/test_layout.py",
+      "tests/test_personal_data.py",
+      "tests/test_published_figures.py",
+      "tests/test_stream.py",
+      "tests/test_viz.py"
+    ],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "out-of-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "036d8d77ed2fa2e02e74aae2e5fb007878473f6c"
+      },
+      "name": "auto/issue-178"
+    }
+  ]
+}

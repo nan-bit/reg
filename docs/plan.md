@@ -10,17 +10,19 @@ for the **seven** items named below · keep current
 
 Where this file and [`docs/prior-art.md`](prior-art.md) disagree, **prior art
 wins and this file gets edited**, and phases are cut when research shows they
-reinvent something with a name. That rule has not changed; what has changed is
-that it has been exercised four times, and most of what those passes ordered into
-this file is now in it — DSSAD and EU AI Act Art. 12 in the standards baseline;
-Simplex / ASTM F3269 named for what Phase 4 already was, and ARMTD / ARMOUR for
-the envelope machinery, with the novelty claim they take dropped; Claim 1
-restated as a retention rate and Claim 2 as answer-agreement; Schneier–Kelsey
-cited where Phase 6 introduces the chain (issue #104); ConSerts where Claim 3
-states its contribution; rosbag2/MCAP priced against Claim 1's baseline (issue
-#117). So this is not a brainstorm and has not been one since the first pass ran.
-It is still not a *specification*: nothing here is normative over `prior-art.md`,
-and a phase that has not been built says so in its own section.
+reinvent something with a name. This is not a brainstorm and has not been one
+since the first pass ran. It is still not a *specification* either: nothing here
+is normative over `prior-art.md`.
+
+That rule has not changed; what has changed is that it has been exercised four
+times, and most of what those passes ordered into this file is now in it — DSSAD
+and EU AI Act Art. 12 in the standards baseline; Simplex / ASTM F3269 named for
+what Phase 4 already was, and ARMTD / ARMOUR for the envelope machinery, with the
+novelty claim they take dropped; Claim 1 restated as a retention rate and Claim 2
+as answer-agreement; Schneier–Kelsey cited where Phase 6 introduces the chain
+(issue #104); ConSerts where Claim 3 states its contribution; rosbag2/MCAP priced
+against Claim 1's baseline (issue #117). A phase that has not been built says so
+in its own section.
 
 **What is unreconciled is these seven, and nothing else is meant by the word.**
 Each is a change a pass ordered into *this* file, and this file has not made:

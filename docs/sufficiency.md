@@ -10,7 +10,9 @@ pose in the artifact recorded 2026-09-02 (issue #166) · keep current
 The mechanism this document argues from already exists. Every edge in the
 artifact carries a `layer` column, `A` or `B`, and so does every occurrence; the
 value is never supplied by a caller but derived from the type in
-`reg.store.EDGE_SPECS` and `reg.store.OCCURRENCE_SPECS`, and
+`reg.store.EDGE_SPECS` and `reg.store.OCCURRENCE_SPECS`.
+
+That derivation is itself checked:
 `tests/test_graph.py::test_layer_b_is_exactly_the_entity_naming_edges` derives
 the *expected* value from whether the type touches an `Entity`, so an edge type
 added without a layer decision fails there rather than in somebody's query months

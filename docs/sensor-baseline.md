@@ -13,9 +13,11 @@ multiplier stayed at 1 TB/day and the *conclusion* moved instead. See
 **The artifact side gained a second variable on 2026-08-21 (issue #68): the
 robot's own control rate.** Every artifact size in this document was measured at
 50 Hz and every one of them is linear in that rate, because enforcement emits a
-verdict and a chain record per commanded action. A real manipulator loop runs at
-1 kHz. That is measured now too, in [The control rate](#the-control-rate), and
-it moved the conclusion a second time — the multiplier, a second time, did not.
+verdict and a chain record per commanded action.
+
+A real manipulator loop runs at 1 kHz. That is measured now too, in
+[The control rate](#the-control-rate), and it moved the conclusion a second
+time — the multiplier, a second time, did not.
 **Two of the rates measured there are above the rate the artifact's time base is
 declared valid at** (`reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz), which is a
 statement about what those artifacts can be *asked*, not about what they cost —

@@ -6,6 +6,7 @@ current
 [`docs/plan.md`](plan.md) Phase 10 lists this file as a deliverable and names what
 it must eventually cover: inner-approximation sampling, 2D only, ground-truth
 perception, no dynamics, a scripted policy, and both chain keys in one process.
+
 Those land with the phases that create them; adding one here is part of finishing
 that phase, not a separate decision. **This file exists early because a limitation
 is worth least once nobody remembers it was a choice.**

@@ -1,49 +1,14 @@
 # The sensor-log baseline
 
-**Status: an assumption with a sourced range, not a measurement.** Written
-2026-08-19, because the sensor rate is the one input the benchmark cannot produce
-and the first thing a robotics safety reader will check. **The artifact sizes it
-is applied to were re-measured 2026-08-20 (issue #60) and every figure below is
-from that run; the sensor assumption itself is unchanged and was not permitted to
-move.** It is an input with a sourced range, and choosing the value that makes
-the conclusion come out is the failure this document exists to prevent — so the
-multiplier stayed at 1 TB/day and the *conclusion* moved instead. See
-[Sensitivity](#sensitivity).
-
-**The artifact side gained a second variable on 2026-08-21 (issue #68): the
-robot's own control rate.** Every artifact size in this document was measured at
-50 Hz and every one of them is linear in that rate, because enforcement emits a
-verdict and a chain record per commanded action.
-
-A real manipulator loop runs at 1 kHz. That is measured now too, in
-[The control rate](#the-control-rate), and it moved the conclusion a second
-time — the multiplier, a second time, did not.
-**Two of the rates measured there are above the rate the artifact's time base is
-declared valid at** (`reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz), which is a
-statement about what those artifacts can be *asked*, not about what they cost —
-[`limitations.md`](limitations.md) §5, linked again beside each table that
-publishes them.
+**Status: an assumption with a sourced range, not a measurement.** The sensor
+rate is the one input the benchmark cannot produce, so it is stated here with a
+source, a range and a sensitivity. The artifact side is measured, at a stated
+control rate. Provenance is under [Why](#why).
 
 `docs/plan.md` Claim 1 compares the artifact against a raw sensor log at
-**1 TB/day**. `reg` has no sensors. Nothing in this repository measures, or can
-measure, that figure — the simulator emits its own state stream and that is the
-whole of its input. That stream is **not** proprioception: for the fixture the
-benchmark prices it is **24 columns and 19 of them are Layer B**
-(`reg.stream.expected_header(2, 3)`) — `human_x`, `human_y`, `human_vx`,
-`human_vy` and each obstacle's `id`, `kind`, `x`, `y`, `r`, beside the five
-proprioceptive columns `reg.bench.proprioceptive_columns` returns. Simulator
-ground truth for a person is exactly the Layer B content this document projects
-rather than measures, so the baseline is small *and* carries the entity state a
-real system would have to perceive; see
-[The Layer B asymmetry](#the-layer-b-asymmetry).
-
-Every comparison against a sensor log is therefore a **projection**, and this
-document is what it is projected from.
-
-The benchmark enforces the distinction in code rather than in prose:
-`--sensor-multiplier` has **no default**. Omit it and the report prints the
-measured columns and says the sensor comparison was not computed. There is no
-value of the flag that makes the output claim to have measured a robot.
+**1 TB/day**. `reg` has no sensors, and nothing in this repository measures or
+can measure that figure. Every comparison against a sensor log is therefore a
+**projection**, and this document is what it is projected from.
 
 ## What is actually published
 
@@ -55,6 +20,36 @@ value of the flag that makes the output claim to have measured a robot.
 | **Retention window** | 182.5 days (EU AI Act six-month floor: Art. 19 providers, Art. 26(6) deployers — *not* Art. 12, which sets no period) |
 | **Implied continuous rate** | 11.6 MB/s over 24 h, or 34.7 MB/s over an 8-hour shift |
 | **Robot control rate the artifact sizes assume** | 50 Hz (`reg.scenarios.DEFAULT_DT`). **Measured**, not assumed, at 100/250/1000 Hz too — [The control rate](#the-control-rate) |
+
+**The multiplier is the input and the conclusion is what moves.** Choosing the
+value that makes the conclusion come out is the failure this document exists to
+prevent, so the multiplier stays at 1 TB/day and the claim drawn from it is
+restated whenever the artifact side is re-measured ([Sensitivity](#sensitivity)).
+
+**Every artifact size here is linear in that control rate**, because enforcement
+emits a verdict and a chain record per commanded action. Every size published
+above [The control rate](#the-control-rate) is at 50 Hz; that section measures the
+rest of the ladder, and states beside each table what the rungs above 100 Hz can
+and cannot be asked.
+
+## What the projection is measured against
+
+The simulator emits its own state stream and that is the whole of its input. That
+stream is **not** proprioception: for the fixture the benchmark prices it is
+**24 columns and 19 of them are Layer B**
+(`reg.stream.expected_header(2, 3)`) — `human_x`, `human_y`, `human_vx`,
+`human_vy` and each obstacle's `id`, `kind`, `x`, `y`, `r`, beside the five
+proprioceptive columns `reg.bench.proprioceptive_columns` returns. Simulator
+ground truth for a person is exactly the Layer B content this document projects
+rather than measures, so the baseline is small *and* carries the entity state a
+real system would have to perceive; see
+[The Layer B asymmetry](#the-layer-b-asymmetry).
+
+The benchmark enforces the distinction in code rather than in prose:
+`--sensor-multiplier` has **no default**. Omit it and the report prints the
+measured columns and says no projection was computed
+(`tests/test_bench.py::test_without_a_multiplier_there_is_no_projection_at_all`).
+No value of the flag makes the output claim to have measured a robot.
 
 ## Sources
 
@@ -77,7 +72,7 @@ Converted to daily volumes:
 
 A second anchor, from the other direction — a real collected dataset:
 **HIW-500** is 10 TB over 500 hours across 12 homes, which is ~20 GB/hour, or
-~0.5 TB over a 24-hour day. That is far below the teleoperation figure because it
+~0.5 TB over a 24-hour day. It sits far below the teleoperation figure because it
 is **compressed, curated episode data rather than a continuous raw log** — the
 distinction that matters most here, and the reason the range spans three orders
 of magnitude.
@@ -99,8 +94,8 @@ Sources:
 no sensor configuration attached to its endpoints; one dataset size that has to be
 divided by hours to become a rate; two industry blog posts. None is a measurement
 of a fielded humanoid logging continuously for six months, because that robot is
-not deployed and that log does not exist yet. This is the state of the evidence,
-and the argument is built to survive it — see the sensitivity below.
+not deployed and that log does not exist yet. The argument is built to survive
+that — see the sensitivity below.
 
 ## Sensitivity
 
@@ -108,27 +103,14 @@ The ratio is **linear in the assumed rate**, so the assumption never hides: halv
 the rate and every ratio halves.
 
 The artifact sizes below are **measured**, from one execution of
-`python -m reg.bench --resolution --seed 0` on 2026-08-20 (issue #60):
-`long_run` at 3,000 frames **at a 50 Hz control rate**, 16 envelope samples,
-200 ms horizon, 1.0 s occurrence
+`python -m reg.bench --resolution --seed 0`: `long_run` at 3,000 frames **at a
+50 Hz control rate**, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
 resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. Each
 size is that level's measured `bytes/hour` — 60.42, 150.15 and 218.00 MB/h —
-times the 4,380 hours in the retention floor. The control rate is not a detail
-of the fixture: every one of those three figures is **linear in it**, and
-[The control rate](#the-control-rate) below is the measurement of that. They are **much larger than the
-provisional figures they replace**, because those measured an artifact holding no
-Layer A record at all (issue #59): occurrence went 18.9 GB → 263 GB, transition
-229.7 → 655 GB, per-frame 589.3 → 952 GB. (Those are the figures **#59
-produced**; today they are 265, 658 and 955 GB. Issue #83 added wall-clock time
-and run identity, #82 added the outer-envelope scalars — together about
-4 KB per artifact — and #166 added the base pose to the `robot_config` row, which
-costs 2,048 B of schema and index at the coarsest level and a further 2 B on every
-retained configuration row at the two finer ones. The attribution above is to #59
-because that is the change that moved the figures by an order of magnitude; the
-three since have moved them by 0.8% between them.) What the sensitivity establishes is
-*the shape of the dependence*, which did not change when the sizes did — but the
-conclusion drawn from it did, and the two paragraphs after the crossover table
-are where.
+times the 4,380 hours in the retention floor. Every one of those three figures is
+**linear in the control rate**, which [The control rate](#the-control-rate) below
+measures. What the sensitivity establishes is *the shape of the dependence*; the
+conclusion drawn from it is the two paragraphs after the crossover table.
 
 | sensor rate | log at 6 months | vs occurrence (265 GB) | vs transition (658 GB) | vs per-frame (955 GB) |
 |---|---|---|---|---|
@@ -153,64 +135,51 @@ At occurrence resolution the claim clears **two** orders of magnitude at any
 sensor rate above 0.145 TB/day — seven times lower than the published
 assumption, and below every cited configuration that carries a camera, including
 HIW-500's compressed ~0.5 TB/day. A motion-only stream at 800 B/s is 0.07 GB/day
-and clears nothing, which was equally true of the provisional figures. So the
-two-order conclusion still does not depend on the assumption being right to
-within a factor of a few.
-
-**Three orders now needs 1.45 TB/day, which the published assumption does not
-reach.** Before Layer A was measured this threshold sat at 0.104 TB/day and the
-assumption cleared it tenfold. That is the single largest change this
-re-measurement made to the argument, and it is a change in the conclusion, not
-in the input: the multiplier is the same 1 TB/day it was, for the same sourced
-reasons.
+and clears nothing. So the two-order conclusion does not depend on the assumption
+being right to within a factor of a few. **Three orders needs 1.45 TB/day, which
+the published assumption does not reach.**
 
 At the finer levels it is weaker still. **Per-frame retention clears the plan's
 two-order criterion only above ~0.52 TB/day, and transition only above
 ~0.36 TB/day** — both within a factor of three of the published assumption, so
-neither has the margin to survive the assumption being wrong by an order of
-magnitude. Below those rates the artifact is still smaller than the log, but not
-by the margin Claim 1 asserts. And the plan's *upper* bound — four orders — is
-reached at occurrence resolution only above 14.4 TB/day, which is inside the
-cited range but far above the published assumption, so it is not available at
-all and must not be quoted.
+neither survives the assumption being wrong by an order of magnitude. Below those
+rates the artifact is still smaller than the log, but not by the margin Claim 1
+asserts. The plan's *upper* bound of four orders is reached at occurrence
+resolution only above 14.4 TB/day: inside the cited range, far above the
+assumption, so it is not available and must not be quoted.
 
 So **the claim should be stated at occurrence resolution and at two orders** —
 not two-to-three, and never four. That is also the level the only mandated
-evidence recorder in existence (UN R157 DSSAD, ±1.0 s) actually operates at — the
-robust claim and the regulated one are the same claim, which is convenient rather
-than coincidental.
+evidence recorder in existence (UN R157 DSSAD, ±1.0 s) operates at: the robust
+claim and the regulated one are the same claim.
 
-**Why coarsening buys so much less than it did.** The occurrence level is no
-longer mostly geometry. The declaration, verdict and chain records are emitted
-per action and no resolution level coarsens them, so at ±1 s they are 3,120 of
-the artifact's 3,166 node rows — the level is now dominated by a Layer A cost that
-resolution does not touch. Coarsening the *scene* still works; it just has less
-left to work on.
+**Why coarsening buys so little at the coarsest level.** That level is not mostly
+geometry. It is dominated by the declaration, verdict and chain records, which no
+resolution level coarsens — 3,120 of its 3,166 node rows, counted in the next
+section. Coarsening the *scene* still works; it just has less left to work on.
 
 ## The control rate
 
-**Status: measured, on the artifact side, 2026-08-21 (issue #68).** Everything
-above this heading holds the *sensor* rate as the variable and the artifact
-sizes as fixed. They are not fixed. They are **linear in the robot's control
-rate**, which no document in this repository named until this section, and the
-rate this simulator runs at is not the rate a manipulator runs at.
+**Status: measured, on the artifact side.** Everything above this heading holds
+the *sensor* rate as the variable and the artifact sizes as fixed. They are not
+fixed: they are **linear in the robot's control rate**, and this simulator's rate
+is not a manipulator's.
 
 **Why the artifact scales with it at all.** Enforcement adjudicates every
 commanded action, so it emits one verdict and one chain record **per control
-step**, and no resolution level coarsens a record (that is what issue #59
-established, and it is why the occurrence level is 3,120 of 3,166 node rows at
-50 Hz). The policy's declarations do *not* scale — it replans on a wall-clock
-interval — so the verdict layer is the whole of the growth.
+step**, and no resolution level coarsens a record — which is why the occurrence
+level is 3,120 of 3,166 node rows at 50 Hz. The policy's declarations do *not*
+scale, because it replans on a wall-clock interval, so the verdict layer is the
+growth.
 
 **Measured**, from one execution of
 `python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0`: the resolution
 curve at four control rates over **one fixed run duration**, 59.98 s of robot
-time, at one seed, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
-resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. The
+time, at one seed and the parameter block [Sensitivity](#sensitivity) states. The
 frame count moves with the rate because it must — 3,000 frames at 50 Hz, 59,981
-at 1 kHz — and everything else is held still, so the only thing that differs
-between two rows is how often the robot acted. The 50 Hz row reproduces the
-published curve exactly, which is what makes the other three comparable to it.
+at 1 kHz — and everything else is held still, so the only thing differing between
+two rows is how often the robot acted. The 50 Hz row reproduces the published
+curve exactly, which is what makes the other three comparable to it.
 
 | control rate | frames | records retained | occurrence | transition | per-frame |
 |---|---|---|---|---|---|
@@ -226,9 +195,10 @@ obvious it would look on a line through the ones that are. They are also a
 **manual measurement**: only the 50 Hz row is re-measured by
 `tests/test_published_figures.py` on every CI run, and the decision to leave the
 pin there rather than extend it to the ladder is recorded in
-[`retention.md`](retention.md), *The control rate*. And the 250 Hz and 1 kHz rows are above
-`reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, so their artifacts cannot address
-every frame of the run they price ([`limitations.md`](limitations.md) §5).
+[`retention.md`](retention.md), *The control rate*. The 250 Hz and 1 kHz rows are
+above `reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, so their artifacts cannot
+address every frame of the run they price
+([`limitations.md`](limitations.md) §5).
 
 The growth is **sublinear**: 15.8x at the occurrence level for a 20x rate
 increase, because the scene rows and the fixed schema-and-index cost do not
@@ -252,49 +222,41 @@ in the retention floor, against the **unchanged** 182.5 TB assumption:
 **At 1 kHz the claim is below two orders of magnitude, and this document says so
 rather than repairing it.** ~39x at occurrence resolution is **one** order, not
 two. The two-order band is still occupied at 250 Hz (~169x) and is gone by
-1 kHz; where between those two it goes was not measured and is therefore not
-quoted. Every finer level is worse: transition is ~21x and per-frame ~10x at
-1 kHz. Both of those rows are also above the 100 Hz the artifact's time base is
-declared valid at, so what they buy at per-frame resolution is bounded by
-[`limitations.md`](limitations.md) §5 as well as by the price
-([`retention.md`](retention.md), *The control rate*, has the same pairing).
+1 kHz; where between those two it goes is unmeasured and is therefore not quoted.
+Every finer level is worse: transition is ~21x and per-frame ~10x at 1 kHz. Both
+of those rows are also above the 100 Hz the artifact's time base is declared
+valid at, so what they buy is bounded by [`limitations.md`](limitations.md) §5 as
+well as by the price.
 
-**The sensor assumption was not adjusted to compensate.** It is the same
+**The sensor assumption is not adjusted to compensate.** It is the same
 1 TB/day it has been since this document was written, for the same sourced
-reasons. This is the second time the measurement has moved and the assumption
-has not — the first was issue #60, when Layer A entered the artifact and three
-orders stopped being available — and it is the discipline the document exists
-for: the input has a range and the conclusion is what moves.
-
-**An outside estimate, checked.** Issue #68 arrived with a reviewer's estimate of
-~5.1 TB per robot per six months at 1 kHz, i.e. ~36x, flagged explicitly as
-unverified. The measured figures are 4.73 TB and ~39x. The estimate was
-directionally right and slightly pessimistic, for the reason above: it assumed
-the whole level scales, and 1.5% of it does not.
+reasons, and it has stood through both re-measurements that moved the artifact
+side (both are in the [Why](#why) table). The input has a range and the
+conclusion is what moves.
 
 **What is out of scope here.** Declaring per behaviour segment rather than per
-control step would cut the term that scales, and this measurement shows it is
-the dominant lever — the verdict layer is essentially all of the growth. It is a
-change to the attestation cadence and is held pending its own decision.
+control step would cut the term that scales, and this measurement shows it is the
+dominant lever. It is a change to the attestation cadence and is held pending its
+own decision.
 
 **One caveat that is not about cost.** At 250 Hz and 1 kHz the transition and
 per-frame levels return `DISAGREE` on `separation_timeline`. The edge layer's
 endpoints are quantized to `TIME_TOL_S` = 0.01 s, which is coarser than the
 control period above 100 Hz, so a per-frame separation read back out of an
-interval can miss by more than `DISTANCE_TOL_M`. That is a property of the graph
-builder rather than of retention, it is reported rather than tuned away, and it
-means a 1 kHz robot does not get the finer levels' full answer even after paying
-for them. What a claim may and may not rest on above 100 Hz is
-[`limitations.md`](limitations.md) §5; this paragraph is the cost side of the same
-limit.
+interval can miss by more than `DISTANCE_TOL_M`.
+
+That is a property of the graph builder rather than of retention, it is reported
+rather than tuned away, and it means a 1 kHz robot does not get the finer levels'
+full answer even after paying for them — the cost side of the limit
+[`limitations.md`](limitations.md) §5 states.
 
 ## The incumbent encoding: rosbag2 / MCAP
 
-**Status: a projection, computed from published specification, 2026-08-26
-(issue #117).** No `mcap` library was used and no `zstd` was run — this
-repository adds no dependency for a baseline. What is *measured* is the byte
-stream produced by an encoder written here from the spec, applied to real fixture
-data. What is *projected* is that a rosbag2 writer would produce the same layout.
+**Status: a projection, computed from published specification.** No `mcap`
+library was used and no `zstd` was run — this repository adds no dependency for a
+baseline. What is *measured* is the byte stream produced by an encoder written
+here from the spec, applied to real fixture data. What is *projected* is that a
+rosbag2 writer would produce the same layout.
 
 ### Why this baseline exists
 
@@ -333,11 +295,11 @@ against what practitioners actually keep is correspondingly smaller than the
 published figure against gzipped CSV.
 
 **This document does not restate the headline.** The ratio above is an encoding
-ratio, free of fixed cost on both sides. Translating it into Claim 1 requires
-`reg.bench` measuring its own fixtures, which is the work of issue #117. A
-short-run artifact measurement will not do it: over a five-second fixture the
-artifact's fixed schema and index cost dominates completely, and any ratio taken
-there says more about the schema than about the encoding.
+ratio, free of fixed cost on both sides. Translating it into Claim 1 needs
+`reg.bench` measuring its own fixtures, which is open work ([Why](#why) says
+whose). A short-run artifact measurement will not do it: over a five-second
+fixture the artifact's fixed schema and index cost dominates, and any ratio taken
+there says more about the schema than the encoding.
 
 ### Assumptions, each of which can move the number
 
@@ -355,17 +317,16 @@ there says more about the schema than about the encoding.
 ### The Layer B asymmetry
 
 The two sides do not carry the same information about the world, and the
-comparison is only honest with that stated rather than footnoted.
-
-The fixture stream carries `human_x`, `human_y`, `human_vx`, `human_vy` —
-**simulator ground truth for the person**. No robot's `/joint_states` contains
-that and no bag does either; a real system carries perception output, and the
-sensing that produced it. Neither is priced here.
+comparison is only honest with that stated rather than footnoted. The fixture
+stream carries `human_x`, `human_y`, `human_vx`, `human_vy` — **simulator ground
+truth for the person**. No robot's `/joint_states` contains that and no bag does
+either; a real system carries perception output, and the sensing that produced
+it. Neither is priced here.
 
 This comparison therefore prices **proprioception only, on both sides**. It says
-nothing about what it costs to know where the human was. That is Layer B, it is
-the expensive half, and it is the half this document projects rather than
-measures everywhere else.
+nothing about what it costs to know where the human was. That is Layer B, the
+expensive half, and the half this document projects rather than measures
+everywhere else.
 
 ### What would retire this section
 
@@ -376,35 +337,35 @@ before any outside-facing document leans on the 2.51x.
 
 ## A premise this document does not carry: air-gapped sites
 
-Until 2026-08-26 the retention argument rested on a **second** empirical claim
-beside the sensor rate: that full sensor logs *cannot leave an air-gapped site*.
-It was stated as a fact in `README.md` and three times in [`plan.md`](plan.md),
-it stood in for the requirement below in three more places, and it appeared
-**zero times here** — no source, no range, no sensitivity, in the document where
-every other input to this argument gets exactly those three (issue #102).
+**The retention argument rests on the sensor rate alone.** A second empirical
+claim once stood beside it: that full sensor logs cannot leave an air-gapped
+site. It was stated as a fact in `README.md` and three times in
+[`plan.md`](plan.md), it stood in for the requirement below in three more places,
+and it appeared **zero times here**: no source, no range, no sensitivity, in the
+document where every other input gets all three.
 
 **It is retired rather than sourced, because the argument does not need it.**
 What the retention argument needs is that keeping the raw log for the mandated
 window is expensive per robot and keeping the artifact is not. Both halves are
 above and neither mentions a network: 182.5 TB per robot per retention window at
 the published multiplier, against 265 GB of artifact at occurrence resolution and
-a 50 Hz control rate, with the ratio's sensitivity to the multiplier in
+a 50 Hz control rate, with the sensitivity to the multiplier in
 [Sensitivity](#sensitivity). None of that arithmetic moves on a site with a fibre
-uplink. Sourcing the premise instead would have added a second empirical input to
-a claim that already turns on one, and the second would have been carrying no
-weight.
+uplink, and sourcing the premise would have added a second empirical input
+carrying no weight.
 
-**What was not retired, because it is a different kind of claim.** *Off-network
-verifiability* — one self-contained file an assessor can check years later with no
-service still running and no call to anyone — is a **requirement of the design**,
-not an observation about how sites are run. These sites are heavily instrumented
-and their telemetry already flows to a cloud the operator runs; that is the reason
-for the requirement rather than an obstacle to it, because an assessor certifying
-what happened needs a record whose integrity does not rest on infrastructure
-belonging to the party being assessed. Requirements are stated, not sourced, so
-that half needs nothing from this document. It is stated in
-[`limitations.md`](limitations.md) §6, in [`plan.md`](plan.md) under Claim 4, and
-in `reg/commit.py`, which is where it decides something: RFC 3161 and
+**The requirement half stands, because it is a different kind of claim.**
+*Off-network verifiability* — one self-contained file an assessor can check years
+later with no service still running and no call to anyone — is a **requirement of
+the design**, not an observation about how sites are run. These sites are heavily
+instrumented and their telemetry already flows to a cloud the operator runs,
+which is the reason for the requirement: an assessor certifying what happened
+needs a record whose integrity does not rest on infrastructure belonging to the
+party assessed.
+
+Requirements are stated, not sourced, so that half needs nothing from this
+document. It is stated in [`limitations.md`](limitations.md) §6, in
+[`plan.md`](plan.md) under Claim 4, and in `reg/commit.py`, where RFC 3161 and
 transparency-log commitment are documented and deliberately unimplemented under
 it.
 
@@ -422,12 +383,11 @@ duty cycle, and a logged byte count over a known interval. Until then the honest
 form is the one used throughout: an explicit multiplier, a linear sensitivity, and
 the word *projection* on every number derived from it.
 
-The rosbag2/MCAP projection above retires separately and on its own terms — see
+That retires the *sensor* side only. The control rate is the other half, and it
+is already measured rather than assumed: the figure a reader needs is the rate
+their own robot's constraint layer adjudicates at. The rosbag2/MCAP
+projection retires separately and on its own terms — see
 [What would retire this section](#what-would-retire-this-section).
-
-That would retire the *sensor* side. The control rate is the other half and is
-already retired as an assumption: it is measured, and the figure a reader needs
-is the rate their robot's constraint layer actually adjudicates at.
 
 ## See also
 
@@ -440,3 +400,60 @@ is the rate their robot's constraint layer actually adjudicates at.
 - `python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0` — the command
   that produces the control-rate table, and `--resolution` for the curve at one
   rate. Neither flag has a default rate to fall back on
+
+## Why
+
+Nothing below is normative. It is the provenance of the sections above: which
+issue each arrived with, and what each re-measurement moved. An assumption is
+worth least once nobody remembers what it was weighed against.
+
+### When each section was added
+
+| section | issue | dated in this file as |
+|---|---|---|
+| The document, the multiplier, its sourced range | #58 | 2026-08-19 |
+| Every size re-measured with Layer A in the artifact; the window as Art. 19 and Art. 26(6) | #59, #60, #64 | 2026-08-20 |
+| *The control rate* and its ladder; run identity and the outer-envelope scalars in the sizes; the ladder republished | #68, #82, #83, #94 | 2026-08-21 |
+| *The incumbent encoding*; the premise this document does not carry | #117, #102 | 2026-08-26 |
+| The priced stream, as 24 columns and 19 Layer B | #123 | 2026-08-27 |
+| Three sensitivity rows recomputed from the sizes | — | 2026-08-28 |
+| The base pose on `robot_config`; the ladder re-measured, three rungs of it stale | #166 | 2026-09-02 |
+
+### The sizes the Layer A re-measurement replaced
+
+The provisional figures measured an artifact holding no Layer A record at all
+(issue #59): occurrence went 18.9 GB → 263 GB, transition 229.7 → 655 GB,
+per-frame 589.3 → 952 GB. Those are the figures #59 produced; today they are 265,
+658 and 955 GB. Issues #83, #82 and #166 account for the 0.8% between — run
+identity, the outer-envelope scalars and the base pose on the `robot_config`
+row, whose byte cost is itemised in [`lossiness.md`](lossiness.md), *Retained*
+#8.
+
+The attribution is to #59 because that is the change that moved the figures by an
+order of magnitude, and because it established that no resolution level coarsens
+a record — which is what put the coarsest level at 3,120 of 3,166 node rows and
+made the control rate the artifact's second variable. Before it, coarsening the
+scene bought proportionally more.
+
+### What the two re-measurements did to the conclusion
+
+Before Layer A entered the artifact the three-order threshold sat at
+0.104 TB/day and the published assumption cleared it tenfold; issue #60 is where
+three orders stopped being available, and issue #68 is where the two-order band
+went at 1 kHz. Both times the multiplier stayed at 1 TB/day, and the two-order
+conclusion at 50 Hz did not move at all.
+
+### An outside estimate, checked
+
+Issue #68 arrived with a reviewer's estimate of ~5.1 TB per robot per six months
+at 1 kHz, i.e. ~36x, flagged explicitly as unverified. The measured figures are
+4.73 TB and ~39x. The estimate was directionally right and slightly pessimistic,
+for the reason *The control rate* gives: it assumed the whole level scales, and
+1.5% of it does not.
+
+### Whose work the incumbent ratio is waiting on
+
+Translating the 2.51x into Claim 1 is the remaining work of issue #117. Until it
+lands the ratio travels with the condition that it is a hand-built encoding
+comparison and not a real bag, which is what `README.md` and
+[`plan.md`](plan.md) state wherever they quote it.

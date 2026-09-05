@@ -2,10 +2,10 @@
 
 **Status:** **normative** where it disagrees with [`plan.md`](plan.md) — prior art
 wins and `plan.md` gets edited, which is the README's stated rule and this file's
-whole purpose · **five passes**: 2026-08-18 before Phase 1, 2026-08-19 after the
+whole purpose · **six passes**: 2026-08-18 before Phase 1, 2026-08-19 after the
 benchmark appeared to refute Claim 1, 2026-08-21 and 2026-08-26 each prompted
-by an outside reader, and 2026-09-01 before the mobile track's design is built on
-· keep current
+by an outside reader, 2026-09-01 before the mobile track's design is built on, and
+2026-09-05 before the self-describing artifact is · keep current
 
 Each pass is kept whole and dated rather than folded into the one after it,
 because half of what this file records is *when* something was found: a citation
@@ -25,7 +25,7 @@ been made there yet.
 
 # The entries at a glance
 
-Twenty-five entries across five passes. **This is an index, not a summary**: it gives
+Twenty-nine entries across six passes. **This is an index, not a summary**: it gives
 each entry a name and a place and says nothing about what it concluded. The first
 cut of this table carried a fourth column of one-line verdicts, and four of the
 twenty were wrong — §1's collapsed the mandate/proposal distinction that §1 was
@@ -61,6 +61,10 @@ nothing mechanical can check a paraphrase of one. Read the section.
 | 23 | **RTD / REFINE** | 5 · 2026-09-01 |
 | 24 | **CORA** and zonotope reachability | 5 · 2026-09-01 |
 | 25 | **Set-theoretic localization** | 5 · 2026-09-01 |
+| 26 | **in-toto attestations** and **SLSA** provenance | 6 · 2026-09-05 |
+| 27 | **Reproducible Builds** | 6 · 2026-09-05 |
+| 28 | **C2PA** content provenance | 6 · 2026-09-05 |
+| 29 | **OAIS Representation Information**; **FRE 902(13)–(14)** | 6 · 2026-09-05 |
 
 ---
 
@@ -2110,3 +2114,574 @@ survey does not edit the claims it bears on:
   is the shape one would take. It collides with issue #84's deliberate refusal of a
   graded scheme, it is a types decision rather than a survey one, and it should be
   decided in the same change as the pose provenance enum or not at all.
+
+---
+
+# Sixth pass — 2026-09-05, before the self-describing artifact is built
+
+[`docs/self-describing.md`](self-describing.md) was written on 2026-09-05. It
+proposes recording the toolchain that produced an artifact and putting a tag's
+basis in the file beside the tag, and it ends its own rationale with an
+instruction: *"Before this is built, `prior-art.md` needs a pass on provenance and
+reproducible-build practice, and on whether 'self-describing evidence' has a name
+in the audit literature already. **Assume it does.**"* The assumption was right on
+all four counts, and one of the four names a defect in the sentence that ordered
+the pass.
+
+Tier 1 of that document's build order **is** this pass, and everything below it in
+the order depends on the outcome, per the rule at the head of this file: prior art
+wins and the plan gets edited.
+
+What the pass costs, up front:
+
+- **§26 corrects the sentence in `self-describing.md` that cites it.** The
+  document says SLSA and in-toto attestations *"do exactly this"* — record the
+  toolchain that produced an artifact. They do not. SLSA's provenance identifies
+  the **build platform** and requires the verifier to *trust* it; the fields that
+  could carry an environment are optional, best-effort and offered for debugging.
+  The statement shape is worth borrowing and this repository already borrows it.
+  The environment record is somebody else's contribution, and §27 is whose.
+- **§27 is the entry the issue predicted: gap 2 is solved practice, and it has a
+  file format.** Reproducible Builds defines reproducibility *relative to a stated
+  build environment* and records that environment in a **buildinfo** —
+  deliberately as a separate product **beside** the artifact rather than inside
+  it. So the content of `self-describing.md` §3's first row is settled by prior art
+  and should be adopted rather than derived; its placement inside `meta` is a
+  deviation made for a reason the practice does not have, and must be stated as
+  one on §5's pattern. Two things arrive free: `diffoscope`, which is what makes a
+  mismatch *attributable* rather than merely visible, and `reprotest`, which says
+  that CI comparing two runs on one machine is the weakest test in the family.
+- **§28 supplies the shipped precedent for the environment field, one layer up.**
+  C2PA's `claim_generator_info` records the name, version **and operating system**
+  of the software that produced a claim, inside a manifest bound to the asset's
+  bytes by hash. It also has a defined way to remove part of a record without
+  breaking the signature — redaction — which is a different answer from this
+  project's to the same question, and the one that does not route back through
+  gap 2.
+- **§29 is the one that changes what the design document may say.** The idea of an
+  artifact carrying what it needs in order to be interpreted has a name — OAIS
+  **Representation Information** — and the model that names it also shows the goal
+  is unreachable as stated: Representation Information is recursive, and the
+  recursion terminates only at a **declared Designated Community**. So §4's line
+  cannot be drawn as *in the file* versus *in prose*; it is drawn by naming the
+  reader, which this survey already did in §12. The audit and legal literature's
+  other name is **self-authenticating**, and its answer is the opposite of
+  self-describing: FRE 902(14) accepts a hash-identified copy only when a
+  **qualified person certifies** it.
+
+What survives, as in every pass since the third, is **retention** and
+**attribution** — and this is the first pass in which the second is contested.
+in-toto, C2PA and FRE 902 are all attribution mechanisms, and two of the three
+have a signing story stronger than this project's. All four bodies of work are
+about evidence rather than about robots, and none of them is a competitor to
+Claim 1 or Claim 4.
+
+**A note on sources before the entries, because all four have a boundary.** §26,
+§27 and §28 are read from the specifications' own published text on 2026-09-05 —
+the in-toto Statement v1 spec, the SLSA v1.0 provenance, levels and FAQ pages, the
+Reproducible Builds documentation, and the C2PA 2.1 specification — and **no
+implementation was run**: no attestation was generated or verified, no build was
+rebuilt, no manifest was validated. §29 carries the real boundary: **ISO 14721 is
+paywalled**, the free CCSDS Magenta Book was fetched and its PDF is encrypted
+against text extraction and **did not extract** here, so its half of that entry is
+entered from secondary sources with **no clause number cited anywhere in it**.
+Each entry repeats this in its own first lines, because a reader who reaches one
+entry does not necessarily read this paragraph.
+
+---
+
+## 26. in-toto and SLSA — the attestation shape this repository already uses, and the environment it does not carry
+
+**The in-toto Attestation Framework, *Statement* v1**, over the framework
+introduced in Torres-Arias, S., Awwad, H., Moore, R., Cappos, J. and Curtmola, R.,
+*"in-toto: Providing farm-to-table guarantees for bits and bytes,"* USENIX
+Security 2019. Beside it **SLSA** (Supply-chain Levels for Software Artifacts)
+**v1.0**, its Provenance predicate and its build track.
+
+**Read from the published specification text on 2026-09-05** — the in-toto
+Statement v1 spec and the SLSA v1.0 provenance, levels and FAQ pages. **No
+implementation was run**; nothing here generated or verified an attestation, and
+nothing below is a quotation from the USENIX paper, which was not opened.
+
+**What it is.** An in-toto Statement is four fields: `_type`, pinned to
+`https://in-toto.io/Statement/v1`; `subject`, a set of artifacts of which each
+*"MUST have `digest` set"* and which are *"matched purely by digest, regardless of
+content type"*; `predicateType`, a URI naming what kind of claim this is; and
+`predicate`, the claim itself. The Statement is signed in an envelope, and the
+predicate is where an ecosystem of claim types lives. SLSA's Provenance is one of
+them: a `buildDefinition` (`buildType`, `externalParameters`, optional
+`internalParameters`, optional `resolvedDependencies`) and `runDetails` (`builder`,
+optional `metadata`, optional `byproducts`).
+
+**This repository is already inside that shape and had not surveyed it.** The
+`.wake` records the harness writes onto each branch are in-toto Statements with a
+harness-defined `predicateType` — a subject with a digest, a predicate with the
+attempt. What those records hold is
+[`wake-runner`](https://github.com/nan-bit/wake-runner)'s to document and this
+file will not restate it. What matters here is the order: the borrowing happened
+before the survey, which is the thing this file exists to prevent.
+
+**The finding, and it corrects the document that ordered this pass.**
+[`docs/self-describing.md`](self-describing.md) says *"Recording the toolchain that
+produced an artifact is ordinary build provenance — SLSA and in-toto attestations
+do exactly this."* The first half is right. The second is not. SLSA Build L1
+requires *"Provenance exists describing how the artifact was built, including the
+build platform, build process, and top-level inputs"* — the build platform
+**identified**, not described. The fields that could carry an environment are all
+optional and all hedged: `internalParameters` are *"set internally by the
+platform"*, *"there is no need to verify these parameters because the build
+platform is already trusted"*, they are offered *"for debugging, incident
+response, and vulnerability management"*, and they merely *"MAY be necessary for
+reproducing the build"*; `resolvedDependencies` is an *"unordered collection of
+artifacts needed at build time"* whose *"completeness is best effort, at least
+through SLSA Build L3"*. No build level requires a hermetic or a reproducible
+build, and the FAQ is explicit that *"SLSA does not require verified reproducible
+builds directly"* — they are *"one option for implementing the requirements"*,
+declined as a requirement partly because rebuilders sharing a pipeline share a
+common cause, which is `CLAUDE.md`'s third rule arriving from the other direction.
+
+So this literature's answer to *whom do I believe about this artifact* is a signed
+identity, and its answer to *what would reproduce it* is: ask the builder. That is
+a different question from gap 2's, and an artifact that recorded `builder.id` and
+nothing else would leave an auditor exactly where [`limitations.md`](limitations.md)
+§1 leaves them.
+
+### What `reg` does that in-toto does not
+
+- **It is about a run, not a build.** Every predicate in this ecosystem describes
+  how bytes were produced from other bytes by a build system. `reg`'s subject is a
+  robot's own state and what was declared against it, and every question Claim 2
+  answers is a question about what a record *says*.
+- **It recomputes rather than attests.** `reg/enforce.py` computes its own bound
+  and refuses to import the policy's; an attestation verifier checks a signature
+  and a digest and takes the predicate's word for its contents. Nothing in the
+  shape can disagree with the claim it carries.
+- **It tags dependence.** Layer A / Layer B has no counterpart. A predicate field
+  is trusted or absent; it is never marked *this one came from outside the robot*.
+
+### What in-toto does that `reg` does not
+
+- **It separates the claim from the artifact and matches by digest.** A `reg`
+  artifact carries its chain inside the file the chain protects. An attestation is
+  a detached, independently distributable statement about a digest, which is what
+  lets a third party hold and serve it — the property §18 found in transparency
+  logs, here without the log.
+- **It has a policy language and a threshold of signers.** in-toto's layout names
+  the steps of a supply chain, who may perform each and how many must agree, and
+  verification is against that layout. `reg` has two keys in one process (§14,
+  [`limitations.md`](limitations.md) §6) and no notion of a party who was
+  *supposed* to sign.
+- **It versions its own schema in the file.** `_type` and `predicateType` are URIs
+  a reader resolves. `reg`'s `meta` carries `reg_version`, and a reader who does
+  not already know the project cannot resolve it to anything.
+
+**Verdict — it corrects [`self-describing.md`](self-describing.md) and supersedes
+none of it.** The sentence attributing the environment record to SLSA and in-toto
+is wrong and is edited in this pass: what this literature gives is the *statement
+shape*, which the repository already uses. §3's first row stands unchanged as a
+design; its precedent moves to §27. §7's third question — `meta` or the chain? —
+gains a precedent rather than an answer: here the environment-adjacent fields live
+inside a **signed** predicate bound to a subject digest, which is the "stronger and
+larger" option that question names, and choosing it is still a person's decision.
+
+**Action:** [`docs/self-describing.md`](self-describing.md)'s *What this borrows*
+paragraph is corrected and §7's third question gains the precedent — **done in
+this pass**. Nothing in `plan.md` moves.
+
+---
+
+## 27. Reproducible Builds — gap 2, solved by someone else, with a name and a file format
+
+**The Reproducible Builds project** — its definition, its documentation on
+recording and on defining a build environment, the `SOURCE_DATE_EPOCH`
+specification, `reprotest` and `diffoscope`.
+
+**Read from the project's own documentation on 2026-09-05**
+(`reproducible-builds.org/docs/`: *Definitions*, *Recording the build
+environment*, *Definition strategies*, and the documentation index). **No build
+was rebuilt and neither tool was run here**; nothing below is a quotation from a
+Debian `.buildinfo`.
+
+**The definition, and it is the whole finding.** *"A build is reproducible if
+given the same source code, build environment and build instructions, any party
+can recreate bit-by-bit identical copies of all specified artifacts."*
+Reproducibility is defined **relative to a stated environment** — not as a property
+an artifact has by itself. Which means [`limitations.md`](limitations.md) §1 and
+issue #175 are not a discovery about this project; they are the first thing this
+field says. *"Relevant attributes of the build environment would usually include
+dependencies and their versions, build configuration flags and environment
+variables as far as they are used by the build system (eg. the locale)"* — and the
+advice is to **minimise** that set rather than to enumerate the world.
+
+**The mechanism has a name and a shape.** *"All relevant information about the
+build environment should either be defined as part of the development process or
+recorded during the build process."* Recorded, it *"is stored best as a separate
+build product that can be easily ignored or distributed separately"* — the
+**buildinfo**: plain text in Debian, key–value pairs in Arch, one form per
+ecosystem. Two tools sit either side of it. `reprotest` builds twice while
+**deliberately varying** the environment — the project's own list of variations
+runs to build path, hostname, timezone, locale, umask, input and output ordering,
+randomness and system image. `diffoscope` recursively diffs two artifacts and says
+**where** they differ.
+
+**Three things this settles for `self-describing.md`, and one is a correction to
+the placement rather than to the content.**
+
+**1. Gap 2 is solved practice, and the content should be adopted rather than
+derived.** §3's first row — shapely and GEOS versions, platform, Python — is a
+buildinfo for a geometry computation. Adopt the list, name the practice, and cite
+it; a list arrived at from first principles here would be the same list with no
+provenance and no community maintaining it.
+
+**2. The practice puts it beside the artifact and `reg` will not — a deviation to
+state, not an oversight to fix.** A buildinfo is *a separate build product*,
+because an archive can distribute it separately to whoever wants to rebuild. Claim
+2 says the file answers with no access to anything else, so this project has a
+reason to put the environment **inside** `meta` that the practice does not have.
+That is the shape of §5's PROFIsafe deviation — a deliberate departure, stated
+precisely, with its reason — and left unstated it reads as unfamiliarity.
+
+**3. Attribution needs a differ, and a version list does not give one.**
+`diffoscope` exists because knowing that two environments differ does not say
+*which* difference moved the bytes. The tier-2 guard `self-describing.md` proposes
+— report could-not-evaluate when the recording environment does not match the
+recomputing one — is the right first move and it is the weaker half: it converts an
+unattributable disagreement into a refusal to evaluate, which is what this
+repository's *a check must be able to fail* demands, and it still does not tell an
+auditor which library moved. Say that, rather than letting *attributable* stand
+unqualified.
+
+### What `reg` does that the Reproducible Builds project does not
+
+- **It carries an adversary.** Reproducibility defends against a compromised
+  builder and is checked by independent rebuilders comparing bytes; the artifact
+  itself is not signed by two parties with different roles, and nothing in it is
+  designed to survive its author. `reg`'s chain is (§14, §18).
+- **Its subject is a run, and its "source" is a row.** A rebuild starts from a
+  source tree. A `reg` recomputation starts from one retained row of
+  proprioceptive state and four numbers in `meta` — a far smaller input, and a
+  correspondingly stronger claim about what was retained.
+- **It tags the dependence of what it recomputes.** Layer A / Layer B again; a
+  buildinfo has no notion of a value that came from outside the machine.
+
+### What the Reproducible Builds project does that `reg` does not
+
+- **It states the environment.** This is gap 2, and it is why the entry exists. An
+  artifact this repository writes today records `reg_version` and an
+  envelope-parameter digest, and neither the shapely/GEOS build nor the platform.
+- **It varies the environment on purpose.** `reprotest` is an entire tool for
+  *discovering* unreproducibility rather than assuming it away. CI here compares
+  two runs on **one machine**, which in that vocabulary is a reproduction with **no
+  variations applied** — the weakest member of the family — and issue #175 found
+  the architecture variation by hand rather than by running one.
+- **It explains a mismatch.** `diffoscope` has no analogue here, and building one
+  is not proposed.
+- **It has independent rebuilders.** The property is checked by parties who are not
+  the builder. Every recomputation of a `reg` artifact contemplated so far is by
+  one auditor, holding the file, alone.
+
+**Verdict — it supersedes the *derive it* half of
+[`self-describing.md`](self-describing.md) §3's first row and corrects §6's
+attribution; the three gaps stand as stated.** Gap 2 is correct, and it is a known
+problem with a known answer. The document should adopt the buildinfo content list,
+name the practice, state the in-`meta` placement as a deviation with its reason,
+and qualify *attributable*.
+
+**Action:** [`docs/self-describing.md`](self-describing.md) §3 gains the deviation
+and the qualification, and §6 records the outcome — **done in this pass**. Adopting
+the field list is tier 2, which is code and a schema bump and **not done** here.
+The CI-variation finding belongs in [`limitations.md`](limitations.md) §1 and is
+**not done** — outside issue #199's affected areas.
+
+---
+
+## 28. C2PA — a claim bound to the bytes it describes, and the software version already inside it
+
+**The Coalition for Content Provenance and Authenticity, *C2PA Specification*,
+version 2.1**, and the manifest model underneath it.
+
+**Read from the published 2.1 specification text on 2026-09-05.** **No manifest
+was generated or validated here** and no implementation was run; nothing below is
+a quotation from a conformance-program document, which was not opened.
+
+**What it is.** A **manifest** is *"the set of information about the provenance of
+an asset based on the combination of one or more assertions (including content
+bindings), a single claim, and a claim signature."* Assertions are individual
+statements — what was captured, what was edited, what the ingredients were. The
+claim references them and is signed. Manifests travel **embedded in the asset**, in
+a JUMBF box, and may also be external and referenced. Ingredients make the manifest
+store a chain: an asset built from other assets carries theirs.
+
+**Two bindings, and the distinction is the useful one.** A **hard binding** is a
+cryptographic hash over the asset's bytes, which lets a validator *"ensure that (a)
+this manifest belongs with this asset and (b) that the asset has not been
+modified."* A **soft binding** — a fingerprint or a watermark — matches *"derived
+assets and asset renditions"* whose bits differ, which is what is left when the
+manifest has been stripped.
+
+**The field `self-describing.md` §3 proposes already exists in a shipped
+standard.** `claim_generator_info` records *"the non-human (hardware or software)
+actor that actually generated the claim"* — name, version, **operating system**. A
+content-provenance standard concluded that the software and the OS which produced
+a claim belong inside the claim. That is §3's first row one layer up, and it is
+the strongest available answer to *is putting the environment in the file
+unusual?* It is not.
+
+**Redaction, which is a different answer to this project's hardest retention
+question.** C2PA permits an assertion to be removed when an asset becomes an
+ingredient — *"removing the entire assertion from the manifest's assertion store or
+retaining the labelled assertion container but replacing its data with zeros"* —
+with the claim still validating. [`lossiness.md`](lossiness.md)'s argument for
+discarding a polygon is that it is recomputable, and gap 2 is the price of that
+argument. Redaction pays a different price: the removed thing is **gone**, the
+record says so, and nothing about the reader's environment is involved. Which of
+the two this project wants is not settled by this entry. That the alternative
+exists, is standardised, and does not route back through gap 2 is what §3's third
+row does not currently know.
+
+**The disclaimer to copy.** The specification says of its own conformance that it
+*"SHOULD NOT provide value judgments about whether a given set of provenance data
+is 'good' or 'bad,' merely whether the assertions included within can be validated
+as associated with the underlying asset, correctly formed, and free from
+tampering."* That is §12's *no compliance claim may be made*, written by a
+standards body about itself, and it is the sentence a `reg` artifact's reader
+documentation should be modelled on.
+
+### What `reg` does that C2PA does not
+
+- **It disagrees with a claim.** Validation there is about binding, form and
+  tampering, and explicitly not about whether an assertion is true. `reg/enforce.py`
+  recomputes the bound and can VETO the declaration — a check on the substance,
+  which this standard deliberately declines to make.
+- **It answers questions the record was not written to answer.** A manifest is read
+  as a manifest; Claim 2's queries run over a graph of runs, and the artifact is a
+  database.
+- **It tags dependence.** Layer A / Layer B. An assertion is signed or absent;
+  there is no third state saying *this came from outside*.
+
+### What C2PA does that `reg` does not
+
+- **It binds the record to the bytes it describes.** The hard binding is over the
+  asset. A `reg` artifact's chain is over its own records, inside the file, and
+  nothing in it says *these are the observations this evidence is about* in a form
+  that would survive the two being separated.
+- **It plans for separation.** Soft bindings exist because metadata gets stripped
+  in the world. Nothing in this project has considered what an artifact means when
+  it arrives without its `meta`.
+- **It has a trust model with a list.** A validator decides *which signer to
+  accept* against a published trust list. `reg` hands the auditor the keyring, and
+  §14's asymmetry is the whole story.
+- **It removes without breaking.** Redaction, above.
+
+**Verdict — it corrects [`self-describing.md`](self-describing.md) §4's statement
+of the line and leaves the rest standing.** §4 draws the line between *in the file*
+and *in prose*. C2PA's line is between what is **bound to the artifact** and what
+is ambient: a manifest that is external and referenced is self-describing in every
+sense §4 wants, provided the binding holds. The three gaps stand; §3's first row
+gains a precedent; §3's third row gains an alternative it did not consider.
+
+**Action:** [`docs/self-describing.md`](self-describing.md) §3 records the
+alternative — **done in this pass**. The restatement of §4's line is folded into
+§29's, which is the sharper version of the same correction.
+
+---
+
+## 29. OAIS Representation Information, and "self-authenticating" — the idea has two names and they disagree
+
+**OAIS — the *Reference Model for an Open Archival Information System*, CCSDS
+650.0-M-2 / ISO 14721:2012, third edition CCSDS 650.0-M-3 / ISO 14721:2025.**
+Beside it, from an entirely different literature, **Federal Rules of Evidence
+902(13) and 902(14)**, the 2017 amendments on **self-authenticating** electronic
+records. And, as the working instances of the idea, the packaging conventions that
+call themselves self-describing: **BagIt** (RFC 8493) and **RO-Crate**.
+
+**Boundary, and it is the largest in this pass. ISO 14721 is paywalled**, and the
+free CCSDS Magenta Book was fetched on 2026-09-05 and is an encrypted PDF that
+**did not extract** in this environment. The OAIS half of this entry is therefore
+**entered from secondary sources** — the DPC and OCLC literature and the model's
+published summaries — and **cites no clause number anywhere**, for the reason §22
+gives: a clause number is exactly what a summary cannot support. The FRE half is
+read from the rule text and its Committee Notes. Nothing below is a quotation from
+the Magenta Book.
+
+**The question this entry was asked.** [`docs/self-describing.md`](self-describing.md)
+§4 draws a line between what an artifact must carry and what may stay in prose,
+and the issue that ordered this pass asked whether *an artifact that carries what
+it needs in order to be interpreted* has a name. It does — and the name arrives
+with a demonstration that the goal is unreachable as §4 states it.
+
+**Representation Information.** In OAIS an archived object is a Data Object plus
+the **Representation Information** needed to render and understand its bits, split
+into **Structure Information** — the format: how bits become characters, numbers,
+arrays, tables — and **Semantic Information** — what those values mean: a data
+dictionary, a glossary, the documentation. Structure is aimed at machines and
+semantics at people. Around it sits **Preservation Description Information** in
+five parts: Reference, Provenance, Context, Fixity and Access Rights.
+
+**The recursion, which is the finding.** Representation Information is itself
+information, so it needs Representation Information: a schema needs its schema
+language, which needs its own specification, and the regress can continue for an
+arbitrary number of steps. It terminates in exactly one place — the **Designated
+Community's Knowledge Base**. The archive *declares* who its consumers are and
+stops adding where their assumed knowledge takes over. The broader the designated
+community, the less may be assumed and the more must be carried.
+
+**Which means §4's line is not the line.** *In the file* versus *in prose* is not a
+boundary that can be drawn on its own terms: there is no quantity of material that
+makes an artifact self-interpreting to a reader nobody has named, and there is a
+small quantity that suffices for a reader who has been. This survey already named
+that reader — §12, IEEE 7001's **incident and accident investigator**, one of the
+five stakeholder groups, and the one this project addresses. So the defensible
+statement of §4 is *what a claim depends on, and what would reproduce it, for an
+investigator holding the file*, and the stopping point is a declaration that can be
+argued with. §2's cold read already contains that declaration and hides it: *"the
+code that reads artifacts and no document"* **is** a knowledge base, asserted in
+passing. Stating it as one is the change.
+
+**And the practice does not put it all in the package.** Representation
+Information may be held in a **Representation Information Registry** — PRONOM is
+the working example, a registry of formats and of the software and hardware
+environments needed to support them — and referenced from the object. What the
+model requires is that the Representation Information be identified, retained and
+itself preserved, not that it live inside the bag; BagIt and RO-Crate are the two
+packaging conventions built on that reading, and RO-Crate delegates checksums to
+BagIt precisely so that the metadata and the fixity live in different files. Which
+is §28's binding distinction reached from the archival side: `docs/` is not
+disqualified by being prose. It is disqualified by being **unversioned, unhashed
+and unreferenced from the artifact** — a smaller and more fixable defect than
+"move it into the file".
+
+**The other name, and it says the opposite.** In the law of evidence the term of
+art is **self-authenticating**. FRE 902(13) admits *"a record generated by an
+electronic process or system that produces an accurate result, as shown by a
+certification of a qualified person"*; 902(14) admits *"data copied from an
+electronic device, storage medium, or file, if authenticated by a process of
+digital identification, as shown by a certification of a qualified person"* — and
+the Committee Notes make that process of digital identification a **hash
+comparison**. So the closest thing this literature has to an artifact that
+authenticates itself is a hash **plus a human certification**: the hash is
+necessary and explicitly not sufficient. A `reg` artifact supplies the digital
+identification and has no field for a certifier — and §14's asymmetry means the
+certifier would be the operator, which is exactly what a 902 certification is, and
+why the rule attaches a person's name to a penalty rather than a signature to a
+key.
+
+### What `reg` does that OAIS does not
+
+- **It is executable and it can fail.** OAIS is a reference model: functional
+  entities and information objects, no format, no bytes, no test. `reg` is a
+  schema, a reader and a suite that goes red.
+- **It has an adversary.** Fixity there is against corruption and error, and the
+  archive is trusted and audited separately (ISO 16363). `reg`'s chain is against
+  an author who would prefer the record said something else, and the two-key split
+  exists for that.
+- **It generates its evidence from the system under scrutiny, at run time.** An
+  archive receives finished objects from a producer. This pipeline has no
+  producer/archive boundary at all, which is why Provenance in the PDI sense is
+  thin here and why Layer A / Layer B is doing a job OAIS has no name for.
+
+### What OAIS does that `reg` does not
+
+- **It requires the reader to be declared.** Designated Community is a first-class,
+  mandatory concept, and every judgement about sufficiency is relative to it. `reg`
+  has an implied reader in four documents and names it nowhere the artifact can
+  see.
+- **It has a place to put the interpretation.** Representation Information,
+  structure and semantics, with a registry pattern for sharing it. The equivalent
+  here is a `docs/` tree that no artifact references and no version pins.
+- **It carries Context and Access Rights.** Two of the five PDI components have no
+  counterpart: nothing in an artifact says what wider programme a run belongs to,
+  and nothing says who may see it — [`retention.md`](retention.md) discusses
+  disclosure as prose.
+- **It certifies the custodian.** ISO 16363 audits the repository, not the object.
+  `reg` has no custodian model, which is the same hole FRE 902 fills with a
+  qualified person.
+
+**Verdict — it supersedes [`self-describing.md`](self-describing.md) §4's statement
+of the line, corrects §2's framing, and leaves the three gaps and the build order
+standing.** *Self-describing* is a real idea with an older name, and the name comes
+with two conditions the design document does not state: the reader must be
+declared, and the interpretation must be identified and retained rather than
+necessarily inlined. Neither weakens the case for tier 2 — an environment record is
+Representation Information on any reading, and gap 2 is precisely the case where
+the investigator's knowledge base cannot cover the difference.
+
+**Action:** [`docs/self-describing.md`](self-describing.md) §4 gains the Designated
+Community statement and §2's cold read is marked as the stopping-point declaration
+it is — **done in this pass**. Naming that reader where the project says what it
+may claim belongs in [`docs/sufficiency.md`](sufficiency.md) and is **not done** —
+outside issue #199's affected areas.
+
+---
+
+## What this pass did not disturb
+
+**§6's hedge stands, and this is the eighth search — but this is the first pass
+that found something retaining a provenance graph, and the table says so rather
+than eliding it:**
+
+| Read | Does it retain a graph for post-hoc audit? |
+|---|---|
+| in-toto / SLSA (§26) | No. A signed statement about one subject digest. Attestations accumulate along a supply chain, and nothing in the framework walks them as a graph afterwards. |
+| Reproducible Builds (§27) | No. A buildinfo is a flat record of one build, distributed beside the artifact. |
+| C2PA (§28) | **Partly, and it is the closest thing eight searches have turned up.** A manifest store chains ingredient manifests, travels with the asset, is hash-bound, and is meant to be read later by someone deciding whether to believe the asset. It is a graph of *asset derivation*, not of a system's evaluations of its own state; nothing in it is recomputable and nothing in it is tagged for dependence. §6's sentence is about **scene graphs** and survives unedited — but the broader claim *nobody retains a provenance graph* was never this file's, and this entry is why it must not become one. |
+| OAIS (§29) | Not in this sense. A reference model, whose Information Packages are archived objects rather than a queryable record of runs. |
+
+**No claim in `plan.md` is edited by this pass, and no published figure moves.**
+All four bodies of work are about evidence rather than about robots. Claims 2 and 3
+gain a vocabulary — Representation Information, Designated Community, buildinfo,
+hard binding, self-authenticating — and no competitor.
+
+**Three positioning risks are recorded rather than fixed**, per the rule that a
+survey does not edit the claims it bears on:
+
+- Any sentence implying that recording the environment **inside** the artifact is
+  this project's idea is leaning on C2PA's `claim_generator_info` not existing
+  (§28) and on the buildinfo not existing (§27).
+- Any sentence calling a `reg` artifact **self-describing** without naming its
+  reader is using a term whose own literature makes it relative to a declared
+  community (§29).
+- Any sentence calling a recomputation **attributable** once the environment is
+  recorded is claiming what `diffoscope` exists because a version list does not
+  give (§27).
+
+## Changes this pass makes to the plan
+
+| # | Change | Where |
+|---|---|---|
+| 26 | Correct *"SLSA and in-toto attestations do exactly this"* — that literature gives the statement shape, not the environment | `docs/self-describing.md` §6 (**done**) |
+| 26a | Record that the signed-predicate placement is this literature's, where the open question is asked | `docs/self-describing.md` §7 (**done**) |
+| 27 | Name Reproducible Builds as the precedent for gap 2 and adopt the buildinfo content list rather than deriving one | `docs/self-describing.md` §6 (**done**); the field list is tier 2 (**not done** — code and schema, outside #199) |
+| 27a | State the in-`meta` placement as a deviation from the buildinfo practice, with Claim 2 as its reason, on §5's pattern; qualify *attributable* | `docs/self-describing.md` §3 (**done**) |
+| 27b | Record that CI's two runs are a reproduction with no variations applied, and that #175's variation was found by hand | `docs/limitations.md` §1 (**not done** — outside #199) |
+| 28 | Record redaction as the standardised alternative to recompute-and-see, which does not route through gap 2 | `docs/self-describing.md` §3 (**done**) |
+| 29 | Restate §4's line as a function of a declared Designated Community, and mark §2's cold read as the declaration it already is | `docs/self-describing.md` §2, §4 (**done**) |
+| 29a | The same restatement where the project says what it may claim and for whom | `docs/sufficiency.md` (**not done** — outside #199) |
+
+## Still open after this pass
+
+- **The clause text of ISO 14721.** Paywalled in its ISO edition, like IEC 61784-3,
+  IEEE 7001-2021, ISO 21448 and both standards in §22; the free CCSDS Magenta Book
+  is an encrypted PDF that did not extract here. §29 is entered from secondary
+  sources, says so, and cites no clause number for that reason. Obtaining a copy
+  that extracts is outstanding, and what a full read would most likely sharpen is
+  the exact wording on where Representation Information may be held — which §29's
+  correction to §4 leans on.
+- **The in-toto USENIX Security 2019 paper.** §26 is written from the
+  specification, which is the part the design depends on; the paper was not opened
+  and obtaining it is outstanding. The layout-and-threshold comparison is what it
+  would sharpen.
+- **Whether a `reg` artifact should carry a certifier at all.** FRE 902(13)–(14)
+  admit a hash-identified record on a **qualified person's certification**, and
+  this project has been designing as though the file could stand without one. It
+  collides with §14's asymmetry and with [`limitations.md`](limitations.md) §6, it
+  is a claim about who is accountable rather than about bytes, and it is a person's
+  decision.
+- **Whether redaction or recomputation is the right answer for a discarded
+  polygon.** §28 supplies the alternative; choosing costs bytes either way and
+  moves the published retention figures, which is the class of decision tier 5 of
+  the design document's build order already reserves for a person.
+- **Whether the environment record is descriptive in `meta` or signed into the
+  chain.** §26 supplies the precedent — this literature signs it —
+  and [`self-describing.md`](self-describing.md) §7's third question is still where
+  it gets decided.

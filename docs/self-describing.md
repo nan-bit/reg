@@ -1,7 +1,7 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
-**Status:** a design document; tier 0 of §8 has landed and nothing else here is
-built · written 2026-09-05 · normative over nothing yet; where it touches what
+**Status:** a design document; tiers 0 and 1 of §8 have landed and no code here is
+built · written 2026-09-05, tier 1's findings folded in 2026-09-05 · normative over nothing yet; where it touches what
 the project may claim it defers to [`sufficiency.md`](sufficiency.md) and
 [`limitations.md`](limitations.md) until those files carry the change · the build
 order in §8 is the authority on what is proposed versus decided
@@ -64,6 +64,14 @@ the question straight back through gap 2.
 document**. For every claim the file makes, either it can be checked from the file
 or it cannot.
 
+*That sentence declares a reader, and after the sixth prior-art pass it says so.*
+"The code that reads artifacts and no document" is a statement about what the
+reader already knows — in OAIS's vocabulary a **Designated Community's Knowledge
+Base**, which is the only thing that terminates the recursion of what an artifact
+must carry ([`prior-art.md`](prior-art.md) §29). The declaration is not new; it was
+being made in passing. The reader it names is §4's, and the test is relative to
+that reader and to no other.
+
 This is the acceptance criterion and it must be a test, not a principle. Its shape,
 per *a check must be able to fail*:
 
@@ -87,18 +95,74 @@ its own basis must be refused, and one whose basis is intact must not be.
 The first is small and unblocks the honesty of the other two. The third is the
 expensive one and is a decision, not a task — see §8.
 
+**What the sixth prior-art pass changed about the first row** ([`prior-art.md`](prior-art.md)
+§27, §28):
+
+- **The content is adopted, not derived.** An environment record is a
+  **buildinfo** — the Reproducible Builds project's name for it — and that project
+  is the precedent, not SLSA. The list to carry is *the dependencies and their
+  versions, the configuration and the environment variables the computation
+  actually uses*, minimised rather than enumerated. C2PA carries the same idea one
+  layer up in `claim_generator_info`, which records a claim generator's name,
+  version and operating system.
+- **Putting it in `meta` is a deviation from that practice, and is stated as
+  one.** A buildinfo is deliberately *a separate product beside the artifact*,
+  because an archive can distribute it to whoever wants to rebuild. Claim 2 says
+  this file answers with no access to anything else, which is a stronger
+  requirement than the practice has, so the record goes inside. That reason is the
+  deviation's whole justification and it belongs wherever the schema is specified
+  — the pattern is [`prior-art.md`](prior-art.md) §5's PROFIsafe deviation.
+- **"Attributable" is the weaker half and must not stand unqualified.** Recording
+  the environment turns *an unresolvable disagreement* into *a could-not-evaluate*.
+  It does not say which library moved the geometry; `diffoscope` exists because a
+  version list does not give that, and nothing here proposes building one.
+- **The third row has an alternative it did not consider.** C2PA **redacts** —
+  removes an assertion, records that it was removed, and the signature still
+  validates. Retaining the boundary and discarding it as recomputable are not the
+  only two options, and redaction is the one that does not route back through
+  gap 2. Choosing is §7's kind of question, not this table's.
+
 ## 4. Where the line falls
 
-**In the file:** what a claim depends on, and what would reproduce it. Anything a
-reader must have in order to *check* an answer.
+**Restated after the sixth prior-art pass ([`prior-art.md`](prior-art.md) §29),
+which superseded the first version of this section.** The line does not fall
+between *in the file* and *in prose*, because that boundary cannot be drawn on its
+own terms: there is no quantity of material that makes an artifact
+self-interpreting to a reader nobody has named, and a small quantity suffices for
+a reader who has been. OAIS calls the material **Representation Information**,
+observes that it recurses — a schema needs its schema language, which needs its
+own specification — and terminates the recursion in exactly one place: a
+**declared Designated Community** and what it already knows.
 
-**In prose:** why the Layer A / Layer B cut is the right one, what the prior art
-took and what it left, what this project may claim and may not. Anything a reader
-must have in order to *agree*.
+**So the line is drawn by naming the reader, and this project's reader is
+already named.** [`prior-art.md`](prior-art.md) §12 identifies it as IEEE
+7001-2021's **incident and accident investigator** — one of that standard's five
+stakeholder groups, and the one every claim here addresses.
+
+**In the file:** what a claim depends on, and what would reproduce it, *for an
+investigator holding the file* — anything that reader must have in order to
+*check* an answer, and does not already have.
+
+**Identified, retained and referenced from the file — which may be prose:** why
+the Layer A / Layer B cut is the right one, what the prior art took and what it
+left, what this project may claim and may not. Anything a reader must have in
+order to *agree*. OAIS does not require Representation Information to live inside
+the package; it requires it to be identified, retained and itself preserved, and
+the working pattern is a registry the object points at. `docs/` is not
+disqualified by being prose. It is disqualified by being unversioned, unhashed and
+unreferenced from any artifact — which is a smaller and more fixable defect than
+the one the first version of this section diagnosed.
 
 A document that defines is load-bearing and drifts silently. A document that
 argues can be wrong in public and gets corrected. The three gaps above are all
 cases of the first kind wearing the second kind's clothes.
+
+*The other name, and it disagrees.* In the law of evidence the term of art is
+**self-authenticating**, and FRE 902(13)–(14) admit a hash-identified electronic
+record only on the certification of a **qualified person**. The hash is necessary
+and explicitly not sufficient. Nothing in this document proposes a certifier
+field; [`prior-art.md`](prior-art.md) §29 records that whether there should be one
+is a person's decision.
 
 ## 5. Relation to the documents epic
 
@@ -127,6 +191,41 @@ They are independent and can be done in either order. Doing this one first makes
   (`limitations.md` §11) and polygon containment (issue #82) both become
   *answerable* once a basis and a boundary are in the file. Answering them is
   separate, and each still changes what a published claim means.
+
+**What the sixth prior-art pass changed** (issue #199;
+[`prior-art.md`](prior-art.md) §26–§29, 2026-09-05 — tier 1 of §8, and the pass
+this document ordered before anything here is built). It did not end the track and
+it changed four things:
+
+1. **§26 corrected this document.** *"SLSA and in-toto attestations do exactly
+   this"* was wrong and is edited below. That literature gives the **statement
+   shape** — a signed predicate about a subject digest, which this repository's
+   `.wake` records already use — and *not* an environment record: SLSA identifies
+   the build platform and requires the verifier to trust it, its
+   environment-adjacent fields are optional and best-effort, and it declines to
+   require reproducible builds at any level.
+2. **§27 found gap 2 solved, with a standard shape, and this document should
+   adopt rather than invent.** The shape is the Reproducible Builds project's
+   **buildinfo**, and reproducibility there is defined *relative to a stated
+   environment* — which is what makes issue #175 an ordinary finding rather than a
+   peculiar one. §3 above carries what that changes: adopt the content list, state
+   the in-`meta` placement as a deviation with Claim 2 as its reason, and stop
+   using *attributable* unqualified.
+3. **§28 supplied the shipped precedent and one alternative.** C2PA's
+   `claim_generator_info` already records software, version and OS inside a
+   hash-bound manifest, so nothing about §3's first row is novel; and **redaction**
+   is a standardised alternative to discard-because-recomputable that does not
+   route back through gap 2.
+4. **§29 superseded §4 and reframed §2.** *Self-describing* has an older name —
+   OAIS **Representation Information** — which recurses and terminates only at a
+   **declared Designated Community**, so the line is drawn by naming the reader
+   rather than by choosing file-versus-prose. The audit and legal literature's
+   other name, **self-authenticating**, requires a qualified person's certification
+   in addition to the hash, which this artifact has no field for.
+
+**The three gaps and the build order stand.** Nothing in the pass weakens the case
+for tier 2; §29 strengthens it, because an environment record is Representation
+Information on any reading.
 
 ---
 
@@ -164,12 +263,23 @@ being blocked on recomputation and becomes purely a question about what a fault 
 the nine-fault taxonomy means. That question needs a person.
 
 **What this borrows.** Nothing here is novel and the doc should not imply it is.
-Recording the toolchain that produced an artifact is ordinary build provenance —
-SLSA and in-toto attestations do exactly this, and the artifact already borrows
-in-toto's statement shape for `.wake` records. The contribution, if any, stays
-where Claim 3 puts it. Before this is built, [`prior-art.md`](prior-art.md) needs
-a pass on provenance and reproducible-build practice, and on whether "self-
-describing evidence" has a name in the audit literature already. **Assume it does.**
+Recording the toolchain that produced an artifact is ordinary build provenance,
+and the precedent is the **Reproducible Builds** project's buildinfo — an
+environment record produced beside the artifact, without which a rebuild that
+disagrees is unattributable ([`prior-art.md`](prior-art.md) §27). C2PA carries the
+same idea inside a hash-bound manifest, in `claim_generator_info` (§28). What
+**SLSA and in-toto** supply is the *statement shape* — a signed predicate about a
+subject digest, which this repository's `.wake` records already use — and not the
+environment: SLSA identifies the build platform and requires the verifier to trust
+it (§26). The contribution, if any, stays where Claim 3 puts it.
+
+*This paragraph is the correction, dated 2026-09-05.* Before the edit it said
+that SLSA and in-toto attestations "do exactly this", and it ordered the pass that
+found otherwise. The pass ran as tier 1 (issue #199), the survey's entries are
+§26–§29, and §6 above records what it changed. **The assumption that
+self-describing evidence already has a name was correct**: it has two — OAIS
+*Representation Information* and, in the law of evidence, *self-authenticating*
+— and they do not agree about what an artifact can carry on its own.
 
 ---
 
@@ -183,7 +293,11 @@ describing evidence" has a name in the audit literature already. **Assume it doe
    A fixture that does is one line and would settle it.
 3. **Does the environment belong in `meta` or in the chain?** In `meta` it is
    descriptive. Signed into the attestation chain it becomes a claim someone made,
-   which is stronger and larger.
+   which is stronger and larger. *The supply-chain literature takes the second
+   option* — in-toto and SLSA put provenance inside a **signed** predicate bound to
+   a subject digest ([`prior-art.md`](prior-art.md) §26). That is a precedent and
+   not an answer: their reason is a builder a verifier must trust, and this
+   artifact's reason would be Claim 3. Still a person's decision.
 
 ## 8. Build order
 
@@ -194,9 +308,13 @@ Sized so a bad attempt is cheap, and split on the seam between kinds of work.
 and §11 rather than restating them. No behaviour change. It was independent of
 everything below and remains so — nothing here is unblocked by it.
 
-**Tier 1 — the argument.** A `prior-art.md` pass on build provenance, in-toto and
-SLSA, and on whether self-describing evidence is named in the audit literature.
-Everything downstream depends on it, per the rule that prior art wins.
+**Tier 1 — the argument. Landed** (issue #199): the
+[`prior-art.md`](prior-art.md) sixth pass, §26–§29, on build provenance, in-toto
+and SLSA, Reproducible Builds, C2PA, and on whether self-describing evidence is
+named in the audit literature. It is. The pass did not end the track; §6 records
+what it changed, and the changes are to this document's §2, §3, §4 and §7, not to
+the tiers below. Everything downstream depended on it, per the rule that prior art
+wins.
 
 **Tier 2 — the environment in `meta`.** Shapely and GEOS versions, platform,
 Python. Schema bump. A recomputation guard that reports could-not-evaluate off the
@@ -216,6 +334,9 @@ the argument for it concrete.
 
 ## See also
 
+- [`prior-art.md`](prior-art.md) — §26–§29, the sixth pass this document ordered
+  and which corrected it; §12 for the reader §4's line is drawn around; §5 for the
+  pattern a stated deviation from a practice takes.
 - [`plan.md`](plan.md) — Claims 2 and 3, which this serves, and the non-goals table.
 - [`limitations.md`](limitations.md) — §12 (the three gaps as one finding, which
   is where they are normative), and the entries it cross-references: §1 (the

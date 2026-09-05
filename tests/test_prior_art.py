@@ -19,6 +19,13 @@ five bodies of work are held to the same both-directions standard as the four
 above, and — because four of the five have a source boundary — each is also
 required to say what it was read *from*.
 
+Issue #199 extends it once more, and adds the one thing a pass ordered *by a
+design document* has to carry that the earlier passes did not: a **verdict**.
+The sixth pass exists to decide whether `docs/self-describing.md` survives it,
+so an entry that surveys a body of work and never says what it does to that
+document has done the reading and not the job. All three predicates apply to
+all four entries — both directions, a source boundary, and a verdict.
+
 **Every predicate here is fed the pre-#104 text and required to say no.** A
 check that only ever sees the corrected wording proves nothing about whether it
 can fail, and the defect being guarded is an *absence*, which is the easiest
@@ -179,6 +186,34 @@ SOURCE_BOUNDARY = re.compile(
 def states_a_source_boundary(text: str) -> bool:
     """Does this entry say what it was read from?"""
     return SOURCE_BOUNDARY.search(normalise(text)) is not None
+
+
+#: A verdict's disposition: what the entry does to the document it bears on.
+#: Three outcomes, and *leaves it standing* is one of them — an entry that
+#: changes nothing is a result, not a missing result, which is why this is a
+#: disjunction rather than a requirement that something moved.
+VERDICT_DISPOSITION = re.compile(
+    r"supersede|correct|leaves .{0,60}standing|stand(s|ing)\b", re.IGNORECASE
+)
+
+
+def states_a_verdict(text: str) -> bool:
+    """Does this entry say what it does to the document that ordered the pass?
+
+    Three conjuncts, and each rules out a different way of appearing to have
+    one. The word **Verdict** is what makes it findable by a reader who is not
+    reading the whole entry. Naming `self-describing.md` is what makes it a
+    verdict *on the design* rather than a summary of the reading — issue #199's
+    pass was ordered by that document and exists to dispose of it. And a
+    disposition — supersedes, corrects, leaves standing — is what keeps
+    "Verdict: interesting" from counting.
+    """
+    flat = normalise(text)
+    return (
+        re.search(r"\bVerdict\b", flat) is not None
+        and re.search(r"self-describing", flat, re.IGNORECASE) is not None
+        and VERDICT_DISPOSITION.search(flat) is not None
+    )
 
 
 def says_both_directions(text: str) -> bool:
@@ -372,7 +407,25 @@ ENTRIES_ISSUE_138 = {
 #: leaving it unread, not a smaller one.
 PAYWALLED_IN_THE_FIFTH_PASS = {"ISO 3691-4 / ANSI/A3 R15.08"}
 
-REQUIRED_ENTRIES = {**ENTRIES_ISSUE_104, **ENTRIES_ISSUE_138}
+#: The sixth pass, issue #199 — the four bodies of work
+#: [`docs/self-describing.md`](../docs/self-describing.md) ordered a pass on
+#: before anything it proposes is built. Same standard again, plus the verdict:
+#: the pass was commissioned to decide the fate of a design document, and an
+#: entry that does not say what it decided is a reading rather than a finding.
+ENTRIES_ISSUE_199 = {
+    "in-toto / SLSA": re.compile(r"in-toto"),
+    "Reproducible Builds": re.compile(r"Reproducible Builds"),
+    "C2PA": re.compile(r"\bC2PA\b"),
+    "OAIS Representation Information": re.compile(r"Representation Information"),
+}
+
+#: The sixth-pass entry whose source boundary is a **paywall**, on the same
+#: reasoning as `PAYWALLED_IN_THE_FIFTH_PASS`: ISO 14721 was not opened, and an
+#: entry written from the digital-preservation literature that reads as though
+#: the standard had been is the defect, not the smaller version of it.
+PAYWALLED_IN_THE_SIXTH_PASS = {"OAIS Representation Information"}
+
+REQUIRED_ENTRIES = {**ENTRIES_ISSUE_104, **ENTRIES_ISSUE_138, **ENTRIES_ISSUE_199}
 
 
 @pytest.mark.parametrize("item", sorted(REQUIRED_ENTRIES))
@@ -415,6 +468,51 @@ def test_each_fifth_pass_entry_records_what_it_was_read_from(item: str) -> None:
             "Some other boundary is not that one: a reader has to know the "
             "standard itself was not opened."
         )
+
+
+@pytest.mark.parametrize("item", sorted(ENTRIES_ISSUE_199))
+def test_each_sixth_pass_entry_records_what_it_was_read_from(item: str) -> None:
+    """Issue #199, the same guard as #138's, over the sixth pass.
+
+    Three of the four are read from specification text published on the web
+    with no implementation run; the fourth is a paywalled standard whose free
+    edition did not extract. An entry carrying none of that reads as a full
+    read of every document it cites.
+    """
+    entry = section(PRIOR_ART.read_text(encoding="utf-8"), ENTRIES_ISSUE_199[item])
+    assert entry.strip(), f"docs/prior-art.md has no section for {item}"
+    assert verdict(entry, states_a_source_boundary(entry)) == AGREE, (
+        f"the {item} entry does not say what it was read from. An entry that "
+        "states no source boundary reads as a full read of everything it "
+        "cites, which is the claim docs/prior-art.md exists to prevent."
+    )
+    if item in PAYWALLED_IN_THE_SIXTH_PASS:
+        assert re.search(r"paywall", normalise(entry), re.IGNORECASE), (
+            f"the {item} entry does not say the standard's text is paywalled. "
+            "Some other boundary is not that one: a reader has to know the "
+            "standard itself was not opened."
+        )
+
+
+@pytest.mark.parametrize("item", sorted(ENTRIES_ISSUE_199))
+def test_each_sixth_pass_entry_carries_a_verdict(item: str) -> None:
+    """Issue #199's acceptance criterion, one entry at a time.
+
+    The sixth pass was ordered by `docs/self-describing.md` — *"Before this is
+    built, prior-art.md needs a pass ... Assume it does"* — and the rule at the
+    head of the survey is that prior art wins and the plan gets edited. So an
+    entry that reads the work and stops has not discharged the order: what the
+    reading *does* to that document is the deliverable, and *leaves it
+    standing* is one of the three answers.
+    """
+    entry = section(PRIOR_ART.read_text(encoding="utf-8"), ENTRIES_ISSUE_199[item])
+    assert entry.strip(), f"docs/prior-art.md has no section for {item}"
+    assert verdict(entry, states_a_verdict(entry)) == AGREE, (
+        f"the {item} entry carries no verdict on docs/self-describing.md. "
+        "That document ordered this pass before anything it proposes is "
+        "built; an entry that does not say whether it supersedes, corrects or "
+        "leaves the design standing has done the reading and not the job."
+    )
 
 
 def test_no_body_of_work_in_the_survey_is_still_described_as_unread() -> None:
@@ -630,6 +728,62 @@ def test_the_source_boundary_check_rejects_an_entry_that_reads_as_a_full_read() 
     assert states_a_source_boundary(
         NO_SOURCE_BOUNDARY + "\nBoth standards are paywalled.\n"
     )
+
+
+#: An entry that passes both of the other checks and carries no verdict: it is
+#: comparative in both directions, it says what it was read from, and it never
+#: says what any of it does to the document that commissioned the pass. This is
+#: what a thorough reading with no decision in it looks like, and it is the
+#: failure issue #199's acceptance criteria were written against.
+NO_VERDICT = """## 27. Reproducible Builds
+
+**Read from the project's own documentation.** No build was rebuilt.
+
+A build is reproducible given the same source, environment and instructions.
+The environment is recorded in a buildinfo.
+
+### What `reg` does that the Reproducible Builds project does not
+
+It carries an adversary.
+
+### What the Reproducible Builds project does that `reg` does not
+
+It states the environment.
+"""
+
+
+def test_the_verdict_check_rejects_a_thorough_entry_that_decides_nothing() -> None:
+    """The hard negative: it clears both of the older checks and still fails.
+
+    An entry can be correct, comparative and honest about its sources and
+    still leave the design document exactly where it found it — which is the
+    one outcome a pass ordered *before this is built* cannot deliver.
+    """
+    assert says_both_directions(NO_VERDICT)
+    assert states_a_source_boundary(NO_VERDICT)
+    assert not states_a_verdict(NO_VERDICT)
+    assert verdict(NO_VERDICT, states_a_verdict(NO_VERDICT)) == DISAGREE
+    # And a deleted entry is could-not-evaluate, not a pass.
+    assert verdict("", states_a_verdict("")) == COULD_NOT_EVALUATE
+
+    # The word alone is not a verdict. This one is findable and says nothing.
+    labelled = NO_VERDICT + "\n**Verdict.** Interesting and worth knowing.\n"
+    assert not states_a_verdict(labelled)
+
+    # Nor is a disposition about some other document: the pass was ordered by
+    # self-describing.md and the verdict has to be on that.
+    elsewhere = NO_VERDICT + (
+        "\n**Verdict.** It supersedes nothing in `docs/lossiness.md`.\n"
+    )
+    assert not states_a_verdict(elsewhere)
+
+    # And the real thing passes, including the do-nothing outcome — an entry
+    # that changes the design is not the only entry that has decided.
+    stands = NO_VERDICT + (
+        "\n**Verdict — it leaves `docs/self-describing.md` standing.** The three "
+        "gaps are unaffected.\n"
+    )
+    assert states_a_verdict(stands)
 
 
 def test_a_missing_section_is_could_not_evaluate_and_not_a_pass() -> None:

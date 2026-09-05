@@ -8,7 +8,9 @@ defects were fixed 2026-09-02 (issue #165) and §4's schema work landed
 base since 2026-09-04 (issue #177), and since 2026-09-04 (issue #184) the room
 containment check follows that base's whole executed path and covers the arm
 sweeping over it, and since 2026-09-04 (issue #189) an `Enforcer` constructs for
-a driven base and adjudicates one, resting on `horizon_bound` alone — but its
+a driven base and adjudicates one, resting on `horizon_bound` alone, and since
+2026-09-05 (issue #191) the pose reaches `robot_config` and a run whose base
+moved retains its geometry — but its
 fixtures have not landed, so no
 registered scenario in this repository drives and nothing here has moved a robot
 yet** — the build order in §7 says per
@@ -273,14 +275,24 @@ not be wrong in. That refusal is what stops item 4 of §4 from arriving quietly:
 until the pose and the base velocity are on `robot_config`, a mobile artifact
 cannot be written at all rather than being written with fixed-base numbers in it.
 
-*Half of that condition is now met and the sentence still holds.* Issue #166 put
-the **pose** on the row and not the velocity, so this refusal is still what
-stands between a driven base and an artifact: `reg.graph` reconstructs states
-with `base_vel=None`, and `outer_envelope` refuses one for a robot that can
-drive. What issue #166 added beside it is a second refusal at the *read* —
+*Half of that condition was met by issue #166 and the other half by issue #191,
+and what the refusal guards has moved rather than gone.* #166 put the **pose** on
+the row and not the velocity, and added a second refusal at the *read* —
 `envelope_at` will not recompute a discarded polygon for a configuration that
-states a pose — so the two absences cannot compound into a fixed-base region
-returned as a mobile one.
+states a pose — so the two absences could not compound into a fixed-base region
+returned as a mobile one. #191 then made a mobile artifact writable, so the
+sentence above — *a mobile artifact cannot be written at all* — no longer holds
+and the guarantee it stood for is carried differently:
+
+- The **velocity** is still not on `robot_config`, and this refusal still fires
+  where it always did. `reg.graph.build` reads `base_vel` off the *stream*, which
+  has carried it since issue #176, so a driven run whose stream records no base
+  velocity is refused by `outer_envelope` at build time — with fixed-base numbers
+  never reaching the file, which is what the refusal is for.
+- The **read** no longer needs a recomputation to refuse: `GEOMETRY_RETENTION`
+  keeps the polygon on every posed configuration, so `envelope_at` returns the
+  retained region and reaches its refusal only for a row that should not exist —
+  and one that does not, because the build refuses to write it.
 
 The tighter construction has a name and a
 literature — RTD and REFINE compute exactly this forward reachable set for ground
@@ -360,9 +372,20 @@ What breaks, worst first:
    [`sufficiency.md`](sufficiency.md) §2's asymmetry and not a call site's
    decision. Where this list and [`sufficiency.md`](sufficiency.md) §5.8 differ
    from here on, **§5.8 is right**: it is normative for what the project may
-   claim and this is a design document. Nothing in this repository writes a
-   posed configuration; the base velocity is still not on the row, so §3's
-   refusal still stands and a mobile artifact still cannot be built.
+   claim and this is a design document.
+
+   *Since 2026-09-05 and issue #191 this repository does write a posed
+   configuration*, and the sentence that stood here — *the base velocity is
+   still not on the row, so §3's refusal still stands and a mobile artifact
+   still cannot be built* — no longer holds. §3's refusal is unchanged and still
+   fires where it fired: it is `outer_envelope` refusing a state whose
+   `base_vel` is `None` for a robot that can drive, and the builder reads that
+   velocity off the *stream*, which has carried it since issue #176. What the
+   row does not hold is the velocity, which is why `envelope_at` reconstructs
+   states with `base_vel=None` — and why it refuses a posed configuration before
+   reaching that line, so the two absences still cannot compound. What replaces
+   the recomputation for a posed row is the retained polygon, not a looser
+   recomputation: see §7 Tier 4.
 5. `reg/declare.py` — **fixed 2026-09-02, issue #165.** `declared_region`
    *raised* on a disconnected union, on the argument that every configuration's
    first link contains the base. A declaration spanning base motion can be
@@ -564,15 +587,16 @@ scenario**, said by `Scenario.drives` rather than by a pose at the origin, which
 is a mounting fact no `PoseSource` describes (#150).
 
 *What that change cost elsewhere, because it is a refusal and not a feature.*
-`reg.graph.build` now **refuses a stream whose frames state a base pose**. It
-writes `base_pose` NULL on every `robot_config` row it produces, so building one
-of these would turn a run whose base drove into an artifact saying no base pose
-was recorded — same row count, every check green, and every envelope in it
-readable as the region a robot at `meta[base_frame]` could reach. Issue #166
-built the refusal for the half of that path it could see (`_recompute` refuses a
-config that states a pose); this is the half in front of it, which never fired
-before because nothing wrote the pose. `base_vel` is not refused: it is
-body-frame, Layer A, and `outer_envelope` reads it correctly (#163).
+`reg.graph.build` **refused a stream whose frames state a base pose**, from
+2026-09-04 until issue #191 replaced the refusal with the thing it stood in for
+(below). It wrote `base_pose` NULL on every `robot_config` row it produced, so
+building one of these would have turned a run whose base drove into an artifact
+saying no base pose was recorded — same row count, every check green, and every
+envelope in it readable as the region a robot at `meta[base_frame]` could reach.
+Issue #166 built the refusal for the half of that path it could see (`_recompute`
+refuses a config that states a pose); that was the half in front of it, which
+never fired before because nothing wrote the pose. `base_vel` was not refused: it
+is body-frame, Layer A, and `outer_envelope` reads it correctly (#163).
 
 *The room holds the whole robot, for the whole run — done, 2026-09-04, issue
 #184.* `World.__post_init__` used to assert that the room contained the module
@@ -607,13 +631,63 @@ occupy, which are different fixture bugs with different repairs. None of the
 eleven arm fixtures is refused by the widened check and every artifact is
 byte-identical; no published figure moved.
 
-*What remains in this tier.* The fixtures themselves. Then the pose reaching
-`robot_config` for real — with the layer tag on
-every edge resting on it following (`reg.store.open_edge`), and a run whose base
-moved retaining its geometry rather than promising a recomputation that cannot
-be honest — which is what turns the refusal above back into a build. No
-registered scenario drives until those land, so `expected_header(2, 3)` is still
-the 24 columns Claim 1 is priced on and no published figure has moved.
+*The pose reaches `robot_config` for real — done, 2026-09-05, issue #191.* This
+is what turns the refusal above back into a build, and it is four decisions that
+travel together.
+
+- **The pose is written from the frame**, and `None` only where the frame states
+  none. `meta[base_frame]` is then **absent**, because *bolted here* and
+  *localized there* are two claims about one run and
+  `reg.store.insert_robot_config` refuses a file making both; `envelope_frame`
+  reads the centre off the row's own `base_pose` instead. Where a run recorded a
+  pose is a whole-run fact, so a stream that records one on some frames and not
+  others is refused — `reg.stream` will not write such a stream either, and two
+  guards on the same condition is the right number when the second one is what
+  decides a `meta` key.
+- **`GEOMETRY_RETENTION` retains the polygon on every frame whose configuration
+  states a pose**, and the rule text in `meta` says that condition out loud. This
+  is the load-bearing half. The discard rule is licensed by recomputability;
+  §4 item 4's refusal is the statement that for a posed configuration there is
+  none, so retaining nothing and refusing on read would make every envelope query
+  on a mobile artifact a could-not-evaluate — a file that parses and answers
+  nothing. It retains the *polygon*, not the *row*: a posed frame that anchors
+  nothing is still a frame `ENVELOPE_RETENTION` keeps no node for, because
+  forcing a row per posed frame would put issue #29's linear-in, linear-out shape
+  back for exactly the runs this tier is about. A posed row with a NULL geometry
+  is refused at build rather than written, and the check reads the file rather
+  than the builder's own bookkeeping.
+- **The polygon retained is the room-frame envelope** — the body-frame set
+  rigidly placed at the pose, which is the third row of §2's table and Layer B
+  for the reason that row gives. Retaining the *body-frame* set would have
+  reintroduced §4 item 4's failure one door along: a region about the origin
+  handed back for a robot that was elsewhere, arriving from storage instead of
+  from a recomputation and looking exactly as much like a right answer. It is
+  also what makes the rest of the artifact true, because every `INTERSECTS`
+  overlap and `SEPARATION` distance in the file is measured against entities in
+  room coordinates. `compute_envelope` gained no frame argument and must not:
+  the placement happens in `reg.graph`, on the answer, which is where the world
+  already is.
+- **The layer tag follows**, as §5.8 of [`sufficiency.md`](sufficiency.md)
+  already said it must: every `HAS_ENVELOPE` edge over a posed configuration is
+  `B`, whatever `Limits.source` says. `reg.store.open_edge` refusing an `A` is
+  the guard and stays the guard; the builder states the `B` rather than being
+  told about it one row too late.
+
+*And no published figure moved.* `GEOMETRY_RETENTION`'s text lands in `meta` in
+every artifact, including the eleven fixed-base ones, so their bytes are not
+identical — #166 is the precedent for expecting movement. It was re-measured with
+`python -m reg.bench --resolution --seed 0` and the report is byte-identical to
+the one before the change: 1,006,592 B / 2,501,632 B / 3,632,128 B, 60.42 /
+150.15 / 218.00 MB/h. One longer string in one `meta` row does not cross a page
+boundary, where #166's two nullable columns cost a record-header byte on every
+one of 2,560 `robot_config` rows. The control-rate ladder above was re-measured
+too, and did not move either.
+
+*What remains in this tier.* The fixtures themselves — a registered scenario that
+drives, and the mobile fault fixtures beside it. No registered scenario drives
+until they land, so `expected_header(2, 3)` is still the 24 columns Claim 1 is
+priced on, and **Claim 1 stays a fixed-arm claim**: no mobile artifact is priced,
+benchmarked or reported beside the fixed-arm figures.
 
 ## See also
 

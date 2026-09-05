@@ -42,6 +42,24 @@ does not hold for — the same six inputs then describe the same arm somewhere
 else, so `envelope_at` refuses such a row rather than handing back the region a
 robot at the origin could reach.
 
+**So a run whose base moved retains its geometry** (issue #191). The refusal
+above is only half an answer: an artifact that discarded the polygon and then
+refused to recompute it would answer every envelope query on a mobile run with a
+could-not-evaluate — a file that parses and says nothing. `GEOMETRY_RETENTION`
+therefore keeps the polygon on every frame whose configuration states a pose,
+the rule text in `meta` says so, and the polygon kept is the **room-frame**
+envelope: the body-frame set `compute_envelope` returns, rigidly placed at the
+pose the frame states (docs/mobile-base.md §2, the third row of its table).
+Retaining the body-frame set instead would reintroduce the very failure the
+refusal exists to stop, one door along — a region about the origin handed back
+for a robot that was elsewhere, indistinguishable from a right answer — and
+every `INTERSECTS` overlap and `SEPARATION` distance in the file is measured
+against entities in room coordinates, so a body-frame region would make those
+edges statements about no run at all. The region inherits the pose and therefore
+the perceiver, which is why every `HAS_ENVELOPE` edge over a posed configuration
+is Layer **B** — `reg.store.open_edge` refuses an `A` on one, and this builder
+states the `B` rather than being told about it a row too late.
+
 What stays per frame is what queries actually read and what costs almost
 nothing: `envelope_hash`, `area`, `horizon`, `source`, and — since issue #82 — `outer_area` and `outer_radius`, the same two projections of the
 *outer* reachable set for that frame, which bracket the sampled area from the
@@ -215,6 +233,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from shapely.affinity import affine_transform
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -264,7 +283,15 @@ from reg.tolerances import (
     quantize_time,
     simplify_geometry,
 )
-from reg.types import Limits, LimitSource, Obstacle, ProprioState, StateFrame
+from reg.types import (
+    BasePose,
+    Limits,
+    LimitSource,
+    Obstacle,
+    PoseSource,
+    ProprioState,
+    StateFrame,
+)
 
 __all__ = [
     "ATTESTATION_RETENTION",
@@ -412,14 +439,20 @@ GEOMETRY_EVIDENCE_EDGES: frozenset[str] = frozenset({"INTERSECTS", "CONTACT"})
 #: to an assessor and `reg.graph.GEOMETRY_EVIDENCE_EDGES` means nothing to
 #: someone holding only the file.
 GEOMETRY_RETENTION = (
-    "envelope geometry is stored on the first and last frame of the run and on "
+    "envelope geometry is stored on the first and last frame of the run, on "
     "every frame at which an INTERSECTS or CONTACT relationship with an entity "
-    "begins or ceases to hold; on every other frame the envelope row carries its "
-    "hash, area, horizon and source with a NULL geometry_wkb, and the polygon is "
-    "recomputed from config_id and the envelope parameters in this meta table "
-    "(reg.graph.envelope_at, docs/lossiness.md Discarded #9). Exact "
-    "recomputation assumes the same code and the same shapely version — "
-    "docs/limitations.md."
+    "begins or ceases to hold, and on every frame whose robot_config states a "
+    "base_pose; on every other frame the envelope row carries its hash, area, "
+    "horizon and source with a NULL geometry_wkb, and the polygon is recomputed "
+    "from config_id and the envelope parameters in this meta table "
+    "(reg.graph.envelope_at, docs/lossiness.md Discarded #9). The posed clause "
+    "is not a preference: every term of that recomputation is body-frame, so "
+    "for a configuration that states a pose it would return the region a robot "
+    "at the origin could reach, and reg.graph.envelope_at refuses it. A row "
+    "whose configuration states a pose and whose geometry_wkb is NULL is "
+    "therefore an envelope this artifact cannot produce, and the build refuses "
+    "to write one. Exact recomputation assumes the same code and the same "
+    "shapely version — docs/limitations.md."
 )
 
 #: Where `GEOMETRY_RETENTION` lands in `meta`.
@@ -957,6 +990,117 @@ def _frame_text(base: BaseFrame) -> str:
     )
 
 
+def _pose_columns(
+    base_pose: BasePose | None, where: str
+) -> tuple[str | None, str | None]:
+    """The two `robot_config` columns a frame's base pose writes (issue #191).
+
+    `(None, None)` for a frame that states no pose, and that pair is the whole of
+    what the artifact then says: *nobody recorded where the base was*, on the
+    same terms `base_vel=None` says it. It is not the origin — a base bolted at
+    the origin is `meta[base_frame]`, a mounting fact about the run, and the two
+    absences must not be one column.
+
+    Both, or a refusal. `reg.types.BasePose` requires a `PoseSource` and refuses
+    anything else, so a pose here with no provenance cannot arrive through the
+    type — but *cannot occur* is not a reason to write `NULL` if it does. A
+    `base_pose` with a `NULL` `base_pose_source` is the row
+    `reg.store.insert_robot_config` and the schema `CHECK` both refuse, and
+    silently dropping the pose instead would put a run whose base drove into an
+    artifact that says it recorded no pose. So this refuses, loudly, naming the
+    frame.
+
+    The rendering is `_frame_text`'s and `_joint_text`'s: `x,y,theta` at the raw
+    stream's own precision, with no quantum of its own. None of the four
+    tolerances is a quantum for a pose, inventing one would put a bound in the
+    artifact no document states, and it is what keeps the pose out of the
+    distance error budget — see the note beside `outer_radius` in
+    `_observe`, and docs/lossiness.md Discarded #9.
+    """
+    if base_pose is None:
+        return None, None
+    if not isinstance(base_pose, BasePose):
+        raise GraphBuildError(
+            f"{where} states a base pose of type "
+            f"{type(base_pose).__name__}, which is not a reg.types.BasePose. "
+            "Three numbers that happen to place a base carry no provenance, and "
+            "the provenance is half of what the artifact records about a "
+            "room-frame pose."
+        )
+    source = base_pose.source
+    if not isinstance(source, PoseSource):
+        raise GraphBuildError(
+            f"{where} states base_pose=({base_pose.x!r}, {base_pose.y!r}, "
+            f"{base_pose.theta!r}) whose source is {source!r} and not a "
+            "reg.types.PoseSource. A room-frame pose whose provenance nobody "
+            "stated is what BasePose exists to make impossible; writing the "
+            "pose with a NULL base_pose_source is refused by the schema and "
+            "dropping the pose instead would make a run whose base drove "
+            "indistinguishable from one that recorded none. This is a "
+            "could-not-evaluate."
+        )
+    text = ",".join(
+        f"{float(v):.{FLOAT_PRECISION}f}"
+        for v in (base_pose.x, base_pose.y, base_pose.theta)
+    )
+    return text, source.value
+
+
+def _frame_base(frame: StateFrame, where: str) -> BaseFrame:
+    """The frame this run's geometry is measured in, for one stream frame.
+
+    `ORIGIN_FRAME` for a frame that states no pose — the mounting fact every
+    fixture in this repository has, and the reason `grep ORIGIN_FRAME` is the
+    list of places this project assumes a base that does not move.
+
+    For a frame that states one, the pose it states, as a `BaseFrame`. It is a
+    *frame* and deliberately not the `BasePose` itself, for
+    `reg.kinematics.BaseFrame`'s reason: Layer A may not import a room-frame
+    pose, so the pose is converted here — in `reg.graph`, which is where the
+    world already is — and what crosses into `link_polygons` and
+    `outer_envelope` is the frame the caller is asking the question in. The
+    provenance does not cross with it and does not need to: it stays on the
+    `robot_config` row beside the pose, where `reg.store.config_base_pose` reads
+    it off the thing it is a provenance of, and every edge that rests on that row
+    is Layer B whichever `PoseSource` it names (docs/sufficiency.md §5.6).
+    """
+    if frame.base_pose is None:
+        return ORIGIN_FRAME
+    _pose_columns(frame.base_pose, where)  # refuse a pose with no provenance
+    pose = frame.base_pose
+    return BaseFrame(x=pose.x, y=pose.y, theta=pose.theta)
+
+
+def _place(geometry: BaseGeometry, base: BaseFrame) -> BaseGeometry:
+    """A body-frame region rigidly placed at `base`. The room-frame envelope.
+
+    docs/mobile-base.md §2, third row of its table: the room-frame envelope *is*
+    the body-frame set transformed by the pose, and it is Layer B because it
+    inherits whatever supplied the pose. `compute_envelope` takes no frame and
+    must not — it is Layer A and a frame argument on it would be a room-frame
+    pose reaching Layer A through the door `reg.kinematics.BaseFrame` refuses —
+    so the placement happens here, on the answer, rather than inside the
+    computation.
+
+    A rigid transform and nothing else: rotation by `theta` about the body
+    origin then translation by `(x, y)`, which is `forward_kinematics`' own
+    convention for the same three numbers, so the placed envelope and the placed
+    links agree about where the robot is. Distances and areas are invariant under
+    it, which is why `outer_area` and `outer_radius` are the same numbers about
+    the placed centre as about the origin.
+
+    `ORIGIN_FRAME` short-circuits rather than transforming by the identity. The
+    identity matrix would rebuild every coordinate through a multiply-add and
+    return a polygon that is the same region and not the same bytes, and every
+    fixed-base artifact in this repository would move for a run in which nothing
+    happened.
+    """
+    if base == ORIGIN_FRAME:
+        return geometry
+    cos, sin = float(np.cos(base.theta)), float(np.sin(base.theta))
+    return affine_transform(geometry, (cos, -sin, sin, cos, base.x, base.y))
+
+
 def _digest(*parts: str) -> str:
     return hashlib.sha256("\x00".join(parts).encode("utf-8")).hexdigest()[:16]
 
@@ -1013,6 +1157,7 @@ class _FrameNodes:
         outer_radius: float,
         q_text: str,
         qd_text: str,
+        base_pose: BasePose | None,
     ) -> None:
         self._conn = conn
         self._t = t
@@ -1028,11 +1173,44 @@ class _FrameNodes:
         self._outer_radius = outer_radius
         self._q_text = q_text
         self._qd_text = qd_text
+        #: Where the base was, as the two columns `robot_config` holds, or two
+        #: `None`s for a frame that states none (issue #191). Resolved on
+        #: construction because the id below is derived from it, and a refusal
+        #: for a pose with no provenance belongs before any row is written.
+        self._pose_text, self._pose_source_text = _pose_columns(
+            base_pose, f"the frame at t={t}"
+        )
         self._envelope_id = "env_" + _digest(
             ENVELOPE_SOURCE, f"{horizon:.9f}", envelope_digest
         )
-        self._config_id = "cfg_" + _digest(q_text, qd_text)
-        self._keep_geometry = False
+        #: AND THE POSE IS PART OF THE CONFIGURATION'S IDENTITY. A vehicle
+        #: driving with a frozen arm has the same `q` and `qd` at every frame
+        #: and is in a different place at each of them, so hashing the joints
+        #: alone would give every one of those frames the same `config_id` —
+        #: and `reg.store` refuses the second write as a content clash, which
+        #: is the good outcome; the bad one is two frames' evidence merging
+        #: into a row about neither. Omitted entirely when there is no pose, so
+        #: every fixed-base artifact keeps the ids it had.
+        self._config_id = "cfg_" + _digest(
+            q_text,
+            qd_text,
+            *(
+                ()
+                if self._pose_text is None
+                else (self._pose_text, str(self._pose_source_text))
+            ),
+        )
+        #: GEOMETRY_RETENTION's posed clause (issue #191), and it is set here
+        #: rather than called for by the loop. `keep_geometry()` also *retains
+        #: the row*, which is right for a transition and wrong for this: a
+        #: posed frame that anchors nothing is still a frame `ENVELOPE_RETENTION`
+        #: keeps no node for, and forcing one would put a row on every frame of
+        #: every mobile run — the linear-in, linear-out shape issue #29 exists
+        #: to remove. What the rule requires is narrower and is exactly this: if
+        #: this frame's row is written *at all*, it carries its polygon, because
+        #: `envelope_at` cannot recompute one for a configuration that states a
+        #: pose.
+        self._keep_geometry = self._pose_text is not None
         self._retained = False
 
     @property
@@ -1044,6 +1222,17 @@ class _FrameNodes:
     def digest(self) -> str:
         """The envelope's identity at this frame. What `HAS_ENVELOPE` compares."""
         return self._envelope_digest
+
+    @property
+    def posed(self) -> bool:
+        """Whether this frame's configuration states a room-frame base pose.
+
+        What it decides, in one place so the two decisions cannot drift: the
+        polygon is retained (`GEOMETRY_RETENTION`'s posed clause) and the
+        `HAS_ENVELOPE` edge over this frame is Layer **B**. Both follow from the
+        same fact and neither is a property of the run's `Limits`.
+        """
+        return self._pose_text is not None
 
     @property
     def retained(self) -> bool:
@@ -1070,6 +1259,26 @@ class _FrameNodes:
         that information — joint text against a WKB polygon.
         """
         self._retained = True
+        # GEOMETRY_RETENTION, the posed clause, asserted where the row is made
+        # (issue #191). Unreachable while the constructor sets `_keep_geometry`
+        # from the pose — which is the point: a rule stated in `meta` that
+        # nothing checks is a rule the next change can quietly stop honouring,
+        # and the row this would write is one `envelope_at` refuses to read and
+        # nothing in the file can recover. A could-not-evaluate at write time is
+        # cheaper than one at every read.
+        if self.posed and not self._keep_geometry:
+            raise GraphBuildError(
+                f"the envelope row for the frame at t={self._t} would be "
+                f"written with a NULL geometry_wkb, and its configuration "
+                f"{self._config_id!r} states base_pose={self._pose_text!r}. "
+                "Every term of the recomputation that NULL promises is "
+                "body-frame, so reg.graph.envelope_at refuses such a row rather "
+                "than handing back the region a robot at the origin could "
+                "reach — which would leave the polygon recoverable from "
+                "nothing. GEOMETRY_RETENTION keeps the geometry on every frame "
+                "whose configuration states a pose, and this row would break "
+                "the rule this artifact's own meta table states."
+            )
         config_id = self.config()
         return store.insert_envelope(
             self._conn,
@@ -1085,29 +1294,35 @@ class _FrameNodes:
         )
 
     def config(self) -> str:
-        """The `RobotConfig` row for this frame. It states no base pose.
+        """The `RobotConfig` row for this frame, with the base pose it states.
 
-        `None` and not the origin (issue #166). Every stream that reaches this
-        builder states no base pose — since issue #177 that is enforced rather
-        than implied, because `reg.stream` grew columns for one (#176) and
-        `reg.scenarios` can now fill them: `_refuse_a_stream_this_builder_cannot_carry`
-        turns a stream that does state one into a refusal, so a `None` here is
-        only ever a base nothing was told about. *Not recorded* is what the
-        artifact must say then, on the same terms `base_vel=None` says it. Where
-        the base was bolted is `meta[base_frame]`, which is a mounting fact about
-        the run rather than a per-frame estimate, and it is written once.
+        **The pose is written from the frame, and `None` only when the frame
+        states none** (issue #191). Until this issue the two columns were
+        `None` unconditionally and `build` refused a posed stream outright,
+        because writing one would have turned a run whose base drove into an
+        artifact saying *no base pose was recorded* — the same row count, every
+        check downstream green (issue #177). The refusal is gone because the
+        thing it stood in for is here.
 
-        A producer arrives with the rest of docs/mobile-base.md §7 Tier 4. Until
-        then the pose reaches the artifact through
-        `reg.store.insert_robot_config` and through nothing here.
+        `None` is still not the origin (issue #166). It says *nobody recorded
+        where the base was*, on the same terms `base_vel=None` says it, and for
+        a run whose base was bolted the mounting fact is `meta[base_frame]` —
+        written once, because it is a fact about the run and not a per-frame
+        estimate. The two are exclusive and `reg.store.insert_robot_config`
+        refuses an artifact claiming both: `_write_provenance` writes no
+        `meta[base_frame]` for a run that states poses.
+
+        A pose with no `PoseSource` is a refusal and not a `NULL` — see
+        `_pose_columns`, which is where that decision is made and where the
+        message names the frame.
         """
         return store.insert_robot_config(
             self._conn,
             self._config_id,
             self._q_text,
             self._qd_text,
-            base_pose=None,
-            base_pose_source=None,
+            base_pose=self._pose_text,
+            base_pose_source=self._pose_source_text,
         )
 
     def keep_geometry(self) -> None:
@@ -1722,47 +1937,110 @@ def _entity_set(
 # --------------------------------------------------------------------------
 
 
-def _refuse_a_stream_this_builder_cannot_carry(
+def _refuse_a_stream_whose_pose_recording_is_partial(
     frames: tuple[StateFrame, ...], csv_path: str | os.PathLike[str]
-) -> None:
-    """Refuse a stream whose frames state a base pose. Could-not-evaluate, loudly.
+) -> bool:
+    """All the frames state a base pose, or none do. Anything else is refused.
 
-    `reg.stream` can carry a room-frame base pose since issue #176 and
-    `reg.scenarios` can produce one since issue #177, and this builder still
-    writes `base_pose=None` on every `robot_config` row (`_FrameNodes.config`).
-    Building anyway would turn a run whose base drove into an artifact that says
-    *no base pose was recorded* — the same header, the same row count, every
-    check downstream green, and every envelope in it read as the region a robot
-    at `meta[base_frame]` could reach. Issue #166 built the refusal for the half
-    of that path it could see (`_recompute` refuses a config that states a pose);
-    this is the half in front of it, and without it that refusal never fires
-    because nothing ever writes the pose.
+    Returns whether this run's base pose is recorded — which is what decides
+    `meta[base_frame]`, and it is returned rather than recomputed by the caller
+    so that the check and the decision cannot disagree.
 
-    Carrying the pose properly is the rest of docs/mobile-base.md §7 Tier 4:
-    the pose has to reach `robot_config`, the layer tag on every edge resting on
-    it has to follow (issue #166, `reg.store.open_edge`), and a run whose base
-    moved has to retain its geometry rather than promise a recomputation that
-    cannot be honest. Until that lands this is a could-not-evaluate, and the
-    rule is that it must not resolve to a parsed artifact.
+    **This replaces the refusal issue #177 put here, and it is a different
+    check.** That one said *this builder cannot carry a pose*, which stopped
+    being true with issue #191: the pose now reaches `robot_config` and a run
+    whose base moved retains its geometry, so a posed stream builds. What cannot
+    be carried is a stream that records a pose on some frames and not others.
 
-    `base_vel` is **not** refused. It is body-frame and Layer A, it reaches the
-    envelope through `StateFrame.proprio()`, and `reg.envelope.outer_envelope`
-    reads it and is the term every mobile VETO rests on (issue #163) — a stream
-    that carries it is a stream this builder uses correctly.
+    Whole-run, because the two things a reader places a region against are
+    whole-run facts. `meta[base_frame]` says the base was bolted *for the run*
+    and `reg.store.insert_robot_config` refuses an artifact that states it beside
+    any posed row, so a mixed stream produces a file with no `base_frame` at all
+    — and then every unposed row in it names no centre, `envelope_frame` reports
+    a could-not-evaluate for each, and half the artifact is unreadable while
+    parsing perfectly. That is not a partial answer; it is an artifact whose
+    silences mean two different things in the same file.
+
+    It cannot arrive from anything in this repository — `reg.scenarios.Scenario`
+    either drives for the whole run or is a fixed-base scenario (`Scenario.drives`,
+    issue #177) — which is why it is a refusal rather than a repair: there is no
+    honest way to fill in a pose nobody recorded, and dropping the ones that were
+    recorded would be the issue #177 failure with extra steps.
     """
     posed = [i for i, frame in enumerate(frames) if frame.base_pose is not None]
     if not posed:
-        return
+        return False
+    if len(posed) == len(frames):
+        return True
+    missing = next(i for i in range(len(frames)) if frames[i].base_pose is None)
     raise GraphBuildError(
-        f"{csv_path}: {len(posed)} frame(s) state a base pose (first at frame "
-        f"{posed[0]}, t={frames[posed[0]].t}), and this builder cannot carry "
-        "one — every robot_config row it writes states base_pose NULL, which "
-        "reads as 'this run recorded no base pose'. Building would drop where "
-        "the base was and leave every envelope in the artifact looking like the "
-        "region a robot at meta[base_frame] could reach, with nothing "
-        "downstream able to tell. Refusing instead: docs/mobile-base.md §7 "
-        "Tier 4 is where the pose reaches the artifact, and until then this is "
-        "a could-not-evaluate."
+        f"{csv_path}: {len(posed)} of {len(frames)} frame(s) state a base pose "
+        f"(first at frame {posed[0]}, t={frames[posed[0]].t}) and the rest do "
+        f"not (first at frame {missing}, t={frames[missing].t}). Where the base "
+        "was is a whole-run fact in this schema: an artifact states "
+        f"meta[{store.META_BASE_FRAME!r}] for a base that was bolted for the "
+        "run, or a base_pose on every configuration for one that drove, and "
+        "reg.store.insert_robot_config refuses a file that claims both. Building "
+        "this would produce an artifact with neither, in which every unposed "
+        "row's outer_radius is a radius about a centre nothing names. Refusing "
+        "instead: a pose recording that stopped part way through is a "
+        "could-not-evaluate about the frames it stopped on, not a run whose "
+        "base went back to the origin."
+    )
+
+
+def _refuse_a_posed_envelope_row_with_no_geometry(
+    conn, csv_path: str | os.PathLike[str]
+) -> None:
+    """`GEOMETRY_RETENTION`'s posed clause, checked against the file it describes.
+
+    The rule text lands in `meta` and says the polygon is kept on every frame
+    whose configuration states a pose. This is what makes that a *check* rather
+    than a claim: it asks the artifact, after every row is written, whether any
+    `envelope` row states a pose and carries a NULL `geometry_wkb`, and refuses
+    the build if one does.
+
+    Such a row is unrecoverable, and quietly. `envelope_at` refuses to recompute
+    a posed configuration — every term of the recomputation is body-frame — so
+    the polygon is neither in the file nor derivable from it, and the row still
+    parses, still carries its hash, area, horizon and source, and still answers
+    every scalar question. The artifact would look complete and hold a region
+    nobody can get back.
+
+    Written as one query over the file rather than as a counter kept during the
+    loop, deliberately: a counter checks that the builder did what the builder
+    thinks it did, and this checks what the bytes say. Its negative is
+    `tests/test_graph.py::test_a_posed_envelope_row_with_no_geometry_is_refused`,
+    which hands it exactly that row.
+    """
+    offending = conn.execute(
+        """
+        SELECT n.node_id AS envelope_id,
+               c.node_id AS config_id,
+               rc.base_pose AS base_pose
+        FROM envelope e
+        JOIN node n ON n.node_key = e.envelope_key
+        JOIN robot_config rc ON rc.config_key = e.config_key
+        JOIN node c ON c.node_key = rc.config_key
+        WHERE e.geometry_wkb IS NULL AND rc.base_pose IS NOT NULL
+        ORDER BY e.envelope_key
+        """
+    ).fetchall()
+    if not offending:
+        return
+    first = offending[0]
+    raise GraphBuildError(
+        f"{csv_path}: {len(offending)} envelope row(s) state a base pose and "
+        f"carry no geometry (first: envelope {str(first['envelope_id'])!r} over "
+        f"config {str(first['config_id'])!r}, "
+        f"base_pose={str(first['base_pose'])!r}). A NULL geometry_wkb is a "
+        "promise that the polygon can be recomputed from the configuration and "
+        "the envelope parameters in meta, and every one of those terms is "
+        "body-frame: for a configuration that states a pose the recomputation "
+        "would return the region a robot at the origin could reach, so "
+        "reg.graph.envelope_at refuses it and the region is recoverable from "
+        f"nothing. meta[{META_GEOMETRY_RETENTION!r}] states the rule this "
+        "would break; the artifact is not written."
     )
 
 
@@ -1881,7 +2159,11 @@ def build(
             "exists to make cheap."
         )
     frames = tuple(read_frames(csv_path))
-    _refuse_a_stream_this_builder_cannot_carry(frames, csv_path)
+    # Whether this run's base pose is recorded, and a refusal if the stream
+    # records it on some frames and not others (issue #191). One answer for the
+    # whole run: it decides `meta[base_frame]` and the layer of every
+    # HAS_ENVELOPE edge below, and both are whole-run facts.
+    drives = _refuse_a_stream_whose_pose_recording_is_partial(frames, csv_path)
     period = _frame_period(frames, csv_path)
     # How many distinct instants this run's frames can be addressed at, which is
     # `len(frames)` at or below `TIME_BASE_MAX_RATE_HZ` and fewer above it. Not a
@@ -1926,6 +2208,7 @@ def build(
             occurrence_resolution_s=occurrence_resolution_s,
             stamp=stamp,
             records=records,
+            drives=drives,
         )
 
         # Entity set, once. Static geometry is simplified because
@@ -1950,6 +2233,19 @@ def build(
         # through. Computed here rather than at the call site so that a build
         # whose limits have no layer decision fails before it writes a row.
         envelope_edge_layer = envelope_layer(limits)
+        if drives:
+            # ...unless the base drove, and then it is `B` whatever the limits
+            # say (issue #191). A HAS_ENVELOPE edge over a posed configuration
+            # rests on a room-frame pose, which is Layer B structurally and for
+            # which no localizer is an argument (docs/sufficiency.md §5.6), and
+            # the region on the far end of the edge is that pose applied to a
+            # body-frame set. `reg.store.open_edge` refuses an `A` on such an
+            # edge and names the pose; this states the `B` rather than being
+            # told about it one row too late, because the refusal is the guard
+            # and not the specification. The limits' own provenance cannot
+            # loosen this: `B` is the weaker tag and `envelope_layer` returning
+            # `B` already agrees with it.
+            envelope_edge_layer = "B"
 
         active: dict[tuple[str, str], _Active] = {}
         has_envelope: _Active | None = None
@@ -2129,6 +2425,13 @@ def build(
         occurrences.closest_approaches()
         occurrences.run_ended(quantize_time(frames[-1].t))
 
+        # GEOMETRY_RETENTION's posed clause, asked of the file rather than of
+        # the builder (issue #191). Everything above has run, so every envelope
+        # row that will exist exists and every polygon that will be attached is
+        # attached; a row that states a pose and holds no geometry now is one
+        # nothing downstream can recover.
+        _refuse_a_posed_envelope_row_with_no_geometry(conn, csv_path)
+
         # Last, because a commitment is made at artifact *close*: the heads it
         # signs are recomputed from the records this file actually holds, so
         # every record has to be in it first.
@@ -2183,17 +2486,30 @@ def _observe(
     """
     proprio = frame.proprio()
 
+    # Where this frame's regions are measured from: `ORIGIN_FRAME` for a base
+    # nobody recorded a pose for, and the pose the frame states for one that
+    # drove (issue #191). Nothing below reads `frame.base_pose` again — the
+    # `BaseFrame` is what the geometry is placed with and the two `robot_config`
+    # columns are what the artifact records, and neither is derived from the
+    # other twice.
+    base = _frame_base(frame, f"the frame at t={frame.t}")
+
     # Layer A, first, and blind to everything below. `compute_envelope` takes a
-    # ProprioState; the world reaches it through no argument.
-    envelope = simplify_geometry(
-        compute_envelope(
-            proprio,
-            limits,
-            horizon=horizon,
-            n_samples=n_samples,
-            seed=seed,
-            substep_dt=substep_dt,
-        )
+    # ProprioState; the world reaches it through no argument — including the
+    # pose, which is why the placement is a second step on the answer and not an
+    # argument to the computation (`_place`, docs/mobile-base.md §2).
+    envelope = _place(
+        simplify_geometry(
+            compute_envelope(
+                proprio,
+                limits,
+                horizon=horizon,
+                n_samples=n_samples,
+                seed=seed,
+                substep_dt=substep_dt,
+            )
+        ),
+        base,
     )
     digest = envelope_hash(envelope)
 
@@ -2205,6 +2521,14 @@ def _observe(
     # boundary either way, and an outer bound that moved inward would stop being
     # one — and computed on the same `substep_dt` grid the inner one was
     # integrated on, because that is the grid its soundness argument covers.
+    #
+    # Measured about `ORIGIN_FRAME` even for a base that drove, and that is not
+    # an oversight: the two things retained off it are an area and a radius
+    # about the base, both invariant under the rigid placement `_place` applies,
+    # so placing this set would change nothing but the last bits of two numbers
+    # the artifact rounds anyway. What the radius is a radius *about* is the
+    # frame the row states — its own `base_pose`, or `meta[base_frame]` — and
+    # `envelope_frame` is the reader that says so (issue #166).
     outer = outer_envelope(proprio, limits, horizon, ORIGIN_FRAME, substep_dt)
 
     # The robot body is deliberately *not* simplified. The error budget in
@@ -2230,7 +2554,15 @@ def _observe(
     # headroom for a third error term" means, and the discipline it asks for is
     # to keep the frame out of the rounding path rather than to shave the
     # budget.
-    body = unary_union(link_polygons(proprio, limits, ORIGIN_FRAME))
+    #
+    # AND THE BODY IS PLACED, NOT REBUILT (issue #191). `link_polygons(proprio,
+    # limits, base)` would put the same robot in the same place to within float
+    # noise; `_place` on the body-frame body puts it there under the *same*
+    # transform the envelope above got, which is what keeps `body` inside
+    # `envelope` exactly rather than to within an ulp — and at `ORIGIN_FRAME` it
+    # is the identity, so every fixed-base artifact in this repository holds the
+    # bytes it held before.
+    body = _place(unary_union(link_polygons(proprio, limits, ORIGIN_FRAME)), base)
 
     nodes = _FrameNodes(
         conn,
@@ -2242,6 +2574,7 @@ def _observe(
         outer_radius=quantize_distance(outer_radius(outer, ORIGIN_FRAME)),
         q_text=_joint_text(frame.q),
         qd_text=_joint_text(frame.qd),
+        base_pose=frame.base_pose,
     )
 
     observations: dict[tuple[str, str], _Observation] = {}
@@ -2331,6 +2664,7 @@ def _write_provenance(
     occurrence_resolution_s: float,
     stamp: str,
     records: AttestationRecords | None,
+    drives: bool,
 ) -> None:
     """Everything needed to say what produced this artifact, and nothing else.
 
@@ -2455,15 +2789,26 @@ def _write_provenance(
     # having to know the difference.
     store.put_meta(conn, META_LIMITS_SOURCE, limits.source.value)
 
-    # Where the base was, once, for the whole run (issue #166). Every fixture in
-    # this repository is bolted down and this builder passes `ORIGIN_FRAME`
-    # everywhere it computes a region, so what lands here is that frame written
-    # out — the same mounting fact `grep ORIGIN_FRAME` lists, said in the
-    # artifact instead of only in the source. It is what makes every retained
+    # Where the base was, once, for the whole run (issue #166) — **and only for a
+    # run whose base did not move** (issue #191). Every fixture in this
+    # repository is bolted down, so what lands here is `ORIGIN_FRAME` written
+    # out: the same mounting fact `grep ORIGIN_FRAME` lists, said in the artifact
+    # instead of only in the source. It is what makes every retained
     # `outer_radius` in the file a radius about a centre somebody named; a file
     # missing it is a could-not-evaluate, and `envelope_frame` refuses rather
     # than resolving the absence to the origin.
-    store.put_meta(conn, store.META_BASE_FRAME, _frame_text(ORIGIN_FRAME))
+    #
+    # For a run whose frames state a pose the key is **absent**, and that is not
+    # an omission: the two are different claims about one run — *the base is
+    # bolted here*, a mounting fact, against *the base was there at this
+    # instant*, a room-frame estimate that inherits a perceiver — and
+    # `reg.store.insert_robot_config` refuses a file making both, because every
+    # retained `outer_radius` in it would be a radius about whichever centre the
+    # reader picked. `envelope_frame` reads the centre off the row's own
+    # `base_pose` there, and `_refuse_a_stream_whose_pose_recording_is_partial`
+    # is what guarantees every row has one.
+    if not drives:
+        store.put_meta(conn, store.META_BASE_FRAME, _frame_text(ORIGIN_FRAME))
 
     store.put_meta(conn, "human_entity_id", HUMAN_ENTITY_ID)
     store.put_meta(conn, "human_radius_m", _float_text(human_radius))

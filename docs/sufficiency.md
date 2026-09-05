@@ -654,13 +654,30 @@ it is the first that reaches the *record* rather than a type — through a
 one of them arrived somewhere a field-name test does not look, and every one was
 caught by a check that reads what the thing actually depends on.
 
-**What it does not do.** Nothing in `reg/` writes a posed configuration. The raw
-stream has no base columns (`reg.stream`), the eleven fixtures are bolted down,
-`meta[base_frame]` on every artifact this repository builds is the origin written
-out, and every existing artifact holds exactly the rows it held before. No layer
-tag on any edge in any fixture changes and `ProprioState` was not touched. What
-moved is what the record is **able** to say, and what it is now refused from
-saying quietly.
+**What it did not do, as of issue #166.** Nothing in `reg/` wrote a posed
+configuration. The raw stream had no base columns (`reg.stream`), the eleven
+fixtures are bolted down, `meta[base_frame]` on every artifact this repository
+built was the origin written out, and every existing artifact held exactly the
+rows it held before. No layer tag on any edge in any fixture changed and
+`ProprioState` was not touched. What moved is what the record is **able** to say,
+and what it is now refused from saying quietly.
+
+**And since issue #191 (2026-09-05) `reg.graph.build` does write one, on the
+terms the table above already set.** A stream whose frames state a base pose
+builds; every `robot_config` row it produces states that pose with its
+`PoseSource`; `meta[base_frame]` is absent for such a run, because the two
+statements are exclusive; and every `HAS_ENVELOPE` edge over a posed
+configuration is `B` — the first row of the table, followed by the producer
+rather than discovered by the guard, which stays where it is and stays the
+guard. The second row is untouched: no attestation edge is written over a posed
+configuration, so the refusal held open below is still held open and no decision
+about §2's asymmetry has been taken. The eleven fixtures are still bolted down,
+`meta[base_frame]` on every artifact this repository *builds today* is still the
+origin written out, no layer tag in any of them changes, and no published figure
+moved. What #191 added beside the write is the retention that makes it honest:
+`GEOMETRY_RETENTION` keeps the polygon on every posed configuration, because
+`envelope_at` cannot recompute one — [`lossiness.md`](lossiness.md) *Discarded*
+#9 and [`mobile-base.md`](mobile-base.md) §7 Tier 4.
 
 **The byte counts did move, and §3's table above is the re-measurement.** Two
 nullable columns cost one SQLite record-header byte per `robot_config` row that

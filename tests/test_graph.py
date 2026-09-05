@@ -210,6 +210,11 @@ def _build(csv: Path, out: Path, **overrides):
     return build(csv, out, LIMITS, human_radius=HUMAN_RADIUS, **params)
 
 
+def _conn(path: Path) -> sqlite3.Connection:
+    """An open artifact. The caller closes it, or lets the test process do it."""
+    return store.connect(path)
+
+
 def _edges(path: Path, **filters) -> list[sqlite3.Row]:
     conn = store.connect(path)
     try:
@@ -688,14 +693,15 @@ def _unsigned_declaration() -> Declaration:
 def _posed_artifact(path: Path) -> sqlite3.Connection:
     """A hand-built store holding one bolted config and one that states a pose.
 
-    Hand-built because nothing in `reg/` writes a posed configuration yet. The
-    raw stream has carried base columns since issue #176 and a scenario can fill
-    them since issue #177, but `build` refuses such a stream rather than
-    dropping the pose into a NULL column
-    (`test_a_stream_that_states_a_base_pose_is_refused`), and every registered
-    fixture is bolted down (docs/mobile-base.md §7, Tier 4). An unexercised rule
-    is one that drifts, so the artifact this rule is about is constructed here
-    rather than waited for.
+    Hand-built, and still hand-built now that `build` writes a posed
+    configuration for real (issue #191,
+    `test_a_stream_that_states_a_base_pose_builds_and_the_pose_arrives`). What
+    this fixture is for is the *store's* refusals — a Layer A tag on an edge
+    resting on a pose, and the four attestation edges refused rather than
+    relabelled — and building one through `reg.graph` would put a whole run's
+    edges in the way of a rule about two rows. Every registered fixture is still
+    bolted down (docs/mobile-base.md §7, Tier 4), so nothing else in this file
+    reaches these two rows.
 
     `record_tables=True` so the attestation edges have endpoints to be refused
     against, and no `meta[base_frame]`: this is a run whose base moved, and an
@@ -5283,22 +5289,30 @@ def test_dropping_a_node_kind_takes_its_identity_with_it(tmp_path: Path) -> None
 
 
 # --------------------------------------------------------------------------
-# A STREAM THIS BUILDER CANNOT CARRY (issue #177, docs/mobile-base.md §7 Tier 4)
+# THE POSE REACHES THE ARTIFACT (issue #191, docs/mobile-base.md §7 Tier 4)
 #
 # `reg.stream` grew columns for a base pose in issue #176 and `reg.scenarios`
-# can fill them since issue #177, and this builder still writes `base_pose`
-# NULL on every `robot_config` row. Those two facts together are the failure
-# mode: a run whose base drove would become an artifact saying no base pose was
-# recorded, with the same row count and every check downstream green.
+# can fill them since issue #177, and until this issue this builder wrote
+# `base_pose` NULL on every `robot_config` row — so it *refused* a posed stream
+# rather than turning a run whose base drove into an artifact saying no base
+# pose was recorded.
 #
-# Issue #166 built the refusal for the half of that path it could see —
-# `_recompute` refuses a config that states a pose — and it never fires, because
-# nothing writes one. This is the half in front of it.
+# The refusal is gone because the thing it stood in for is here: the pose is
+# written from the frame, `meta[base_frame]` is absent for a run that states
+# one, `GEOMETRY_RETENTION` keeps the polygon on every posed configuration
+# because `envelope_at` cannot recompute one, and the polygon kept is the
+# **room-frame** envelope — the body-frame set placed at the pose. Retaining
+# the body-frame set would have reintroduced the failure issue #166's refusal
+# exists to stop, one door along.
+#
+# What replaces the refusal here is not one test. The pose arriving is the easy
+# half; the half that would rot quietly is the geometry, the layer tag and the
+# three negatives.
 # --------------------------------------------------------------------------
 
 
-def _posed_frame(frame_id: int, x: float):
-    """A frame that states where the base was. Layer B, and unwritable here."""
+def _posed_frame(frame_id: int, x: float, y: float = 0.0, theta: float = 0.0):
+    """A frame that states where the base was. Layer B, and now writable."""
     from reg.types import BasePose, PoseSource
 
     return StateFrame(
@@ -5308,28 +5322,561 @@ def _posed_frame(frame_id: int, x: float):
         human_pos=np.array([2.0, 0.0], dtype=float),
         human_vel=np.array([0.0, 0.0], dtype=float),
         base_vel=None,
-        base_pose=BasePose(x=x, y=0.0, theta=0.0, source=PoseSource.DEAD_RECKONED),
+        base_pose=BasePose(x=x, y=y, theta=theta, source=PoseSource.DEAD_RECKONED),
         objects=(OBSTACLE,),
     )
 
 
-def test_a_stream_that_states_a_base_pose_is_refused(tmp_path: Path) -> None:
-    """**NEGATIVE.** Refusing is the could-not-evaluate; building is the lie.
-
-    Everything this builder writes about geometry is in the base's own frame —
-    `q`, `qd`, the limits, the four numbers in `meta` — so an artifact built
-    from these frames would report every envelope as the region a robot at
-    `meta[base_frame]` could reach, for a robot that was somewhere else. That is
-    not a looser answer than the right one; it is an answer about somewhere
-    else, and nothing downstream could tell, because the artifact would be
-    indistinguishable from a bolted run's.
-    """
-    csv = _write_stream(
-        tmp_path / "posed.csv", [_posed_frame(i, 0.05 * i) for i in range(6)]
+def _driven_stream(path: Path, n_frames: int = 6, *, theta: float = 0.0):
+    """A run whose base drives along +x, one pose per frame."""
+    return _write_stream(
+        path, [_posed_frame(i, 0.05 * i, theta=theta) for i in range(n_frames)]
     )
-    with pytest.raises(GraphBuildError, match="cannot carry"):
-        _build(csv, tmp_path / "posed.sqlite")
-    assert not (tmp_path / "posed.sqlite").exists()
+
+
+def _config_rows(path: Path) -> list[sqlite3.Row]:
+    """Every `robot_config` row with its readable id, in insertion order."""
+    conn = store.connect(path)
+    try:
+        return list(
+            conn.execute(
+                "SELECT n.node_id AS config_id, rc.q AS q, rc.qd AS qd, "
+                "rc.base_pose AS base_pose, "
+                "rc.base_pose_source AS base_pose_source "
+                "FROM robot_config rc JOIN node n ON n.node_key = rc.config_key "
+                "ORDER BY rc.config_key"
+            )
+        )
+    finally:
+        conn.close()
+
+
+def test_a_stream_that_states_a_base_pose_builds_and_the_pose_arrives(
+    tmp_path: Path,
+) -> None:
+    """The refusal issue #177 put here is replaced by the thing it waited for.
+
+    Three assertions, and each one is a way the old NULL column could come back:
+    the build succeeds; **every** configuration states the pose its frame stated,
+    at the raw stream's own precision and with the `PoseSource` beside it; and
+    the artifact states no `meta[base_frame]`, because *the base is bolted here*
+    and *the base was there at this instant* are two different claims about one
+    run and `reg.store.insert_robot_config` refuses a file making both.
+    """
+    csv = _driven_stream(tmp_path / "posed.csv")
+    out = tmp_path / "posed.sqlite"
+    _build(csv, out)
+    assert out.exists()
+
+    rows = _config_rows(out)
+    assert rows, "precondition failed: the build retained no configuration at all"
+    poses = {str(row["base_pose"]) for row in rows}
+    assert poses <= {f"{0.05 * i:.6f},0.000000,0.000000" for i in range(6)}, poses
+    assert len(poses) > 1, (
+        "every retained configuration states the same pose, so this run does "
+        "not exercise a base that moved"
+    )
+    for row in rows:
+        assert row["base_pose"] is not None, row["config_id"]
+        assert row["base_pose_source"] == "dead_reckoned", row["config_id"]
+
+    conn = store.connect(out)
+    try:
+        assert store.get_meta(conn, store.META_BASE_FRAME) is None, (
+            "a run whose base drove states no meta[base_frame]: it would be a "
+            "second, contradictory claim about where the base was, and every "
+            "retained outer_radius would be a radius about whichever centre the "
+            "reader picked"
+        )
+    finally:
+        conn.close()
+
+
+def test_a_fixed_base_stream_still_writes_no_pose_and_states_its_base_frame(
+    tmp_path: Path,
+) -> None:
+    """**The control.** Every fixture in this repository is bolted down.
+
+    `None` is not the origin and never became it: a configuration that states no
+    pose says *nobody recorded where the base was*, and the mounting fact lives
+    once in `meta[base_frame]`. A change that wrote `0,0,0` into the two columns
+    for a bolted run would pass every assertion in the test above and destroy the
+    distinction both of them exist for.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    rows = _config_rows(out)
+    assert rows, "precondition failed: the build retained no configuration at all"
+    for row in rows:
+        assert row["base_pose"] is None, row["config_id"]
+        assert row["base_pose_source"] is None, row["config_id"]
+
+    conn = store.connect(out)
+    try:
+        assert store.get_meta(conn, store.META_BASE_FRAME) == "0.000000,0.000000,0.000000"
+    finally:
+        conn.close()
+
+
+def test_the_pose_is_part_of_a_configuration_identity(tmp_path: Path) -> None:
+    """A vehicle driving with a frozen arm is in a different place every frame.
+
+    `q` and `qd` are identical across this run, so a `config_id` hashed from the
+    joints alone would name one row for six different places. `reg.store` refuses
+    the second write as a content clash, which is the *good* outcome; the bad one
+    is a hash that happens to match on the columns it compares and two frames'
+    evidence merging into a row about neither.
+    """
+    frames = [_posed_frame(i, 0.05 * i) for i in range(6)]
+    assert len({_joint_pair(f) for f in frames}) == 1, (
+        "precondition failed: the arm moved, so distinct config ids would prove "
+        "nothing about the pose"
+    )
+    csv = _write_stream(tmp_path / "frozen-arm.csv", frames)
+    out = tmp_path / "frozen-arm.sqlite"
+    _build(csv, out)
+
+    rows = _config_rows(out)
+    assert len({row["config_id"] for row in rows}) == len(rows)
+    assert len({row["base_pose"] for row in rows}) == len(rows)
+
+
+def _joint_pair(frame: StateFrame) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    return tuple(float(v) for v in frame.q), tuple(float(v) for v in frame.qd)
+
+
+def _envelope_rows_with_pose(path: Path) -> list[sqlite3.Row]:
+    """Every envelope row beside the base pose of the configuration it names.
+
+    `_envelope_rows` above does not carry the two pose columns and is not widened
+    for this: the retention rule these tests are about is a statement relating
+    `geometry_wkb` to `base_pose`, and a query that reads both is what can check
+    it.
+    """
+    conn = store.connect(path)
+    try:
+        return list(
+            conn.execute(
+                "SELECT n.node_id AS envelope_id, c.node_id AS config_id, "
+                "e.geometry_wkb AS geometry_wkb, rc.base_pose AS base_pose "
+                "FROM envelope e "
+                "JOIN node n ON n.node_key = e.envelope_key "
+                "LEFT JOIN robot_config rc ON rc.config_key = e.config_key "
+                "LEFT JOIN node c ON c.node_key = e.config_key "
+                "ORDER BY e.envelope_key"
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+
+def test_every_posed_envelope_row_carries_its_geometry(tmp_path: Path) -> None:
+    """`GEOMETRY_RETENTION`'s posed clause, asserted against the file.
+
+    Not inferred from a query succeeding — `envelope_at` would answer from a
+    retained polygon and from a recomputed one identically, which is the whole
+    point of the rule and exactly why it cannot be the check here. This reads
+    `geometry_wkb` out of the artifact and requires it non-NULL on every row
+    whose configuration states a pose.
+    """
+    csv = _driven_stream(tmp_path / "posed.csv")
+    out = tmp_path / "posed.sqlite"
+    _build(csv, out)
+
+    rows = _envelope_rows_with_pose(out)
+    assert rows, "precondition failed: the build retained no envelope at all"
+    posed = [row for row in rows if row["base_pose"] is not None]
+    assert len(posed) == len(rows), (
+        "precondition failed: this run states a pose on every frame, so every "
+        "retained envelope should rest on a posed configuration"
+    )
+    for row in posed:
+        assert row["geometry_wkb"] is not None, (
+            f"envelope {row['envelope_id']} states "
+            f"base_pose={row['base_pose']} and carries no geometry. Nothing in "
+            "the file can recover that polygon: every term of the recomputation "
+            "is body-frame and envelope_at refuses a posed configuration."
+        )
+
+
+def test_the_retained_polygon_is_the_body_frame_one_placed_at_the_pose(
+    tmp_path: Path,
+) -> None:
+    """**What makes retaining it worth anything.** The region is in the room.
+
+    The failure this guards against is not a missing polygon; it is a polygon
+    about the wrong point. Storing the *body-frame* envelope for a posed
+    configuration would hand back the region a robot at the origin could reach —
+    the identical wrong answer `envelope_at`'s refusal exists to prevent, arriving
+    through the stored path instead of the recomputed one, and looking exactly
+    like a right one.
+
+    So: build the same six frames twice, once bolted and once with the base at
+    `(x, y, theta)`, and require the posed polygon to be the bolted polygon
+    rigidly transformed — rotated by `theta` about the base point, then
+    translated. That is the third row of docs/mobile-base.md §2's table, and it
+    is the same convention `forward_kinematics` gives the same three numbers, so
+    the placed envelope and the placed links agree about where the robot is.
+    """
+    x, y, theta = 0.7, -0.4, 0.3
+    held = _write_stream(
+        tmp_path / "held.csv", [_frame(i, (2.0, 0.0)) for i in range(6)]
+    )
+    posed = _write_stream(
+        tmp_path / "posed.csv",
+        [_posed_frame(i, x, y=y, theta=theta) for i in range(6)],
+    )
+    held_out, posed_out = tmp_path / "held.sqlite", tmp_path / "posed.sqlite"
+    _build(held, held_out)
+    _build(posed, posed_out)
+
+    body_frame = graph.envelope_at(_conn(held_out), 0.0)
+    room_frame = graph.envelope_at(_conn(posed_out), 0.0)
+
+    from shapely.affinity import affine_transform
+
+    cos, sin = np.cos(theta), np.sin(theta)
+    expected = affine_transform(body_frame, (cos, -sin, sin, cos, x, y))
+    assert room_frame.equals_exact(expected, 0.0), (
+        "the retained polygon is not the body-frame envelope placed at the "
+        "pose. A region about the wrong centre is not a looser answer than the "
+        "right one; it is an answer about somewhere else."
+    )
+    assert not room_frame.equals(body_frame), (
+        "precondition failed: the pose used here does not move the region, so "
+        "the assertion above would hold for a builder that ignored it"
+    )
+
+
+def test_the_separation_of_a_posed_run_is_measured_from_where_the_base_was(
+    tmp_path: Path,
+) -> None:
+    """The other half of *in the room*, on the edges a report actually reads.
+
+    `SEPARATION` is the distance from the robot's body to an entity in room
+    coordinates. Drive the base **towards** the human and the distance must
+    shrink; a builder that placed the envelope and left the body at the origin
+    would report the same distance on every frame while the artifact's own
+    configurations said the robot had moved 25 cm.
+    """
+    frames = [_posed_frame(i, 0.05 * i) for i in range(6)]
+    csv = _write_stream(tmp_path / "approach.csv", frames)
+    out = tmp_path / "approach.sqlite"
+    _build(csv, out)
+
+    distances = [
+        float(row["min_distance"])
+        for row in _edges(out, edge_type="SEPARATION", dst_id=HUMAN_ENTITY_ID)
+    ]
+    assert len(distances) >= 2, distances
+    assert distances == sorted(distances, reverse=True), (
+        "the human is straight ahead and the base drove towards it, so the "
+        f"reported separation must fall: {distances}"
+    )
+    assert distances[0] - distances[-1] == pytest.approx(0.25, abs=2 * DISTANCE_TOL_M)
+
+
+def test_a_has_envelope_edge_over_a_posed_configuration_is_layer_b(
+    tmp_path: Path,
+) -> None:
+    """The room-frame taint, followed by the builder rather than met by it.
+
+    `reg.store.open_edge` refuses a Layer A `HAS_ENVELOPE` edge resting on a
+    posed configuration (issue #166) — that refusal is the guard and it stays
+    where it is. What this asserts is that the builder never reaches it: the
+    region on the far end of the edge is a body-frame set placed by a room-frame
+    pose, so it inherits the perceiver and the edge is `B` whatever the limits'
+    own provenance says. The control is the same build bolted down, where the
+    limits are proprioceptive and the edge is `A`.
+    """
+    posed = _driven_stream(tmp_path / "posed.csv")
+    posed_out = tmp_path / "posed.sqlite"
+    _build(posed, posed_out)
+    edges = _edges(posed_out, edge_type="HAS_ENVELOPE")
+    assert edges, "precondition failed: no HAS_ENVELOPE edge was written"
+    assert {row["layer"] for row in edges} == {"B"}
+
+    held = _held_stream(tmp_path / "held.csv", 6)
+    held_out = tmp_path / "held.sqlite"
+    _build(held, held_out)
+    control = _edges(held_out, edge_type="HAS_ENVELOPE")
+    assert control, "precondition failed: no HAS_ENVELOPE edge in the control"
+    assert {row["layer"] for row in control} == {"A"}, (
+        "the control is not Layer A, so the assertion above would hold for a "
+        "builder that tagged every envelope edge B"
+    )
+
+
+def test_envelope_at_reads_a_posed_polygon_back_and_never_recomputes_one(
+    tmp_path: Path,
+) -> None:
+    """The retained polygon is returned, and the refusal behind it is intact.
+
+    Two halves, and the second is the one that would rot. First: `envelope_at`
+    answers for a posed configuration, and it answers **from the file** — the
+    recomputation path is replaced with something that raises, so an answer here
+    is proof no recomputation happened. Second: blank that geometry and
+    `envelope_at` must refuse, naming the pose. Nothing catches that refusal —
+    `reg/graph.py`'s recompute guard is a could-not-evaluate and this is where it
+    is shown able to fire.
+    """
+    csv = _driven_stream(tmp_path / "posed.csv")
+    out = tmp_path / "posed.sqlite"
+    _build(csv, out)
+
+    conn = _conn(out)
+    stored = graph.envelope_at(conn, 0.0)
+    assert not stored.is_empty
+
+    def _never(*args: object, **kwargs: object):
+        raise AssertionError(
+            "envelope_at recomputed a polygon for a posed configuration"
+        )
+
+    original = graph.compute_envelope
+    graph.compute_envelope = _never  # type: ignore[assignment]
+    try:
+        assert graph.envelope_at(conn, 0.0).equals_exact(stored, 0.0)
+    finally:
+        graph.compute_envelope = original  # type: ignore[assignment]
+
+    conn.execute("UPDATE envelope SET geometry_wkb = NULL")
+    with pytest.raises(graph.GraphQueryError, match="base_pose") as refusal:
+        graph.envelope_at(conn, 0.0)
+    assert "GEOMETRY_RETENTION" in str(refusal.value)
+    conn.close()
+
+
+def test_the_geometry_retention_rule_states_the_posed_condition() -> None:
+    """A rule text that omitted the posed case would misdescribe every mobile
+    artifact — and it lands in `meta`, so the artifact would misdescribe itself.
+
+    A reader holding only the file has nothing but this sentence to tell *the
+    polygon was discarded on a stated rule and is recomputable* from *the polygon
+    was discarded and is gone*. `reg.graph` is not on the shelf beside it.
+    """
+    rule = graph.GEOMETRY_RETENTION
+    assert "base_pose" in rule, rule
+    assert "body-frame" in rule, rule
+
+
+def test_a_posed_artifact_carries_the_stated_rule_in_its_meta(
+    tmp_path: Path,
+) -> None:
+    """...and the artifact built from a posed stream carries exactly that text."""
+    csv = _driven_stream(tmp_path / "posed.csv")
+    out = tmp_path / "posed.sqlite"
+    _build(csv, out)
+    conn = store.connect(out)
+    try:
+        meta = store.all_meta(conn)
+    finally:
+        conn.close()
+    assert meta[graph.META_GEOMETRY_RETENTION] == graph.GEOMETRY_RETENTION
+
+
+def test_reg_query_answers_the_standard_questions_over_a_posed_artifact(
+    tmp_path: Path,
+) -> None:
+    """An artifact that parses and answers nothing is not an artifact.
+
+    The scene half of the supported question set, asked of a run whose base
+    drove. Every one of these reads an edge the builder wrote in room
+    coordinates, so a `COULD-NOT-EVALUATE` here would mean the mobile artifact is
+    a file that opens and says nothing — the outcome retaining the geometry
+    exists to avoid.
+    """
+    from reg import query
+
+    csv = _driven_stream(tmp_path / "posed.csv")
+    out = tmp_path / "posed.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        answers = {
+            "min_separation": query.min_separation(conn, HUMAN_ENTITY_ID),
+            "time_of_closest_approach": query.time_of_closest_approach(
+                conn, HUMAN_ENTITY_ID
+            ),
+            "separation_timeline": query.separation_timeline(conn, HUMAN_ENTITY_ID),
+            "did_contact_occur": query.did_contact_occur(conn, HUMAN_ENTITY_ID),
+            "reachable_entities": query.reachable_entities(conn, 0.0, 0.1),
+        }
+    finally:
+        conn.close()
+    unanswered = {
+        name: answer.reason
+        for name, answer in answers.items()
+        if not answer.answered
+    }
+    assert not unanswered, unanswered
+
+
+# --------------------------------------------------------------------------
+# The three negatives (issue #191). Each is fed the condition it guards against.
+# --------------------------------------------------------------------------
+
+
+def test_a_posed_envelope_row_with_no_geometry_is_refused(
+    tmp_path: Path,
+) -> None:
+    """**NEGATIVE.** The rule in `meta`, shown able to fail.
+
+    The builder cannot produce this row — `_FrameNodes` retains the polygon from
+    the moment it knows the frame states a pose — so the row is constructed by
+    hand and handed to the check. Without this the check asserts an absence it
+    has never been shown able to detect, and a future change that stopped
+    retaining posed geometry would pass the suite while writing artifacts whose
+    envelopes are recoverable from nothing.
+
+    The positive control is beside it: the same store with a geometry attached
+    passes, so what is refused is the NULL and not the pose.
+    """
+    conn = store.create(tmp_path / "hand.sqlite", record_tables=False)
+    try:
+        store.insert_robot_config(
+            conn,
+            "cfg_posed",
+            "0.000000,0.000000",
+            "0.000000,0.000000",
+            base_pose="1.200000,-0.400000,0.300000",
+            base_pose_source="localized",
+        )
+        store.insert_envelope(
+            conn,
+            "env_posed",
+            envelope_hash=_HASH_A,
+            area=0.25,
+            geometry=None,
+            config_id="cfg_posed",
+            horizon=0.2,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+        with pytest.raises(GraphBuildError, match="no geometry") as refusal:
+            graph._refuse_a_posed_envelope_row_with_no_geometry(conn, "hand.csv")
+        message = str(refusal.value)
+        assert "env_posed" in message and "cfg_posed" in message, message
+
+        store.attach_envelope_geometry(
+            conn, "env_posed", Point(1.2, -0.4).buffer(0.5)
+        )
+        graph._refuse_a_posed_envelope_row_with_no_geometry(conn, "hand.csv")
+    finally:
+        conn.close()
+
+
+def test_a_bolted_row_with_no_geometry_is_not_refused(tmp_path: Path) -> None:
+    """And the check must not cry wolf. A NULL geometry on a configuration that
+    states no pose is `GEOMETRY_RETENTION` working exactly as written — that
+    polygon *is* recomputable — and a check that flagged it would refuse every
+    artifact this repository builds."""
+    conn = store.create(tmp_path / "hand.sqlite", record_tables=False)
+    try:
+        store.insert_robot_config(
+            conn,
+            "cfg_bolted",
+            "0.000000,0.000000",
+            "0.000000,0.000000",
+            base_pose=None,
+            base_pose_source=None,
+        )
+        store.insert_envelope(
+            conn,
+            "env_bolted",
+            envelope_hash=_HASH_A,
+            area=0.25,
+            geometry=None,
+            config_id="cfg_bolted",
+            horizon=0.2,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+        graph._refuse_a_posed_envelope_row_with_no_geometry(conn, "hand.csv")
+    finally:
+        conn.close()
+
+
+def test_a_pose_whose_source_is_absent_is_refused_and_not_written_as_null() -> None:
+    """**NEGATIVE.** `BasePose` requires a `PoseSource`, and *cannot happen* is
+    not a reason to write `NULL` if it does.
+
+    The state is forced through `object.__setattr__` because the type forbids it
+    — which is the point: the alternative to this refusal is a `base_pose` with a
+    `NULL` `base_pose_source`, a row the schema `CHECK` and
+    `reg.store.insert_robot_config` both refuse, or a silently dropped pose,
+    which is the issue #177 failure with extra steps.
+    """
+    from reg.types import BasePose, PoseSource
+
+    pose = BasePose(x=1.2, y=-0.4, theta=0.3, source=PoseSource.LOCALIZED)
+    assert graph._pose_columns(pose, "a frame") == (
+        "1.200000,-0.400000,0.300000",
+        "localized",
+    )
+    assert graph._pose_columns(None, "a frame") == (None, None)
+
+    object.__setattr__(pose, "source", None)
+    with pytest.raises(GraphBuildError, match="PoseSource") as refusal:
+        graph._pose_columns(pose, "the frame at t=0.4")
+    assert "the frame at t=0.4" in str(refusal.value)
+
+    object.__setattr__(pose, "source", "localized")
+    with pytest.raises(GraphBuildError, match="PoseSource"):
+        graph._pose_columns(pose, "the frame at t=0.4")
+
+
+def test_a_stream_that_records_a_pose_on_only_some_frames_is_refused(
+    tmp_path: Path,
+) -> None:
+    """**NEGATIVE.** Where the base was is a whole-run fact in this schema.
+
+    An artifact states `meta[base_frame]` for a base bolted for the run, or a
+    `base_pose` on every configuration for one that drove, and
+    `reg.store.insert_robot_config` refuses a file claiming both. A mixed stream
+    therefore produces a file with **neither**, in which every unposed row's
+    `outer_radius` is a radius about a centre nothing names and `envelope_frame`
+    reports a could-not-evaluate for each — an artifact that parses perfectly and
+    whose silences mean two different things in the same file.
+
+    Nothing in this repository can produce one: a `Scenario` either drives for
+    the whole run or is a fixed-base scenario, and `reg.stream` refuses to write
+    a stream whose shape changes mid-run. It is refused rather than repaired,
+    because there is no honest way to fill in a pose nobody recorded.
+    """
+    frames = tuple(
+        [_posed_frame(i, 0.05 * i) for i in range(4)]
+        + [_frame(i, (2.0, 0.0)) for i in range(4, 6)]
+    )
+    # Handed straight to the check rather than through a CSV, because
+    # `reg.stream` refuses to *write* this stream at all: one header cannot
+    # describe a run whose shape changes half way through
+    # (`reg.stream.StreamFormatError`, issue #176). That is a second, earlier
+    # guard on the same condition and not a substitute for this one — the
+    # builder decides `meta[base_frame]` from the frames it holds, and a
+    # decision taken from frame 0 alone would be a decision about the run taken
+    # from one sixth of it.
+    with pytest.raises(GraphBuildError, match="base pose") as refusal:
+        graph._refuse_a_stream_whose_pose_recording_is_partial(
+            frames, "partial.csv"
+        )
+    message = str(refusal.value)
+    assert "frame 4" in message, message
+
+    # ...and the two ways it must not fire: a run that states a pose on every
+    # frame reports that it drives, and one that states none reports that it
+    # does not. A check that refused either would refuse every stream there is.
+    assert graph._refuse_a_stream_whose_pose_recording_is_partial(
+        frames[:4], "posed.csv"
+    )
+    assert not graph._refuse_a_stream_whose_pose_recording_is_partial(
+        frames[4:], "bolted.csv"
+    )
 
 
 def test_a_stream_that_states_only_a_base_velocity_still_builds(

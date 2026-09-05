@@ -178,6 +178,20 @@ Each entry is a claim that the graph can be tested against.
    the row that says what the robot was doing, and a pose reachable only by a join
    is one every reader of `robot_config` can forget to make.
 
+   **Issue #191 filled those two columns in and cost nothing more.** The pose now
+   reaches the row from the stream, `GEOMETRY_RETENTION`'s text gained the posed
+   clause, and that text lands in `meta` in every artifact — including the eleven
+   fixed-base ones, whose bytes are therefore not identical. The figures were
+   re-measured with the command above on the same build, expecting movement on
+   #166's precedent, and there is none: the report is byte-identical, at
+   **1,006,592 B** / **2,501,632 B** / **3,632,128 B** and 60.42 / 150.15 /
+   218.00 MB/h. One longer string in one row does not cross a page boundary,
+   where #166's two columns cost a record-header byte on each of 2,560
+   `robot_config` rows. The control-rate ladder
+   [`sensor-baseline.md`](sensor-baseline.md) publishes — the rungs CI does not
+   pin, which is the lesson of issue #181 — was re-measured too and did not move
+   either.
+
    Two narrower clauses sit under this one and both are in *Discarded*, because both
    are things the contract could have kept and does not: **which frames get a row at
    all** is #10, and **which of those rows carry the polygon** is #9.
@@ -293,10 +307,40 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    *this artifact records no pose*), and `reg.graph.envelope_at` **refuses** a row
    that states one rather than recomputing it. So the clause reads: geometry is
    discarded because it is recomputable *for a base that did not move*, and a run
-   whose base moved has to retain it. Nothing in this repository writes a posed
-   configuration yet, so nothing here is currently discarding a polygon it cannot
-   recover; the refusal is what stops that from arriving quietly when something
-   does.
+   whose base moved has to retain it.
+
+   **And since issue #191 it does retain it, which is what makes the clause a
+   rule rather than a warning.** `reg.graph.build` writes the pose onto the
+   `robot_config` row it came from, and `reg.graph.GEOMETRY_RETENTION` keeps the
+   polygon on **every frame whose configuration states one** — a third clause
+   beside the two ends of the run and the relationship transitions, stated in the
+   rule text that lands in `meta` so a reader never infers it from the pattern of
+   NULLs. A posed `envelope` row carrying a NULL `geometry_wkb` is refused at
+   build time and never written, because it would be a promise of a
+   recomputation that cannot be honoured and the region would then be
+   recoverable from nothing. Retaining nothing and refusing on read was the
+   alternative, and it is worse than either: it makes every envelope query on a
+   mobile artifact a could-not-evaluate, which is a file that parses and answers
+   nothing. It retains the **polygon**, not the **row** — a posed frame that
+   anchors nothing is still a frame #10 below keeps no row for, and forcing one
+   per posed frame would put the linear-in, linear-out shape issue #29 removed
+   back for exactly the runs that need it gone.
+
+   **What is retained is the region in the room, not the region about the
+   origin.** The polygon stored for a posed configuration is the body-frame set
+   `compute_envelope` returns, rigidly placed at the pose the frame states
+   ([`mobile-base.md`](mobile-base.md) §2, the third row of its table). Storing
+   the body-frame set instead would have reintroduced the failure two paragraphs
+   up, arriving from storage rather than from a recomputation and looking exactly
+   as much like a right answer; it would also make every `INTERSECTS` overlap and
+   `SEPARATION` distance in the file a measurement between a region about the
+   origin and entities in room coordinates. The placed region inherits the pose
+   and therefore the perceiver, which is why every `HAS_ENVELOPE` edge over a
+   posed configuration is Layer **B** — [`sufficiency.md`](sufficiency.md) §5.8's
+   table, followed rather than discovered. **It cost no published figure:** the
+   rule text is one longer string in one `meta` row, and
+   `python -m reg.bench --resolution --seed 0` produces a byte-identical report
+   before and after it (1,006,592 B, 2,501,632 B and 3,632,128 B, unchanged).
 
    **The same condition, and the same fix, for the two scalars in Retained #8.**
    `outer_area` and `outer_radius` are kept instead of the outer polygon on the

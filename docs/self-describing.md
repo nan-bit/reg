@@ -1,7 +1,9 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
-**Status:** a design document; tiers 0 and 1 of §8 have landed and no code here is
-built · written 2026-09-05, tier 1's findings folded in 2026-09-05 · normative over nothing yet; where it touches what
+**Status:** a design document; tiers 0 and 1 of §8 have landed, and tier 2's
+first half — the environment **recorded**, not yet acted on — landed with issue
+#200 · written 2026-09-05, tier 1's findings folded in 2026-09-05, tier 2's
+recording half 2026-09-05 · normative over nothing yet; where it touches what
 the project may claim it defers to [`sufficiency.md`](sufficiency.md) and
 [`limitations.md`](limitations.md) until those files carry the change · the build
 order in §8 is the authority on what is proposed versus decided
@@ -35,7 +37,7 @@ document's statement of the same three, for the argument it goes on to make.*
 | # | what an auditor cannot do with the file alone | why | where it is recorded now |
 |---|---|---|---|
 | 1 | Check a `layer` tag | The tag is written; what it was computed **from** is not | `sufficiency.md` §5.6, §5.9 |
-| 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform | `limitations.md` §1 |
+| 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **half-closed by issue #200**: it now records them, and nothing yet acts on them | `limitations.md` §1 |
 | 3 | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` are retained, not the boundary | `limitations.md` §2, §3 |
 
 **Gap 1 — a tag that is asserted rather than checkable.** `envelope_layer` takes
@@ -52,6 +54,16 @@ and four numbers in `meta`. Issue #175 measured that the function is the
 platform's: tables captured on one architecture differ in their last bits on
 another. So an auditor who recomputes and disagrees cannot distinguish *wrong
 machine* from *the geometry moved* — and those are opposite findings.
+
+*Half-closed, 2026-09-05 (issue #200).* `meta` now carries the six keys §3's
+first row asks for — `reg.store.ENVIRONMENT_KEYS`, read off the running
+interpreter and read back by `reg.graph.recorded_environment` — with
+`SCHEMA_VERSION` at 11 and its note beside the others. **Recording is not
+acting.** `envelope_at` recomputes exactly as it did before; a reader that
+ignores the environment still gets the pre-#200 answer, and the guard that
+reports could-not-evaluate off the recording environment is the issue that
+depends on this one. The split was deliberate: writing the data and using it are
+different work, and the second changes what a query answers.
 
 **Gap 3 — a radius where the question wants a region.** A stored envelope row
 answers *not at that distance*. It cannot answer *not at that point*, because the
@@ -88,7 +100,7 @@ its own basis must be refused, and one whose basis is intact must not be.
 
 | addition | what it buys | cost |
 |---|---|---|
-| **Environment** in `meta`: shapely and GEOS versions, platform, Python | Gap 2. A recomputation that disagrees becomes attributable | a few rows; schema bump |
+| **Environment** in `meta`: shapely and GEOS versions, platform, Python — **landed, issue #200**, as six keys: those four, plus numpy, plus the platform's system and machine separately | Gap 2, in the weaker form below. A recomputation that disagrees becomes a could-not-evaluate rather than an unresolvable one | six rows; schema bump to 11; **no published figure moved** |
 | **Layer basis** per tagged edge: the inputs the tag was computed from, each with its provenance | Gap 1, and the tag becomes checkable rather than trusted | a row per input per tagged edge |
 | **The outer boundary**, retained rather than projected | Gap 3 | bytes, and the published figures move |
 
@@ -105,13 +117,34 @@ expensive one and is a decision, not a task — see §8.
   actually uses*, minimised rather than enumerated. C2PA carries the same idea one
   layer up in `claim_generator_info`, which records a claim generator's name,
   version and operating system.
+
+  *What the minimise rule settled when it was applied* (issue #200). Two keys
+  arrived that the row above did not name — **numpy**, because `np.cos` and
+  `np.sin` place every link endpoint in `reg.kinematics`, and the platform's
+  **system** and **machine** as separate keys rather than one platform string,
+  because that is the pair issue #175 measured a divergence across. Everything
+  that would not change the geometry stayed out: no hostname, no build path, no
+  user, no locale, no timezone. **One thing that would change it is out too, and
+  it is stated rather than quietly dropped** — the C library, because
+  `platform.libc_ver()` reports nothing on macOS and under musl, so a key for it
+  would be empty on some platforms and would mean both *could not tell* and *no
+  glibc here*. Two artifacts can therefore agree on all six keys and have been
+  linked against different libms: matching environments are necessary for a
+  bit-identical recomputation and not sufficient.
 - **Putting it in `meta` is a deviation from that practice, and is stated as
   one.** A buildinfo is deliberately *a separate product beside the artifact*,
   because an archive can distribute it to whoever wants to rebuild. Claim 2 says
   this file answers with no access to anything else, which is a stronger
   requirement than the practice has, so the record goes inside. That reason is the
   deviation's whole justification and it belongs wherever the schema is specified
-  — the pattern is [`prior-art.md`](prior-art.md) §5's PROFIsafe deviation.
+  — the pattern is [`prior-art.md`](prior-art.md) §5's PROFIsafe deviation. It is
+  now stated there: `reg.store.ENVIRONMENT_KEYS`, where the keys are specified,
+  and [`lossiness.md`](lossiness.md) *Discarded* #9, where the retention argument
+  the record qualifies lives. **What the departure costs**, said in the same
+  breath as its reason: the environment cannot be handed to a rebuilder without
+  handing over the artifact, and it is descriptive `meta` — nothing in the chain
+  signs it, so a party who can rewrite the file can rewrite its environment too.
+  §7 question 3 is where that second half is still a person's decision.
 - **"Attributable" is the weaker half and must not stand unqualified.** Recording
   the environment turns *an unresolvable disagreement* into *a could-not-evaluate*.
   It does not say which library moved the geometry; `diffoscope` exists because a
@@ -255,6 +288,14 @@ them buys less than it appears to: an auditor still ends at a disagreement they
 cannot resolve. Recording the environment is a few rows and it is what makes the
 other two worth doing.
 
+*It was six rows, and the estimate held* (issue #200). The measurement is in the
+PR: `python -m reg.bench --resolution --seed 0` and the four-rung control-rate
+ladder both produce reports identical in every measured number, before and after,
+because six short strings in one `meta` row each land inside pages the file was
+already paying for. That is the smallest a change to the artifact has come out
+at, and it is the reason this tier went first rather than an argument that it
+should have.
+
 **Why the boundary is a decision and not a task.** Retaining it costs bytes on
 every retained envelope, which moves the published figures — the same class of
 cost issue #166 paid and #191 avoided only by page alignment. It also interacts
@@ -316,10 +357,17 @@ what it changed, and the changes are to this document's §2, §3, §4 and §7, n
 the tiers below. Everything downstream depended on it, per the rule that prior art
 wins.
 
-**Tier 2 — the environment in `meta`.** Shapely and GEOS versions, platform,
-Python. Schema bump. A recomputation guard that reports could-not-evaluate off the
-recording environment rather than a pass or a failure, on the pattern issue #175
-established for the bit-identity tables.
+**Tier 2 — the environment in `meta`. The recording half landed** (issue #200):
+six keys — Python, numpy, shapely, GEOS, and the platform's system and machine —
+written by `reg.store.build_environment` from the running interpreter, read by
+`reg.graph.recorded_environment`, `SCHEMA_VERSION` at 11 with its note, and no
+published figure moved. **What remains is the half that acts:** a recomputation
+guard that reports could-not-evaluate off the recording environment rather than a
+pass or a failure, on the pattern issue #175 established for the bit-identity
+tables. The split is on the seam this build order is cut along — writing the data
+and using it are different work, and only the second changes what a query
+answers. Tier 3 is unblocked by the half that landed; nothing else here was
+waiting on it.
 
 **Tier 3 — the cold-read test.** §2, against the fixtures, with its negative. It
 can be written the moment tier 2 lands and it is what makes the rest checkable.

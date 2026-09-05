@@ -47,6 +47,8 @@ depends on a default staying put.
 
 from __future__ import annotations
 
+import getpass
+import platform
 import sqlite3
 from collections import Counter
 from collections.abc import Callable
@@ -873,6 +875,252 @@ def test_a_stream_with_no_provenance_leaves_the_key_absent(tmp_path: Path) -> No
         assert store.get_meta(conn, "source_provenance") is None
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------
+# The environment that produced the artifact (issue #200)
+#
+# docs/self-describing.md gap 2, and it is a **buildinfo** in the Reproducible
+# Builds sense (docs/prior-art.md §27): a discarded polygon is retained as "a
+# deterministic function of the row and four numbers in meta", and issue #175
+# measured that the function is the platform's. These tests are about the
+# recording only. Refusing to recompute off the recording environment is the
+# work that depends on this and is deliberately not here — `envelope_at` is
+# unchanged, and `test_envelope_at_recomputes_the_stored_polygon_exactly` above
+# is the gate that says so.
+# --------------------------------------------------------------------------
+
+
+def test_the_artifact_records_the_environment_that_computed_its_geometry(
+    tmp_path: Path,
+) -> None:
+    """Every key in the buildinfo, present and read off *this* interpreter.
+
+    Against the running modules rather than against a golden string: a test that
+    pinned `2.1.2` would have to be edited on every upgrade, which is the change
+    the key exists to make visible rather than one it should suppress.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        recorded = graph.recorded_environment(conn)
+    finally:
+        conn.close()
+
+    assert list(recorded) == list(store.ENVIRONMENT_KEYS)
+    assert all(value.strip() for value in recorded.values())
+    assert recorded[store.META_ENV_SHAPELY] == shapely.__version__
+    assert recorded[store.META_ENV_GEOS] == ".".join(
+        str(part) for part in shapely.geos_version
+    )
+    assert recorded[store.META_ENV_NUMPY] == np.__version__
+    assert recorded[store.META_ENV_PYTHON] == platform.python_version()
+    assert recorded[store.META_ENV_PLATFORM_SYSTEM] == platform.system()
+    assert recorded[store.META_ENV_PLATFORM_MACHINE] == platform.machine()
+    # The recording side and the reading side agree, which is the comparison the
+    # guard that depends on this issue will make.
+    assert recorded == store.build_environment()
+
+
+def test_two_builds_on_one_machine_record_the_same_environment(
+    tmp_path: Path,
+) -> None:
+    """The buildinfo is a function of the machine, not of the run.
+
+    `test_two_builds_of_one_stream_are_byte_identical` covers this in bytes; it
+    is asserted here in its own terms because the risk this block adds is a
+    value that varies between two runs on one machine — a clock, a path, a
+    process id — and a byte comparison names neither the key nor the reason
+    when it fails.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    a, b = tmp_path / "a.sqlite", tmp_path / "b.sqlite"
+    _build(csv, a)
+    _build(csv, b)
+
+    conns = [store.connect(a), store.connect(b)]
+    try:
+        first, second = (graph.recorded_environment(c) for c in conns)
+    finally:
+        for c in conns:
+            c.close()
+    assert first == second
+
+
+def test_the_environment_names_no_hostname_path_or_user(tmp_path: Path) -> None:
+    """The minimise rule, as a negative.
+
+    A buildinfo records what the computation depends on. The hostname, the build
+    path and the user differ between two checkouts on one machine while nothing
+    about the geometry differs, so recording them would break determinism to buy
+    nothing — and `platform.node()` is one autocomplete away from `machine()`.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+
+    conn = store.connect(out)
+    try:
+        recorded = graph.recorded_environment(conn)
+    finally:
+        conn.close()
+
+    values = set(recorded.values())
+    for leaked in (platform.node(), str(tmp_path), getpass.getuser()):
+        if leaked:
+            assert leaked not in values
+
+
+def _forget_meta(path: Path, *keys: str) -> None:
+    """Delete `keys` from an artifact's meta table, behind reg's back.
+
+    Through raw SQL rather than through `put_meta`, which refuses to overwrite a
+    key with a different value. What is being simulated is a file this build did
+    not write — an older schema, or an editor — and that file is exactly what a
+    reader has to be able to refuse.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in keys])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_an_artifact_stating_no_environment_is_a_could_not_evaluate(
+    tmp_path: Path,
+) -> None:
+    """The negative. An absent buildinfo never resolves to the reader's own."""
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+    _forget_meta(out, *store.ENVIRONMENT_KEYS)
+
+    conn = store.connect(out)
+    try:
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.recorded_environment(conn)
+    finally:
+        conn.close()
+    # It names what is missing: a refusal that cannot say which key is one a
+    # reader can only answer by upgrading blind.
+    assert store.META_ENV_GEOS in str(excinfo.value)
+
+
+def test_an_artifact_stating_part_of_an_environment_is_a_could_not_evaluate(
+    tmp_path: Path,
+) -> None:
+    """Five keys of six is not five sixths of an answer.
+
+    The interesting negative, because the four the file still states look like a
+    complete environment to anything that reads them one at a time — and the
+    missing one is GEOS, which is the library that does the arithmetic.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+    _forget_meta(out, store.META_ENV_GEOS)
+
+    conn = store.connect(out)
+    try:
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.recorded_environment(conn)
+    finally:
+        conn.close()
+    message = str(excinfo.value)
+    assert store.META_ENV_GEOS in message
+    assert store.META_ENV_SHAPELY in message  # what it *does* state, so a reader
+    # can see the block is partial rather than absent.
+
+
+def test_an_empty_environment_value_is_refused_rather_than_returned(
+    tmp_path: Path,
+) -> None:
+    """An empty machine compares unequal to every environment on earth.
+
+    Returned, it would read as *built somewhere else* — a finding about the
+    artifact — when the fact is that the file never said. That is a
+    could-not-evaluate resolving to a fail, which is the same defect as one
+    resolving to a pass and just as wrong.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+    raw = sqlite3.connect(out)
+    try:
+        raw.execute(
+            "UPDATE meta SET value = '' WHERE key = ?",
+            (store.META_ENV_PLATFORM_MACHINE,),
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    conn = store.connect(out)
+    try:
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.recorded_environment(conn)
+    finally:
+        conn.close()
+    assert store.META_ENV_PLATFORM_MACHINE in str(excinfo.value)
+
+
+def test_a_build_whose_interpreter_cannot_name_its_machine_refuses(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No environment value is ever synthesised. `platform.machine()` returns an
+    empty string when it cannot tell, and that is the case this covers: the
+    build fails loudly, naming the key, and leaves no artifact behind.
+
+    An artifact carrying five keys and an empty sixth would be worse than one
+    carrying none, because it reads as an environment somebody recorded.
+    """
+    monkeypatch.setattr(platform, "machine", lambda: "")
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+
+    with pytest.raises(store.StoreError) as excinfo:
+        _build(csv, out)
+    message = str(excinfo.value)
+    assert store.META_ENV_PLATFORM_MACHINE in message
+    assert "platform.machine()" in message
+    assert not out.exists()
+
+
+def test_a_build_whose_environment_probe_raises_refuses_and_says_what_asked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The other half of the same rule: a probe that raises is a
+    could-not-evaluate too, and the refusal names the expression that could not
+    answer rather than reporting that "the environment" is unavailable."""
+
+    def _no_version() -> str:
+        raise RuntimeError("no GEOS here")
+
+    monkeypatch.setattr(store, "_geos_version_text", _no_version)
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+
+    with pytest.raises(store.StoreError) as excinfo:
+        _build(csv, out)
+    message = str(excinfo.value)
+    assert store.META_ENV_GEOS in message
+    assert "shapely.geos_version" in message
+    assert "no GEOS here" in message
+    assert not out.exists()
+
+
+def test_a_geos_version_this_build_cannot_name_is_refused(monkeypatch) -> None:
+    """`shapely.geos_version` is a three-part tuple, and the one thing that must
+    not happen if it ever is not is a plausible string built out of whatever it
+    holds."""
+    monkeypatch.setattr(shapely, "geos_version", "3.13.1")
+    with pytest.raises(store.StoreError) as excinfo:
+        store.build_environment()
+    assert "shapely.geos_version" in str(excinfo.value)
 
 
 def test_two_builds_of_one_stream_are_byte_identical(tmp_path: Path) -> None:

@@ -87,10 +87,21 @@ Layer B — not proprioception, whatever this comparison was called before issue
 than implementation-defined. Neither is in scope for a prototype. The mitigation
 actually taken is to name the dependency: every artifact records `reg_version`
 and the retention rule, and this section is the statement that `reg_version`
-alone is not sufficient — **the shapely and GEOS versions that built
-an artifact are not currently recorded in it, and recording them would let a future
-reader know whether to trust a recomputation rather than having to assume.** That is
-a small, obvious follow-up and it is deliberately not smuggled in here.
+alone is not sufficient. **The small, obvious follow-up this paragraph asked for
+landed with issue #200**: `meta` now carries the shapely and GEOS versions — and
+numpy, the interpreter, and the platform, `reg.store.ENVIRONMENT_KEYS` — read off
+the running interpreter at build time. It is a **buildinfo** in the Reproducible
+Builds sense, adopted rather than invented ([`prior-art.md`](prior-art.md) §27),
+and putting it inside `meta` rather than beside the artifact is a stated
+deviation from that practice with Claim 2 as its reason.
+
+**Recording is not acting, and the difference is this section's.** Nothing yet
+refuses to recompute off the recording environment; `envelope_at` behaves exactly
+as it did before, so a reader who ignores the keys gets the pre-#200 answer. The
+guard is separate work ([`self-describing.md`](self-describing.md) §8, tier 2's
+second half). What the record does buy is that a disagreement can be turned into
+a could-not-evaluate rather than left unresolvable — and it buys neither
+portability nor attribution: it does not say *which* library moved the geometry.
 
 **What a claim would need instead, for this axis.** The same versioned,
 specified-output geometry kernel the paragraph above asks for, plus correctly
@@ -99,8 +110,16 @@ whole stack to be specified, not merely deterministic. Short of that, an artifac
 would have to record the platform it was built on (`platform.machine()` and
 `platform.system()`, beside the shapely and GEOS versions named above) so a
 recomputation that disagrees can be read as *wrong machine* rather than as *the
-geometry moved*. **It records none of them today.** What has been done is
-the smaller, in-repository half: each bit-identity table now records the platform
+geometry moved*. **It records exactly those, since issue #200** — and the reading
+still needs care in two directions. Equal environments are **necessary and not
+sufficient**: the C library is not among the keys, because `platform.libc_ver()`
+reports nothing on macOS and under musl and a key that is empty on some platforms
+would mean both *could not tell* and *nothing to tell*, so two artifacts can agree
+on all six keys and have been linked against different libms. And unequal
+environments say *this is a different machine*, not *the geometry moved on this
+one* — attribution needs a differ, which `diffoscope` is and this project has no
+analogue of ([`prior-art.md`](prior-art.md) §27). The other half of the
+mitigation is in-repository: each bit-identity table now records the platform
 it was captured on and reports an explicit could-not-evaluate — the repository's
 third state, warned so it is audible and skipped so it never reads as a pass —
 when the suite runs anywhere else, while the moved-base negatives stay ungated so
@@ -936,12 +955,22 @@ and cannot be checked. A reader who wants to know what it depends on — today
 read §11.
 
 *2 — attribution requires the recording machine.* Most `envelope` rows have
-`geometry_wkb = NULL` and are recomputed on demand. The artifact records
+`geometry_wkb = NULL` and are recomputed on demand. The artifact recorded
 `reg_version` and the envelope parameters, and not the shapely and GEOS versions
-or the platform, so a recomputation that disagrees cannot be attributed. §1 has
-the measurement and what a claim would need; the point here is only that the fact
-lives in prose and not in the file, which is why the disagreement is unresolvable
+or the platform, so a recomputation that disagreed could not be attributed. §1 has
+the measurement and what a claim would need; the point here was that the fact
+lived in prose and not in the file, which is why the disagreement was unresolvable
 rather than merely unresolved.
+
+**This one is half-closed, 2026-09-05 (issue #200).** The environment is now
+*in the file* — shapely, GEOS, numpy, the interpreter and the platform,
+`reg.store.ENVIRONMENT_KEYS`, `SCHEMA_VERSION` 11 — so the fact no longer lives
+only here. What has not changed is that **nothing acts on it**: `envelope_at`
+recomputes as before, and the guard that reports a could-not-evaluate off the
+recording environment is the follow-up. So this row stays in the table with its
+question narrowed: an auditor can now ask the file *which machine built this*
+and get an answer, and still cannot ask *the code that reads artifacts* to refuse
+a recomputation somewhere else. The other two rows are untouched.
 
 *3 — the pointwise question requires a recomputation, which routes back through
 2.* A stored `envelope` row retains `outer_area` and `outer_radius`, not a

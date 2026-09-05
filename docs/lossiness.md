@@ -381,6 +381,41 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    of this trade and it is recorded in [`docs/limitations.md`](limitations.md), not
    here, because it is a limitation of the project and not a clause of the contract.
 
+   **And since issue #200 the precondition is *in the file*, which changes what a
+   disagreement means and not whether one can happen.** `meta` carries six keys —
+   the interpreter, numpy, shapely, GEOS, and the platform's system and machine —
+   read off the running interpreter by `reg.store.build_environment` and read back
+   by `reg.graph.recorded_environment`. This is a **buildinfo** and the word is
+   borrowed: the Reproducible Builds project defines reproducibility *relative to a
+   stated environment*, and the content list here is adopted from that practice
+   rather than reasoned out again ([`prior-art.md`](prior-art.md) §27; C2PA carries
+   the same idea inside a hash-bound manifest, §28). **The deviation from the
+   practice is deliberate and is stated where the keys are specified**: a buildinfo
+   is a separate product *beside* the artifact, so an archive can hand it to a
+   rebuilder; these keys go **inside** `meta` because Claim 2 says this file answers
+   with no access to anything else. What that costs is that the environment cannot
+   be distributed without the artifact, and that it is descriptive `meta` rather
+   than anything the chain signs.
+
+   **What it buys, in the weaker form that is true.** Before, an auditor who
+   recomputed a discarded polygon and disagreed could not tell *wrong machine* from
+   *the geometry moved*, and those are opposite findings. Now the file says which
+   machine, so the disagreement can be **turned into a could-not-evaluate instead
+   of an unresolvable one**. It does not make recomputation portable, and it does
+   not say *which* library moved the geometry — `diffoscope` exists because a
+   version list does not give that, and nothing here proposes building one. Nor
+   does it act: `envelope_at` recomputes exactly as it did before, and a guard that
+   refuses to recompute off the recording environment is separate work
+   ([`self-describing.md`](self-describing.md) §8). One hole is stated rather than
+   papered over — the C library is not recorded, because `platform.libc_ver()`
+   reports nothing on macOS and under musl, so two artifacts can agree on all six
+   keys and still have been linked against different libms. Matching environments
+   are a necessary condition for a bit-identical recomputation, not a sufficient
+   one. **It cost no published figure:** six short `meta` rows, and
+   `python -m reg.bench --resolution --seed 0` produces a report identical in every
+   measured number before and after (1,006,592 B, 2,501,632 B and 3,632,128 B,
+   unchanged; the schema version in the parameter block reads 11 rather than 10).
+
    **What it does not license.** Discarding the scalars (Retained #8), discarding
    the `config_id` that makes recomputation possible (the schema refuses an
    `envelope` row with neither geometry nor a config, and since issue #166 it

@@ -596,7 +596,8 @@ as text, with its `PoseSource` in the column beside it — and `meta` gained
 move. Both are optional and neither has a default: `NULL` says *this artifact
 records no pose for this configuration*, which is a could-not-evaluate and never
 a base at the origin, and the two statements are exclusive, because *bolted here*
-and *localized there* are different claims about one run. `SCHEMA_VERSION` is 10.
+and *localized there* are different claims about one run. `SCHEMA_VERSION` was
+bumped to 10 for it.
 
 **Why the record had to hold it, stated as the cost of not holding it.** Two
 things in the artifact were silently conditional on the base being bolted down,

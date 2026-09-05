@@ -1,10 +1,15 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
-**Status:** a design document, nothing here is built · written 2026-09-05 ·
-normative over nothing yet; where it touches what the project may claim it
-defers to [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md)
-until those files carry the change · the build order in §8 is the authority on
-what is proposed versus decided
+**Status:** a design document; tier 0 of §8 has landed and nothing else here is
+built · written 2026-09-05 · normative over nothing yet; where it touches what
+the project may claim it defers to [`sufficiency.md`](sufficiency.md) and
+[`limitations.md`](limitations.md) until those files carry the change · the build
+order in §8 is the authority on what is proposed versus decided
+
+**§1 is now carried by [`limitations.md`](limitations.md) §12** (issue #198), which
+is where the three gaps are normative. The table below is the same finding stated
+for this document's own argument; where the two differ, `limitations.md` wins,
+because that is the file that says what this project may claim.
 
 ---
 
@@ -23,6 +28,9 @@ to interpret it, needs the original machine to recompute it, and cannot ask it
 one of the two questions §2 of [`limitations.md`](limitations.md) says it answers.
 
 ## 1. The three gaps, as they stand today
+
+*Normative in [`limitations.md`](limitations.md) §12; what follows is this
+document's statement of the same three, for the argument it goes on to make.*
 
 | # | what an auditor cannot do with the file alone | why | where it is recorded now |
 |---|---|---|---|
@@ -181,8 +189,10 @@ describing evidence" has a name in the audit literature already. **Assume it doe
 
 Sized so a bad attempt is cheap, and split on the seam between kinds of work.
 
-**Tier 0 — say what is true.** A `limitations.md` entry stating the three gaps in
-the vocabulary above. No behaviour change. Independent of everything below.
+**Tier 0 — say what is true. Landed** (issue #198): [`limitations.md`](limitations.md)
+§12 states the three gaps in the vocabulary above, cross-referencing §1, §2, §3
+and §11 rather than restating them. No behaviour change. It was independent of
+everything below and remains so — nothing here is unblocked by it.
 
 **Tier 1 — the argument.** A `prior-art.md` pass on build provenance, in-toto and
 SLSA, and on whether self-describing evidence is named in the audit literature.
@@ -207,8 +217,9 @@ the argument for it concrete.
 ## See also
 
 - [`plan.md`](plan.md) — Claims 2 and 3, which this serves, and the non-goals table.
-- [`limitations.md`](limitations.md) — §1 (the platform), §2 and §3 (the radius),
-  §11 (the tag that does not follow its value).
+- [`limitations.md`](limitations.md) — §12 (the three gaps as one finding, which
+  is where they are normative), and the entries it cross-references: §1 (the
+  platform), §2 and §3 (the radius), §11 (the tag that does not follow its value).
 - [`lossiness.md`](lossiness.md) — the retention rules this would qualify.
 - [`mobile-base.md`](mobile-base.md) — where the fixed-base assumption stopped
   hiding the distinction, and why the gaps became visible now.

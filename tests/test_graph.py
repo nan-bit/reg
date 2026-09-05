@@ -968,8 +968,14 @@ def test_the_environment_names_no_hostname_path_or_user(tmp_path: Path) -> None:
     finally:
         conn.close()
 
+    try:
+        user = getpass.getuser()
+    except (OSError, KeyError):
+        # A machine that cannot name its user is not a failure of this test, and
+        # the other two are the ones that would actually appear in `meta`.
+        user = ""
     values = set(recorded.values())
-    for leaked in (platform.node(), str(tmp_path), getpass.getuser()):
+    for leaked in (platform.node(), str(tmp_path), user):
         if leaked:
             assert leaked not in values
 

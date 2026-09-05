@@ -203,10 +203,12 @@ RATE = 94.5
 #   74,945  2026-09-05, when #171 landed — measured, no headroom
 #   74,590  2026-09-05, after #206 split `docs/limitations.md` into a normative
 #           core and a `## Why` line — measured, no headroom
-#   74,230  today, 2026-09-05, after #209 did the same to `docs/lossiness.md`:
-#           that file went 11,116 -> 10,756, of which 9,391 is the normative
+#   74,230  2026-09-05, after #209 did the same to `docs/lossiness.md`: that
+#           file went 11,116 -> 10,756, of which 9,391 is the normative core
+#   73,969  today, 2026-09-05, after #210 did the same to `docs/sufficiency.md`:
+#           that file went 11,425 -> 11,164, of which 9,707 is the normative
 #           core — measured, no headroom
-ARGUMENT_MAX = 74230
+ARGUMENT_MAX = 73969
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -218,8 +220,10 @@ PARAGRAPH_MAX_WORDS = 120
 #   146  2026-09-05, when #171 landed, over 915
 #   141  2026-09-05, after #206: five of docs/limitations.md's twenty-three
 #        over-long paragraphs were split or cut
-#   135  today, 2026-09-05, after #209: docs/lossiness.md went 26 -> 20
-LONG_PARAGRAPHS_MAX = 135
+#   135  2026-09-05, after #209: docs/lossiness.md went 26 -> 20
+#   121  today, 2026-09-05, after #210: docs/sufficiency.md went 14 -> 0, six of
+#        the fourteen by splitting rather than cutting
+LONG_PARAGRAPHS_MAX = 121
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -230,9 +234,14 @@ LONG_PARAGRAPHS_MAX = 135
 #        unit
 #   240  2026-09-05, after #206 moved docs/limitations.md's archaeology below a
 #        `## Why` heading: that file went 38 -> 13
-#   212  today, 2026-09-05, after #209 did the same to docs/lossiness.md: that
-#        file went 39 -> 11
-NARRATION_MAX = 212
+#   212  2026-09-05, after #209 did the same to docs/lossiness.md: that file
+#        went 39 -> 11
+#   179  today, 2026-09-05, after #210 did the same to docs/sufficiency.md: that
+#        file went 33 -> 0. Zero is what the proxy now counts above that file's
+#        rationale line, not a claim that the file narrates nothing — two of the
+#        33 were the marker set firing on normative text and were reworded in
+#        the present tense, which the docstring below says it over-counts
+NARRATION_MAX = 179
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

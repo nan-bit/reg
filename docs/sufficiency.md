@@ -1,11 +1,7 @@
 # Sufficiency boundary — which audit claims survive an uncertifiable perceiver
 
 **Status:** normative for what this project may claim · written 2026-08-19 ·
-[`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable · written for
-Milestone 2, re-measured 2026-08-20 after Milestone 3, §7 reconciled against the
-measured tables 2026-08-21, §5.1's frame condition recorded 2026-09-01
-(issue #139), §5.7's widening of Layer A recorded 2026-09-02 (issue #150), §5.8's
-pose in the artifact recorded 2026-09-02 (issue #166) · keep current
+[`docs/plan.md`](plan.md) Phase 9, Claim 3's deliverable · keep current
 
 The mechanism this document argues from already exists. Every edge in the
 artifact carries a `layer` column, `A` or `B`, and so does every occurrence; the
@@ -16,14 +12,14 @@ That derivation is itself checked:
 `tests/test_graph.py::test_layer_b_is_exactly_the_entity_naming_edges` derives
 the *expected* value from whether the type touches an `Entity`, so an edge type
 added without a layer decision fails there rather than in somebody's query months
-later. **Since issue #166 that test also covers the way into Layer B that the
-type table cannot express** — an edge resting on a configuration that states where
-the base was — which is §5.8 below and is the first dependency on something
-outside the robot that reaches an edge naming no `Entity` at all.
+later. **That test also covers the way into Layer B that the type table cannot
+express** — an edge resting on a configuration that states where the base was,
+which is §5.8 below and the one dependency on something outside the robot that
+reaches an edge naming no `Entity` at all.
 
-What did not exist until this file is the argument that turns that column into a
-claim: **which audit questions this artifact answers on its own authority, and
-which it answers only as well as whatever supplied the entity positions.**
+What this file adds to that column is the argument that turns it into a claim:
+**which audit questions this artifact answers on its own authority, and which it
+answers only as well as whatever supplied the entity positions.**
 
 The obstacle-independent envelope itself is not the contribution and this document
 does not present it as one — computing a reachable set from the robot and only
@@ -33,6 +29,10 @@ is worth stating is downstream of it: the graph tags every relationship with the
 layer it depends on, so the boundary below is a property of the *record* rather
 than a paragraph in a README.
 
+**How to read this file.** Everything above [`## Why`](#why) is normative and is
+meant to read without it. What is under that heading is the rationale: which issue
+each section arrived with, and what each was weighed against.
+
 ---
 
 ## 1. The finding
@@ -41,8 +41,8 @@ than a paragraph in a README.
 cannot ground a certifiable envelope in an uncertifiable perceiver.**
 
 This is not a statement about how good a perceiver is. Take any claim this
-artifact can be asked for about the world — *the human was never inside the
-reachable set*, *the closest the robot came was 7 cm*, *no contact occurred*. Each
+artifact can be asked for about the world — *the human never entered the reachable
+set*, *the closest the robot came was 7 cm*, *no contact occurred*. Each
 decomposes into two conjuncts:
 
 1. where the reachable set was, which comes from `q`, `q̇` and the actuation
@@ -52,8 +52,8 @@ decomposes into two conjuncts:
 
 A conjunction is no stronger than its weaker conjunct. Improving (1) — a tighter
 envelope, a finer quantum, an outer approximation instead of an inner one — moves
-nothing about the strength of the composite claim, because the composite claim
-was never limited by (1). The layered structure does not repair this. **Nothing
+nothing about the strength of the composite claim, because the composite claim is
+not limited by (1). The layered structure does not repair this. **Nothing
 repairs it**; a perception stack's assurance case is the only thing that can, and
 this project does not attempt one. What the structure does is make the dependence
 *visible per edge, and therefore per answer*, so that a claim which is conditional
@@ -68,7 +68,8 @@ perception was right. A declaration is a statement the policy made about a regio
 it computed from its own state; a verdict is what an independent enforcement layer
 computed from proprioception and actuation limits; the chain is a hash and a MAC
 over those records. Not one of them names an entity, and no perceptual error can
-make a policy that exceeded its declared bound look like one that did not.
+make a policy that exceeded its declared bound look like one that stayed inside
+it.
 
 That is a materially stronger claim than anything about the world, and it is
 exactly what the black-channel pattern buys ([`docs/plan.md`](plan.md), standards
@@ -79,44 +80,39 @@ attestation questions route around both.
 
 Three honest bounds on that sentence, stated here rather than buried:
 
-- The asymmetry was a claim about **structure** only, when this was written in
-  Milestone 2: `reg.declare` and `reg.chain` existed but no artifact carried a
-  declaration, a verdict or a chain, so rows 2–4 read *unmeasured*. **Milestone 3
-  closed that gap** — the artifact carries them, and `reg.bench --resolution`
-  prices four of the attestation questions against the record stream the run
-  emitted (§5.4). What remains structural rather than measured is row 1, and for
-  a different reason: its only available ground truth is `reg.envelope` itself,
-  and a check whose ground truth reruns the code under test cannot fail.
+- **Rows 2–4 are measured and row 1 is structural.** The artifact carries the
+  declarations, verdicts and chain records, and `reg.bench --resolution` prices
+  four of the attestation questions against the record stream the run emitted
+  (§5.4). Row 1 stays structural for a reason measurement does not remove: its
+  only available ground truth is `reg.envelope` itself, and a check whose ground
+  truth reruns the code under test cannot fail.
 - Layer A is certifiable *in the sense that its failure modes are characterizable*
   — not in the sense that this prototype has characterized them. §7 lists what a
   Layer A answer here still inherits.
-- **It is conditional on the base being bolted down, and until issue #139 nothing
-  in this document said so.** `reg/store.py` states the asymmetry in its
-  strongest form, beside the four attestation edge types: *"None of it needs to
-  know where anybody is standing."* That is exactly right about **anybody**, and
-  it is not the same sentence as *needs to know nothing about where anything is*.
-  A declaration names a **region** and a verdict names the bound it was tested
-  against, and a region is stated in a frame. For the arm this repository models
-  that frame is the room's for free — `reg.kinematics` begins its cumulative sums
-  at an explicit leading `0.0` and that literal *is* the base, a mounting fact
-  rather than a measurement. Give the robot a driven base and the two frames come
-  apart: a declaration made in room coordinates can be tested against a
-  body-frame bound only by way of the pose, and the pose is Layer B (§5.6). **A
-  mobile base is the first thing that would make a Layer A attestation edge
-  depend on a pose in the room** — and it would do it while naming no `Entity`,
-  so `test_layer_b_is_exactly_the_entity_naming_edges` would not see it, exactly
-  as it did not see the `Limits` taint issue #84 closed. What the attestation
-  half would lose is not its independence from *perception of other people*; it
-  is the free coincidence of the two frames that made the question moot. Nothing
-  in this repository is mobile, so the sentence above holds as written for the
-  artifact this document is about — it is now stated with the condition it was
-  always resting on.
+- **It is conditional on the base being bolted down.** `reg/store.py` states the
+  asymmetry in its strongest form, beside the four attestation edge types: *"None
+  of it needs to know where anybody is standing."* That is exactly right about
+  **anybody**, and it is not the same sentence as *needs to know nothing about
+  where anything is*. A declaration names a **region** and a verdict names the
+  bound it was tested against, and a region is stated in a frame. For the arm this
+  repository models that frame is the room's for free, and §5.1 has the
+  mechanism. Give the robot a driven base and the two frames come apart: a
+  declaration made in room coordinates can be tested against a body-frame bound
+  only by way of the pose, and the pose is Layer B (§5.6). **A
+  mobile base is the first thing that would make a Layer A attestation edge depend
+  on a pose in the room** — and it would do it while naming no `Entity`, so
+  `test_layer_b_is_exactly_the_entity_naming_edges` cannot see it, which is the
+  `Limits` case of §7 arriving through a frame instead of through a value. What the
+  attestation half would lose is not its independence from *perception of other
+  people*; it is the free coincidence of the two frames that made the question
+  moot. Nothing in this repository is mobile, so the sentence above holds as
+  written for the artifact this document is about.
 
 ## 3. Two axes, not one
 
 [`docs/plan.md`](plan.md) Phase 9 describes a single taxonomy: Layer A alone
-versus needs Layer B. That was written before issue #35 added a second and
-orthogonal axis — **resolution** — and before issue #36 measured it.
+versus needs Layer B. There is a second and orthogonal axis — **resolution** — and
+it is measured.
 
 | Axis | What it decides | Where the answer comes from |
 |---|---|---|
@@ -126,12 +122,13 @@ orthogonal axis — **resolution** — and before issue #36 measured it.
 They are independent, and both directions of the independence occur below. A
 Layer A question can be unanswerable at a coarse level: the occurrence view holds
 **zero** edge rows, so nothing about the envelope survives into it and the
-reachability question dies there despite being certifiable. A Layer B question can
-be perfectly answerable at the coarsest level: *did the robot contact the human*
-is answered from a DSSAD-shaped occurrence flag in a level costing 60.42 MB/h —
-a figure **at a 50 Hz control rate**, which the level's attestation stream and
-not its occurrence flags is what buys (98.5% of its rows are records,
-[`retention.md`](retention.md), issue #116) — and is still only as strong as
+reachability question dies there despite being certifiable.
+
+A Layer B question can be perfectly answerable at the coarsest level: *did the
+robot contact the human* is answered from a DSSAD-shaped occurrence flag in a
+level costing 60.42 MB/h — a figure **at a 50 Hz control rate**, which the level's
+attestation stream and not its occurrence flags is what buys (98.5% of its rows
+are records, [`retention.md`](retention.md)) — and is still only as strong as
 whatever said where the human was.
 
 The three levels are defined in [`docs/lossiness.md`](lossiness.md), *The three
@@ -144,15 +141,6 @@ resolution levels*: **occurrence** (DSSAD-aligned, timestamps at ±1.0 s),
 `long_run` at 3,000 frames (60.0 s of robot time) **at a 50 Hz control rate**,
 `n_samples=16`, seed 0, occurrence resolution 1.0 s — reproduced for this document
 with `python -m reg.bench --resolution`:
-
-> **Re-measured 2026-08-20.** This table predated issues #59, #60 and #61 and was
-> wrong in every column. It measured an artifact holding **no Layer A at all**
-> (`bench._measure` never passed `records=`), so its byte counts were a third of
-> the truth and it could price only four questions; and it recorded `occurrence`
-> as **DISAGREE** on `time_of_closest_approach`, because the check graded every
-> level against `TIME_TOL_S` without consulting the level's own quantum. A ±1.0 s
-> level answered within 0.02 s and was marked wrong for it. Both are fixed; the
-> figures below come from one execution on the merged code.
 
 | level | ts res | SQLite B | bytes/hour @ 50 Hz | nodes | edges | occ | records |
 |---|---|---|---|---|---|---|---|
@@ -186,13 +174,12 @@ could-not-evaluate, never a pass.
 | `verify_chain` | A | AGREE | AGREE | AGREE |
 | **level verdict** | | **CNE** | **AGREE** | **AGREE** |
 
-**2.5x the bytes buys four questions**, and the ratio used to read twelve because
-the artifact was missing the layer that does not coarsen. The declaration,
-verdict and chain records are emitted per action and **no level coarsens them**:
-at ±1 s they are 3,120 of `occurrence`'s 3,166 node rows. Coarsening the scene
-now has much less left to work on, which is the finding and not a defect in it.
-That is the entire content of the resolution axis, and the rows below cite it
-rather than restating it.
+**2.5x the bytes buys four questions.** The declaration, verdict and chain records
+are emitted per action and **no level coarsens them**: at ±1 s they are 3,120 of
+`occurrence`'s 3,166 node rows. Coarsening the scene has that much less left to
+work on, which is the finding rather than a complaint about it. That is the
+entire content of the resolution axis, and the rows below cite it rather than
+restating it.
 
 ---
 
@@ -209,11 +196,11 @@ not omitted, and it is not softened into a claim.
   failure mode. Still inherits this project's own stated limitations (§7).
 - **certifiable, and measured** — Layer A by the schema's vocabulary, *and* the
   artifact carries the records, *and* the curve prices the question against the
-  stream the run emitted. Rows 2–4 earned this in Milestone 3.
+  stream the run emitted. Rows 2–4 are the rows that carry it.
 - **certifiable in structure, unmeasured** — Layer A by the schema's own
   vocabulary, but no artifact holds the records, so nothing has been measured. The
   honest reading is "this is what the structure will support", not "this is
-  supported". **No row carries this label any more**; it is kept because the
+  supported". **No row carries this label today**; it is kept because the
   distinction is the one this document exists to hold, and the next unbuilt Layer
   A question will need it again.
 - **only as strong as perception** — the answer is a conjunction with *the entity
@@ -234,14 +221,12 @@ not omitted, and it is not softened into a claim.
 | 10 | What was the separation at every frame? (`separation_timeline`) | **B** — `SEPARATION`, as row 6 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level holds no per-frame separation"); transition: AGREE, worst frame Δ 0.0096 m over 3,000 frames against 0.01 m | **only as strong as perception** |
 | 11 | When exactly was the closest approach? (`time_of_closest_approach`) | **B** — as row 6 | **transition** — occurrence: **COULD-NOT-EVALUATE**, 46.0000 s against 5 frames within 0.01 m of the minimum, nearest at 45.9800 s, Δ 0.0200 s — inside that level's own 1.0 s quantum, so imprecise rather than wrong; transition: AGREE, Δ 0.0000 s | **only as strong as perception, *and* needs 10 ms** |
 
-Rows 1 and 5–11 were the questions **Milestone 2** could be asked, and of those
-exactly one was Layer A — the one saying what the machine could have done rather
-than what happened to anyone. That imbalance is what Milestone 3 corrected: rows
-2–4 are answerable and measured now, so four of the eleven are Layer A — and
-**two** of those four are answerable at the coarsest level in the project. Rows 2
-and 4 are; row 3 is COULD-NOT-EVALUATE there, and row 1 has no substrate there at
-all. The certifiable layer survives coarsening better than the scene layer does,
-which is §5.4's finding, but "better" is not "entirely".
+Four of the eleven rows are Layer A: row 1, the one saying what the machine could
+have done rather than what happened to anyone, and rows 2–4, the attestation half.
+**Two** of those four are answerable at the coarsest level in the project — rows 2
+and 4. Row 3 is COULD-NOT-EVALUATE there, and row 1 has no substrate there at all.
+The certifiable layer survives coarsening better than the scene layer does, which
+is §5.4's finding, but "better" is not "entirely".
 
 ---
 
@@ -257,34 +242,37 @@ the_allowed_set` fails if one appears — *that absence is the enforcement*
 intersects it with the scene, which is why `HAS_ENVELOPE` can be tagged `A` while
 every edge naming an entity is tagged `B`.
 
-So the answer inherits nothing from perception. A perception stack that was wrong
-about every entity in the room changes no bit of this answer.
+So the answer inherits nothing from perception. A perception stack in error about
+every entity in the room changes no bit of this answer.
 
 **And that verdict is conditional on the base being bolted down — a fact about
 the mounting, not a property of the method.** The `(x, y)` in this question is a
 **room** coordinate, and it is answerable from proprioception alone only because
 the robot's own frame and the room's frame are the same frame here:
 `reg.kinematics` starts its cumulative sums at an explicit leading `0.0`, and
-that literal *is* the base. Nothing measured it, so nothing can be wrong about
-it. For a mobile robot where the base is comes from localization, the identical
+that literal *is* the base. Nothing measured it, so nothing can be wrong about it.
+
+For a mobile robot where the base is comes from localization, the identical
 question is **Layer B**, and what survives in Layer A is the question posed
-against the robot's own base rather than against the room — *could the robot have
-reached a point 1.2 m ahead-left of its own base at t?* §5.6 states the split and
-what it costs; [`docs/limitations.md`](limitations.md) §9 records the condition
-against the present artifact and [`docs/mobile-base.md`](mobile-base.md) §2 works
-out the design. Nothing in this repository drives, so this row's verdict stands
-for the artifact this document describes — with the condition written down
-instead of inherited silently from the mounting.
+against the robot's own base rather than against the room. §5.6 states the split
+and what it costs; [`docs/limitations.md`](limitations.md) §9 records the
+condition against the present artifact and
+[`docs/mobile-base.md`](mobile-base.md) §2 works out the design. Nothing in this
+repository drives, so this row's verdict stands for the artifact this document
+describes — with the condition written down instead of inherited silently from
+the mounting.
 
 **What it does not license, and this is not a footnote.** The envelope whose
 geometry this answer is read off is a sampling-based *under*-approximation. "The
 robot **could have** reached (x, y)" is supported at any resolution;
-"**could not have**" is supported only *radially*, and only since issue #82: every
-`computed` envelope row carries `outer_radius`, the radius of a horizon-limited
-**outer** reachable set, and a point beyond it is one the robot could not have
-reached. Between that radius and the sampled boundary the artifact says nothing,
-and no query may be read as though it did ([`docs/lossiness.md`](lossiness.md)
-*Unanswerable* #3, [`docs/limitations.md`](limitations.md) §2 and §3,
+"**could not have**" is supported only *radially*: every `computed` envelope row
+carries `outer_radius`, the radius of a horizon-limited **outer** reachable set,
+and a point beyond it is one the robot could not have reached.
+
+Between that radius and the sampled boundary the artifact says nothing, and no
+query may be read as though it did ([`docs/lossiness.md`](lossiness.md)
+*Unanswerable* #3,
+[`docs/limitations.md`](limitations.md) §2 and §3,
 [`docs/prior-art.md` §4](prior-art.md) for the zonotope machinery a *tight* claim
 in the negative direction would need). A certifiable claim in the wrong direction
 is not a safety claim, and a bracket is not a boundary.
@@ -292,16 +280,17 @@ is not a safety claim, and a bracket is not a boundary.
 **And it dies first under coarsening.** The occurrence view holds 0 edges, and
 this question's substrate is edges. The Layer A rows that view *does* hold are
 `run_began` and `run_ended` — *this run happened, between these two instants,
-under this software version* — plus, since Milestone 3, the 3,120 declaration and
-verdict records no level coarsens (§3, §5.4). Those are the attestation half: they
-say what the policy claimed and what enforcement did about it. Not one of them
-says what the machine could have reached, and the geometry that would is in the
-`edge` and `envelope` tables this view empties. That is worth saying to anyone who
-reads "occurrence-level evidence is enough" as a general conclusion — it is enough
-for four of the eight questions the curve prices as columns (contact and closest
-distance from the scene half; `violations` and `verify_chain` from the attestation
-half), and it is the level at which the certifiable *reachability* question stops
-being answerable.
+under this software version* — plus the 3,120 declaration and verdict records no
+level coarsens (§3, §5.4). Those are the attestation half: they say what the
+policy claimed and what enforcement did about it.
+
+Not one of them says what the machine could have reached, and the geometry that
+would is in the `edge` and `envelope` tables this view empties. That is worth
+saying to anyone who reads "occurrence-level evidence is enough" as a general
+conclusion — it is enough for four of the eight questions the curve prices as
+columns (contact and closest distance from the scene half; `violations` and
+`verify_chain` from the attestation half), and it is the level at which the
+certifiable *reachability* question stops being answerable.
 
 ### 5.2 Layer B, and occurrence resolution is enough: contact, and how close
 
@@ -311,10 +300,9 @@ and it AGREEs with ground truth recomputed from the raw stream by forward
 kinematics. *How close did it get?* likewise, to within 0.0007 m of a 0.01 m
 budget, carried on the `closest_approach` occurrence's `min_distance_m`.
 
-Two things have to be said about that agreement and neither weakens the other.
-(Three, counting the one the report says about itself: `long_run` contains no
-contact, so the contact row is **agreement on a negative** at every level, and the
-check is shown able to say no in `tests/test_bench.py` rather than here.)
+Two things have to be said about that agreement and neither weakens the other,
+and §4's row 5 carries the third: `long_run` contains no contact, so that row is
+agreement on a negative at every level.
 
 **It is a real result about resolution.** These are the two questions an incident
 report leads with, and they survive a 2.5x reduction in retained bytes. That is
@@ -325,9 +313,9 @@ do *not* need the resolution `reg` chose without noticing it was choosing.
 reading — *no `contact_began` row means no contact* — is legitimate only because
 the retention rule in `meta` says one would have been written
 ([`docs/lossiness.md`](lossiness.md), Level 1). That rule is a promise about the
-*builder*, not about the perceiver. If the entity's position was wrong, a contact
+*builder*, not about the perceiver. If the entity's position is wrong, a contact
 that happened produces no row and the artifact's silence reads, correctly by its
-own rule and wrongly in fact, as "no contact". No amount of resolution or chain
+own rule and falsely in fact, as "no contact". No amount of resolution or chain
 integrity touches this.
 
 ### 5.3 Layer B, and it needs transition resolution: the timeline, and *when*
@@ -344,21 +332,14 @@ level *does* produce an answer: 46.0000 s, where the nearest instant whose
 separation is within one distance quantum of the minimum is 45.9800 s.
 Δ 0.0200 s, against a 0.01 s tolerance.
 
-**This read `DISAGREE` until issue #61, and the paragraph that stood here argued
-the verdict was fine because "the occurrence layer never promised better than
-±1.0 s."** That argument is right and it is an argument against the verdict, not
-for it. A level graded against a precision twenty times finer than it advertises
-is not answering wrongly; the check was asking a question the level had already
-said it could not take. `ResolutionPoint.verdict` then propagated `DISAGREE`
-upward and the whole DSSAD-aligned level — the one Claim 1 rests on — read as
-broken in a document about what it can be trusted for.
-
-The comparison now consults the level's own quantum, and
+The comparison consults the level's own quantum, and
 [`docs/lossiness.md`](lossiness.md) carries the rule beside *Unanswerable* #4
 where the principle it specialises already lived: inside `TIME_TOL_S` is `AGREE`,
 outside it but inside the quantum is `COULD-NOT-EVALUATE`, and outside the
 quantum too is still `DISAGREE` — a level that misplaces an event by more than
-its own resolution *is* wrong, and that verdict has to stay reachable.
+its own resolution *is* wrong, and that verdict has to stay reachable. A level
+graded against a precision twenty times finer than it advertises is being asked a
+question it has already said it cannot take.
 
 So the measurement says a question phrased *when exactly* cannot be **put** to a
 record whose timestamps are seconds wide — not that such a record answers it
@@ -378,23 +359,20 @@ could fail either one on its own.
 
 Rows 2–4 — *did the policy exceed its declared bound*, *what did it declare*, *was
 the record tampered with* — are the asymmetry of §2 and the reason this project
-exists. **This section used to say nothing in the project could measure them, and
-that it would change by measurement when Milestone 3 landed. It landed, and this
-is that change.**
+exists.
 
-The artifact carries the records now: 120 declarations, 3,000 verdicts, 24 faults
+The artifact carries the records: 120 declarations, 3,000 verdicts, 24 faults
 and 3,120 chain records over 60 s of robot time. `reg.bench --resolution` prices
 four of them — `declared_bound`, `violations`, `verdicts`, `verify_chain` —
 against **the record stream the run emitted**, held in memory and never read back
 out of the artifact under test. Ground truth that rereads the artifact cannot
-fail, which is the same trap `first_envelope_intersection` is still excluded for
-(row 1: its only available ground truth is `reg.envelope` itself).
+fail, which is the same trap `first_envelope_intersection` is excluded for (row 1:
+its only available ground truth is `reg.envelope` itself).
 
-The resolution finding is not the one this section anticipated. **Layer A is very
-nearly resolution-independent**: no level coarsens the record tables, so
-`violations` and `verify_chain` are `AGREE` at ±1.0 s. The two that do degrade
-degrade for a Layer B reason — `declared_bound` and the clamped bound inside
-`verdicts` name regions that live in the `edge` and `envelope` tables the
+**Layer A is very nearly resolution-independent**: no level coarsens the record
+tables, so `violations` and `verify_chain` are `AGREE` at ±1.0 s. The two that do
+degrade degrade for a Layer B reason — `declared_bound` and the clamped bound
+inside `verdicts` name regions that live in the `edge` and `envelope` tables the
 occurrence view empties. The certifiable layer survives coarsening; what it says
 *about the scene* does not.
 
@@ -421,20 +399,20 @@ edge is Layer B and can be nothing else. Retagging `SEPARATION` as A to make a
 claim read better requires editing a test whose docstring says why not.
 
 One qualification, and it does not touch `SEPARATION`. Naming an entity is
-*sufficient* for Layer B; since issue #84 it is no longer *necessary*, because
-`HAS_ENVELOPE` names no entity and is still Layer B when the `Limits` it was
-computed from were perception-derived (§7). So that one edge type is the
-exception to "the layer never comes from the caller" — `open_edge` requires it to
-be stated and `layer_of` refuses to answer for it — and the exception runs in the
-conservative direction: an omission is a refusal, never an `A`.
+*sufficient* for Layer B and it is not *necessary*: `HAS_ENVELOPE` names no entity
+and is still Layer B when the `Limits` it was computed from were perception-derived
+(§7). So that one edge type is the exception to "the layer never comes from the
+caller" — `open_edge` requires it to be stated and `layer_of` refuses to answer for
+it — and the exception runs in the conservative direction: an omission is a
+refusal, never an `A`.
 
 ### 5.6 The condition under §5.1: which frame the question is asked in
 
 The one question in §4 that names a coordinate is row 1, and the `(x, y)` in it
-is a **room** coordinate. This document has never had to say so. For an arm bolted to the floor the
-robot's frame and the room's frame are one frame, and *the base is at the origin*
-is free — a mounting fact, true without anybody sensing anything, and not the
-output of a process that has failure modes.
+is a **room** coordinate. For an arm bolted to the floor the robot's frame and the
+room's frame are one frame, and *the base is at the origin* is free — a mounting
+fact, true without anybody sensing anything, and not the output of a process that
+has failure modes.
 
 Allow the base to drive and the two frames come apart. The envelope comes apart
 with them, and the split is the one this document already has:
@@ -452,12 +430,13 @@ argument that does not move is that a room-frame pose is a statement about the
 robot's relationship to things **outside** the robot: a map, landmarks, a frame
 somebody defined. That is where this project draws the boundary, and it is the
 same reason `SEPARATION` is Layer B in §5.5 despite being computed from the
-robot's own body. Even set-theoretic localization, which returns a set
-*guaranteed* to contain the true pose rather than a distribution over it, is
-guaranteed only under a map and bounded-error hypotheses, both exogenous — a
-guarantee conditioned on a Layer B input is a Layer B guarantee
-([`docs/prior-art.md`](prior-art.md) §25). No localizer of any kind moves the
-base pose to Layer A.
+robot's own body.
+
+Even set-theoretic localization, which returns a set *guaranteed* to contain the
+true pose rather than a distribution over it, is guaranteed only under a map and
+bounded-error hypotheses, both exogenous — a guarantee conditioned on a Layer B
+input is a Layer B guarantee ([`docs/prior-art.md`](prior-art.md) §25). No
+localizer of any kind moves the base pose to Layer A.
 
 **This is a loss, and stating it plainly is the point of this section.** Fewer
 questions are certifiable for a mobile robot than for a fixed arm — the same
@@ -475,16 +454,6 @@ Layer A question set:
   That is answerable from proprioception alone, and it is a narrower question
   than the one it replaces — it says what the machine could do and not where.
 
-A reader is entitled to ask why a project whose whole thesis is tagging evidence
-with the layer it depends on did not have this written down already. The answer
-is that **the fixed base hid the distinction by making the two frames one
-frame.** There was no pose to tag, no transform to attribute a layer to, and no
-line of code that had to mention which frame it was working in — so the
-coincidence read as an absence of the question rather than as an answer to it.
-That is the same shape as the two entries in §7 below: a dependency that arrives
-through a *value* or a *frame* rather than through a field name is one a
-field-name test cannot catch.
-
 **And the body-frame set is *what a protective field is*, which is not a claim
 to be one.** The Layer A row above has a name in the mobile-robot standards:
 under ISO 3691-4 and ANSI/A3 R15.08 a **protective field** is the region a
@@ -498,30 +467,21 @@ the output of a rated device, at a stated performance level, validated by a
 stated procedure, in a system somebody assessed. `reg`'s envelope is a `shapely`
 polygon computed by unrated Python from a simulator, and calling it a protective
 field would claim the rating along with the noun. **This document claims no
-performance level, no rating and no validation**, on the same terms §7 already
-states for the word *certifiable*: it means the failure modes are
-characterizable from proprioception, not that anybody has characterized,
-assessed or rated them. That is the same trap §12 of
-[`docs/prior-art.md`](prior-art.md) records for IEEE 7001's investigator
-ladder — *state that the project cannot be placed on it, and claim no level* —
-arriving a second time from a second standard, and it is recorded here because
-this is the file that says what may be claimed
+performance level, no rating and no validation**, on the same terms §7 states for
+the word *certifiable*: it means the failure modes are characterizable from
+proprioception, not that anybody has characterized, assessed or rated them.
+
+[`prior-art.md`](prior-art.md) §12 records the same trap for IEEE 7001's
+investigator ladder — *state that the project cannot be placed on it, and claim no
+level* — and this is the file that says what may be claimed
 ([`prior-art.md`](prior-art.md) §22).
 
-**What this does not do.** It reclassifies nothing. ~~Nothing in `reg/` models a
-robot pose~~, no figure in §3 is re-measured, no layer tag moves, and §5.1's
-verdict is correct for the artifact this document is normative over.
-[`docs/mobile-base.md`](mobile-base.md) is a design document with nothing built
-behind it, and [`docs/limitations.md`](limitations.md) §9 records the same
-condition against the present artifact. What changes here is what §5.1's verdict
-is understood to **rest on**, which is this document's job and not that one's.
-
-*Amended 2026-09-02, issue #150. The struck clause was true when this section
-was written and is not now: `reg.types.BasePose` exists (issue #149) and
-`StateFrame` carries one (issue #150). Everything else in the paragraph still
-holds, and §5.7 below is why — the type is Layer B, nothing constructs one, and
-no figure moved. The sentence is struck rather than deleted because what this
-document used to say is part of what it is for.*
+**What this does not do.** It reclassifies nothing: no figure in §3 is
+re-measured, no layer tag moves, and §5.1's verdict is correct for the artifact
+this document is normative over. What changes here is what that verdict is
+understood to **rest on**, which is this document's job and not
+[`docs/mobile-base.md`](mobile-base.md)'s — a design document with nothing built
+behind it.
 
 ### 5.7 The widening: what Layer A gained, and what it did not
 
@@ -530,16 +490,15 @@ argument has produced, recorded here because
 `tests/test_layer_boundary.py::test_propriostate_fields_are_exactly_the_allowed_set`
 will not let the two be separated: it pins `ProprioState`'s fields to an exact
 set and its failure message says *update `docs/sufficiency.md` in the same
-change or revert*. This is that update. *Issue #150, 2026-09-02;
-[`docs/mobile-base.md`](mobile-base.md) §7, Tier 2.*
+change or revert*.
 
 **What was added.** `ProprioState` held `{t, q, qd}` from the first commit in
-this repository. It now holds `base_vel` as well — a `BaseVelocity`, the base's
+this repository. It holds `base_vel` as well — a `BaseVelocity`, the base's
 **body-frame** linear velocity and yaw rate, the rates a wheel encoder measures.
-`StateFrame` gained the same field and, beside it, a `base_pose` holding the
-`BasePose` from issue #149. Neither field has a default; `None` means *this
-artifact records no base reading*, which is a could-not-evaluate and never a
-base that was found to be standing still.
+`StateFrame` carries the same field and, beside it, a `base_pose` holding a
+`BasePose`. Neither field has a default; `None` means *this artifact records no
+base reading*, which is a could-not-evaluate and never a base that was found to be
+standing still.
 
 **Why the velocity is Layer A.** By §5.6's own test, and not by a new one. *This
 base is moving 0.4 m/s forward and turning at 0.2 rad/s* is a statement about
@@ -551,57 +510,51 @@ it.
 **Why the pose is not, and the form the reason has to take.** A room-frame pose
 is a statement about the robot's relationship to something *outside* the robot,
 and that is where the boundary is drawn — the structural argument in §5.6, not
-the sensing-status one. The distinction is load-bearing here rather than
-rhetorical. Argued from sensing status, *the pose is Layer B* is a claim about
-2026 that a rated localizer would answer, and the next person to read this
-paragraph would be entitled to add the field once one existed. Argued
-structurally, it does not move: no localizer of any kind — including a
-set-membership estimator returning a set *guaranteed* to contain the true pose,
-whose guarantee is still conditional on a map and on bounded-error hypotheses,
-both exogenous ([`prior-art.md`](prior-art.md) §25) — puts `(x, y, θ)` in the
-room on the Layer A side. So the pose lives on `StateFrame`, which is
-mixed-layer by construction, and `StateFrame.proprio()` drops it exactly as it
-drops `human_pos`.
+the sensing-status one. Which form the reason takes is load-bearing rather than
+rhetorical: argued from sensing status, the next person to read this paragraph
+would be entitled to add the field once a rated localizer existed.
+
+Argued structurally, it does not move, and §5.6's argument puts no localizer of
+any kind — set-membership estimators included — on the Layer A side. So the pose
+lives on `StateFrame`, which is mixed-layer by construction, and
+`StateFrame.proprio()` drops it exactly as it drops `human_pos`.
 
 **The enforcement is an allowlist, because the word check cannot do this one.**
 `ProprioState` is kept clear of the world by *field name*, against
 `WORLD_WORDS` — `human`, `obstacle`, `entity` and their kind. None of `x`, `y`,
 `theta`, `base_x` or `base_pose` is in that list and none can be: a pose is not
 a thing in the world, it is the robot's relationship to one, so it arrives under
-names that read as innocent as `qd` does. The allowlist is the whole guard, and
-`tests/test_layer_boundary.py` feeds it a state built to offend — a pose spelled
-out as three floats, and a `BasePose` wearing an allowed field name — and
-requires it to refuse both. This is the third distinct way a dependency has got
-past a field-name test in this document: through a **value** (§7, `Limits`),
-through a **frame** (§5.6), and now through a **name that is not a world word**.
+names that read as innocent as `qd` does.
 
-**What it does not do.** Nothing reads `base_vel`. The envelope is still
-computed for a base bolted to the origin, `reg.enforce.computed_bound` is still
-finite because of it, no bound changed, no layer tag moved, and every figure in
-§3 and in [`retention.md`](retention.md) is the number it was — the raw stream
-schema deliberately did not grow a base column, because those bytes are the
-denominator of Claim 1 and a new column would also need a
-`reg.bench.COLUMN_RULES` entry naming its layer
+The allowlist is the whole guard, and `tests/test_layer_boundary.py` feeds it a
+state built to offend — a pose spelled out as three floats, and a `BasePose`
+wearing an allowed field name — and requires it to refuse both.
+
+**What it does not do.** Nothing reads `base_vel` for a *layer*;
+`reg.envelope.base_motion_bounds` reads it into a bound (§5.9). The envelope is
+still computed for a base bolted to the origin, `reg.enforce.computed_bound` is
+still finite because of it, no bound changed, no layer tag moved, and every figure
+in §3 and in [`retention.md`](retention.md) is the number it was — the raw stream
+schema has no base column, because those bytes are the denominator of Claim 1 and
+a new column would also need a `reg.bench.COLUMN_RULES` entry naming its layer
 ([`mobile-base.md`](mobile-base.md) §5). What moved is the **boundary**, which is
 the only thing this section is about. The geometry is Tier 3.
 
 ### 5.8 The pose in the artifact: what §5.6 costs once the record can hold one
 
 §5.6 is an argument about frames and §5.7 is the one change to a *type* it
-produced. This is the one change to the **artifact**, and it is the decision
-§5.6 said was Tier 3's to make in the open. *Issue #166, 2026-09-02;
-[`docs/mobile-base.md`](mobile-base.md) §4 item 4 and §7, Tier 3.*
+produced. This is the one change to the **artifact**, and it is the decision §5.6
+said was Tier 3's to make in the open.
 
-**What was added.** `robot_config` gained `base_pose` — `x,y,theta` in the room,
-as text, with its `PoseSource` in the column beside it — and `meta` gained
+**What was added.** `robot_config` carries `base_pose` — `x,y,theta` in the room,
+as text, with its `PoseSource` in the column beside it — and `meta` carries
 `base_frame`, the frame the base was bolted in for a run whose base does not
 move. Both are optional and neither has a default: `NULL` says *this artifact
 records no pose for this configuration*, which is a could-not-evaluate and never
 a base at the origin, and the two statements are exclusive, because *bolted here*
-and *localized there* are different claims about one run. `SCHEMA_VERSION` was
-bumped to 10 for it.
+and *localized there* are different claims about one run.
 
-**Why the record had to hold it, stated as the cost of not holding it.** Two
+**Why the record has to hold it, stated as the cost of not holding it.** Two
 things in the artifact were silently conditional on the base being bolted down,
 and both would have answered rather than refused:
 
@@ -615,8 +568,8 @@ and both would have answered rather than refused:
   It was the origin by there being no other possibility, which is a fact about the
   code that wrote the artifact and not about the artifact.
 
-Both are now enforced rather than argued: a retained radius requires the config
-that states its frame, and `envelope_at` refuses a posed configuration instead of
+Both are enforced rather than argued: a retained radius requires the config that
+states its frame, and `envelope_at` refuses a posed configuration instead of
 recomputing it. [`docs/lossiness.md`](lossiness.md) carries the restated
 recomputation clause and the arithmetic showing the frame is not a third term in
 the distance error budget.
@@ -625,129 +578,86 @@ the distance error budget.
 artifact, and everything resting on it is Layer B.** Letting a room-frame pose
 into the record is letting the perceiver in, so the question is not whether the
 pose is Layer B — §5.6 settles that structurally, on both `PoseSource` values —
-but what happens to the edges over it. An edge resting on a posed configuration
-depends on something outside the robot **while naming no `Entity`**, and that is
-the case none of this project's three existing guards can see: not the word check
-(`base_pose`, `x`, `y`, `theta` are not world words and cannot be made into
-them), not `EDGE_SPECS` (the layer is a property of the type), and not
-`Limits.source` (the bounds are still a datasheet's). `reg.store.open_edge` reads
-the pose off the endpoint and refuses the `A`:
+but what happens to the edges over it.
+
+An edge resting on a posed configuration depends on something outside the robot
+**while naming no `Entity`**, and that is the case none of this project's three
+existing guards can see: not the word check (`base_pose`, `x`, `y`, `theta` are
+not world words and cannot be made into them), not `EDGE_SPECS` (the layer is a
+property of the type), and not `Limits.source` (the bounds are still a
+datasheet's). `reg.store.open_edge` reads the pose off the endpoint and refuses
+the `A`:
 
 | edge type | over a bolted config | over a posed config |
 |---|---|---|
-| `HAS_ENVELOPE` — layer stated by the caller (§7, issue #84) | `A` or `B` by `Limits.source` | **`B`**, and an `A` is refused naming the pose |
+| `HAS_ENVELOPE` — layer stated by the caller (§7) | `A` or `B` by `Limits.source` | **`B`**, and an `A` is refused naming the pose |
 | `DECLARED`, `ADJUDICATED`, `ENFORCED`, `FOLLOWS` — layer fixed at `A` by type | `A` | **refused**, not relabelled |
 
 **Why the second row refuses instead of turning `B`.** §2's asymmetry — *the four
 attestation edges are Layer A and not one of them names an `Entity`* — is the
 half of this document worth the trouble, and relabelling those edges is a change
 to what the project claims rather than a tag on a row. Nothing forces that
-decision yet: no fixture is mobile, `reg.enforce.Enforcer` refuses to construct
-for a driven base (issue #164), and a run whose base moved can retain its regions
-rather than bounds over a base that moved. So the refusal is a
-could-not-evaluate held open on purpose, and the decision stays available to
-whoever brings the first mobile fixture — which is the right place to take it,
-with something in hand that the answer would be about.
+decision: no fixture is mobile, `reg.enforce.Enforcer` refuses to construct for a
+driven base, and a run whose base moved can retain its regions rather than bounds
+over a base that moved.
 
-**And this is the fourth distinct door a dependency has come through.** §7 records
-two: through a **value** (`Limits`, issue #84) and through a **frame** (§5.6).
-§5.7 added a third, a **name that is not a world word**. This is the fourth and
-it is the first that reaches the *record* rather than a type — through a
-**column** — and it is worth writing down that the pattern has not varied: every
-one of them arrived somewhere a field-name test does not look, and every one was
-caught by a check that reads what the thing actually depends on.
+So the refusal is a could-not-evaluate held open on purpose, and the decision
+stays available to whoever brings the first mobile fixture — which is the right
+place to take it, with something in hand that the answer would be about.
 
-**What it did not do, as of issue #166.** Nothing in `reg/` wrote a posed
-configuration. The raw stream had no base columns (`reg.stream`), the eleven
-fixtures are bolted down, `meta[base_frame]` on every artifact this repository
-built was the origin written out, and every existing artifact held exactly the
-rows it held before. No layer tag on any edge in any fixture changed and
-`ProprioState` was not touched. What moved is what the record is **able** to say,
-and what it is now refused from saying quietly.
+**`reg.graph.build` writes a posed configuration, on the terms the table above
+sets.** A stream whose frames state a base pose builds; every `robot_config` row
+it produces states that pose with its `PoseSource`; `meta[base_frame]` is absent
+for such a run, because the two statements are exclusive; and every
+`HAS_ENVELOPE` edge over a posed configuration is `B` — the first row of the
+table, followed by the producer rather than discovered by the guard, which stays
+where it is and stays the guard. The second row is untouched: no attestation edge
+is written over a posed configuration, so the refusal above is still held open and
+no decision about §2's asymmetry has been taken.
 
-**And since issue #191 (2026-09-05) `reg.graph.build` does write one, on the
-terms the table above already set.** A stream whose frames state a base pose
-builds; every `robot_config` row it produces states that pose with its
-`PoseSource`; `meta[base_frame]` is absent for such a run, because the two
-statements are exclusive; and every `HAS_ENVELOPE` edge over a posed
-configuration is `B` — the first row of the table, followed by the producer
-rather than discovered by the guard, which stays where it is and stays the
-guard. The second row is untouched: no attestation edge is written over a posed
-configuration, so the refusal held open below is still held open and no decision
-about §2's asymmetry has been taken. The eleven fixtures are still bolted down,
-`meta[base_frame]` on every artifact this repository *builds today* is still the
-origin written out, no layer tag in any of them changes, and no published figure
-moved. What #191 added beside the write is the retention that makes it honest:
-`GEOMETRY_RETENTION` keeps the polygon on every posed configuration, because
-`envelope_at` cannot recompute one — [`lossiness.md`](lossiness.md) *Discarded*
-#9 and [`mobile-base.md`](mobile-base.md) §7 Tier 4.
+Beside the write is the retention that makes it honest: `GEOMETRY_RETENTION`
+keeps the polygon on every posed configuration, because `envelope_at` cannot
+recompute one — [`lossiness.md`](lossiness.md) *Discarded* #9 and
+[`mobile-base.md`](mobile-base.md) §7 Tier 4. The eleven fixtures in this
+repository are bolted down, so `meta[base_frame]` on every artifact it builds is
+the origin written out and no layer tag in any of them is a posed one.
 
-**The byte counts did move, and §3's table above is the re-measurement.** Two
-nullable columns cost one SQLite record-header byte per `robot_config` row that
-exists, written into or not, so the file grew by 2,048 B of schema and index at
-the `occurrence` level and by 7,168 B at the two finer ones — +0.20% to +0.29%.
-Issue #166 asked for no published figure to move; that part could not be met, and
-the figures were re-measured with `python -m reg.bench --resolution --seed 0` and
-republished across this document, [`retention.md`](retention.md),
-[`sensor-baseline.md`](sensor-baseline.md), [`plan.md`](plan.md),
-[`lossiness.md`](lossiness.md) and both READMEs rather than left to drift.
-[`lossiness.md`](lossiness.md) *Retained* #8 carries the attribution.
+### 5.9 The provenance on the velocity
 
-### 5.9 The provenance on the velocity: the decision issue #156 forced
+§5.7 admitted `BaseVelocity` to Layer A on exactly the terms `qd` is admitted on,
+and left it carrying no provenance field. This section is the decision that
+deferred.
 
-§5.7 admitted `BaseVelocity` to Layer A and recorded, in the type's own
-docstring, that it carries no provenance field — on the argument that it is
-admitted on exactly the terms `qd` is, that `qd` carries none either, and that
-tagging the newer of the two while leaving the older untagged would be a wider
-change than the widening. That was a scope call and it was a fair one. This
-section is the decision it deferred. *Issue #156, 2026-09-03;
-[`docs/limitations.md`](limitations.md) §11.*
+**A `BaseVelocity` filled from a perceiver is not Layer A, and the type says which
+case it is in.** `reg.types.VelocitySource` is required on every `BaseVelocity`,
+with no default and no inference — `PROPRIOCEPTIVE` for a rate measured on the
+robot, `DERIVED` for one estimated from something perceived — on `Limits.source`'s
+pattern and for `Limits.source`'s reason.
 
-**The decision. A `BaseVelocity` filled from a perceiver is not Layer A, and the
-type now says which case it is in.** `reg.types.VelocitySource` is required on
-every `BaseVelocity`, with no default and no inference — `PROPRIOCEPTIVE` for a
-rate measured on the robot, `DERIVED` for one estimated from something perceived
-— on `Limits.source`'s pattern and for `Limits.source`'s reason.
-
-**Why the deferral did not survive contact with the asymmetry.** The
-justification rested on `qd` being the precedent, and the two are not the same
-case:
-
-* The *quantity* is Layer A in both. *This base is moving 0.4 m/s forward and
-  turning at 0.2 rad/s* names no map, no landmark and no frame anybody defined,
-  exactly as a joint rate does not. §5.7's argument stands and is not withdrawn.
-* The *value* is where they part. **Nothing plausibly measures a joint velocity
-  by looking at the room, and something plausibly measures a base velocity that
-  way.** Visual and visual-inertial odometry are ordinary on a real vehicle; a
-  `BaseVelocity` filled from one is a perceiver's output wearing a Layer A tag,
-  and no check that inspects field *names* can see it — which is §7's first
-  bullet about `Limits`, verbatim, one type over.
-
-So the gap was not symmetric with the precedent it was justified by, and it is
-the justification that failed rather than the omission that was careless.
+**The quantity and the value part company.** *This base is moving 0.4 m/s forward
+and turning at 0.2 rad/s* names no map, no landmark and no frame anybody defined,
+exactly as a joint rate does not, so the *quantity* is Layer A in both cases and
+§5.7's argument stands. The *value* is where they part: **nothing plausibly
+measures a joint velocity by looking at the room, and something plausibly measures
+a base velocity that way.** Visual and visual-inertial odometry are ordinary on a
+real vehicle; a `BaseVelocity` filled from one is a perceiver's output wearing a
+Layer A tag, and no check that inspects field *names* can see it — which is §7's
+first bullet about `Limits`, verbatim, one type over.
 
 **What this is not: a graded integrity attribute.** §7 records that a two-value
 provenance is not how assurance is actually argued, and that a tag plus an
-integrity attribute was considered and rejected for scope under issue #84. This
-section does not reopen that. A wheel encoder still needs ISO 13849 cat-3 dual
-channel before it carries a safety claim and still lands in `PROPRIOCEPTIVE`; a
-fused wheel/IMU/VO estimator — which is what a real base runs — is one number
-with three provenances and lands in `DERIVED` whole, because a fused value
-inherits the taint of its weakest input. The binary records *which case an
+integrity attribute was considered and rejected for scope; this section does not
+reopen that. A fused wheel/IMU/VO estimator — which is what a real base runs — is
+one number with three provenances and lands in `DERIVED` whole, because a fused
+value inherits the taint of its weakest input. The binary records *which case an
 artifact is in*, and that is all it does.
 
-**`qd` stays untagged, and here is the reason, since it is the precedent that
-justified the omission.** It is a **deployment** argument and not a structural
-one: joint state comes off the actuator's own encoders on every arm this project
-would run on, so no ordinary system fills `qd` from a perceiver, while an
-ordinary system fills a base velocity from one. By this document's own standard
-that is the weaker kind of argument — §5.6 prefers the structural form precisely
-because a sensing-status claim is a claim about 2026 that somebody could answer
-by building something — and a visual joint-state estimator would answer it. So
-`qd`'s untagged status is a **residual**, not a settled question, and
-[`limitations.md`](limitations.md) §11 carries it in the form that file's entries
-take. What makes it tolerable meanwhile is the likelihood asymmetry above and
-nothing stronger.
+**`qd` stays untagged, and that is a residual rather than a settled question.**
+The argument for leaving it is a **deployment** argument and not a structural one,
+which by this document's own standard is the weaker kind — §7's third bullet
+states it and [`limitations.md`](limitations.md) §11 carries it as an entry. What
+makes it tolerable meanwhile is the likelihood asymmetry above and nothing
+stronger.
 
 **What was built.** `BaseVelocity.source`, required; `reg.types.VelocitySource`,
 two members; `base_vel_source` in the raw stream's optional velocity block, so a
@@ -756,44 +666,28 @@ rather than a substituted member; and a `reg.bench.COLUMN_RULES` entry, because 
 column with no rule is a could-not-evaluate the classifier is required to raise
 on.
 
-**What was not built, and it is the part a reader should hold this section to.**
+**What remains unbuilt, and it is the part a reader should hold this section to.**
 Nothing maps a `VelocitySource` to a `Layer`. `reg.envelope.envelope_layer`
-still decides the `HAS_ENVELOPE` tag from `Limits.source` alone, so an outer
-envelope computed from a `DERIVED` base velocity — and
-`reg.envelope.base_motion_bounds` reads `state.base_vel` into the bound every
-VETO for a mobile robot rests on (issue #163) — is still tagged from its bounds
-only. **What the artifact gained is that it records the case; what it did not
-gain is the tag following it.** [`limitations.md`](limitations.md) §11 is that
-entry, and the reason it is an entry rather than a line of code is that the tag
-is a property of an *edge*, no fixture in this repository is mobile, and
-`reg.enforce.Enforcer` refuses to construct for a driven base at all (issue
-#164) — so the mapping would be written, tested against nothing, and first
-exercised by whoever brings the first mobile fixture. That is the same
-could-not-evaluate held open on purpose that §5.8 describes for the attestation
-edges, and for the same reason.
+decides the `HAS_ENVELOPE` tag from `Limits.source` alone, so an outer envelope
+computed from a `DERIVED` base velocity — and `reg.envelope.base_motion_bounds`
+reads `state.base_vel` into the bound every VETO for a mobile robot rests on — is
+tagged from its bounds only. **What the artifact gained is that it records the
+case; what it has yet to gain is the tag following it.**
 
-**No published figure moves.** The velocity block is optional and no fixture in
-this repository records a base at all, so `expected_header(2, 3)` is the 24
-columns Claim 1 is measured on, byte for byte; the gzipped baseline, `265 GB`,
-`~40x` and every figure in §3 and [`retention.md`](retention.md) are the numbers
-they were. What changed is a required argument to a constructor no fixture calls
-and one column in a header no fixture writes.
-
-**The fifth door, and it is the first one that had already been described.** §5.8
-counts four ways a dependency has got past a field-name check here: through a
-**value**, through a **frame**, through a **name that is not a world word**, and
-through a **column**. This is the first, again — and the interesting part is that
-it arrived in the type Layer A had just been widened for, in a change that cited
-the very bullet describing it. A door that is documented is not thereby closed.
-
----
+[`limitations.md`](limitations.md) §11 is that entry, and the reason it is an
+entry rather than a line of code is that the tag is a property of an *edge*, no
+fixture in this repository is mobile, and `reg.enforce.Enforcer` refuses to
+construct for a driven base at all — so the mapping would be written, tested
+against nothing, and first exercised by whoever brings the first mobile fixture.
+That is the same could-not-evaluate held open on purpose that §5.8 describes for
+the attestation edges, and for the same reason.
 
 ---
 
 ## 6. What a real deployment changes
 
 **Here, Layer B is simulator ground truth, and it is therefore perfect.** The
-human's position in the raw stream is the position the simulator used to move it.
+human's position in the raw stream is the position the simulator moved it to.
 There is no detection, no association, no latency, no occlusion, and no false
 negative. Every Layer B agreement measured in §3 was measured against a perceiver
 that cannot be wrong, which is exactly the perceiver a real system does not have.
@@ -818,10 +712,10 @@ have to establish, at minimum:
   contact* with total confidence;
 - and evidence, retained, that the stack running at the time was the one that was
   validated. DSSAD's `R157SWIN` element is the shape of that requirement, and
-  **this project does not meet it** (issue #109): what the occurrence layer
-  carries is `recorder_version`, the build of `reg` that was *watching* and the
-  envelope parameters it watched with. That is the evidence tool, not the stack
-  under investigation, and it is not offered as the element
+  **this project does not meet it**: what the occurrence layer carries is
+  `recorder_version`, the build of `reg` that was *watching* and the envelope
+  parameters it watched with. That is the evidence tool, not the stack under
+  investigation, and it is not offered as the element
   ([`prior-art.md` §9](prior-art.md)). A real deployment has to bind a policy
   build, as a required caller-supplied input; a simulator with no policy vendor
   has nothing to bind, and filling the column anyway would be a fiction.
@@ -872,12 +766,11 @@ document's asymmetry lives.
   frames is recomputed rather than stored and that recomputation assumes the same
   code and the same shapely ([`docs/limitations.md`](limitations.md) §1), and both
   chain keys live in one process — *the structure of non-repudiation, not
-  non-repudiation* ([`docs/plan.md`](plan.md) Phase 6). Milestone 3 landed and did
-  not change that last one: `reg.chain.Keyring` holds both roles, `reg.chain`'s
-  own honesty note says so, and the independence the pattern needs is an
-  enforcement key in hardware the policy vendor cannot reach. **Still holds, in
-  the present tense.** "Certifiable" here means *its failure modes are
-  characterizable from proprioception*, not *they have been characterized*.
+  non-repudiation* ([`docs/plan.md`](plan.md) Phase 6). `reg.chain.Keyring` holds
+  both roles, `reg.chain`'s own honesty note says so, and the independence the
+  pattern needs is an enforcement key in hardware the policy vendor cannot reach.
+  "Certifiable" here means *its failure modes are characterizable from
+  proprioception*, not *they have been characterized*.
 - **Not that a Layer A envelope is Layer A whatever its `Limits` are.** The
   envelope has two inputs and only one of them is kept out of the world by
   structure. `ProprioState` names no entity and cannot, but `Limits` names none
@@ -887,7 +780,7 @@ document's asymmetry lives.
   a function of the measured separation distance, so `qd_max` comes from a
   perceiver and everything integrated under it inherits that perceiver. A
   field-name test cannot catch a taint that arrives in a number. **The artifact
-  now records which case it is in**: `Limits.source` is required with no default,
+  records which case it is in**: `Limits.source` is required with no default,
   `reg.envelope.envelope_layer` maps it to a layer, and the `HAS_ENVELOPE` edge
   is tagged from that — proprioceptive bounds give a Layer A edge, derived bounds
   give a Layer B one, and `meta['limits_source']` carries the provenance so a
@@ -895,25 +788,22 @@ document's asymmetry lives.
   a **could-not-evaluate**, not a proprioceptive one: nothing reads its absence as
   the clean case. What this closes is the *mislabelling*; an SSM deployment's
   envelopes are as dependent on perception as they always were, and the change is
-  that the dependence is now in the column Claim 3 queries instead of nowhere.
-  *Recorded 2026-08-21, issue #84.*
+  that the dependence is in the column Claim 3 queries instead of nowhere.
 - **Not that every Layer A value records where it came from.** Two do:
-  `Limits.source` since issue #84, and `BaseVelocity.source` since issue #156
-  (§5.9). `t`, `q` and `qd` do not, and the reason `qd` does not is a
-  **deployment** argument rather than a structural one — joint state comes off
-  the actuator's own encoders on every arm this project would run on, so nothing
-  ordinary fills it from a perceiver, whereas visual odometry ordinarily fills a
-  base velocity. By §5.6's own standard that is the weaker kind of argument: a
-  claim about what exists in 2026, which a visual joint-state estimator would
-  answer. It is recorded as a residual in [`limitations.md`](limitations.md) §11
-  and not treated as settled. **And a provenance the artifact records is not yet
-  a provenance the artifact acts on**: nothing maps a `VelocitySource` to a
-  layer, so an outer envelope computed from a `DERIVED` base velocity still
-  carries the tag its `Limits` earned. What issue #156 closed is the
-  *indistinguishability* — a rate whose provenance nobody stated can no longer
-  be told apart from one somebody did — and what it left open is the tag
-  following the value, which §5.9 states and §11 prices. *Recorded 2026-09-03,
-  issue #156.*
+  `Limits.source` and `BaseVelocity.source` (§5.9). `t`, `q` and `qd` do not, and
+  the reason `qd` does not is a **deployment** argument rather than a structural
+  one — joint state comes off the actuator's own encoders on every arm this
+  project would run on, so nothing ordinary fills it from a perceiver, whereas
+  visual odometry ordinarily fills a base velocity. By §5.6's own standard that is
+  the weaker kind of argument: a claim about what exists in 2026, which a visual
+  joint-state estimator would answer. It is recorded as a residual in
+  [`limitations.md`](limitations.md) §11 and not treated as settled. **And a
+  provenance the artifact records is not yet a provenance the artifact acts on**:
+  nothing maps a `VelocitySource` to a layer, so an outer envelope computed from a
+  `DERIVED` base velocity still carries the tag its `Limits` earned. What the tag
+  closes is the *indistinguishability* — a rate whose provenance nobody stated can
+  be told apart from one somebody did — and what it leaves open is the tag
+  following the value, which §5.9 states and §11 prices.
 - **Not that a two-value provenance is how assurance is actually argued.** The
   binary above matches this project's two layers and it is a simplification, said
   out loud here because the alternative was considered rather than unseen. An
@@ -925,7 +815,7 @@ document's asymmetry lives.
   one more column, and the taxonomy becomes legible to people who already work
   this way. It was rejected for **scope, not for correctness**: it rewrites this
   document, and this document is normative for what the project may claim, so it
-  is a decision and not an implementation. *Issue #84.*
+  is a decision and not an implementation.
 - **Not that a reachability answer is Layer A whatever frame it is asked in.**
   §5.6 is the whole argument; what belongs here is the part this document
   declines to settle. The room-frame question is Layer B for a mobile robot and
@@ -937,18 +827,16 @@ document's asymmetry lives.
   horizon**, and this artifact has `A` and `B` and nothing else: the schema
   carries `CHECK (layer IN ('A', 'B'))`, `store.layer_of` refuses a type it has
   no rule for, and there is no third value to reach for. Recorded, not resolved.
-  When it is resolved, **issue #84's precedent is the shape it should take** — a
-  two-value provenance tag beside `LimitSource`, required with no default and
-  with no inference, the simplification stated out loud, and the drift horizon
-  recorded rather than modelled — and not the graded integrity attribute the
-  bullet above rejects for scope. Either way it is a change to this document
-  before it is a change to a type. *Recorded 2026-09-01, issue #139;
-  [`docs/mobile-base.md`](mobile-base.md) §2.2.* **Still recorded and still not
-  resolved after issue #166**, which is worth saying because the record now holds
-  poses: `robot_config.base_pose_source` stores which of the two provenances a
-  pose has, and neither of them buys a third layer value. A `DEAD_RECKONED` pose
-  taints an edge exactly as a `LOCALIZED` one does (§5.8), which is the honest
-  answer under a binary and is not the same as the drift horizon being modelled.
+  When it is resolved, **`Limits.source`'s precedent is the shape it should
+  take** — a two-value provenance tag, required with no default and with no
+  inference, the simplification stated out loud, and the drift horizon recorded
+  rather than modelled — and not the graded integrity attribute the bullet above
+  rejects for scope. Either way it is a change to this document before it is a
+  change to a type. The record holds poses now and neither `PoseSource` value buys
+  a third layer value: a `DEAD_RECKONED` pose taints an edge exactly as a
+  `LOCALIZED` one does (§5.8), which is the honest answer under a binary and is
+  not the same as the drift horizon being modelled.
+  [`docs/mobile-base.md`](mobile-base.md) §2.2 works out the design.
 - **Not that the layer tag makes a Layer B answer safe to quote.** It makes it
   legibly conditional. Quoting a Layer B answer without its condition is the
   failure this document exists to prevent, which is why the strength column says
@@ -958,31 +846,16 @@ document's asymmetry lives.
   COULD-NOT-EVALUATE; it holds no substrate at all for rows 1, 7 and 8, whose
   answers live in the `edge` and `envelope` tables it empties; and row 9 is
   `EXCLUDED` from the curve entirely, because a threshold test needs a threshold
-  and nothing supplies one. *Amended 2026-08-21: this bullet used to read "It is
-  sufficient for rows 5 and 6, refuses row 10, answers row 11 outside tolerance,
-  and holds no substrate at all for rows 1, 7 and 8." Two things had moved under
-  it. Row 11 is a refusal now, not an answer outside tolerance — issue #61 stopped
-  grading a level against a precision twenty times finer than it advertises
-  (§5.3). And rows 2, 3 and 4 were absent because nothing had measured them; two
-  of the three are now the coarsest level's strongest answers.* "How coarse can
-  evidence get" has a measured answer and the answer is *it depends on the
-  question* — which is the taxonomy, not a disappointment.
+  and nothing supplies one. "How coarse can evidence get" has a measured answer
+  and the answer is *it depends on the question* — which is the taxonomy, not a
+  disappointment.
+- **Not that the measured chain attests to anything.** It was walked under
+  `reg.bench.measurement_keyring`, which is derived from the run seed and **attests
+  to nothing** — it shows `verify_chain` survives coarsening, not that anything was
+  attested — and both keys are still in one process.
 - **Not a novelty claim about obstacle-independent reachability.** See
   [`docs/prior-art.md` §4](prior-art.md): that is standard practice, and this
   document borrows it rather than announcing it.
-- **~~Not a completed Claim 3 for the attestation half.~~ Retired by measurement
-  on 2026-08-20 (issue #63); recorded here 2026-08-21.**
-  This bullet read: *"Rows 2–4 are structure awaiting measurement, and they say
-  so."* They no longer say so, and the sentence is kept rather than deleted
-  because what this document used to claim is part of what it is for. Milestone 3
-  landed the records and issue #63 measured them: §4 marks rows 2–4 *certifiable,
-  and measured*, §5.4 prices four attestation questions against the record stream
-  the run emitted, and the curve in §3 puts `violations` and `verify_chain` at
-  AGREE on every level. What replaces the bullet is narrower and lives above it:
-  the measured chain was walked under `reg.bench.measurement_keyring`, which is
-  derived from the run seed and **attests to nothing** — it shows `verify_chain`
-  survives coarsening, not that anything was attested — and both keys are still in
-  one process.
 - **Not that every row's agreement has been measured.** Four rows carry
   **unmeasured** as an agreement verdict in §4, and for two distinct reasons. Rows
   1, 7 and 8 are unmeasured *deliberately*: their only available ground truth is
@@ -1043,3 +916,152 @@ occurrence resolution 1.0 s.
   rows 2–4 rest on.
 - [`docs/retention.md`](retention.md) — **What replaces it**, the resolution
   question, and the measured curve this document prices its question set against.
+
+---
+
+## Why
+
+Nothing below is normative. It is the rationale for the sections above — which
+issue each arrived with, and what each was weighed against. A boundary is worth
+least once nobody remembers which side of it something used to be on.
+
+### When each section was added
+
+| section | issue | dated in this file as |
+|---|---|---|
+| The document, for Milestone 2 | #37 | 2026-08-19 |
+| §3's curve and §4's rows 2–4, re-measured after Milestone 3 | #59, #60, #61, #63 | 2026-08-20 |
+| §7 reconciled against the measured tables | #63 | 2026-08-21 |
+| §7's `Limits` bullet, and `HAS_ENVELOPE`'s stated layer | #84 | 2026-08-21 |
+| §2's third bound and §5.1's frame condition; §5.6 | #139 | 2026-09-01 |
+| §5.7, the widening of Layer A | #150 | 2026-09-02 |
+| §5.8, the pose in the artifact | #166 | 2026-09-02 |
+| §5.9, the provenance on the velocity | #156 | 2026-09-03 |
+| §5.8's second half, the pose written by `reg.graph.build` | #191 | 2026-09-05 |
+
+### §3's curve was wrong in every column until 2026-08-20
+
+The table predated issues #59, #60 and #61. It measured an artifact holding **no
+Layer A at all** — `bench._measure` never passed `records=` — so its byte counts
+were a third of the truth and it could price only four questions; and it graded
+every level against `TIME_TOL_S` without consulting the level's own quantum, so a
+±1.0 s level that answered `time_of_closest_approach` within 0.02 s was recorded
+as **DISAGREE** for it. Both were fixed. The `2.5x` ratio beside the table used to
+read twelve, because the artifact was missing the layer that does not coarsen.
+
+### §2 and §4 — what Milestone 3 changed
+
+The asymmetry was a claim about **structure** only when this document was written
+in Milestone 2: `reg.declare` and `reg.chain` existed but no artifact carried a
+declaration, a verdict or a chain, so rows 2–4 read *unmeasured*. Of the questions
+Milestone 2 could be asked — rows 1 and 5–11 — exactly one was Layer A, the one
+saying what the machine could have done rather than what happened to anyone. That
+imbalance is what Milestone 3 corrected.
+
+### §5.3 — a verdict that read DISAGREE
+
+`time_of_closest_approach` at the occurrence level read `DISAGREE` until issue
+#61, and the paragraph that stood in §5.3 argued the verdict was fine because
+"the occurrence layer never promised better than ±1.0 s." That argument is right
+and it is an argument against the verdict, not for it: the check was asking a
+question the level had already said it could not take. `ResolutionPoint.verdict`
+propagated `DISAGREE` upward, so the whole DSSAD-aligned level — the one Claim 1
+rests on — read as broken in a document about what it can be trusted for.
+
+### §5.4 — the finding was not the one the section anticipated
+
+§5.4 used to say nothing in the project could measure rows 2–4, and that it would
+change by measurement when Milestone 3 landed. It landed. What it found is that
+Layer A is very nearly resolution-independent, and that the two attestation
+questions which do degrade degrade for a Layer B reason — the opposite shape from
+the degradation the section had expected to record.
+
+### §5.6 — why the distinction was not written down earlier
+
+A reader is entitled to ask why a project whose whole thesis is tagging evidence
+with the layer it depends on did not have the frame condition written down
+already. The answer is that **the fixed base hid the distinction by making the two
+frames one frame.** There was no pose to tag, no transform to attribute a layer
+to, and no line of code that had to mention which frame it was working in — so the
+coincidence read as an absence of the question rather than as an answer to it.
+
+`reg/store.py`'s strongest form of the asymmetry — *"None of it needs to know
+where anybody is standing"* — was resting on that coincidence, and until issue
+#139 nothing in this document said so.
+
+### §5.6 — the clause struck on 2026-09-02
+
+*What this does not do* read **"~~Nothing in `reg/` models a robot pose~~, no
+figure in §3 is re-measured, no layer tag moves…"** when §5.6 was written. The
+struck clause was true then and is not now: `reg.types.BasePose` exists (issue
+#149) and `StateFrame` carries one (issue #150). Everything else in the paragraph
+still holds, and §5.7 is why — the type is Layer B, nothing constructs one, and no
+figure moved. It is recorded rather than deleted because what this document used
+to say is part of what it is for.
+
+### The five doors, and none of them was a field name
+
+Each widening in §5.6–§5.9 arrived somewhere a field-name test does not look, and
+each was caught by a check that reads what the thing actually depends on:
+
+1. a **value** — `Limits`, perception-derived bounds under SSM (issue #84, §7);
+2. a **frame** — a room-frame pose under a body-frame envelope (§5.6);
+3. a **name that is not a world word** — `base_pose` on a state (issue #150, §5.7);
+4. a **column** — a posed configuration under an edge (issue #166, §5.8), the
+   first that reaches the *record* rather than a type;
+5. the **value** again — a `BaseVelocity` filled by visual odometry (issue #156,
+   §5.9), which arrived in the type Layer A had just been widened for, in a change
+   that cited the very bullet describing it. A door that is documented is not
+   thereby closed.
+
+### §5.8 — what the pose in the record cost, and what it did not touch
+
+Two nullable columns cost one SQLite record-header byte per `robot_config` row
+that exists, written into or not, so the file grew at every level. Issue #166
+asked for no published figure to move; that part could not be met, and §3's table
+is the re-measurement. [`lossiness.md`](lossiness.md) *Retained* #8 carries the
+byte-level attribution and the command that measures it.
+
+Nothing in `reg/` wrote a posed configuration until issue #191. As of #166 the raw
+stream had no base columns, every existing artifact held exactly the rows it held
+before, and no layer tag on any edge in any fixture changed; what moved was what
+the record is **able** to say. #191 then wrote one, on the terms §5.8's table had
+already set, and no published figure moved with it.
+
+### §5.9 — the deferral, and why it did not survive
+
+`BaseVelocity` was admitted to Layer A in issue #150 carrying no provenance
+field, on the argument that it is admitted on exactly the terms `qd` is, that `qd`
+carries none either, and that tagging the newer of the two while leaving the older
+untagged would be a wider change than the widening. That was a scope call and it
+was a fair one; issue #156 is the decision it deferred.
+
+It did not survive contact with the asymmetry because the two cases are not the
+same case: the *quantity* is Layer A in both, and the *value* is where they part,
+so the gap was not symmetric with the precedent it was justified by. It is the
+justification that failed rather than the omission that was careless.
+
+Issue #156 moved no published figure: the velocity block is optional and no
+fixture in this repository records a base at all, so what changed is a required
+argument to a constructor no fixture calls and one column in a header no fixture
+writes.
+
+### §7 — the bullet retired by measurement
+
+A bullet reading **~~Not a completed Claim 3 for the attestation half~~** stood in
+§7 until 2026-08-20, and said: *"Rows 2–4 are structure awaiting measurement, and
+they say so."* Milestone 3 landed the records and issue #63 measured them, so §4
+marks rows 2–4 *certifiable, and measured* and the curve in §3 puts `violations`
+and `verify_chain` at AGREE on every level. What replaces the bullet is narrower
+and lives in §7 as its own: the measured chain was walked under a keyring that
+attests to nothing.
+
+### §7 — what the occurrence-level bullet used to say
+
+*Not that the occurrence level is sufficient* read: *"It is sufficient for rows 5
+and 6, refuses row 10, answers row 11 outside tolerance, and holds no substrate at
+all for rows 1, 7 and 8."* Two things had moved under it by 2026-08-21. Row 11 is
+a refusal now, not an answer outside tolerance — issue #61 stopped grading a level
+against a precision twenty times finer than it advertises (§5.3). And rows 2, 3
+and 4 were absent because nothing had measured them; two of the three are now the
+coarsest level's strongest answers.

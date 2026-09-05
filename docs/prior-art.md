@@ -10,10 +10,12 @@ by an outside reader, 2026-09-01 before the mobile track's design is built on, a
 Each pass is kept whole and dated rather than folded into the one after it,
 because half of what this file records is *when* something was found: a citation
 that was there before the claim was written reads differently from one added
-after the claim was published. Later passes correct earlier entries in place,
-marked and dated — §1's mandate-versus-proposal amendment is the pattern, and the
-correction runs in that direction only, because an entry that is quietly rewritten
-stops being evidence of what was known when.
+after the claim was published.
+
+Later passes correct earlier entries in place, marked and dated — §1's
+mandate-versus-proposal amendment is the pattern, and the correction runs in that
+direction only, because an entry that is quietly rewritten stops being evidence
+of what was known when.
 
 Every pass ends on a table of changes it orders into other files. §20 is what
 happened when one of those tables went undischarged for five days while nothing

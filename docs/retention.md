@@ -6,15 +6,17 @@ number where it sits — #98's Layer-A comparison, #116's label and byte
 attribution · extracted from [`plan.md`](plan.md) Claim 1 on 2026-08-31, **with
 no figure changed** · keep current
 
-**What is machine-checked here, and it is less than the whole file.**
+**What is machine-checked here is less than the whole file.**
 `tests/test_published_figures.py` re-derives four things from the code on every
 CI run: the control-rate ladder's **50 Hz row**, the coarsest level's **label**
 and the record and node counts behind it, the **byte attribution**, and the
-**Layer-A comparison** table. Everything else is prose or arithmetic over those —
-including the six-month totals in the resolution table below, `265 GB` among
-them, and every ratio against the sensor assumption. That module's own *What this
-does not cover* is the authority on the boundary; this line exists so that
-nothing here reads as guaranteed when it is not.
+**Layer-A comparison** table.
+
+Everything else is prose or arithmetic over those — including the six-month
+totals in the resolution table below, `265 GB` among them, and every ratio
+against the sensor assumption. That module's own *What this does not cover* is
+the authority on the boundary; this line exists so that nothing here reads as
+guaranteed when it is not.
 
 This is [`plan.md`](plan.md) Claim 1's measurement record. It lives in its own
 file because it is not a plan: it is a set of measured figures, the arithmetic

@@ -1,0 +1,159 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "171-1788637577002589515-2834045",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "duration_s": 0,
+      "harness": "wake-runner",
+      "harness_version": "v0.4.7 (dd801cee4)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "503977ca09480def5d58db88d5112c083c6a06bf1b902fd1e17c2a41496d5476",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "ea6747516350cc2f501a9d74ead09d675a923810741086616a65523264b12371",
+        "authored_by": "06761d5f348c690924e16ab464e454a517f535b1231ab56f8c8ec0aad24cc9ed",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "935a81721505c70f16bb8570f4a7b6c3edd78072a7f04a754ca9d349684c9ddd",
+        "concluded": "1afd5e1dccaafc427d92d50cd8aa88595b1ad79d2e250987979aded24e869bca",
+        "coverage": "c8425907585df13f282e6ae010004e804f675bd0b9bbf5916abd3a2d93ed2e9d",
+        "declared": "98e5cfc5b9df27a88a1ce2d4ae12d078138c02cc72a8ff433734589922f7322a",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "284de502c9847342318c17d474733ef468fbdbe252cddf6e4b4be0676706d9d0",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "3c8f9b520d0036aa0d3e26eeae436f849d75e5292f4ef8b840115fea0144a53e",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "fcc79ca14f7186fec3760f1f1635d6346cdfe253b0401678939825672593bf7b",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "74ab9f8932e0bfb63e696ffcedea4435e98b0e41",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/limitations.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "docs/sensor-baseline.md",
+        "docs/sufficiency.md",
+        "tests/test_doc_shape.py"
+      ],
+      "edge_kinds": [
+        "file-reference",
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/limitations.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "docs/sensor-baseline.md",
+        "docs/sufficiency.md",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_derived_arithmetic.py",
+        "tests/test_doc_shape.py",
+        "tests/test_doc_status_headers.py",
+        "tests/test_graph.py",
+        "tests/test_layout.py",
+        "tests/test_personal_data.py",
+        "tests/test_prior_art.py",
+        "tests/test_published_figures.py",
+        "tests/test_readme.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 49
+      },
+      "changed_unreadable": [
+        "docs/limitations.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "docs/sensor-baseline.md",
+        "docs/sufficiency.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 6
+      },
+      "unresolved_edges": [
+        {
+          "at": "reg/chain.py:493",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "reg/commit.py:443",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1257",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1259",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "CLAUDE.md",
+        "README.md",
+        "docs/",
+        "tests/"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 171,
+    "out_of_scope": [],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "in-scope-partial",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "74ab9f8932e0bfb63e696ffcedea4435e98b0e41"
+      },
+      "name": "auto/issue-171"
+    }
+  ]
+}

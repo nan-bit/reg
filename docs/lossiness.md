@@ -183,9 +183,10 @@ Each entry is a claim that the graph can be tested against.
    clause, and that text lands in `meta` in every artifact — including the eleven
    fixed-base ones, whose bytes are therefore not identical. The figures were
    re-measured with the command above on the same build, expecting movement on
-   #166's precedent, and there is none: the report is byte-identical, at
-   **1,006,592 B** / **2,501,632 B** / **3,632,128 B** and 60.42 / 150.15 /
-   218.00 MB/h. One longer string in one row does not cross a page boundary,
+   #166's precedent, and there is none: the report is byte-identical, and its
+   three sizes are the **1,006,592 B**, **2,501,632 B** and **3,632,128 B** this
+   clause already carries. One longer string in one row does not cross a page
+   boundary,
    where #166's two columns cost a record-header byte on each of 2,560
    `robot_config` rows. The control-rate ladder
    [`sensor-baseline.md`](sensor-baseline.md) publishes — the rungs CI does not

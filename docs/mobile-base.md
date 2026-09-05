@@ -677,8 +677,9 @@ travel together.
 every artifact, including the eleven fixed-base ones, so their bytes are not
 identical — #166 is the precedent for expecting movement. It was re-measured with
 `python -m reg.bench --resolution --seed 0` and the report is byte-identical to
-the one before the change: 1,006,592 B / 2,501,632 B / 3,632,128 B, 60.42 /
-150.15 / 218.00 MB/h. One longer string in one `meta` row does not cross a page
+the one before the change: 1,006,592 B / 2,501,632 B / 3,632,128 B, which at this
+fixture's 50 Hz control rate is 60.42 / 150.15 / 218.00 MB/h. One longer string
+in one `meta` row does not cross a page
 boundary, where #166's two nullable columns cost a record-header byte on every
 one of 2,560 `robot_config` rows. The control-rate ladder above was re-measured
 too, and did not move either.

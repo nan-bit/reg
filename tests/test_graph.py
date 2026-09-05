@@ -5415,7 +5415,8 @@ def test_a_fixed_base_stream_still_writes_no_pose_and_states_its_base_frame(
 
     conn = store.connect(out)
     try:
-        assert store.get_meta(conn, store.META_BASE_FRAME) == "0.000000,0.000000,0.000000"
+        bolted = store.get_meta(conn, store.META_BASE_FRAME)
+        assert bolted == "0.000000,0.000000,0.000000", bolted
     finally:
         conn.close()
 

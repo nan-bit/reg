@@ -906,3 +906,79 @@ assurance case does, and which the binary cannot express in either direction.
 Until then the supportable claim is exactly: **this artifact records whether a
 base velocity came from a perceiver, and its layer tags do not yet depend on the
 answer.**
+
+---
+
+## 12. The artifact is not self-describing: three questions need this document to answer
+
+Added 2026-09-05 (issue #198). [`self-describing.md`](self-describing.md) §1 is
+the design document; this entry is its tier 0, which is the part that is true
+today. The three gaps it names are each already priced somewhere in this file —
+§1 for the platform, §2 and §3 for the radius, §11 for the tag that does not
+follow its value — and **that is the finding**: a reader who wants to know what
+an auditor can do with the file alone has to assemble it from three entries
+written about other things. Nothing below is a new defect. It is the same three
+defects stated once, in the vocabulary of the file rather than of the mechanisms.
+
+**What.** Three questions an auditor holding only an artifact and the code that
+reads artifacts cannot answer, and must come here for.
+
+| # | the question the file cannot answer | where the mechanism is priced |
+|---|---|---|
+| 1 | *What was this `layer` tag computed from?* | §11 |
+| 2 | *Whose recomputation is wrong, mine or the file's?* | §1 |
+| 3 | *Could the robot have reached (x, y)?* | §2, §3 |
+
+*1 — the tag requires a document.* The `HAS_ENVELOPE` edge carries `A` or `B`;
+the file does not carry the basis it was computed from, so the tag can be read
+and cannot be checked. A reader who wants to know what it depends on — today
+`Limits.source` alone, and not `state.base_vel`'s provenance beside it — has to
+read §11.
+
+*2 — attribution requires the recording machine.* Most `envelope` rows have
+`geometry_wkb = NULL` and are recomputed on demand. The artifact records
+`reg_version` and the envelope parameters, and not the shapely and GEOS versions
+or the platform, so a recomputation that disagrees cannot be attributed. §1 has
+the measurement and what a claim would need; the point here is only that the fact
+lives in prose and not in the file, which is why the disagreement is unresolvable
+rather than merely unresolved.
+
+*3 — the pointwise question requires a recomputation, which routes back through
+2.* A stored `envelope` row retains `outer_area` and `outer_radius`, not a
+boundary, and for most frames not the sampled polygon either. So from the row
+alone the answer to a question about a *point* is a radial one, in whichever
+direction it is asked — §2's three bullets are the exact statement, and §3 is what
+that costs the overclaim check. The region is recomputable, and a recomputation is
+gap 2.
+
+**The cost.** Every one of the three is a fact a reader must take from a markdown
+file that no test holds against the artifact. That is the cost this project has
+already refused to accept one level down — `reg.enforce` recomputes its own bound
+rather than reading the declared one, precisely because a value supplied by the
+party being checked is not evidence — and the artifact does not yet meet it about
+itself. Concretely: an assessor with the file, no documents and no access to the
+recording machine can report *the tag says A*, and cannot report *the tag is
+right*; and the two findings are what an assurance case is for.
+
+**What it does not cost.** No claim moves, no figure moves, and no code changes.
+This entry adds no mechanism and removes none: §1's recomputation rule,
+[`lossiness.md`](lossiness.md) *Discarded* #9, §2's bracket and §11's tagging are
+exactly as they were, and every artifact this repository builds is as sound as it
+was yesterday. It is also **not** a resolution of the two open decisions it
+touches: the envelope-layer minimum (§11's *what a claim would need*, item 1) and
+polygon containment (issue #82, §3) both stay open, and each still changes what a
+published claim means. Nor is it a limitation of Claim 1: the stream, the chain
+and the verdicts are untouched.
+
+**What a claim would need in order not to inherit this.** That the file carry
+what the prose carries, which is [`self-describing.md`](self-describing.md) §3 and
+its build order in §8: the recording environment in `meta` (tier 2), a cold-read
+test that fails when a tag disagrees with its own basis (tier 3), the layer basis
+per tagged edge (tier 4), and the outer boundary retained rather than projected
+(tier 5, a decision and not a task, because it moves published figures). Tier 1 —
+the [`prior-art.md`](prior-art.md) pass on build provenance, in-toto and SLSA — comes
+before all of them, because recording the toolchain that produced an artifact is
+ordinary practice with names on it and this project does not get to discover it.
+Until then the supportable claim is exactly: **this artifact answers audit
+questions from the graph alone; it does not yet let a reader check the answers
+from the graph alone.**

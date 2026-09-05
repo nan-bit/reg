@@ -22,12 +22,12 @@ partial failure, transition demand, minimal-risk manoeuvre) precisely so that mo
 later someone can reconstruct who was driving. `reg` is not inventing the retention
 principle; it is applying it to a manipulator and stating the loss explicitly.
 
-**One thing this document said only implicitly until 2026-08-19.** The *Retained*,
-*Discarded* and *Unanswerable* lists below describe one resolution — the finest
-one — and issue #35 added two more beside it. Read
-[The three resolution levels](#the-three-resolution-levels) before reading the
-lists as the whole contract: the levels are why "how much resolution does this
-answer actually need" is now a measured question rather than an assumption.
+**How to read this file.** The *Retained*, *Discarded* and *Unanswerable* lists
+describe one resolution level — the **finest** one — and there are three. Read
+[The three resolution levels](#the-three-resolution-levels) before reading those
+lists as the whole contract. Everything above [`## Why`](#why) is normative; what
+is under that heading is the rationale, and the core is meant to be readable
+without it.
 
 ---
 
@@ -79,14 +79,14 @@ Each entry is a claim that the graph can be tested against.
    `outcome`, `fault`, the clamped envelope where one was applied, `prev_hash`,
    `mac`.
 
-   **Verbatim, and stored 2026-08-19 (issue #45).** "In full" is stronger than it
-   reads: every field goes into the artifact exactly as the record was signed, and
-   nothing is re-signed or re-hashed on the way in. A record read back verifies —
-   or fails to — precisely as it did before it was written, because a store that
-   could recompute a MAC is a store that can quietly repair a broken chain. The
-   two record timestamps are stored unquantized for the same reason: `TIME_TOL_S`
-   is the resolution *observations* are reported at, and a record's `t_issued` is
-   a value the MAC covers.
+   **Verbatim.** "In full" is stronger than it reads: every field goes into the
+   artifact exactly as the record was signed, and nothing is re-signed or
+   re-hashed on the way in. A record read back verifies — or fails to — precisely
+   as it did before it was written, because a store that could recompute a MAC is
+   a store that can quietly repair a broken chain. The two record timestamps are
+   stored unquantized for the same reason: `TIME_TOL_S` is the resolution
+   *observations* are reported at, and a record's `t_issued` is a value the MAC
+   covers.
 
    **One verdict per commanded action, never one per declaration.** The `Verdict`
    table and the `ADJUDICATED` edges hold as many rows as there were
@@ -126,108 +126,56 @@ Each entry is a claim that the graph can be tested against.
    whom* is a question no artifact answers. This paragraph and `README.md`'s Claim 4
    row state the same gap deliberately, and issue #112 is where it would close —
    which is a schema change, a new edge type, a query, a fixture and a
-   re-measurement, not a repair. It said "not stored **yet**, arriving with issue
-   #46" until 2026-08-24, when issue #110 found #46 closed with the fixtures shipped
-   and the row not: a pointer at a closed issue reads as scheduled work and was not.
+   re-measurement, not a repair.
 8. **Envelope *identity and scalars* on every envelope the artifact keeps** — every
    `envelope` row records `envelope_hash`, `area`, `horizon`, and `source`
    (`computed` / `declared` / `clamped`). There is no such thing here as a row that
    says less. All three sources are retained separately; a clamp is only legible if
    the declared and the computed bound both survive.
 
-   **And the other side of the bracket, on a `computed` row (issue #82).**
-   `outer_area` and `outer_radius` are the area and radius of the horizon-limited
-   **outer** reachable set for the same frame — `reg.envelope.outer_envelope`,
-   which over-covers, against an `area` column that under-covers. Without them
-   "how good is the sampled envelope" is a question the artifact cannot answer at
-   all, only a benchmark can, and only for a run somebody still has. Sixteen bytes
-   a row buys it. What is *not* retained is that region's geometry — it is a
-   deterministic function of the `robot_config` and the `horizon` the row already
-   names, so storing its WKB would store the same information twice, once cheaply
-   and once expensively (the same argument as #9 below). A `declared` or `clamped`
-   row carries neither: neither is a reachable set, and a number invented for them
-   would be indistinguishable downstream from one something computed.
+   **And the other side of the bracket, on a `computed` row.** `outer_area` and
+   `outer_radius` are the area and radius of the horizon-limited **outer**
+   reachable set for the same frame — `reg.envelope.outer_envelope`, which
+   over-covers, against an `area` column that under-covers. Without them "how good
+   is the sampled envelope" is a question only a benchmark can answer, and only
+   for a run somebody still has. Sixteen bytes a row buys it. What is *not*
+   retained is that region's geometry — a deterministic function of the
+   `robot_config` and the `horizon` the row already names, so storing its WKB
+   would store the same information twice (the same argument as #9 below). A
+   `declared` or `clamped` row carries neither: neither is a reachable set, and a
+   number invented for them would be indistinguishable downstream from one
+   something computed.
 
    **And a radius is retained with the frame it is measured from, or it is not
-   retained (issue #166).** `outer_radius` is a distance from the base, so it is a
-   radius *about a centre*, and until the schema could hold a moving base nothing
-   in the file named that centre — it was the origin by there being no other
-   possibility. The `config_id` beside it is now required, because that row states
-   the frame: its own `base_pose` when the base drove, or `meta[base_frame]`, the
-   frame the base was bolted in, for a configuration that states none. An artifact
-   stating neither is a could-not-evaluate and `reg.graph.envelope_frame` refuses
-   it; the absence does not resolve to the origin.
+   retained.** `outer_radius` is a distance from the base, so it is a radius
+   *about a centre*, and the `config_id` beside it is required because that row
+   states the frame: its own `base_pose` when the base drove, or
+   `meta[base_frame]`, the frame the base was bolted in, for a configuration that
+   states none. An artifact stating neither is a could-not-evaluate and
+   `reg.graph.envelope_frame` refuses it; the absence does not resolve to the
+   origin. The schema pays two nullable columns on `robot_config` and one `meta`
+   row for that, and the published figures moved when it did — the arithmetic is
+   under [`## Why`](#why).
 
-   **What it cost, because it is not free and the issue that asked for it expected
-   it to be.** Two nullable columns on `robot_config` and one `meta` row, measured
-   on the build Claim 1 prices (`python -m reg.bench --resolution --seed 0`,
-   `long_run` at 3,000 frames): **+2,048 B** at the `occurrence` level, all of it in
-   `indexes + schema` — that level retains no `robot_config` row at all — and
-   **+7,168 B** at `transition` and `per-frame`, which is the same 2,048 plus **2 B
-   on each of the 2,560 configuration rows those levels keep**. The 2 B is SQLite's
-   record header: a column that is NULL on every row still costs one serial-type
-   byte per row, and there is no trailing-NULL trimming to hide behind — a table
-   with two more columns is a larger table even when nothing is written into them.
-   So the schema could not hold a base pose *and* leave the published figures
-   still, and the figures moved by **+0.20% to +0.29%**. They were re-measured with
-   the command above and republished in the same change, here and in
-   [`retention.md`](retention.md), [`sensor-baseline.md`](sensor-baseline.md),
-   [`sufficiency.md`](sufficiency.md), [`plan.md`](plan.md), `docs/README.md` and
-   the top-level `README.md`. The alternative — a side table, so a bolted run pays
-   nothing — was rejected because it puts where the base was somewhere other than
-   the row that says what the robot was doing, and a pose reachable only by a join
-   is one every reader of `robot_config` can forget to make.
-
-   **Issue #191 filled those two columns in and cost nothing more.** The pose now
-   reaches the row from the stream, `GEOMETRY_RETENTION`'s text gained the posed
-   clause, and that text lands in `meta` in every artifact — including the eleven
-   fixed-base ones, whose bytes are therefore not identical. The figures were
-   re-measured with the command above on the same build, expecting movement on
-   #166's precedent, and there is none: the report is byte-identical, and its
-   three sizes are the **1,006,592 B**, **2,501,632 B** and **3,632,128 B** this
-   clause already carries. One longer string in one row does not cross a page
-   boundary,
-   where #166's two columns cost a record-header byte on each of 2,560
-   `robot_config` rows. The control-rate ladder
-   [`sensor-baseline.md`](sensor-baseline.md) publishes — the rungs CI does not
-   pin, which is the lesson of issue #181 — was re-measured too and did not move
-   either.
-
-   Two narrower clauses sit under this one and both are in *Discarded*, because both
-   are things the contract could have kept and does not: **which frames get a row at
-   all** is #10, and **which of those rows carry the polygon** is #9.
-
-   This clause read "at every material change" until 2026-08-18, when issue #29
-   replaced it. A moving arm has a materially different envelope on *every* frame,
-   so that reading put one row per frame into the artifact for exactly the runs this
-   project exists to record — linear in the frame count, and no amount of shrinking a
-   row changes the shape of linear-in, linear-out. The replacement narrows *when a
-   row exists*; it does not narrow what a row says.
+   Two narrower clauses sit under this one and both are in *Discarded*: **which
+   frames get a row at all** is #10, and **which of those rows carry the polygon**
+   is #9. Neither narrows what a row *says* — every `envelope` row the artifact
+   holds carries every field above.
 9. **The layer tag on every edge** — `A` or `B`, per Phase 9. Claim 3 is a query
    over these tags, so an untagged edge is an unusable edge.
 10. **The run's provenance** — scenario name, seed, tolerance constants in force,
     and the schema version, once per artifact. Determinism is only checkable if the
     artifact says what produced it.
 
-    **The schema version is itself versioned, and it moved to 2 (issue #176).**
+    **The schema version is itself versioned, and it is at 2.**
     `reg.sim.PROVENANCE_VERSION` is what a reader consults when the block it is
-    holding is older than the code reading it. `reg.stream` can now carry a
-    mobile base as two optional blocks, which changes what an *absence* means: a
-    header with no base columns used to mean *this format has no base columns*
-    and now means *this run recorded no base*. Those are different facts about
-    two files that look identical, and the version is the only thing in either
-    of them that tells the two apart — so it bumped, which is what the constant
-    is for.
-
-    **What that cost.** One character in one comment line, and gzip rendered it
-    one byte longer: the gzipped CSV baseline in [`retention.md`](retention.md)
-    went from 64,651 B to 64,652 B, +0.0015%, re-measured with `python -m
-    reg.bench --resolution --seed 0` and republished there in the same change.
-    Nothing else moved — no fixture grew a column, because every robot here is
-    bolted to the origin and the base blocks are written only for a stream whose
-    frames carry one. It is recorded at this size for the same reason the +0.20%
-    to +0.29% above is: a figure that moves for an unwritten reason is
-    indistinguishable from a regression.
+    holding is older than the code reading it. `reg.stream` carries a mobile base
+    as two optional blocks, which changes what an *absence* means: a header with
+    no base columns means *this run recorded no base*, where under version 1 the
+    same absence meant *this format has no base columns*. Those are different
+    facts about two files that look identical, and the version is the only thing
+    in either of them that tells the two apart — so it bumps, which is what the
+    constant is for.
 
 ---
 
@@ -263,9 +211,8 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    a *new* quantity nobody queries, never re-litigating something listed as
    Retained.
 9. **Envelope geometry, except where it is evidence — because it is recomputable.**
-   Added 2026-08-18 (issue #28); it comes last because it is the only item here
-   discarded for *recoverability* rather than for irrelevance, and the two must not
-   be confused.
+   It comes last because it is the only item here discarded for *recoverability*
+   rather than for irrelevance, and the two must not be confused.
 
    **The rule.** Geometry is stored on the first and last frame of the run, and on
    every frame at which an `INTERSECTS` or `CONTACT` relationship with an entity
@@ -277,11 +224,10 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
 
    **Relationships, not edge rows.** An `INTERSECTS` edge also closes and reopens
    whenever the overlap area crosses an `AREA_QUANT_SIGFIGS` boundary. Those are
-   metric steps, and the metric is already on the edge. Counting them as transitions
-   keeps geometry on 150 of `sustained_overlap`'s 301 frames (measured at the
-   benchmark's parameters); counting the relationship's own beginning and end keeps
-   it on 2. A retention rule whose cost scales with how much the arm moved is the
-   defect this item exists to remove.
+   metric steps, the metric is already on the edge, and they are **not**
+   transitions for this rule. Counting them as transitions would keep geometry on
+   150 of `sustained_overlap`'s 301 frames (measured at the benchmark's
+   parameters); counting the relationship's own beginning and end keeps it on 2.
 
    **The recomputation contract.** `compute_envelope` is a deterministic function of
    `(q, qd, horizon, n_samples, seed, substep_dt)`. The artifact stores every one of
@@ -295,66 +241,51 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    and this item is wrong rather than merely expensive.
 
    **The recomputation contract holds for a base that does not move, and that
-   condition is now written into the schema.** Every term in the function above is
+   condition is written into the schema.** Every term in the function above is
    **body-frame**: `q`, `qd`, the horizon and the three envelope parameters
    describe an arm relative to its own base, and where the base *was* is in none
    of them. For a bolted arm that is a complete description, because the base is
    at the origin as a mounting fact. Allow it to drive and the same six inputs
    describe the same arm **somewhere else**, so a recomputation from them alone
-   returns the region a robot at the origin could reach — not a looser answer than
-   the right one, an answer about a different robot, and one that arrives looking
-   exactly like a stored polygon. Since issue #166 the `robot_config` row can say
+   returns the region a robot at the origin could reach — an answer about a
+   different robot rather than a looser answer than the right one, and one that
+   arrives looking exactly like a stored polygon. The `robot_config` row states
    where the base was (`base_pose`, with its `PoseSource` beside it, both NULL for
    *this artifact records no pose*), and `reg.graph.envelope_at` **refuses** a row
-   that states one rather than recomputing it. So the clause reads: geometry is
-   discarded because it is recomputable *for a base that did not move*, and a run
-   whose base moved has to retain it.
+   that states one rather than recomputing it. Geometry is discarded because it is
+   recomputable *for a base that did not move*, and a run whose base moved has to
+   retain it.
 
-   **And since issue #191 it does retain it, which is what makes the clause a
-   rule rather than a warning.** `reg.graph.build` writes the pose onto the
-   `robot_config` row it came from, and `reg.graph.GEOMETRY_RETENTION` keeps the
-   polygon on **every frame whose configuration states one** — a third clause
-   beside the two ends of the run and the relationship transitions, stated in the
-   rule text that lands in `meta` so a reader never infers it from the pattern of
-   NULLs. A posed `envelope` row carrying a NULL `geometry_wkb` is refused at
-   build time and never written, because it would be a promise of a
-   recomputation that cannot be honoured and the region would then be
-   recoverable from nothing. Retaining nothing and refusing on read was the
-   alternative, and it is worse than either: it makes every envelope query on a
-   mobile artifact a could-not-evaluate, which is a file that parses and answers
-   nothing. It retains the **polygon**, not the **row** — a posed frame that
-   anchors nothing is still a frame #10 below keeps no row for, and forcing one
-   per posed frame would put the linear-in, linear-out shape issue #29 removed
-   back for exactly the runs that need it gone.
+   **And it does retain it, which is what makes the clause a rule rather than a
+   warning.** `reg.graph.build` writes the pose onto the `robot_config` row it
+   came from, and `reg.graph.GEOMETRY_RETENTION` keeps the polygon on **every
+   frame whose configuration states one** — a third clause beside the two ends of
+   the run and the relationship transitions, stated in the rule text that lands in
+   `meta` so a reader never infers it from the pattern of NULLs. A posed `envelope`
+   row carrying a NULL `geometry_wkb` is refused at build time, because it would
+   promise a recomputation that cannot be honoured. It retains the **polygon**, not
+   the **row** — a posed frame that anchors nothing is still a frame #10 below
+   keeps no row for, and forcing one per posed frame would put the linear-in,
+   linear-out shape back for exactly the runs that need it gone.
 
    **What is retained is the region in the room, not the region about the
    origin.** The polygon stored for a posed configuration is the body-frame set
    `compute_envelope` returns, rigidly placed at the pose the frame states
    ([`mobile-base.md`](mobile-base.md) §2, the third row of its table). Storing
-   the body-frame set instead would have reintroduced the failure two paragraphs
-   up, arriving from storage rather than from a recomputation and looking exactly
-   as much like a right answer; it would also make every `INTERSECTS` overlap and
-   `SEPARATION` distance in the file a measurement between a region about the
-   origin and entities in room coordinates. The placed region inherits the pose
-   and therefore the perceiver, which is why every `HAS_ENVELOPE` edge over a
-   posed configuration is Layer **B** — [`sufficiency.md`](sufficiency.md) §5.8's
-   table, followed rather than discovered. **It cost no published figure:** the
-   rule text is one longer string in one `meta` row, and
-   `python -m reg.bench --resolution --seed 0` produces a byte-identical report
-   before and after it (1,006,592 B, 2,501,632 B and 3,632,128 B, unchanged).
+   the body-frame set instead would reintroduce the failure two paragraphs up,
+   arriving from storage rather than from a recomputation; it would also make
+   every `INTERSECTS` overlap and `SEPARATION` distance in the file a measurement
+   between a region about the origin and entities in room coordinates. The placed
+   region inherits the pose and therefore the perceiver, which is why every
+   `HAS_ENVELOPE` edge over a posed configuration is Layer **B** —
+   [`sufficiency.md`](sufficiency.md) §5.8's table, followed rather than
+   discovered.
 
    **The same condition, and the same fix, for the two scalars in Retained #8.**
    `outer_area` and `outer_radius` are kept instead of the outer polygon on the
-   identical recomputability argument, so the paragraph above applies unchanged.
-   `outer_radius` also carried a second, quieter defect: it is a radius **about a
-   centre**, and until issue #166 nothing in the file named that centre. It was the
-   origin because there was no other possibility — a fact about the code that wrote
-   the artifact rather than about the artifact — and a schema that can hold a moving
-   base makes it meaningless. So a retained `outer_radius` now requires the
-   `config_id` beside it, which is what names the frame: that row's own `base_pose`,
-   or `meta[base_frame]` for a configuration that states none. `reg.graph.envelope_frame`
-   is the reader, and an artifact stating neither is a **could-not-evaluate** — the
-   absence never resolves to the origin.
+   identical recomputability argument, so everything above applies to them
+   unchanged — including the frame, which is why a retained `outer_radius`
+   requires the `config_id` beside it.
 
    **And the base frame is not a third term in the distance error budget.** The
    budget below is exactly saturated (`GEOM_SIMPLIFY_TOL_M + DISTANCE_TOL_M/2 =
@@ -363,16 +294,13 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    on a stored boundary, and `quantize_distance` on a reported distance — and a base
    frame passes through neither: it is written as text at the raw stream's own
    precision (`reg.stream.FLOAT_PRECISION`), exactly as `q` and `qd` are, with no
-   quantum of its own, because none of the four tolerances is a quantum for a frame
-   and inventing one would put a bound in the artifact that no document states. `q`
-   is the precedent and it is a strong one: every distance this artifact reports is
-   computed from geometry built out of `q`, and `q` has never been a term in the
-   budget for exactly this reason. The centre is also written down *after* the radius
-   is measured about it, so no reported number is computed through the digits; they
-   say what the retained radius is a radius **about**. Retain a frame with a quantum
-   of its own and this paragraph stops being true — which is what *no headroom for a
-   third error term* means, and the discipline it asks for is to keep the frame out
-   of the rounding path rather than to shave the budget.
+   quantum of its own, because none of the four tolerances is a quantum for a frame.
+   `q` is the precedent: every distance this artifact reports is computed from
+   geometry built out of `q`, and `q` has never been a term in this budget for the
+   same reason. The centre is also written down *after* the radius is measured about
+   it, so no reported number is computed through the digits. Retain a frame with a
+   quantum of its own and this paragraph stops being true, so the discipline is to
+   keep a frame out of the rounding path rather than to shave the budget.
 
    **Its precondition, stated rather than assumed.** Recomputation is exact for the
    same code and the same shapely version. An artifact handed to an assessor years
@@ -381,68 +309,55 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    of this trade and it is recorded in [`docs/limitations.md`](limitations.md), not
    here, because it is a limitation of the project and not a clause of the contract.
 
-   **And since issue #200 the precondition is *in the file*, which changes what a
-   disagreement means and not whether one can happen.** `meta` carries six keys —
-   the interpreter, numpy, shapely, GEOS, and the platform's system and machine —
-   read off the running interpreter by `reg.store.build_environment` and read back
-   by `reg.graph.recorded_environment`. This is a **buildinfo** and the word is
-   borrowed: the Reproducible Builds project defines reproducibility *relative to a
-   stated environment*, and the content list here is adopted from that practice
-   rather than reasoned out again ([`prior-art.md`](prior-art.md) §27; C2PA carries
-   the same idea inside a hash-bound manifest, §28). **The deviation from the
-   practice is deliberate and is stated where the keys are specified**: a buildinfo
-   is a separate product *beside* the artifact, so an archive can hand it to a
-   rebuilder; these keys go **inside** `meta` because Claim 2 says this file answers
-   with no access to anything else. What that costs is that the environment cannot
-   be distributed without the artifact, and that it is descriptive `meta` rather
-   than anything the chain signs.
+   **The precondition is *in the file*, which changes what a disagreement means
+   and not whether one can happen.** `meta` carries six keys — the interpreter,
+   numpy, shapely, GEOS, and the platform's system and machine — written by
+   `reg.store.build_environment` and read back by `reg.graph.recorded_environment`.
+   This is a **buildinfo**, and the content list is adopted from the Reproducible
+   Builds project's practice rather than reasoned out again
+   ([`prior-art.md`](prior-art.md) §27; C2PA carries the same idea inside a
+   hash-bound manifest, §28). **The deviation from that practice is deliberate**: a
+   buildinfo is a separate product *beside* the artifact, and these keys go
+   **inside** `meta` because Claim 2 says this file answers with no access to
+   anything else. What that costs is that the environment cannot be distributed
+   without the artifact, and that it is descriptive `meta` rather than anything the
+   chain signs.
 
-   **What it buys, in the weaker form that is true.** Before, an auditor who
-   recomputed a discarded polygon and disagreed could not tell *wrong machine* from
-   *the geometry moved*, and those are opposite findings. Now the file says which
-   machine, so the disagreement can be **turned into a could-not-evaluate instead
-   of an unresolvable one**. It does not make recomputation portable, and it does
-   not say *which* library moved the geometry — `diffoscope` exists because a
-   version list does not give that, and nothing here proposes building one.
-
-   **And since issue #201 it acts.** `reg.graph.envelope_at` will not recompute a
-   discarded polygon off the recording environment: it compares the platform's
-   system and machine, shapely's version and GEOS's
-   (`reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`, four of the six recorded keys) and
-   refuses where any of them differs, naming the key and both values. So this
-   clause of the contract now has a reader that enforces its precondition rather
-   than one that assumes it — **a discarded polygon is recoverable on the
+   **And it acts.** `reg.graph.envelope_at` will not recompute a discarded polygon
+   off the recording environment: it compares the platform's system and machine,
+   shapely's version and GEOS's (`reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`, four of
+   the six recorded keys) and refuses where any of them differs, naming the key
+   and both values. So this clause has a reader that enforces its precondition
+   rather than one that assumes it — **a discarded polygon is recoverable on the
    environment the file names, and is a stated could-not-evaluate anywhere else.**
-   The retained polygons are unaffected and are returned on any machine; they are
-   evidence in their own right, and the precondition is not about them.
+   That is weaker than portability, and it still does not say *which* library moved
+   the geometry: `diffoscope` exists because a version list does not give that, and
+   nothing here proposes building one. The retained polygons are unaffected and
+   are returned on any machine; they are evidence in their own right, and the
+   precondition is not about them.
 
-   One hole is stated rather than
-   papered over — the C library is not recorded, because `platform.libc_ver()`
-   reports nothing on macOS and under musl, so two artifacts can agree on all six
-   keys and still have been linked against different libms. Matching environments
-   are a necessary condition for a bit-identical recomputation, not a sufficient
-   one. **It cost no published figure:** six short `meta` rows, and
-   `python -m reg.bench --resolution --seed 0` produces a report identical in every
-   measured number before and after (1,006,592 B, 2,501,632 B and 3,632,128 B,
-   unchanged; the schema version in the parameter block reads 11 rather than 10).
+   One hole is stated rather than papered over — the C library is not recorded,
+   because `platform.libc_ver()` reports nothing on macOS and under musl, so two
+   artifacts can agree on all six keys and still have been linked against different
+   libms. Matching environments are a necessary condition for a bit-identical
+   recomputation, not a sufficient one.
 
    **What it does not license.** Discarding the scalars (Retained #8), discarding
    the `config_id` that makes recomputation possible (the schema refuses an
-   `envelope` row with neither geometry nor a config, and since issue #166 it
-   refuses an `outer_radius` with no config beside it), or lowering `n_samples` to
-   make the polygons smaller — that changes what the envelope *is* in order to move
-   a storage number, which is the move this whole document forbids.
+   `envelope` row with neither geometry nor a config, and it refuses an
+   `outer_radius` with no config beside it), or lowering `n_samples` to make the
+   polygons smaller — that changes what the envelope *is* in order to move a
+   storage number, which is the move this whole document forbids.
 
    **It reaches computed envelopes only.** A `declared` or a `clamped` bound is
    stored with its polygon, always. The discard above is licensed by
    recomputability and by nothing else, and those two regions came from a policy
    rather than from a configuration in this file: there is nothing here to
    recompute them from, so discarding one would not be a discard but a deletion.
-   Added 2026-08-19 with issue #45.
 
 10. **The envelope at frames that anchor nothing, and the per-frame node itself.**
-    Added 2026-08-18 (issue #29). #9 stopped storing the polygon on every frame and
-    left the row; this stops storing the row.
+    #9 stopped storing the polygon on every frame and left the row; this stops
+    storing the row.
 
     **The rule.** An `envelope` row is written on the first and last frame of the
     run, on every frame at which an `INTERSECTS` or `CONTACT` relationship with an
@@ -489,18 +404,15 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
     * *`reg.graph.envelope_at(conn, t)` refuses*, naming the rule. It does not
       return the neighbouring interval's polygon. See *Unanswerable* #1 — this is
       that item reaching a sampled frame rather than an instant between two, and for
-      the same reason: the envelope is a function of the configuration, `q` has never
-      been stored at every frame (*Discarded* #1), so an envelope at every frame was
-      only ever available by storing a configuration at every frame. That is the
-      linearity being removed.
+      the same reason: the envelope is a function of the configuration, and `q` is
+      stored only where a relationship anchors it (*Discarded* #1), so an envelope
+      at every frame is available only by storing a configuration at every frame.
+      That is the linearity being removed.
 
     **Why it is a discard and not a deletion.** The test that distinguishes them is
     whether a run in which something genuinely changes every frame still costs a row
-    every frame. It does: a human walking steadily across the scene crosses a
-    `DISTANCE_TOL_M` bucket at every frame and gets a `SEPARATION` interval and a
-    `robot_config` row at every frame; a human sliding out of the envelope crosses an
-    `AREA_QUANT_SIGFIGS` boundary at every frame and gets an `envelope` row at every
-    frame. `tests/test_graph.py::test_a_stream_that_changes_every_frame_still_emits_
+    every frame. It does, and
+    `tests/test_graph.py::test_a_stream_that_changes_every_frame_still_emits_
     a_row_per_frame` and its envelope counterpart assert exactly that. A rule that
     capped the row count instead of tracking the transitions would pass every
     sub-linearity measurement in this project and would be dropping evidence.
@@ -515,40 +427,26 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
 
 ## The three resolution levels
 
-**Added 2026-08-19 (issue #35), amended the same day.** Everything above this
-section describes the **finest** level and was written as though it were the only
-one. It is not, and saying so is the point.
+Everything above this section describes the **finest** level and was written as
+though it were the only one. It is not, and saying so is the point.
 
-This section was originally motivated by a refutation: `docs/plan.md` Claim 1's
-original form — the graph is orders of magnitude smaller than the stream — was
-measured against a gzipped copy of the simulator's own raw state CSV — 24
-columns for the priced fixture, 19 of them Layer B, not the proprioception this
-line called it — and came out 14x *worse* (issue #30). That refutation has since
-been withdrawn; the CSV was never the baseline the claim was about. The
-sensor-log baseline is stated in the README and in the original plan — both
-predate the benchmark by hours on 2026-08-18, and the plan's own limitations
-section already flagged the terabytes/day figure as "imported context, not a
-result". The CSV was a substitute this simulator forced, not a restatement of
-the claim. But the question it provoked is the durable part and it outlived its
-own premise: *how coarse can the evidence get before it stops answering the
-question?* The resolution levels below are what answer it, and they turn out to
-be **where the compression argument actually lives** — a measured **265 GB** per
-robot per six months at occurrence resolution against a projected 182.5 TB of
-sensor log, i.e. ~689x ([`retention.md`](retention.md); measured 2026-08-20 at seed 0,
-and the sensor rate is an assumption with a sourced range and a sensitivity
-table, [`sensor-baseline.md`](sensor-baseline.md)). It lives there **less
-comfortably than the provisional 18.9 GB suggested**: that figure was measured
-before the artifact carried any Layer A record (issue #59), and the record layer
-does not coarsen, so the coarsest level now clears two orders of magnitude
-against the published sensor assumption rather than three.
+The question the levels answer is *how coarse can the evidence get before it stops
+answering the question?* — and they turn out to be **where the compression argument
+actually lives**: a measured **265 GB** per robot per six months at occurrence
+resolution against a projected 182.5 TB of sensor log, i.e. ~689x
+([`retention.md`](retention.md); measured 2026-08-20 at seed 0, and the sensor rate
+is an assumption with a sourced range and a sensitivity table,
+[`sensor-baseline.md`](sensor-baseline.md)). It lives there **less comfortably than
+the provisional 18.9 GB suggested**: that figure predates the artifact carrying any
+Layer A record, and the record layer does not coarsen, so the coarsest level clears
+two orders of magnitude against the published sensor assumption rather than three.
 
 The coarsest level is not invented here. UN R157's **DSSAD** is the only mandated
 evidence recorder for autonomy that exists, and it stores **occurrences**: an
 occurrence flag, a reason, a date, a timestamp accurate to **±1.0 second**, and
 the software version identifier present at the event
 ([`docs/prior-art.md` §9](prior-art.md)). `reg` chose cm / 10 ms, every frame —
-two orders of magnitude finer than the only comparable thing required by law —
-and chose it without noticing it was choosing.
+two orders of magnitude finer than the only comparable thing required by law.
 
 All three levels are **views of one artifact**, not three artifacts. `reg.graph`
 writes both layers; `python -m reg.bench --resolution` projects the build into
@@ -559,47 +457,41 @@ not be a measurement.
 
 ### Level 1 — occurrence (±1.0 s by default; a DSSAD-aligned *quantum*, not a DSSAD)
 
-**Read the second `Retains` below before pricing this level.** The heading used
-to read *occurrence (DSSAD-aligned, ±1.0 s by default)* and the retention table
-in [`plan.md`](plan.md) Claim 1 used to call the level *DSSAD-shaped*. What is
-DSSAD-aligned is the **timestamp quantum** and the occurrence vocabulary that
-sits at it; measured on the published fixture, that part is 42 of the level's
-3,166 node rows, and the record layer — which no level coarsens — is 3,120 of
-them. Level 1 is an attestation record whose event layer is DSSAD-aligned, and
-not an event log with some attestation attached. The positioning decision, its
-two rejected alternatives and what it commits the project to are recorded in
-[`retention.md`](retention.md), *What the coarsest level actually holds*
-(issue #116).
+**Read the second `Retains` below before pricing this level.** What is
+DSSAD-aligned is the **timestamp quantum** and the occurrence vocabulary that sits
+at it; measured on the published fixture, that part is 42 of the level's 3,166
+node rows, and the record layer — which no level coarsens — is 3,120 of them.
+Level 1 is an attestation record whose event layer is DSSAD-aligned, and not an
+event log with some attestation attached. The positioning decision and its two
+rejected alternatives are in [`retention.md`](retention.md), *What the coarsest
+level actually holds*.
 
 **Retains.** One row per semantically material event, from a fixed vocabulary
 (`reg.store.OCCURRENCE_SPECS`): `run_began`, `run_ended`, `envelope_entered`,
 `envelope_left`, `contact_began`, `contact_ended`, one `closest_approach` per
-entity carrying the smallest separation of the run, and — added 2026-08-19 with
-issue #45 — the five enforcement events, `declaration_vetoed`, `action_clamped`,
-`safe_state_entered`, `reintegrated` and `escalation_failed`. Each row carries DSSAD's
+entity carrying the smallest separation of the run, and the five enforcement
+events, `declaration_vetoed`, `action_clamped`, `safe_state_entered`,
+`reintegrated` and `escalation_failed`. Each row carries DSSAD's
 elements — the flag (the type), the reason, the date, the timestamp, and a
 provenance stamp binding the event to the `reg` version and the envelope
 parameters that produced it. That stamp is `recorder_version`, and it is **not**
 `R157SWIN`: the regulation's element names the system under investigation, this
 one names the recorder, and the element is **not implemented** here because
-nothing in this prototype has a policy version to bind (issue #109,
-[`prior-art.md` §9](prior-art.md)). The entity set and the run's
+nothing in this prototype has a policy version to bind
+([`prior-art.md` §9](prior-art.md)). The entity set and the run's
 provenance stay, because an occurrence naming an entity the file does not contain
 is not a record of anything. The rule itself is written into `meta` under
 `occurrence_retention`.
 
 **Retains — and this is the larger half of the level.** Every `Declaration`,
 every `Verdict` and the chain record each of them carries survives here **in
-full**: no resolution level coarsens a record, which is what issue #59
-established and what the byte counts have reflected since. Coarsening the
-timestamps coarsens the *event* layer and leaves the *attestation* layer exactly
-where it was. On the published fixture — `long_run` at 3,000 frames, 50 Hz,
-`python -m reg.bench --resolution --seed 0` — that is 3,000 verdicts and 120
-declarations against 42 occurrences and 4 entities: **98.5% of the level's node
-rows are records**. What a reader buys at ±1.0 s is the attestation stream at
-full per-action density, with an event layer at DSSAD's quantum beside it; what
-they do not buy is a cheap event log, and the price of the level is dominated by
-the half of it this paragraph describes rather than the half above.
+full**: no resolution level coarsens a record. Coarsening the timestamps coarsens
+the *event* layer and leaves the *attestation* layer exactly where it was. On the
+published fixture — `long_run` at 3,000 frames, 50 Hz, `python -m reg.bench
+--resolution --seed 0` — that is 3,000 verdicts and 120 declarations against 42
+occurrences and 4 entities: **98.5% of the level's node rows are records**. What a
+reader buys at ±1.0 s is the attestation stream at full per-action density, with
+an event layer at DSSAD's quantum beside it, and not a cheap event log.
 
 **Discards.** Every interval, every metric between events, every timestamp digit
 finer than the stated resolution, and the order of two events inside one quantum.
@@ -612,37 +504,22 @@ enforcer is already passivated emits nothing either — both would be one row pe
 frame, the first for a run that went well and the second for a robot that was
 not moving.
 
-**The first attestation question this level can answer.** Until issue #45 every
-occurrence type was Layer B and about an entity, so the coarse layer could say
-who came near the robot and nothing about what the robot was authorised to do.
-The five enforcement events are Layer A: at ±1.0 s the artifact now answers *was
-an action ever clamped, and roughly when* without the edge layer and without a
-perceiver. What it still cannot answer is which declaration, which bound, or by
-how much — those are `declaration`, `verdict` and the four attestation edges,
-all of them level 2.
+**The first attestation question this level can answer.** The five enforcement
+events are Layer A: at ±1.0 s the artifact answers *was an action ever clamped,
+and roughly when* without the edge layer and without a perceiver. What it cannot
+answer is which declaration, which bound, or by how much — those are
+`declaration`, `verdict` and the four attestation edges, all of them level 2.
 
-**The date element deviation is closed (issue #83), and the reason it stood for
-as long as it did was wrong.** This document used to say: *"There is no date
-element, and that is a deviation stated rather than hidden. DSSAD records
-`yyyy/mm/dd` because a recorder in a car has a clock. This artifact must be
-byte-reproducible from its seeds, and a wall-clock date is exactly the ambient
-value that would break it."* The premise was sound and the conclusion did not
-follow. The project's own design already handled a value that cannot come from a
-seed: **key material is not derivable from one either**, and the answer there was
-to make it a *required caller-supplied input* rather than to drop it. A run-start
-instant is the same kind of input.
-
-So `--run-start` is now required, has no default, and is *declared* rather than
-read from the building host's clock. Determinism is preserved exactly — same seed
-**and** same declared start, same bytes — and every `occurrence` row carries
-DSSAD's `date` plus an absolute `t_utc` derived from that start and the row's own
-quantized `t`. What this buys is not tidiness: **±1.0 s is an accuracy
-requirement on a wall clock**, and until there was a wall clock behind the float,
-`reg` had copied the number and dropped the datum — an alignment that was
-element-shaped rather than requirement-shaped. An assessor now gets *which
-afternoon* and *which robot* (`meta[unit_id]`, `meta[operator_id]`), which is
-what makes the file correlatable with the other logs in the cell and what lets an
-EU AI Act Art. 73 clock be started from it.
+**The date element, and what ±1.0 s asks of it.** `--run-start` is required, has
+no default, and is *declared* rather than read from the building host's clock.
+Determinism is preserved exactly — same seed **and** same declared start, same
+bytes — and every `occurrence` row carries DSSAD's `date` plus an absolute `t_utc`
+derived from that start and the row's own quantized `t`. **±1.0 s is an accuracy
+requirement on a wall clock**, and a float with no wall clock behind it is an
+alignment that is element-shaped rather than requirement-shaped. An assessor gets
+*which afternoon* and *which robot* (`meta[unit_id]`, `meta[operator_id]`), which
+is what makes the file correlatable with the other logs in the cell and what lets
+an EU AI Act Art. 73 clock be started from it.
 
 **What the declared start is not.** It is a claim by the party that built the
 artifact, exactly as the records are. It places the run on a wall clock *if that
@@ -744,11 +621,11 @@ plausible interpolated number.
    configurations at its endpoints. It cannot reconstruct the pose between them, and
    interpolating one would produce a number indistinguishable from a recorded one.
 
-   This covers instants *between* two frames and, since issue #29, sampled frames
-   that anchor no relationship (*Discarded* #10) — the same refusal for the same
-   reason, since a frame whose `robot_config` was never written is exactly as
-   unreconstructable as an instant between two that were. The envelope inherits it:
-   `reg.graph.envelope_at` refuses both.
+   This covers instants *between* two frames and sampled frames that anchor no
+   relationship (*Discarded* #10) — the same refusal for the same reason, since a
+   frame with no `robot_config` row is exactly as unreconstructable as an instant
+   between two that have one. The envelope inherits it: `reg.graph.envelope_at`
+   refuses both.
 2. **Anything about entities outside the entity set.** An object nobody declared as
    an entity leaves no trace. Absence of an entity from the graph is not evidence of
    its absence from the room.
@@ -758,21 +635,19 @@ plausible interpolated number.
    §4](prior-art.md)), so "the robot could have reached (x, y)" is supported for
    any point inside it and nothing follows from a point outside it.
 
-   **Narrowed 2026-08-21 (issue #82).** Every `computed` row now also carries
+   **The outer radius narrows this.** Every `computed` row also carries
    `outer_radius`, the radius of a horizon-limited **outer** reachable set for
    that frame, which over-covers. So "the robot could **not** have reached
-   (x, y)" *is* supported for a point further from the base than that radius —
-   a claim this artifact previously could not make in any form. What stays
-   unanswerable is the gap between the two: a point inside the outer set and
-   outside the sampled one. The bracket makes the gap visible; it does not close
-   it. [`docs/limitations.md`](limitations.md) §2 is the authority on which
+   (x, y)" *is* supported for a point further from the base than that radius.
+   What stays unanswerable is the gap between the two: a point inside the outer
+   set and outside the sampled one. The bracket makes the gap visible; it does not
+   close it. [`docs/limitations.md`](limitations.md) §2 is the authority on which
    direction is supported at which radius.
 4. **Metric differences finer than the tolerances.** "Was the human 4 mm closer at
    t₁ than at t₂?" is below `DISTANCE_TOL_M` and unanswerable, not false.
 
-   **The same rule one level down: a level is graded against its own quantum**
-   (added 2026-08-20, issue #60; it lived only in a `reg.bench` docstring until
-   then). A resolution level advertises a timestamp resolution, and an answer
+   **The same rule one level down: a level is graded against its own quantum.**
+   A resolution level advertises a timestamp resolution, and an answer
    that misses the query's tolerance but lands inside that resolution is
    *unanswerable at that level*, not wrong — the level answered exactly as
    precisely as it claims to. So `reg.bench --resolution` grades
@@ -788,12 +663,11 @@ plausible interpolated number.
    that quantize to the same `TIME_TOL_S` bucket have no retained order.
 
    **And, above 100 Hz, anything that distinguishes two *frames* within one
-   quantum** (added 2026-08-21, issue #77). This item was written for two
-   transitions that happened to land close together; at a control rate above
-   `1 / TIME_TOL_S` it applies to every consecutive pair of frames in the run,
-   because the artifact's time base has no address for the second one. A question
-   about one frame of a shared instant is *could-not-evaluate*, and the per-frame
-   agreement predicates below are stated for the rate range in
+   quantum.** At a control rate above `1 / TIME_TOL_S` this applies to every
+   consecutive pair of frames in the run, because the artifact's time base has no
+   address for the second one. A question about one frame of a shared instant is
+   *could-not-evaluate*, and the per-frame agreement predicates below are stated
+   for the rate range in
    [The rate range these hold in](#the-rate-range-these-hold-in). This is a limit
    on *addressing*, not on retention: the values are all there, and the
    measurement showing so is in that section.
@@ -840,8 +714,7 @@ construction, query, benchmark, test — imports them from there; a literal `0.0
 graph or query code is a defect even when it is the right number, because the next
 person to change the tolerance will not find it. `tests/test_tolerances.py` asserts
 the module's values equal the table above, so an edit to either side that is not
-mirrored in the other fails CI. That test and that module are Phase 5 work; this
-issue is prose only, and the table is normative until they exist.
+mirrored in the other fails CI.
 
 ### Where the values come from
 
@@ -868,19 +741,14 @@ inequality with room in it. There is no headroom in `DISTANCE_TOL_M` for a third
 error term, which is why the next section's failure appears the instant a third
 one exists rather than growing gradually into it.
 
-**The base frame that arrived in issue #166 is not one**, and the arithmetic is in
-*Discarded* #9 rather than repeated here: it is stored as text at the raw stream's
-own precision, like `q`, and passes through neither of the two roundings the
-equality above is a sum of. The rule the equality implies is that anything retained
-with a quantum of its own has to be added to this sum — so the way to add a frame
-to the artifact is to keep it out of the rounding path, not to widen a tolerance.
+**The base frame is not one**, and the arithmetic is in *Discarded* #9 rather than
+repeated here: it is stored as text at the raw stream's own precision, like `q`,
+and passes through neither of the two roundings the equality above is a sum of.
+The rule the equality implies is that anything retained with a quantum of its own
+has to be added to this sum — so the way to add a frame to the artifact is to keep
+it out of the rounding path, not to widen a tolerance.
 
 ### The rate range these hold in
-
-**Added 2026-08-21 (issue #77), and the section is the fix.** Everything above was
-written as though the tolerances held at any control rate. They do not, the range
-had never been stated, and *a contract silent about its own domain of validity is
-the defect* — the number was never the problem.
 
 **The range.** The four tolerances above hold as written for a stream sampled at
 or below **`1 / TIME_TOL_S` = 100 Hz** (`reg.tolerances.TIME_BASE_MAX_RATE_HZ`,
@@ -920,7 +788,7 @@ only; nothing is fitted and no rate that was not run appears.
 | 500 Hz | 2,501 | 501 | 5 | 269 | **0.0134 m** | 0.0060 m |
 | 1000 Hz | 5,001 | 501 | 11 | 269 | **0.0140 m** | 0.0060 m |
 
-Four things the table says and the argument did not:
+Four things the table says:
 
 1. **The break is at the structural rate, not at a measured one.** The addressable
    instants stop tracking the frame count at 101 Hz — the first rate above
@@ -962,12 +830,10 @@ fixtures, two harnesses, one boundary — which is what makes it a property of t
 time base rather than of a run.
 
 **What this does not license.** Widening `TIME_TOL_S`. It would move the line
-instead of the behaviour, which is the one move this document exists to forbid —
-and it would make this rate *lower*, since the rate is its reciprocal.
-[`docs/plan.md`](plan.md) already calls the `DISAGREE` that found this "a
-measurement, not a tolerance to widen", and `reg.bench`'s control-rate section
-calls `TIME_TOL_S` "not a parameter this study is allowed to move". Both stand;
-issue #77 held the constant and characterised the limit instead.
+instead of the behaviour, and it would make this rate *lower*, since the rate is
+its reciprocal. [`docs/plan.md`](plan.md) already calls the `DISAGREE` that found
+this "a measurement, not a tolerance to widen", and `reg.bench`'s control-rate
+section calls `TIME_TOL_S` "not a parameter this study is allowed to move".
 A build above 100 Hz is also not refused: the artifact holds the same intervals it
 always did and every question in the supported set still answers off it, so
 refusing would delete evidence to avoid stating a limit. What `reg.graph` does
@@ -988,11 +854,10 @@ this edge layer cannot place a per-frame value at a frame.
   must record the frame period in its provenance and never report finer. Claiming
   10 ms resolution over 20 ms frames is a fabricated digit.
 
-  **And the other direction, which went unwritten until issue #77.** Above 100 Hz
-  the quantum is *coarser* than the frame period and the artifact cannot address
-  every frame at all — see [The rate range these hold in](#the-rate-range-these-hold-in).
-  The bullet above was the only half of this sentence anyone had written down, and
-  a reader could fairly have taken its silence for a guarantee.
+  **And the other direction.** Above 100 Hz the quantum is *coarser* than the frame
+  period and the artifact cannot address every frame at all — see
+  [The rate range these hold in](#the-rate-range-these-hold-in). Both halves are
+  stated, because the silence of one of them reads as a guarantee.
 - **`AREA_QUANT_SIGFIGS` is relative.** Two significant figures is worst-case ~5%
   near the bottom of a decade (1.0 vs 1.05 m²) and ~0.5% near the top. Say the
   relative figure in the writeup; do not quote an absolute area tolerance that
@@ -1019,14 +884,13 @@ forbid.
 
 **The per-frame predicates below hold at or below 100 Hz.** Row 1
 (`separation_timeline`, "per sampled frame") and the `overlap_area` row at the
-bottom are conditional on the artifact being able to address each frame, which it
-can only do for a stream sampled at or below `1 / TIME_TOL_S`. Above that they are
-*could-not-evaluate* rather than failing, and `meta[time_base_resolves_frames]` in
-the artifact under test says which. The range, the measurement behind it, and why
-it is not a tolerance to widen are
-[The rate range these hold in](#the-rate-range-these-hold-in). Every other row is
-an interval or a record predicate — an endpoint stated to `TIME_TOL_S` is what a
-`TIME_TOL_S` time base can deliver at any rate — and inherits nothing from this.
+bottom are conditional on the artifact being able to address each frame. Above
+`1 / TIME_TOL_S` they are *could-not-evaluate* rather than failing, and
+`meta[time_base_resolves_frames]` in the artifact under test says which side of
+the range it is on. Every other row is an interval or a record predicate and
+inherits nothing from this; the range, the measurement behind it and why it is
+not a tolerance to widen are
+[The rate range these hold in](#the-rate-range-these-hold-in).
 
 | Query | Ground truth from the CSV | Agreement predicate |
 |---|---|---|
@@ -1080,3 +944,143 @@ has not been shown to be able to fail at all. The `--tamper` flag in
   actual data elements and how far this project overshot them — the source of the
   occurrence level above. Also **§4**, the under-approximation that makes item 3 of
   *Unanswerable* unanswerable.
+
+---
+
+## Why
+
+Nothing below is normative. It is the rationale for the clauses above — how each
+came to be stated in the shape it is, and what each cost when it landed. A
+discard is worth least once nobody remembers what it was weighed against.
+
+### When each clause was added
+
+| clause | issue | dated in this file as |
+|---|---|---|
+| *Discarded* #9, geometry discarded because recomputable | #28 | 2026-08-18 |
+| *Discarded* #10, the per-frame row | #29 | 2026-08-18 |
+| The three resolution levels | #35 | 2026-08-19, amended the same day |
+| *Retained* #5's verbatim storage; level 1's enforcement occurrences; *Discarded* #9's last clause | #45 | 2026-08-19 |
+| *Unanswerable* #4, a level graded against its own quantum | #60 | 2026-08-20 |
+| *Unanswerable* #5; *The rate range these hold in* | #77 | 2026-08-21 |
+| *Retained* #8's outer scalars; *Unanswerable* #3's narrowing | #82 | 2026-08-21 |
+| Level 1's date element and `--run-start` | #83 | — |
+| *Retained* #7, the acknowledgment row | #110 | 2026-08-24 |
+| *Retained* #8 and *Discarded* #9, the base frame and `config_id` | #166 | — |
+| *Retained* #10, `PROVENANCE_VERSION` at 2 | #176 | — |
+| *Retained* #8 and *Discarded* #9, the pose written and the polygon kept | #191 | — |
+| *Discarded* #9, the buildinfo in `meta` | #200 | — |
+| *Discarded* #9, `envelope_at` refusing off-environment | #201 | — |
+
+### The lists described one level, and said so only implicitly
+
+*Retained*, *Discarded* and *Unanswerable* were written as the whole contract.
+Issue #35 put two coarser levels beside them, and the preamble's **How to read
+this file** note is what stops the old reading.
+
+### *Retained* #7 — a pointer that read as scheduled work
+
+The clause said "not stored **yet**, arriving with issue #46" until 2026-08-24,
+when issue #110 found #46 closed with the fixtures shipped and the row not. #112
+is the open one, and the core names it instead.
+
+### *Retained* #8 — what the base frame cost
+
+Two nullable columns on `robot_config` and one `meta` row, measured with
+`python -m reg.bench --resolution --seed 0` on `long_run` at 3,000 frames:
+**+2,048 B** at `occurrence`, all of it in `indexes + schema` — that level retains
+no `robot_config` row at all — and **+7,168 B** at `transition` and `per-frame`,
+the same 2,048 plus **2 B on each of the 2,560 configuration rows those levels
+keep**. The 2 B is SQLite's record header: a column that is NULL on every row
+still costs a serial-type byte per row. So the published figures moved, by
+**+0.20% to +0.29%**, and were re-measured and republished across the corpus in
+the same change. A side table, so a bolted run pays nothing, was rejected: a pose
+reachable only by a join is one every reader of `robot_config` can forget to make.
+
+Filling those columns in (#191) and recording the environment (#200) cost no
+published figure between them — both are longer strings in `meta` rather than
+bytes on 2,560 rows — so the three artifact sizes are left where
+[`sufficiency.md`](sufficiency.md) publishes them and
+`tests/test_published_figures.py` re-measures them, rather than restated here. The
+eleven fixed-base artifacts are nonetheless not byte-identical, because
+`GEOMETRY_RETENTION`'s text lands in every one of them. The control-rate ladder
+[`sensor-baseline.md`](sensor-baseline.md) publishes — the rungs CI does not pin,
+which is the lesson of issue #181 — was re-measured too and did not move.
+
+### *Retained* #8 — the clause that read "at every material change"
+
+It read that way until issue #29 replaced it on 2026-08-18. A moving arm has a
+materially different envelope on *every* frame, so that reading put one row per
+frame into the artifact for exactly the runs this project exists to record, and no
+amount of shrinking a row changes the shape of linear-in, linear-out.
+
+### *Retained* #10 — what the version bump cost
+
+One character in one comment line, which gzip rendered one byte longer in the
+baseline. Nothing else moved, because every robot here is bolted to the origin.
+The figure is not restated here: [`retention.md`](retention.md) publishes it in
+the Layer-A comparison table and `tests/test_published_figures.py` re-measures
+that table against `reg.bench` every run.
+
+### *Discarded* #9 — the alternatives, and what was wrong with each
+
+A retention rule whose cost scales with how much the arm moved is the defect
+*Relationships, not edge rows* exists to remove, and 150 frames against 2 is the
+size of it. Retaining nothing for a posed frame and refusing on read was the
+alternative to retaining the polygon: it is worse than either, because every
+envelope query on a mobile artifact becomes a could-not-evaluate, which is a file
+that parses and answers nothing. And the centre `outer_radius` is measured about
+went unnamed until issue #166 — it was the origin because there was no other
+possibility, a fact about the code that wrote the artifact rather than about the
+artifact.
+
+Before issues #200 and #201 an artifact recorded the envelope parameters and
+nothing about the machine, so an assessor who recomputed a discarded polygon and
+disagreed could not tell *wrong machine* from *the geometry moved*, which are
+opposite findings. What used to be a number is now a refusal: a worse answer and a
+true one.
+
+### The three resolution levels — the refutation that started them
+
+Claim 1's original form — the graph is orders of magnitude smaller than the stream
+— was measured against a gzipped copy of the simulator's own raw state CSV — 24
+columns for the priced fixture, 19 of them Layer B, not the proprioception that
+line called it — and came out 14x *worse* (issue #30). That refutation has since
+been withdrawn: the CSV was never the baseline the claim was about, the sensor-log
+baseline is stated in the README and in the original plan, and the plan's own
+limitations section already flagged the terabytes/day figure as "imported context,
+not a result". The question it provoked outlived its own premise, which is why the
+levels are in the core and this is here. The provisional figure the core names
+predates the Layer A record (issue #59). And `reg` chose cm / 10 ms, every
+frame, without noticing it was choosing — the DSSAD comparison in the core is what
+made that visible.
+
+### Level 1 — a heading that oversold it, and a date element
+
+The heading read *occurrence (DSSAD-aligned, ±1.0 s by default)* and
+[`plan.md`](plan.md) Claim 1's retention table called the level *DSSAD-shaped*;
+both described the event layer as though it were the level. Issue #59 established
+that no level coarsens a record and issue #116 decided the positioning. Until
+issue #45 every occurrence type was Layer B and about an entity, so the coarse
+layer could say who came near the robot and nothing about what it was authorised
+to do.
+
+The date element (issue #83) was a stated deviation, on the argument that DSSAD
+records `yyyy/mm/dd` because a recorder in a car has a clock while this artifact
+must be byte-reproducible from its seeds. The premise was sound and the conclusion
+did not follow: **key material is not derivable from a seed either**, and the
+answer there was a required caller-supplied input rather than a dropped element.
+Until `--run-start` applied the same answer, `reg` had copied DSSAD's ±1.0 s and
+dropped the datum that number is an accuracy requirement on.
+
+### *The rate range these hold in* — a limit that arrived as a bug report
+
+Everything above that section was written as though the tolerances held at any
+control rate. They do not, the range had never been stated, and *a contract silent
+about its own domain of validity is the defect* — the number was never the
+problem. Issue #77 held `TIME_TOL_S` and characterised the limit rather than
+tuning the finding away. *Unanswerable* #5 was written for two transitions that
+happened to land close together; above 100 Hz it reaches every consecutive pair of
+frames. The `TIME_TOL_S`-is-a-quantum bullet was the only half of its sentence
+anyone had written down, and a reader could fairly have taken its silence for a
+guarantee.

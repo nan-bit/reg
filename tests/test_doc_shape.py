@@ -201,9 +201,12 @@ RATE = 94.5
 #
 #   60,635  #171 as filed
 #   74,945  2026-09-05, when #171 landed — measured, no headroom
-#   74,590  today, 2026-09-05, after #206 split `docs/limitations.md` into a
-#           normative core and a `## Why` line — measured, no headroom
-ARGUMENT_MAX = 74590
+#   74,590  2026-09-05, after #206 split `docs/limitations.md` into a normative
+#           core and a `## Why` line — measured, no headroom
+#   74,230  today, 2026-09-05, after #209 did the same to `docs/lossiness.md`:
+#           that file went 11,116 -> 10,756, of which 9,391 is the normative
+#           core — measured, no headroom
+ARGUMENT_MAX = 74230
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -213,9 +216,10 @@ PARAGRAPH_MAX_WORDS = 120
 #
 #   110  #170's measurement, 2026-09-02, over 821 prose paragraphs
 #   146  2026-09-05, when #171 landed, over 915
-#   141  today, 2026-09-05, after #206: five of docs/limitations.md's
-#        twenty-three over-long paragraphs were split or cut
-LONG_PARAGRAPHS_MAX = 141
+#   141  2026-09-05, after #206: five of docs/limitations.md's twenty-three
+#        over-long paragraphs were split or cut
+#   135  today, 2026-09-05, after #209: docs/lossiness.md went 26 -> 20
+LONG_PARAGRAPHS_MAX = 135
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -224,9 +228,11 @@ LONG_PARAGRAPHS_MAX = 141
 #   265  2026-09-05, when #171 landed, by PAST_DEFECT_MARKERS below — a
 #        different rule, so the two are comparable in direction and not to the
 #        unit
-#   240  today, 2026-09-05, after #206 moved docs/limitations.md's archaeology
-#        below a `## Why` heading: that file went 38 -> 13
-NARRATION_MAX = 240
+#   240  2026-09-05, after #206 moved docs/limitations.md's archaeology below a
+#        `## Why` heading: that file went 38 -> 13
+#   212  today, 2026-09-05, after #209 did the same to docs/lossiness.md: that
+#        file went 39 -> 11
+NARRATION_MAX = 212
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

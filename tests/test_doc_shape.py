@@ -200,8 +200,10 @@ RATE = 94.5
 # allowance.
 #
 #   60,635  #171 as filed
-#   74,945  today, 2026-09-05 — measured, no headroom
-ARGUMENT_MAX = 74945
+#   74,945  2026-09-05, when #171 landed — measured, no headroom
+#   74,590  today, 2026-09-05, after #206 split `docs/limitations.md` into a
+#           normative core and a `## Why` line — measured, no headroom
+ARGUMENT_MAX = 74590
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -210,16 +212,21 @@ PARAGRAPH_MAX_WORDS = 120
 # How many of them the corpus may hold. MAY BE LOWERED, NEVER RAISED.
 #
 #   110  #170's measurement, 2026-09-02, over 821 prose paragraphs
-#   146  today, 2026-09-05, over 915
-LONG_PARAGRAPHS_MAX = 146
+#   146  2026-09-05, when #171 landed, over 915
+#   141  today, 2026-09-05, after #206: five of docs/limitations.md's
+#        twenty-three over-long paragraphs were split or cut
+LONG_PARAGRAPHS_MAX = 141
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
 #
 #   190  #170's measurement, 2026-09-02, by its own counting rule
-#   265  today, 2026-09-05, by PAST_DEFECT_MARKERS below — a different rule,
-#        so the two are comparable in direction and not to the unit
-NARRATION_MAX = 265
+#   265  2026-09-05, when #171 landed, by PAST_DEFECT_MARKERS below — a
+#        different rule, so the two are comparable in direction and not to the
+#        unit
+#   240  today, 2026-09-05, after #206 moved docs/limitations.md's archaeology
+#        below a `## Why` heading: that file went 38 -> 13
+NARRATION_MAX = 240
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

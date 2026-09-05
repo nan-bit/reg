@@ -681,8 +681,11 @@ the one before the change: 1,006,592 B / 2,501,632 B / 3,632,128 B, which at thi
 fixture's 50 Hz control rate is 60.42 / 150.15 / 218.00 MB/h. One longer string
 in one `meta` row does not cross a page
 boundary, where #166's two nullable columns cost a record-header byte on every
-one of 2,560 `robot_config` rows. The control-rate ladder above was re-measured
-too, and did not move either.
+one of 2,560 `robot_config` rows. The control-rate ladder
+[`sensor-baseline.md`](sensor-baseline.md) publishes — all four rungs, including
+the three CI does not pin — was re-measured too, with
+`python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0`, and that report
+is byte-identical as well.
 
 *What remains in this tier.* The fixtures themselves — a registered scenario that
 drives, and the mobile fault fixtures beside it. No registered scenario drives

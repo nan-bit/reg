@@ -1498,7 +1498,20 @@ def coverage_claim_is_qualified(text: str) -> tuple[str, list[str]]:
 #: other roster here is: a document that stops citing the guarantee, and one that
 #: starts, are both worth a look.
 DOCS_CITING_THE_GUARANTEE: frozenset[str] = frozenset(
-    {"README.md", "README.md (docs/)", "retention.md", "sensor-baseline.md"}
+    {
+        "README.md",
+        "README.md (docs/)",
+        "retention.md",
+        "sensor-baseline.md",
+        # Added 2026-09-05 with issue #209. `docs/lossiness.md`'s `## Why`
+        # section cites this module twice, in both cases to say why a figure it
+        # used to restate is *not* restated there any more: the three artifact
+        # sizes are `sufficiency.md`'s measured-curve table and the gzipped CSV
+        # baseline is `retention.md`'s Layer-A comparison table, and both are
+        # re-measured here. Each citation names the table it is about, so
+        # neither claims this module covers everything.
+        "lossiness.md",
+    }
 )
 
 

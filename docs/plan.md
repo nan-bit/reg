@@ -259,12 +259,13 @@ condition that is part of the number:
   condition quotes a different artifact.
 - The gzipped state CSV is **not what practitioners retain**. Against
   **rosbag2/MCAP**, the incumbent, the same proprioceptive content costs
-  **2.51x** what the gzipped CSV does — and that is a **hand-built encoding
-  comparison and not a real bag**, which [`sensor-baseline.md`](sensor-baseline.md)
-  requires be said wherever the figure is quoted until issue #117 retires it. So
-  the artifact's disadvantage against a real bag is smaller than the figure
-  suggests; by how much is not measured, because the two comparisons do not carry
-  the same content.
+  **11.76x** what the gzipped CSV does at rosbag2's default preset and **3.83x**
+  at its opt-in compressed one — and both are a **hand-built encoding comparison
+  and not a real bag**, which [`sensor-baseline.md`](sensor-baseline.md) requires
+  be said wherever either figure is quoted until a measurement retires it. So the
+  artifact's disadvantage against a real bag is smaller than the figures suggest;
+  by how much is not measured, because the two comparisons do not carry the same
+  content.
 
 **And the prohibition those two conditions imply, stated as a rule here because
 code cites it as one.** *Nothing in this repository may quote a compression ratio

@@ -1198,6 +1198,14 @@ rather than a measurement. **README and `plan.md` Claim 1 still describe the
 baseline without naming what it stands in for** — outside issue #104's affected
 areas, the same way §11a records the README standards table.
 
+**Corrected 2026-09-06 (issue #117).** The **2.51x** above is superseded and
+left standing as the figure this pass was given: it priced the opt-in
+`mcap_compressed_nocrc` preset as though it were what rosbag2 writes, and
+charged nothing for the per-message MessageIndex. Republished from
+`docs/sensor-baseline.md`: **11.76x** at the default preset, **3.83x**
+compressed. Every part of the error ran one way, so this section's conclusion
+stands and its number understated it.
+
 ---
 
 ## 17. SOTER — Simplex with an implementation, in robotics, in 2019

@@ -41,13 +41,9 @@ own revision.
 
 ---
 
-**What the claim is, and where it is stated.** Retention is the enabling
-condition for Claim 4 rather than a rival to it: an attestation you cannot afford
-to keep until the claim is filed is worthless. The property the rest of the
-argument needs is *cheap enough to keep for the mandated window*, not *smaller
-than the alternative by the largest available factor* — which is why this is
-named Retention and no longer Compression. The claim itself, with the conditions
-that travel with every figure below, is [`plan.md`](plan.md) Claim 1.
+**What the claim is, and where it is stated.** The claim itself, the conditions
+that travel with every figure below, and why this is named Retention and not
+Compression are [`plan.md`](plan.md) Claim 1, *What it supports*.
 
 **Success, as originally stated:** 2–4 orders of magnitude, one number, one chart.
 
@@ -79,14 +75,11 @@ cited it correctly; the slip was under the headline number, which is where it
 would have been read.)
 
 **And that floor is subordinate to data-protection law, which nothing here
-prices** (issue #101). Both Articles set the six-month period *"unless provided
-otherwise in applicable Union or national law, in particular Union law on the
-protection of personal data"*, and the artifact contains personal data. Every
-figure below is what it costs to keep the artifact for the mandated window; none
-of them is a claim that keeping it for that window is permitted. Stated in full,
-once, where the claim is: [`plan.md`](plan.md) Claim 1. The entry it rests on —
-with Art. 26(7) and the DPIA obligation named, and no claim of compliance — is
-[`limitations.md` §8](limitations.md).
+prices** (issue #101). Every figure below is what it costs to keep the artifact
+for the mandated window; none of them is a claim that keeping it for that window
+is permitted. Stated in full, once, where the claim is: [`plan.md`](plan.md)
+Claim 1. The entry it rests on — with Art. 26(7) and the DPIA obligation named,
+and no claim of compliance — is [`limitations.md` §8](limitations.md).
 
 Per robot, from the measured resolution curve:
 
@@ -131,11 +124,6 @@ frames` across run lengths and evaluating the fit, which is the extrapolation
 **every** report shape that prints a `bytes/hour` figure — the resolution table,
 the control-rate ladder and the console summary — rather than in one of the
 three (issue #116).
-
-**The first row's label changed in issue #116 and its figures did not.** What
-the coarsest level actually holds, why it is no longer called *DSSAD-shaped*,
-and the two labels that were rejected instead are below, under *What the
-coarsest level actually holds*.
 
 At occurrence resolution the artifact is **~689x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
@@ -463,16 +451,23 @@ same 24 columns it has always been and every ratio, MB/hour and GB figure in thi
 document is unchanged. Recorded here rather than absorbed, because a figure that
 moves for a reason nobody wrote down is the thing the pin exists to prevent.
 
-**That baseline is not the incumbent, and the gap is now measured.** Nobody
-retains a gzipped CSV; practitioners retain rosbag2, in MCAP. For the same
-proprioceptive content — `t`, `q`, `qd` over the same fixture — MCAP
-`/joint_states` costs **2.51x** what the gzipped CSV costs: 7,669 B against
-3,053 B, computed from the MCAP specification and chunk-compressed, recorded as a
-projection in [`sensor-baseline.md`](sensor-baseline.md) *The incumbent encoding*
-and held to the byte by `tests/test_incumbent_encoding.py`.
+**That baseline is not the incumbent, and the gap is now measured, under both
+configurations rosbag2 writes.** Nobody retains a gzipped CSV; practitioners
+retain rosbag2, in MCAP. For the same proprioceptive content — `t`, `q`, `qd`
+over the same fixture — MCAP `/joint_states` costs **11.76x** what the gzipped
+CSV costs at the `mcap_default` preset a practitioner gets without choosing:
+35,893 B against 3,053 B, uncompressed and chunked with a 16 B/message index. At
+the opt-in `mcap_compressed_nocrc` preset it costs **3.83x**, 11,685 B. Both are
+computed from the MCAP specification, recorded as a projection in
+[`sensor-baseline.md`](sensor-baseline.md) *The incumbent encoding* and held to
+the byte by `tests/test_incumbent_encoding.py`.
+
+The **2.51x** published here from 2026-08-26 is superseded. It priced
+compression as a default rosbag2 does not apply and left the message index out;
+both of those made the incumbent look cheap.
 
 So **~40x overstates the artifact's disadvantage against what a buyer actually
-keeps**, and by an amount this project has not measured: the 2.51x is
+keeps**, and by an amount this project has not measured: the incumbent ratio is
 proprioception on both sides, while the ~40x baseline carries the human's state
 and three obstacles as well. The two comparisons do not cover the same content
 and are not composable into a single corrected ratio. **~40x remains the number
@@ -599,17 +594,17 @@ compression ratio.
 ## See also
 
 - [`plan.md`](plan.md) Claim 1 — the claim these figures serve, and the
-  conditions that travel with each of them wherever it is quoted.
-- [`sensor-baseline.md`](sensor-baseline.md) — where the sensor side comes from.
-  It is an assumption with a sourced range, never a measurement, and the
-  sensitivity table there is what the ratio's robustness rests on.
-- [`lossiness.md`](lossiness.md) — the three resolution levels being priced, and
-  what each of them can still be asked.
+  conditions that travel with each figure wherever it is quoted.
+- [`sensor-baseline.md`](sensor-baseline.md) — where the sensor side comes from:
+  an assumption with a sourced range, never a measurement, and the sensitivity
+  table the ratio's robustness rests on.
+- [`lossiness.md`](lossiness.md) — the three resolution levels priced above, and
+  what each can still be asked.
 - [`limitations.md`](limitations.md) §5 — the rate ceiling above which an
-  artifact cannot address every frame of the run it prices. Two rungs of the
-  ladder above are beyond it.
-- [`prior-art.md`](prior-art.md) §8 and §16 — why the artifact loses to a float
-  codec, and the incumbent (rosbag2/MCAP) that a bag-shaped baseline would be.
+  artifact cannot address every frame of the run it prices. Two rungs above are
+  beyond it.
+- [`prior-art.md`](prior-art.md) §8 and §16 — the float codec the artifact loses
+  to, and the incumbent a bag-shaped baseline would be.
 - `python -m reg.bench --resolution --seed 0 --out runs/resolution.md` — the
   command that produces the resolution table; swap `--resolution` for
   `--control-rate-hz 50,100,250,1000` for the ladder. **`--out` is required and

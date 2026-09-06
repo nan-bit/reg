@@ -268,18 +268,30 @@ against a format nobody runs prices a counterfactual.
 ### The comparison
 
 Same information on both sides — `t`, `q`, `qd` for a two-joint arm, 251 frames
-of the `declared_violation` fixture at 50 Hz:
+of the `declared_violation` fixture at 50 Hz. **Both rosbag2 presets are
+priced**, because the configuration a practitioner gets and the configuration
+that matches a gzipped baseline are not the same one:
 
-| Encoding | Size |
-|---|---|
-| CSV, gzip -9 | **3,051 B** |
-| MCAP `/joint_states` | **7,669 B** |
+| Encoding | Size | x gz CSV |
+|---|---|---|
+| CSV, gzip -9 | **3,053 B** | 1.00x |
+| MCAP, `mcap_default` — uncompressed, chunked, indexed | **35,893 B** | **11.76x** |
+| MCAP, `mcap_compressed_nocrc` — zstd chunks, indexed | **11,685 B** | **3.83x** |
 
-**MCAP is 2.51x the gzipped CSV for identical content.** The cost is per-message
-self-description, which is what a bag format is for and is expensive at 50 Hz:
+`mcap_default` is rosbag2's default preset: **uncompressed**, chunked at 768 KiB,
+with a message index; compression is the opt-in `mcap_compressed_nocrc`
+([rosbag2 storage plugin benchmarks](https://mcap.dev/guides/benchmarks/rosbag2-storage-plugins)).
+So **what a practitioner retains without choosing anything costs 11.76x the
+gzipped CSV**, and the compressed preset — the like-for-like against a gzipped
+baseline — costs 3.83x. Both are published rather than one: quoting whichever
+preset suits the argument is the same move as measuring against a baseline
+nobody runs, one layer down.
+
+The cost is per-message self-description plus a per-message index, which is what
+a bag format is for and is expensive at 50 Hz:
 
 ```
-127 B  MCAP Message record
+143 B  per message, before compression
    1   opcode
    8   record length
   22   channel_id, sequence, log_time, publish_time   (mcap.dev/spec)
@@ -287,12 +299,15 @@ self-description, which is what a bag format is for and is expensive at 50 Hz:
         of which 32 B is the four float64s that carry the data;
         the rest is the encapsulation header, the Time struct, the
         joint-name strings repeated on every message, and alignment padding
+  16   MessageIndex entry: log_time 8 + offset 8, one per message
+        and outside the chunk, so uncompressed under either preset
 ```
 
 So the baseline Claim 1 currently uses is not merely unrepresentative — it is
-**about 2.5x more efficient than the incumbent**. The artifact's disadvantage
-against what practitioners actually keep is correspondingly smaller than the
-published figure against gzipped CSV.
+**about 12x more efficient than what a practitioner actually retains**, and
+about 4x more efficient than the same bag with compression turned on. The
+artifact's disadvantage against what practitioners keep is correspondingly
+smaller than the published figure against gzipped CSV.
 
 **This document does not restate the headline.** The ratio above is an encoding
 ratio, free of fixed cost on both sides. Translating it into Claim 1 needs
@@ -303,11 +318,21 @@ there says more about the schema than the encoding.
 
 ### Assumptions, each of which can move the number
 
-- **gzip -9 stands in for zstd**, which is rosbag2's MCAP default. Comparable in
-  class, not identical.
-- **File-level records excluded** — header, schema, channel, chunk index,
-  statistics, summary, footer. Adds roughly 1-2 kB fixed: negligible at scale,
-  material at 251 messages, and it makes MCAP look *better* here than it is.
+- **`mcap_default` is a floor and the compressed figure is not.** Every
+  assumption below makes the default preset look cheaper than a real bag, so
+  11.76x understates the incumbent. The compressed figure carries one
+  assumption whose direction nobody here can state, which is the next line, so
+  *floor* is claimed for the first number and withdrawn for the second.
+- **gzip -9 stands in for zstd** in `mcap_compressed_nocrc`. Comparable in
+  class, not identical, and which is smaller on this data is unmeasured. The
+  default preset compresses nothing and carries no compressor assumption at all.
+- **File-level records excluded** — header, schema, channel, chunk headers,
+  chunk index, statistics, summary, footer, and the 15 B fixed part of each
+  MessageIndex record. Adds roughly 1-2 kB fixed: negligible at scale, material
+  at 251 messages, and it makes MCAP look *better* here than it is.
+- **The per-message index is included**, at 16 B per message under both presets.
+  It is what makes a bag seekable, rosbag2 writes it by default, and it scales
+  with the run rather than sitting in the fixed cost above.
 - **Joint names `joint_0` / `joint_1`, empty `frame_id`, empty `effort`.** Real
   robots use longer joint names, which makes MCAP look worse.
 - **`sensor_msgs/msg/JointState` with position and velocity only.** A system
@@ -332,8 +357,9 @@ everywhere else.
 
 A rosbag2 writer with the real `mcap` library and real `zstd`, run once outside
 this repository against the same fixture, recorded here with its version and
-command line. That replaces a projection with a measurement and should be done
-before any outside-facing document leans on the 2.51x.
+command line, and priced under both presets. That replaces a projection with a
+measurement and should be done before any outside-facing document leans on the
+11.76x.
 
 ## A premise this document does not carry: air-gapped sites
 
@@ -415,6 +441,7 @@ worth least once nobody remembers what it was weighed against.
 | Every size re-measured with Layer A in the artifact; the window as Art. 19 and Art. 26(6) | #59, #60, #64 | 2026-08-20 |
 | *The control rate* and its ladder; run identity and the outer-envelope scalars in the sizes; the ladder republished | #68, #82, #83, #94 | 2026-08-21 |
 | *The incumbent encoding*; the premise this document does not carry | #117, #102 | 2026-08-26 |
+| *The incumbent encoding* republished under both rosbag2 presets, with the message index priced | #117 | 2026-09-06 |
 | The priced stream, as 24 columns and 19 Layer B | #123 | 2026-08-27 |
 | Three sensitivity rows recomputed from the sizes | — | 2026-08-28 |
 | The base pose on `robot_config`; the ladder re-measured, three rungs of it stale | #166 | 2026-09-02 |
@@ -453,7 +480,18 @@ for the reason *The control rate* gives: it assumed the whole level scales, and
 
 ### Whose work the incumbent ratio is waiting on
 
-Translating the 2.51x into Claim 1 is the remaining work of issue #117. Until it
-lands the ratio travels with the condition that it is a hand-built encoding
-comparison and not a real bag, which is what `README.md` and
-[`plan.md`](plan.md) state wherever they quote it.
+Translating the 11.76x into Claim 1 is not #117's work but its successor's: the
+two comparisons are not composable. Until that lands the ratio travels with the
+condition that it is a hand-built encoding comparison and not a real bag, which
+is what `README.md` and [`plan.md`](plan.md) state wherever they quote it.
+
+### What the 2026-09-06 re-measurement moved, and why
+
+This section published **2.51x** and **7,669 B** from 2026-08-26. That figure is
+superseded: it priced chunk compression as though rosbag2 applied it by default
+and left the message index out, so it modelled a configuration a practitioner has
+to select and undercharged even that one. Both errors ran the same way — they
+made the incumbent look cheap, which made this project's disadvantage look worse
+than it is, the same direction of error the gzipped-CSV baseline itself has.
+Correcting them gives 35,893 B at the default preset and 11,685 B at the
+compressed one, against the same 3,053 B of gzipped CSV.

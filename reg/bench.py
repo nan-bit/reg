@@ -1089,18 +1089,25 @@ def proprioceptive_columns(header: Sequence[str]) -> list[str]:
     return [c for c in header if column_layer(c) == LAYER_A]
 
 
-def mcap_joint_states_bytes(path: str | Path) -> int:
+def mcap_joint_states_bytes(path: str | Path, *, preset: str) -> int:
     """Bytes a rosbag2/MCAP `/joint_states` topic would hold for this stream.
 
-    Message records only: the file-level header, schema, channel, chunk index,
-    statistics, summary and footer are excluded, which understates a real bag by
-    one to two kilobytes. Excluded rather than estimated, because an estimate
-    would be a number nobody measured sitting beside numbers that were.
+    `preset` names a configuration in `MCAP_PRESETS` and has **no default**. The
+    two presets differ by a factor of three on the same messages, so a default
+    here would be this comparison choosing its own answer; the caller says which
+    configuration it is pricing and the report prints the name.
+
+    Message records and their message index, which are the two costs that scale
+    with the run. The file-level header, schema, channel, chunk index, chunk
+    headers, statistics, summary and footer are excluded, which understates a
+    real bag by one to two kilobytes. Excluded rather than estimated, because an
+    estimate would be a number nobody measured sitting beside numbers that were.
 
     Raises rather than guessing when the stream cannot be priced. A stream with
     no proprioceptive columns is a could-not-evaluate, and returning 0 for it
     would read downstream as a free encoding.
     """
+    chosen = mcap_preset(preset)
     path = Path(path)
     rows = [
         line for line in path.read_text(encoding="utf-8").splitlines()
@@ -1130,6 +1137,7 @@ def mcap_joint_states_bytes(path: str | Path) -> int:
     qi = [header.index(f"q_{j}") for j in joints]
     di = [header.index(f"qd_{j}") for j in joints]
     stream = bytearray()
+    messages = 0
     for seq, row in enumerate(reader):
         t_s = float(row[ti])
         payload = joint_state_cdr(
@@ -1145,16 +1153,21 @@ def mcap_joint_states_bytes(path: str | Path) -> int:
         ns = int(t_s * 1_000_000_000)
         record = struct.pack("<HIQQ", 0, seq, ns, ns) + payload
         stream += b"\x05" + struct.pack("<Q", len(record)) + record
-    # Chunk-compressed, because that is what rosbag2 writes and because the
-    # baseline this is compared against is gzipped. Uncompressed here against
-    # gzipped there would not be a comparison, it would be a category error.
-    # `gzip` stands in for `zstd`, MCAP's rosbag2 default — comparable in class,
-    # not identical, and stated as an assumption in `docs/sensor-baseline.md`.
-    return len(
-        gzip.compress(
-            bytes(stream), compresslevel=GZIP_COMPRESSLEVEL, mtime=GZIP_MTIME
+        messages += 1
+    # Only the chunk's own records are compressed. The message index sits
+    # outside the chunk in both presets and is added at full width to both:
+    # the spec puts MessageIndex records after the chunk they index, precisely
+    # so a reader can seek without decompressing anything.
+    body = (
+        len(
+            gzip.compress(
+                bytes(stream), compresslevel=GZIP_COMPRESSLEVEL, mtime=GZIP_MTIME
+            )
         )
+        if chosen.compressed
+        else len(stream)
     )
+    return body + messages * MCAP_MESSAGE_INDEX_PER_MESSAGE
 
 
 def gzip_bytes_of_columns(path: str | Path, columns: Sequence[str]) -> int:
@@ -1222,13 +1235,25 @@ def gzip_bytes(path: str | Path) -> int:
 # WHAT IT IS NOT. This is a **projection computed from published specification**,
 # not a measurement: no `mcap` library is imported and no `zstd` is run, because
 # this project adds no dependency for a baseline. What is measured is the byte
-# stream the encoder below produces. What is projected is that a rosbag2 writer
+# stream the encoder above produces. What is projected is that a rosbag2 writer
 # would lay the same bytes out the same way.
 #
-# WHY IT IS A FLOOR. Every assumption here makes MCAP look *better* than it is:
-# file-level records are excluded, joint names are the shortest plausible, and
-# `effort` is empty. A real bag is larger than this, so the penalty computed from
-# it understates the incumbent's cost.
+# WHY THE CONFIGURATION IS NAMED RATHER THAN ASSUMED. rosbag2's MCAP plugin has
+# more than one writer preset and they do not cost the same thing. Both are
+# priced and both are published: `mcap_default` is what a practitioner retains
+# without choosing anything, and `mcap_compressed_nocrc` is the like-for-like
+# against a gzipped baseline. Pricing whichever one suits the argument is the
+# error the gzipped-CSV baseline already made one layer down.
+#
+# WHAT "FLOOR" MEANS, AND WHERE THE WORD STOPS APPLYING. Under `mcap_default`
+# every assumption here makes MCAP look *better* than it is: file-level records
+# are excluded, the message index's per-chunk part with them, joint names are
+# the shortest plausible and `effort` is empty. A real bag is larger, so the
+# penalty computed from it understates the incumbent's cost. Under
+# `mcap_compressed_nocrc` that claim is **withdrawn, not repeated**: gzip -9
+# stands in for zstd and which of the two is smaller on this data is not known
+# here, so that number carries one assumption whose direction nobody in this
+# repository can state. `docs/sensor-baseline.md` says so beside the figure.
 
 MCAP_MESSAGE_RECORD_OVERHEAD = 31
 """Bytes of MCAP framing per message, from the format specification.
@@ -1239,8 +1264,93 @@ number that moved with the answer would be the invented default this project
 refuses everywhere else.
 """
 
+MCAP_MESSAGE_INDEX_PER_MESSAGE = 16
+"""Bytes of MessageIndex per message, from the same specification.
+
+8 log_time + 8 offset, one entry per message in the chunk's index. Both presets
+below write it — a message index is what makes a bag seekable — and it is a
+*per-message* cost, so it scales with the run the way the record overhead does
+and cannot sit under the file-level exclusion the way a footer can.
+
+The per-record fixed part is excluded with those file-level records: opcode 1 +
+record length 8 + channel_id 2 + array length 4, once per chunk per channel, and
+at a 768 KiB chunk size that is 15 bytes for this whole fixture. Excluded rather
+than estimated, and its exclusion is one of the assumptions that keeps
+`mcap_default` a floor.
+"""
+
 CDR_ENCAPSULATION = 4
 """The XCDR1 representation identifier and options, ahead of every payload."""
+
+
+@dataclass(frozen=True)
+class McapPreset:
+    """One rosbag2 MCAP writer configuration, named after the preset it models.
+
+    `what` is not decoration. A preset is a claim about what somebody else's
+    software does by default, so the entry that asserts it carries the source
+    for it — the same discipline `docs/sensor-baseline.md` applies to the sensor
+    rate, and the reason neither number is a guess with a citation-shaped
+    comment beside it.
+    """
+
+    name: str
+    compressed: bool
+    what: str
+
+
+#: The two configurations priced, and the reason there are two.
+#:
+#: `mcap_default` is rosbag2's default preset: **uncompressed**, chunked at
+#: 768 KiB, with a message index. `mcap_compressed_nocrc` is the opt-in preset
+#: that turns zstd on and CRCs off. Both are documented at
+#: mcap.dev/guides/benchmarks/rosbag2-storage-plugins.
+#:
+#: Reporting only the compressed one prices a configuration a practitioner has
+#: to deliberately choose; reporting only the default compares uncompressed
+#: bytes against a gzipped baseline, which is a category error. So both are
+#: reported, each under the name of the preset it models.
+MCAP_PRESETS: tuple[McapPreset, ...] = (
+    McapPreset(
+        name="mcap_default",
+        compressed=False,
+        what=(
+            "rosbag2's default MCAP preset: uncompressed, chunked at 768 KiB, "
+            "with a message index. What a practitioner retains without "
+            "choosing anything "
+            "(mcap.dev/guides/benchmarks/rosbag2-storage-plugins)."
+        ),
+    ),
+    McapPreset(
+        name="mcap_compressed_nocrc",
+        compressed=True,
+        what=(
+            "rosbag2's opt-in compressed preset: zstd-compressed chunks, CRCs "
+            "off, message index kept. The like-for-like against a gzipped "
+            "baseline, and a configuration somebody had to select "
+            "(mcap.dev/guides/benchmarks/rosbag2-storage-plugins)."
+        ),
+    ),
+)
+
+
+def mcap_preset(name: str) -> McapPreset:
+    """The preset called `name`, or a refusal naming the ones that exist.
+
+    Not `dict.get` with a fallback. A misspelt preset that quietly priced the
+    compressed one would publish a figure under the name of a configuration
+    nobody encoded, which is the invented default in its most expensive form:
+    the number would be real and the label on it would be false.
+    """
+    for preset in MCAP_PRESETS:
+        if preset.name == name:
+            return preset
+    raise BenchError(
+        f"{name!r} is not an MCAP preset this module prices. Known presets: "
+        f"{[p.name for p in MCAP_PRESETS]}. A preset is a claim about what "
+        "rosbag2 writes by default, so it is named rather than inferred, and "
+        "an unknown one is a could-not-evaluate rather than the nearest match."
+    )
 
 
 def _cdr_align(buf: bytes, n: int) -> bytes:
@@ -1285,6 +1395,149 @@ def joint_state_cdr(t_s: float, q: Sequence[float], qd: Sequence[float],
     b = _cdr_align(b, 8) + b"".join(struct.pack("<d", v) for v in qd)
     b = _cdr_align(b, 4) + struct.pack("<I", 0)                     # effort[]
     return b"\x00\x01\x00\x00" + b
+
+
+# --- reporting it, in a shape that can come out against the project ----------
+
+#: The incumbent costs more than the baseline this project loses against. This
+#: is the finding the comparison was built to publish, and it is a verdict
+#: rather than a constant precisely because the other two are reachable.
+INCUMBENT_DEARER = "INCUMBENT DEARER"
+
+#: The incumbent costs less. Then the gzipped CSV is not a soft baseline after
+#: all, the ~40x is not overstated for the reason this section gives, and the
+#: sentence saying so is printed rather than left for a reader to derive from a
+#: ratio below 1.
+INCUMBENT_CHEAPER = "INCUMBENT CHEAPER"
+
+#: The two encodings come out at the same number of bytes. Not folded into
+#: `INCUMBENT_DEARER` by a `>=`: "dearer by nothing" is not the finding, and a
+#: comparison that rounds a tie towards its own conclusion is the shape of thing
+#: this whole section exists to avoid.
+INCUMBENT_LEVEL = "INCUMBENT LEVEL"
+
+
+@dataclass(frozen=True)
+class IncumbentComparison:
+    """One preset's encoded size against the gzipped baseline, and the verdict.
+
+    Constructed from two byte counts rather than from a file so the reporter can
+    be handed a case the fixtures do not produce — including the one where the
+    incumbent comes out cheaper, which is the case that decides whether this is a
+    measurement or an advertisement.
+    """
+
+    preset: str
+    incumbent_bytes: int
+    baseline_bytes: int
+    messages: int
+
+    def __post_init__(self) -> None:
+        if self.incumbent_bytes <= 0 or self.baseline_bytes <= 0:
+            raise BenchError(
+                f"{self.preset}: {self.incumbent_bytes} B of incumbent against "
+                f"{self.baseline_bytes} B of baseline. A side that came out at "
+                "zero bytes is an encoding that did not run, and a ratio "
+                "against it would print as a result."
+            )
+        if self.messages <= 0:
+            raise BenchError(
+                f"{self.preset}: {self.messages} messages. A comparison over no "
+                "messages prices nothing, and reporting it beside comparisons "
+                "that priced something would read as agreement with them."
+            )
+
+    @property
+    def ratio(self) -> float:
+        """Incumbent bytes over baseline bytes. Above 1 means the bag is dearer."""
+        return self.incumbent_bytes / self.baseline_bytes
+
+    @property
+    def verdict(self) -> str:
+        """`INCUMBENT_DEARER`, `INCUMBENT_CHEAPER` or `INCUMBENT_LEVEL`."""
+        if self.incumbent_bytes > self.baseline_bytes:
+            return INCUMBENT_DEARER
+        if self.incumbent_bytes < self.baseline_bytes:
+            return INCUMBENT_CHEAPER
+        return INCUMBENT_LEVEL
+
+    def sentence(self) -> str:
+        """The comparison in words, with the direction stated rather than implied.
+
+        A ratio alone is not a report. `0.42x` and `2.51x` look alike at a
+        glance and mean opposite things about whether the published baseline is
+        soft, so the direction is spelled out and the consequence of the
+        direction that goes against this project is spelled out with it.
+        """
+        head = (
+            f"{self.preset}: {self.incumbent_bytes:,} B of MCAP against "
+            f"{self.baseline_bytes:,} B of gzipped CSV over {self.messages:,} "
+            f"messages of the same proprioceptive content, {self.ratio:.2f}x."
+        )
+        if self.verdict == INCUMBENT_DEARER:
+            return (
+                f"{head} The incumbent is DEARER than the baseline this project "
+                "is measured against, so the published disadvantage against "
+                "what practitioners retain is smaller than the disadvantage "
+                "against a gzipped CSV."
+            )
+        if self.verdict == INCUMBENT_CHEAPER:
+            return (
+                f"{head} The incumbent is CHEAPER than the gzipped CSV, which "
+                "is the result against this project: the baseline it loses to "
+                "is not soft, and nothing here licenses saying the published "
+                "ratio overstates the artifact's disadvantage. Read it as a "
+                "fault in this encoder before reading it as a finding."
+            )
+        return (
+            f"{head} The incumbent and the baseline cost the SAME, so the "
+            "gzipped CSV is not a cheap comparator at this preset and the "
+            "finding this comparison publishes does not stand."
+        )
+
+
+def compare_incumbent(path: str | Path, *, preset: str) -> IncumbentComparison:
+    """Price `path` both ways under one preset and return the comparison.
+
+    Both sides come from the same file and the same proprioceptive subset, which
+    is what makes the ratio a statement about encodings rather than about
+    content. `preset` has no default here for the reason it has none in
+    `mcap_joint_states_bytes`.
+    """
+    path = Path(path)
+    chosen = mcap_preset(preset)
+    rows = [
+        line for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("#")
+    ]
+    if len(rows) < 2:
+        raise BenchError(
+            f"{path} holds no frames to compare. An empty stream cannot decide "
+            "between two encodings of it."
+        )
+    reader = csv.reader(rows)
+    header = next(reader)
+    prop = proprioceptive_columns(header)
+    return IncumbentComparison(
+        preset=chosen.name,
+        incumbent_bytes=mcap_joint_states_bytes(path, preset=chosen.name),
+        baseline_bytes=gzip_bytes_of_columns(path, prop),
+        messages=sum(1 for _ in reader),
+    )
+
+
+def incumbent_report(path: str | Path) -> str:
+    """Every preset in `MCAP_PRESETS`, one sentence each, in order.
+
+    Both presets, always: `mcap_default` is what practitioners retain and
+    `mcap_compressed_nocrc` is the like-for-like against a gzipped baseline, and
+    a report that printed whichever of the two suited the argument would be the
+    baseline-shopping this comparison exists to correct.
+    """
+    return "\n".join(
+        compare_incumbent(path, preset=preset.name).sentence()
+        for preset in MCAP_PRESETS
+    )
 
 
 # --------------------------------------------------------------------------

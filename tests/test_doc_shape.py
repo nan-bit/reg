@@ -228,7 +228,15 @@ RATE = 90.6
 #   73,969  2026-09-05, after #210 did the same to `docs/sufficiency.md`:
 #           that file went 11,425 -> 11,164, of which 9,707 is the normative
 #           core — measured, no headroom
-ARGUMENT_MAX = 73969
+#   73,968  2026-09-06, after #117 republished the incumbent encoding under both
+#           rosbag2 presets. The prose that added to `retention.md`, `plan.md`
+#           and `prior-art.md` is paid for in the same group: `retention.md`
+#           stopped restating `plan.md`'s *What it supports* and its Article 19
+#           / 26(6) quotation, and dropped a forward pointer that summarised a
+#           section three screens below it. A ceiling one word lower than the
+#           last one is what a change that adds prose looks like when it finds
+#           the room rather than asking for it — measured, no headroom
+ARGUMENT_MAX = 73968
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -289,7 +297,13 @@ LONG_PARAGRAPHS_MAX = 97
 #        and `was not made` on one line did, so this proxy is sensitive to
 #        rewrapping. It was reworded rather than rewrapped, because wrapping a
 #        sentence to clear a marker is gaming the count
-NARRATION_MAX = 139
+#   138  2026-09-06, after #117: `docs/prior-art.md` gained a dated correction,
+#        which narrates by construction — a survey pass is corrected by adding
+#        to it and dating the addition, never by rewriting the entry — and
+#        `docs/retention.md` lost two, both of them paragraphs that restated a
+#        document they linked to. Set to what is now above the line rather than
+#        left at 139, which would have banked the difference as headroom
+NARRATION_MAX = 138
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

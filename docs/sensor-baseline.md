@@ -244,16 +244,19 @@ answer even after paying for them — the cost side of
 
 ## The incumbent encoding: rosbag2 / MCAP
 
-**Status: a projection computed from published specification, checked once
-against a real encoder.** No `mcap` library is used here and no `zstd` is run —
+**Status: a projection computed from published specification, checked against a
+real encoder and against rosbag2.** No `mcap` library is used here and no
+`zstd` is run —
 this repository adds no dependency for a baseline. What is *measured* is the byte
 stream an encoder written here from the spec produces on real fixture data; what
 is *projected* is that a rosbag2 writer lays out the same bytes.
 
-**That projection is now tested rather than asserted**
-([Validating the projection](#validating-the-projection-against-a-real-bag)):
-every uncompressed figure came back exact, and two compressed ones sit outside
-the registered band and are marked wherever this document publishes them.
+**That projection is now tested rather than asserted.** Every uncompressed
+figure came back exact against a reference writer
+([Validating the projection](#validating-the-projection-against-a-real-bag)) and
+within 1% of a bag `ros2 bag record` wrote ([the rosbag2 run](#the-rosbag2-run));
+two compressed figures sit outside the registered band and are marked where
+this document publishes them.
 
 ### Why this baseline exists
 
@@ -265,23 +268,24 @@ nobody runs prices a counterfactual.
 ### The comparison
 
 Same information on both sides — `t`, `q`, `qd` for a two-joint arm, 251 frames
-of the `declared_violation` fixture at 50 Hz. **Both rosbag2 presets are
-priced**: what a practitioner gets and what matches a gzipped baseline are not
-the same configuration:
+of the `declared_violation` fixture at 50 Hz. **Uncompressed and compressed are
+both priced**: what a practitioner gets and what matches a gzipped baseline are
+not the same configuration:
 
 | Encoding | Size | x gz CSV |
 |---|---|---|
 | CSV, gzip -9 | **3,053 B** | 1.00x |
-| MCAP, `mcap_default` — uncompressed, chunked, indexed | **35,893 B** | **11.76x** |
-| MCAP, `mcap_compressed_nocrc` — zstd chunks, indexed | **11,685 B** | **3.83x** |
+| MCAP, `none` — uncompressed, chunked, indexed | **35,893 B** | **11.76x** |
+| MCAP, `zstd_fast` / `zstd_small` — zstd chunks, indexed | **11,685 B** | **3.83x** |
 
-`mcap_default` is rosbag2's default preset: **uncompressed**, chunked at 768 KiB,
-message-indexed; compression is the opt-in `mcap_compressed_nocrc`
-([rosbag2 storage plugin benchmarks](https://mcap.dev/guides/benchmarks/rosbag2-storage-plugins)).
-So **what a practitioner retains without choosing anything costs 11.76x the
-gzipped CSV**, and the like-for-like compressed preset 3.83x. Both are published:
-quoting whichever suits the argument is the error the gzipped baseline already
-makes, one layer down.
+The names are `--storage-preset-profile` values
+(`reg.bench.ROSBAG2_STORAGE_PRESET_PROFILES`). `none` is what a bag costs when
+nobody chooses, **uncompressed** and message-indexed, so **what a practitioner
+retains without choosing anything costs 11.76x the gzipped CSV**. The compressed
+row is one projection standing for both zstd profiles, at 3.83x;
+[the rosbag2 run](#the-rosbag2-run) measures it against each and it matches
+neither. Both are published anyway: quoting whichever suits the argument is the
+error the gzipped baseline already makes, one layer down.
 
 The cost is per-message self-description plus a per-message index, which is what
 a bag format is for and is expensive at 50 Hz:
@@ -292,9 +296,9 @@ a bag format is for and is expensive at 50 Hz:
    8   record length
   22   channel_id, sequence, log_time, publish_time   (mcap.dev/spec)
   96   CDR payload
-        of which 32 B is the four float64s that carry the data;
-        the rest is the encapsulation header, the Time struct, the
-        joint-name strings repeated on every message, and alignment padding
+        of which 32 B is the four float64s that carry the data; the rest
+        is the encapsulation header, the Time struct, the joint names
+        repeated on every message, and alignment padding
   16   MessageIndex entry: log_time 8 + offset 8, one per message
         and outside the chunk, so uncompressed under either preset
 ```
@@ -307,17 +311,16 @@ correspondingly smaller.
 **This document does not restate the headline.** The ratio above is an encoding
 ratio, free of fixed cost on both sides and over 5 columns of 24.
 [`retention.md`](retention.md) is where Claim 1's headline meets it, on the
-whole-stream figures below — measured on the same 3,000-frame fixture the
-retention curve is, because over a five-second one the artifact's fixed schema
-and index cost dominates.
+whole-stream figures below — measured on the 3,000-frame fixture, because over a
+five-second one the artifact's fixed cost dominates.
 
 ### Assumptions, each of which can move the number
 
 These govern both tables in this section — the same encoder over different
 columns of the same fixture.
 
-- **`mcap_default` is a floor; the compressed figure is not.** Every assumption
-  below makes the default preset look cheaper than a real bag, so 11.76x
+- **`none` is a floor; the compressed figure is not.** Every assumption below
+  makes the uncompressed profile look cheaper than a real bag, so 11.76x
   understates the incumbent. The compressed figure instead rests on **gzip -9
   standing in for zstd** — comparable in class, not identical — and that
   direction is now measured rather than open: it costs both compressed
@@ -327,9 +330,11 @@ columns of the same fixture.
   chunk index, statistics, summary, footer, and the 15 B fixed part of each
   MessageIndex record. Roughly 1-2 kB fixed: negligible at scale, material at
   251 messages, and it makes MCAP look *better* here than it is.
-- **The per-message index is included**, at 16 B per message under both presets.
+- **The per-message index is included**, at 16 B per message under every profile
+  priced, and measured at 16.06 B against the `fastwrite` bag that writes none.
   It makes a bag seekable, rosbag2 writes it by default, and it scales with the
-  run rather than sitting in the fixed cost above.
+  run. `fastwrite` is not priced here for the same reason: the cost that defines
+  it is one this encoder always charges.
 - **Joint names `joint_0` / `joint_1`, empty `frame_id`, empty `effort`.** Real
   robots use longer joint names, which makes MCAP look worse.
 - **`sensor_msgs/msg/JointState` with position and velocity only.** A system
@@ -361,12 +366,12 @@ number, so `reg.bench.LAYER_B_OPTIONS` prices the candidates and
 `cheapest_layer_b_option` takes the **smallest** — the arrangement most
 favourable to the incumbent:
 
-| arrangement for the 19 Layer B columns, 3,000 frames | `mcap_default` | `mcap_compressed_nocrc` |
+| arrangement for the 19 Layer B columns, 3,000 frames | `none` | `zstd_fast` / `zstd_small` |
 |---|---|---|
 | **`/tf`** — one `tf2_msgs/TFMessage` per control period, one `TransformStamped` per entity | **1,209,000 B** | **170,628 B** [^v] |
 | `geometry_msgs/PoseStamped` per entity per control period, each on its own topic | 1,476,000 B | 315,225 B |
 
-`/tf` is smaller at both presets and is chosen at both: it carries the
+`/tf` is smaller either way and is chosen either way: it carries the
 per-message MCAP framing and the 16 B message index once per control period
 instead of once per entity, each entity's identity rides in its child frame
 name, and a tf tree is what many ROS 2 systems publish entity poses on anyway.
@@ -387,7 +392,7 @@ either way. `tests/test_incumbent_encoding.py` measures that on an obstacle.
 **The bag, both halves, over the same 3,000-frame fixture the retention figures
 are measured on:**
 
-| Encoding, all 24 columns | `mcap_default` | `mcap_compressed_nocrc` |
+| Encoding, all 24 columns | `none` | `zstd_fast` / `zstd_small` |
 |---|---|---|
 | `/joint_states` — the 5 proprioceptive columns | 429,000 B | 136,500 B |
 | `/tf` — the 19 Layer B columns | 1,209,000 B | 170,628 B [^v] |
@@ -444,8 +449,7 @@ one `TransformStamped` per entity in header order, `frame_id` `map`
 (`x`, `y`, 0), identity rotation. Both carry `log_time` = `publish_time` =
 `round(t x 1e9)` and `sequence` = the row index, XCDR1 little-endian. Six bags —
 `/joint_states` over 251 frames, then `/joint_states`, `/tf` and both over 3,000
-— at each preset: `mcap_default`, uncompressed, chunked at 768 KiB, indexed; and
-`mcap_compressed_nocrc`, zstd chunks, CRCs off.
+— uncompressed, chunked at 768 KiB, indexed, and again with zstd chunks.
 
 **Compare the per-message scaling total, not file sizes**, since the projection
 excludes every file-level record. Walk the bag by opcode; per chunk sum the
@@ -455,17 +459,15 @@ index records. Set that beside `reg.bench.mcap_joint_states_bytes`,
 `layer_b_mcap_bytes(option="tf_tree")` and `full_content_mcap_bytes`.
 
 **The tolerance, fixed in commit e8f1534 ahead of the bags.** Payload length,
-per-message framing, MessageIndex entry width and the whole `mcap_default` total
+per-message framing, MessageIndex entry width and the whole uncompressed total
 are compared **exactly**: byte counts off the spec and the IDL over a known
-message count, with no estimate in them. The `mcap_compressed_nocrc` total gets
-**+/-5%**, for the one substitution — gzip -9 for zstd, which *Assumptions* above
-declines a direction for.
+message count, with no estimate in them. The compressed total gets **+/-5%**,
+for the one substitution — gzip -9 for zstd, which *Assumptions* above declines a
+direction for.
 
-Within the band the projection stands, delta published beside it. Outside it the
-figure does not stand: marked as such wherever this document publishes it,
-measurement and delta next to it, re-derived from a run that pins what this one
-could not reach. A tolerance chosen after seeing the number is not one, and
-either outcome is a result.
+Within the band the projection stands, delta beside it. Outside it, the figure
+is marked as not standing wherever this document quotes it. A tolerance chosen
+after seeing the number is not one, and either outcome is a result.
 
 **The measurement: 2026-09-06, x86_64 Linux**, by the reference Python MCAP
 writer — `mcap` 1.4.0, `mcap-ros2-support` 0.5.7, `zstandard` 0.25.0 (libzstd
@@ -476,14 +478,14 @@ and the 96 B and 356 B payloads came back **byte-identical** to
 
 ```
 fixture             frames  topics             preset                  projected    measured    delta  verdict
-declared_violation     251  /joint_states      mcap_default               35,893      35,893   +0.00%  stands
-declared_violation     251  /joint_states      mcap_compressed_nocrc      11,685      11,358   -2.80%  stands
-long_run_3000        3,000  /joint_states      mcap_default              429,000     429,000   +0.00%  stands
-long_run_3000        3,000  /joint_states      mcap_compressed_nocrc     136,500     133,134   -2.47%  stands
-long_run_3000        3,000  /tf                mcap_default            1,209,000   1,209,000   +0.00%  stands
-long_run_3000        3,000  /tf                mcap_compressed_nocrc     170,628     154,040   -9.72%  DOES-NOT-STAND
-long_run_3000        3,000  /joint_states+/tf  mcap_default            1,638,000   1,638,000   +0.00%  stands
-long_run_3000        3,000  /joint_states+/tf  mcap_compressed_nocrc     307,128     284,259   -7.45%  DOES-NOT-STAND
+declared_violation     251  /joint_states      none                       35,893      35,893   +0.00%  stands
+declared_violation     251  /joint_states      reference_zstd_l3          11,685      11,358   -2.80%  stands
+long_run_3000        3,000  /joint_states      none                      429,000     429,000   +0.00%  stands
+long_run_3000        3,000  /joint_states      reference_zstd_l3         136,500     133,134   -2.47%  stands
+long_run_3000        3,000  /tf                none                    1,209,000   1,209,000   +0.00%  stands
+long_run_3000        3,000  /tf                reference_zstd_l3         170,628     154,040   -9.72%  DOES-NOT-STAND
+long_run_3000        3,000  /joint_states+/tf  none                    1,638,000   1,638,000   +0.00%  stands
+long_run_3000        3,000  /joint_states+/tf  reference_zstd_l3         307,128     284,259   -7.45%  DOES-NOT-STAND
 ```
 
 `reg.bench.MCAP_SIZE_MEASUREMENTS` holds those rows and derives each verdict from
@@ -496,22 +498,77 @@ figures split**, structurally: gzip's window is 32 KiB and zstd's is not, while 
 `/tf` message repeats the parent frame, four entity names, three static poses and
 four identity quaternions every 387 B.
 
-A negative delta means the projection published a bag dearer than the real one,
-making the artifact's ratio against it smaller than it should be. Across zstd
-levels 1 to 19 `/tf` stays outside the band, so the verdict is not an artefact of
-the level.
+A negative delta means the projection published a bag dearer than the real one.
+Across zstd levels 1 to 19 `/tf` stays outside the band, so the verdict is not an
+artefact of the level.
 
 **The two are marked, not replaced.** `reg.bench` computes them live for any
-stream it is handed and every document quoting them is pinned to that
-computation, so a constant substituted here would make a general function return
-a number it never computed. Replacing them needs the rosbag2 run below.
+stream, and a constant substituted here would make a general function return a
+number it never computed.
+
+### The rosbag2 run
+
+`ros2 bag record` itself, on both fixtures, by the procedure above.
+**2026-09-06, `ros:jazzy` under Docker 29.4.0 on an arm64 Darwin host, via
+`rosbag2_py`**, `/joint_states` + `/tf`, whole files as the filesystem reports
+them (`reg.bench.ROSBAG2_PROVENANCE`). No ROS 2 is installed on the host that
+writes this repository's unattended changes, so to it these bytes are given
+data.
+
+**Two preset names this document published are names rosbag2 rejects**, each
+answered with `unknown MCAP storage preset profile (valid options are 'none',
+'fastwrite', 'zstd_fast', 'zstd_small')`. They are mcap.dev's benchmark
+vocabulary, not `--storage-preset-profile` values. **And rosbag2 ships two
+compressed profiles**, so one projection cannot be right about "the compressed
+preset":
+
+```
+fixture             frames  profile     measured   projected     delta  verdict
+declared_violation     251  unset        147,827           -        -  not-projected
+declared_violation     251  none         147,831     137,046  +7.870%  no-band
+declared_violation     251  fastwrite    139,621           -        -  not-projected
+declared_violation     251  zstd_fast     39,227      25,225 +55.508%  no-band
+declared_violation     251  zstd_small    28,295      25,225 +12.170%  no-band
+long_run_3000        3,000  unset      1,637,963           -        -  not-projected
+long_run_3000        3,000  none       1,637,967   1,638,000  -0.002%  stands
+long_run_3000        3,000  fastwrite  1,541,617           -        -  not-projected
+long_run_3000        3,000  zstd_fast    360,798     307,128 +17.475%  no-band
+long_run_3000        3,000  zstd_small   252,034     307,128 -17.938%  no-band
+```
+
+**One row carries a band: the uncompressed 3,000-frame bag, at 1%**, fixed ahead
+of the run (`reg.bench.ROSBAG2_UNCOMPRESSED_TOLERANCE`). No other row gets one
+and none reads as a pass: the `fastwrite` and unset bags have no projection to
+judge, and one compressed projection covers two profiles 43% apart. What the run
+settles:
+
+- **The uncompressed projection is the bag**: 1,638,000 B against 1,637,967 B,
+  -0.002%, inside the band, and closer than its parts: ~11.8 kB of excluded
+  file-level records against ~4 B per frame-pair of over-charge, cancelling at
+  3,000 frames and showing as +7.87% at 251.
+- **The default is uncompressed, measured.** No profile and `none` differ by 4 B
+  on 147,827, under one message of framing.
+- **The 16 B index is confirmed from a second direction**: `none` − `fastwrite`
+  over 6,000 messages is 16.06 B per message
+  (`reg.bench.rosbag2_index_bytes_per_message`), the 0.06 being the per-chunk
+  fixed part this projection excludes.
+- **Neither compressed figure projects a profile**: 307,128 B sits 14.9% under
+  `zstd_fast` and 21.9% over `zstd_small`, so the marked figures stay marked,
+  and marked about a model now rather than about a missing measurement.
+
+`reg.bench.ROSBAG2_SIZE_MEASUREMENTS` holds the ten rows and derives each verdict
+from its own byte counts; `tests/test_incumbent_encoding.py` fails if page and
+record disagree.
 
 ### What would retire this section
 
-One `ros2 bag record` under a named `--storage-preset-profile`. The record
-layout, the CDR payloads, the framing and the index arithmetic are measurements
-already; that run adds rosbag2's own C++ writer and with it the compression
-level — the only reason the two compressed figures are marked, not replaced.
+A compressed projection that models one of the two zstd profiles. Everything a
+bag can settle is settled above — record layout, payloads, framing, index and the
+whole uncompressed total. What is left is gzip -9 standing in for zstd, and no
+further `ros2 bag record` closes it: the two profiles bracket the projection, so
+a compressed figure that stands has to name which one it models. That is a
+modelling question ([`plan.md`](plan.md) forbids the dependency that would
+answer it directly).
 
 ## A premise this document does not carry: air-gapped sites
 
@@ -591,6 +648,7 @@ worth least once nobody remembers what it was weighed against.
 | *The incumbent encoding* republished under both rosbag2 presets, with the message index priced | #117 | 2026-09-06 |
 | *The same encoding, over the whole stream* — the `/tf` decision, its alternatives and the whole-stream figures | #220 | 2026-09-06 |
 | *Validating the projection against a real bag* — the procedure, the tolerance registered ahead of it, and the measurement | #221 | 2026-09-06 |
+| *The rosbag2 run* — the real profile names, the measured bags and the 1% band on the uncompressed projection | #232 | 2026-09-06 |
 | The priced stream, as 24 columns and 19 Layer B | #123 | 2026-08-27 |
 | Three sensitivity rows recomputed from the sizes | — | 2026-08-28 |
 | The base pose on `robot_config`; the ladder re-measured, three rungs of it stale | #166 | 2026-09-02 |
@@ -627,13 +685,13 @@ gives — it assumed the whole level scales, and 1.5% of it does not.
 ### Whose work the incumbent ratio was waiting on
 
 Translating the 11.76x into Claim 1 was not #117's work but its successor's: the
-two comparisons were not composable, five columns on one side of the encoding
-ratio and 24 on both sides of the headline. Issue #220 closed that by pricing the
-same encoder over the other nineteen columns, and [`retention.md`](retention.md)
-now publishes one ratio of the artifact against the bag. Both figures still
-travel with the condition that this is a hand-built comparison and not a rosbag2
-run, which `README.md` and [`plan.md`](plan.md) state wherever they quote
-either.
+two comparisons were not composable, five columns on one side and 24 on the
+other. Issue #220 closed that, and [`retention.md`](retention.md) now publishes
+one ratio of the artifact against the bag. `README.md`, [`plan.md`](plan.md),
+[`retention.md`](retention.md) and [`prior-art.md`](prior-art.md) still carry the
+condition that no rosbag2 run stands behind the figures, and still carry the two
+retired preset names; #232 measured the bags and left that republication to the
+issue that depends on it.
 
 ### What the 2026-09-06 re-measurement moved, and why
 

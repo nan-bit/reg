@@ -1092,10 +1092,11 @@ def proprioceptive_columns(header: Sequence[str]) -> list[str]:
 def mcap_joint_states_bytes(path: str | Path, *, preset: str) -> int:
     """Bytes a rosbag2/MCAP `/joint_states` topic would hold for this stream.
 
-    `preset` names a configuration in `MCAP_PRESETS` and has **no default**. The
-    two presets differ by a factor of three on the same messages, so a default
-    here would be this comparison choosing its own answer; the caller says which
-    configuration it is pricing and the report prints the name.
+    `preset` names a configuration in `MCAP_PRICED_CONFIGURATIONS` and has **no
+    default**. Compressed and uncompressed differ by a factor of three on the
+    same messages, so a default here would be this comparison choosing its own
+    answer; the caller says which configuration it is pricing and the report
+    prints the name.
 
     Message records and their message index, which are the two costs that scale
     with the run. The file-level header, schema, channel, chunk index, chunk
@@ -1155,7 +1156,7 @@ def mcap_joint_states_bytes(path: str | Path, *, preset: str) -> int:
         stream += b"\x05" + struct.pack("<Q", len(record)) + record
         messages += 1
     # Only the chunk's own records are compressed. The message index sits
-    # outside the chunk in both presets and is added at full width to both:
+    # outside the chunk under every profile and is added at full width to all:
     # the spec puts MessageIndex records after the chunk they index, precisely
     # so a reader can seek without decompressing anything.
     body = (
@@ -1238,22 +1239,32 @@ def gzip_bytes(path: str | Path) -> int:
 # stream the encoder above produces. What is projected is that a rosbag2 writer
 # would lay the same bytes out the same way.
 #
-# WHY THE CONFIGURATION IS NAMED RATHER THAN ASSUMED. rosbag2's MCAP plugin has
-# more than one writer preset and they do not cost the same thing. Both are
-# priced and both are published: `mcap_default` is what a practitioner retains
-# without choosing anything, and `mcap_compressed_nocrc` is the like-for-like
-# against a gzipped baseline. Pricing whichever one suits the argument is the
-# error the gzipped-CSV baseline already made one layer down.
+# WHY THE CONFIGURATION IS NAMED RATHER THAN ASSUMED, AND WHY THE NAME IS
+# ROSBAG2'S. rosbag2's MCAP plugin has more than one writer profile and they do
+# not cost the same thing, so pricing whichever one suits the argument is the
+# error the gzipped-CSV baseline already makes one layer down. The names here
+# are the four strings `--storage-preset-profile` accepts, in
+# `ROSBAG2_STORAGE_PRESET_PROFILES`, because a preset name is the one part of
+# this projection a practitioner types: a name of this repository's own devising
+# reads as something they can run and is not.
 #
-# WHAT "FLOOR" MEANS, AND WHERE THE WORD STOPS APPLYING. Under `mcap_default`
-# every assumption here makes MCAP look *better* than it is: file-level records
-# are excluded, the message index's per-chunk part with them, joint names are
-# the shortest plausible and `effort` is empty. A real bag is larger, so the
-# penalty computed from it understates the incumbent's cost. Under
-# `mcap_compressed_nocrc` that claim is **withdrawn, not repeated**: gzip -9
-# stands in for zstd and which of the two is smaller on this data is not known
-# here, so that number carries one assumption whose direction nobody in this
-# repository can state. `docs/sensor-baseline.md` says so beside the figure.
+# WHY THREE OF THE FOUR ARE PRICED AND NOT FOUR. `none` is the uncompressed
+# default; `zstd_fast` and `zstd_small` are the two compressed profiles and both
+# are published, because one number for "the compressed profile" would pick one
+# of two configurations a practitioner really has. `fastwrite` is refused: a bag
+# written under it has no message index, this encoder charges one per message,
+# and pricing it here would publish a total for a profile whose defining cost
+# this module does not model.
+#
+# WHAT "FLOOR" MEANS, AND WHERE THE WORD STOPS APPLYING. Under `none` every
+# assumption here makes MCAP look *better* than it is: file-level records are
+# excluded, the message index's per-chunk part with them, joint names are the
+# shortest plausible and `effort` is empty. A real bag is larger, so the penalty
+# computed from it understates the incumbent's cost. Under the two compressed
+# profiles that claim is **withdrawn, not repeated**: gzip -9 stands in for
+# zstd, so this module computes **one** compressed projection and applies it to
+# both, and the measured bags in `ROSBAG2_SIZE_MEASUREMENTS` put it between
+# them, matching neither. `docs/sensor-baseline.md` says so beside the figure.
 
 MCAP_MESSAGE_RECORD_OVERHEAD = 31
 """Bytes of MCAP framing per message, from the format specification.
@@ -1267,89 +1278,207 @@ refuses everywhere else.
 MCAP_MESSAGE_INDEX_PER_MESSAGE = 16
 """Bytes of MessageIndex per message, from the same specification.
 
-8 log_time + 8 offset, one entry per message in the chunk's index. Both presets
-below write it — a message index is what makes a bag seekable — and it is a
-*per-message* cost, so it scales with the run the way the record overhead does
-and cannot sit under the file-level exclusion the way a footer can.
+8 log_time + 8 offset, one entry per message in the chunk's index. Every profile
+priced below writes it — a message index is what makes a bag seekable — and it
+is a *per-message* cost, so it scales with the run the way the record overhead
+does and cannot sit under the file-level exclusion the way a footer can.
+
+Read off the specification, and since the rosbag2 run recorded in
+`ROSBAG2_SIZE_MEASUREMENTS` also measured from the other side:
+`rosbag2_index_bytes_per_message` subtracts the `fastwrite` bag, which writes no
+index, from the `none` bag that does, and what is left is this width per
+message. A constant with two independent derivations is the one kind that does
+not quietly become a convention.
 
 The per-record fixed part is excluded with those file-level records: opcode 1 +
 record length 8 + channel_id 2 + array length 4, once per chunk per channel, and
 at a 768 KiB chunk size that is 15 bytes for this whole fixture. Excluded rather
-than estimated, and its exclusion is one of the assumptions that keeps
-`mcap_default` a floor.
+than estimated, and its exclusion is one of the assumptions that keeps `none` a
+floor.
 """
 
 CDR_ENCAPSULATION = 4
 """The XCDR1 representation identifier and options, ahead of every payload."""
 
 
+#: The four strings rosbag2's MCAP plugin accepts for
+#: `--storage-preset-profile`, quoted from the error it raises when handed
+#: anything else:
+#:
+#:     unknown MCAP storage preset profile (valid options are 'none',
+#:     'fastwrite', 'zstd_fast', 'zstd_small'): mcap_default
+#:
+#: Recorded on 2026-09-06 from `ros:jazzy` — see `ROSBAG2_PROVENANCE`. This is
+#: the vocabulary a practitioner can type, and it is not the vocabulary of
+#: mcap.dev's benchmark pages, which name configurations rather than profiles.
+#: Mixing the two is how this module came to publish a preset name that does not
+#: exist, so the list is written down and `mcap_preset` refuses anything outside
+#: it by a different sentence than it refuses a profile it merely does not
+#: price.
+ROSBAG2_STORAGE_PRESET_PROFILES: tuple[str, ...] = (
+    "none",
+    "fastwrite",
+    "zstd_fast",
+    "zstd_small",
+)
+
+
 @dataclass(frozen=True)
 class McapPreset:
-    """One rosbag2 MCAP writer configuration, named after the preset it models.
+    """One rosbag2 MCAP writer configuration, named after the profile it models.
 
-    `what` is not decoration. A preset is a claim about what somebody else's
-    software does by default, so the entry that asserts it carries the source
-    for it — the same discipline `docs/sensor-baseline.md` applies to the sensor
-    rate, and the reason neither number is a guess with a citation-shaped
-    comment beside it.
+    `what` and `source` are not decoration, and they are separate fields because
+    they fail differently. A preset is a claim about what somebody else's
+    software does, so the entry that asserts it carries the citation for it —
+    the same discipline `docs/sensor-baseline.md` applies to the sensor rate,
+    and the reason neither number is a guess with a citation-shaped comment
+    beside it. Both are required: an entry with an empty `source` is an
+    assertion about another project's defaults with nothing behind it.
     """
 
     name: str
     compressed: bool
     what: str
+    source: str
+
+    def __post_init__(self) -> None:
+        for field, value in (("what", self.what), ("source", self.source)):
+            if not value.strip():
+                raise BenchError(
+                    f"MCAP preset {self.name!r} has an empty {field}. A preset "
+                    "is a claim about what somebody else's software writes, and "
+                    "one with nothing saying what it is or where that came from "
+                    "is the same silence as no entry — dressed as an entry."
+                )
 
 
-#: The two configurations priced, and the reason there are two.
+#: The rosbag2 profiles this module prices, and the reason there are three.
 #:
-#: `mcap_default` is rosbag2's default preset: **uncompressed**, chunked at
-#: 768 KiB, with a message index. `mcap_compressed_nocrc` is the opt-in preset
-#: that turns zstd on and CRCs off. Both are documented at
-#: mcap.dev/guides/benchmarks/rosbag2-storage-plugins.
+#: `none` is the uncompressed default. `zstd_fast` and `zstd_small` are the two
+#: compressed profiles, and **both** are carried because rosbag2 ships both:
+#: publishing one number for "the compressed profile" chooses between two
+#: configurations a practitioner really has, which is the baseline-shopping this
+#: whole section exists to correct, one layer down.
 #:
-#: Reporting only the compressed one prices a configuration a practitioner has
-#: to deliberately choose; reporting only the default compares uncompressed
-#: bytes against a gzipped baseline, which is a category error. So both are
-#: reported, each under the name of the preset it models.
+#: `fastwrite` is a real profile and is deliberately absent. It writes no
+#: message index, this encoder charges `MCAP_MESSAGE_INDEX_PER_MESSAGE` for
+#: every message, and a total published under its name would be a projection of
+#: a bag it does not write.
 MCAP_PRESETS: tuple[McapPreset, ...] = (
     McapPreset(
-        name="mcap_default",
+        name="none",
         compressed=False,
         what=(
-            "rosbag2's default MCAP preset: uncompressed, chunked at 768 KiB, "
-            "with a message index. What a practitioner retains without "
-            "choosing anything "
-            "(mcap.dev/guides/benchmarks/rosbag2-storage-plugins)."
+            "rosbag2's uncompressed profile, and what a bag costs when "
+            "--storage-preset-profile is not passed at all: chunked, with a "
+            "message index, no compression. What a practitioner retains "
+            "without choosing anything."
+        ),
+        source=(
+            "rosbag2_storage_mcap's own list of valid profiles, and the "
+            "measured bags in ROSBAG2_SIZE_MEASUREMENTS, where the unset bag "
+            "and the `none` bag come out 4 B apart on 147,827."
         ),
     ),
     McapPreset(
-        name="mcap_compressed_nocrc",
+        name="zstd_fast",
         compressed=True,
         what=(
-            "rosbag2's opt-in compressed preset: zstd-compressed chunks, CRCs "
-            "off, message index kept. The like-for-like against a gzipped "
-            "baseline, and a configuration somebody had to select "
-            "(mcap.dev/guides/benchmarks/rosbag2-storage-plugins)."
+            "rosbag2's faster compressed profile: zstd chunks at its low "
+            "level, message index kept. One of the two like-for-likes against "
+            "a gzipped baseline, and a configuration somebody had to select."
+        ),
+        source=(
+            "rosbag2_storage_mcap's own list of valid profiles. The projection "
+            "under it is this module's single compressed projection, which the "
+            "measured bag puts 14.9% below the real one."
+        ),
+    ),
+    McapPreset(
+        name="zstd_small",
+        compressed=True,
+        what=(
+            "rosbag2's smaller compressed profile: zstd chunks at its high "
+            "level, message index kept. The other like-for-like, and the "
+            "reason there is no single compressed figure to be right about."
+        ),
+        source=(
+            "rosbag2_storage_mcap's own list of valid profiles. The projection "
+            "under it is the same one `zstd_fast` gets, which the measured bag "
+            "puts 21.9% above the real one — so it matches neither profile."
         ),
     ),
 )
 
+#: Configurations that are **not** rosbag2 profiles and cannot be passed to
+#: `ros2 bag record`, kept because a measurement was taken under one.
+#:
+#: `MCAP_SIZE_MEASUREMENTS` records a run by the reference Python MCAP writer at
+#: python-zstandard's own default level. That is neither `zstd_fast` nor
+#: `zstd_small`, and labelling those rows with either name would put a real byte
+#: count under the name of a configuration nobody encoded — the failure this
+#: module has already had once, with the names it used before issue #232. So the
+#: configuration keeps its own name and stays out of `MCAP_PRESETS`, which is
+#: what the reports iterate.
+MCAP_NON_PROFILE_CONFIGURATIONS: tuple[McapPreset, ...] = (
+    McapPreset(
+        name="reference_zstd_l3",
+        compressed=True,
+        what=(
+            "NOT a rosbag2 profile and not passable to ros2 bag record: the "
+            "reference Python MCAP writer with python-zstandard at its own "
+            "default level 3, which is the configuration the 2026-09-06 "
+            "reference-writer run encoded under."
+        ),
+        source=(
+            "MCAP_VALIDATION_PROVENANCE, which states the versions that "
+            "wrote those bags and that rosbag2's own writer was not among "
+            "them."
+        ),
+    ),
+)
+
+#: Everything `mcap_preset` will resolve: the profiles plus the one measured
+#: configuration that is not a profile.
+MCAP_PRICED_CONFIGURATIONS: tuple[McapPreset, ...] = (
+    MCAP_PRESETS + MCAP_NON_PROFILE_CONFIGURATIONS
+)
+
 
 def mcap_preset(name: str) -> McapPreset:
-    """The preset called `name`, or a refusal naming the ones that exist.
+    """The configuration called `name`, or a refusal naming the ones that exist.
 
-    Not `dict.get` with a fallback. A misspelt preset that quietly priced the
+    Not `dict.get` with a fallback. A misspelt preset that quietly priced a
     compressed one would publish a figure under the name of a configuration
     nobody encoded, which is the invented default in its most expensive form:
     the number would be real and the label on it would be false.
+
+    Two refusals, not one, because they mean different things to whoever is
+    reading them. A name rosbag2 does not accept is a name that cannot be run at
+    all; a profile rosbag2 accepts and this module does not price is a real
+    thing with no projection behind it, and telling a practitioner the second is
+    "unknown" would send them looking for a typo they did not make.
     """
-    for preset in MCAP_PRESETS:
+    for preset in MCAP_PRICED_CONFIGURATIONS:
         if preset.name == name:
             return preset
+    if name in ROSBAG2_STORAGE_PRESET_PROFILES:
+        raise BenchError(
+            f"{name!r} is a rosbag2 storage preset profile, and it is not one "
+            f"this module prices. Priced: {[p.name for p in MCAP_PRESETS]}. A "
+            "bag written under 'fastwrite' carries no message index, which "
+            "this encoder charges for every message, so a total under that "
+            "name would price a bag rosbag2 does not write. That is a "
+            "could-not-evaluate, not a near-miss to be rounded to the "
+            "uncompressed profile."
+        )
     raise BenchError(
-        f"{name!r} is not an MCAP preset this module prices. Known presets: "
-        f"{[p.name for p in MCAP_PRESETS]}. A preset is a claim about what "
-        "rosbag2 writes by default, so it is named rather than inferred, and "
-        "an unknown one is a could-not-evaluate rather than the nearest match."
+        f"{name!r} is not an MCAP preset this module prices, and it is not a "
+        "profile rosbag2 accepts either: --storage-preset-profile takes "
+        f"{list(ROSBAG2_STORAGE_PRESET_PROFILES)}. Priced here: "
+        f"{[p.name for p in MCAP_PRICED_CONFIGURATIONS]}. A preset is a claim "
+        "about what rosbag2 writes, so it is named rather than inferred, and an "
+        "unknown one is a could-not-evaluate rather than the nearest match."
     )
 
 
@@ -1529,10 +1658,12 @@ def compare_incumbent(path: str | Path, *, preset: str) -> IncumbentComparison:
 def incumbent_report(path: str | Path) -> str:
     """Every preset in `MCAP_PRESETS`, one sentence each, in order.
 
-    Both presets, always: `mcap_default` is what practitioners retain and
-    `mcap_compressed_nocrc` is the like-for-like against a gzipped baseline, and
-    a report that printed whichever of the two suited the argument would be the
-    baseline-shopping this comparison exists to correct.
+    Every profile, always: `none` is what practitioners retain and `zstd_fast`
+    and `zstd_small` are the two like-for-likes against a gzipped baseline, and
+    a report that printed whichever of them suited the argument would be the
+    baseline-shopping this comparison exists to correct. The two compressed
+    lines carry the same byte count because this module has one compressed
+    projection; what separates the profiles is measured, not projected.
     """
     return "\n".join(
         compare_incumbent(path, preset=preset.name).sentence()
@@ -2164,10 +2295,10 @@ def compare_full_content(
 def full_content_report(path: str | Path, *, artifact_bytes: int) -> str:
     """Every preset in `MCAP_PRESETS`, one sentence each, in order.
 
-    Both presets, always, for the reason `incumbent_report` prints both: the
-    corrected ratio is five times larger at one than at the other, and a report
-    that printed whichever suited the argument would be preset-shopping in place
-    of the baseline-shopping this section corrects.
+    Every profile, always, for the reason `incumbent_report` prints them all:
+    the corrected ratio is five times larger uncompressed than compressed, and a
+    report that printed whichever suited the argument would be preset-shopping
+    in place of the baseline-shopping this section corrects.
     """
     return "\n".join(
         compare_full_content(
@@ -2390,48 +2521,49 @@ MCAP_STRUCTURAL_CHECKS: tuple[McapStructuralCheck, ...] = (
 )
 
 #: Every byte count `docs/sensor-baseline.md` publishes, beside the bag. Eight
-#: rows: four arrangements at two presets. Six stand and two do not, and the two
-#: that do not are both compressed — which is the figure that carried the
-#: substitution, so the validation found the thing it was pointed at.
+#: rows: four arrangements, each uncompressed and at `reference_zstd_l3`. Six
+#: stand and two do not, and the two that do not are both compressed — which is
+#: the figure that carried the substitution, so the validation found the thing
+#: it was pointed at.
 MCAP_SIZE_MEASUREMENTS: tuple[McapSizeMeasurement, ...] = (
     McapSizeMeasurement(
         fixture="declared_violation", seed=0, frames=251,
-        topics=("/joint_states",), preset="mcap_default",
+        topics=("/joint_states",), preset="none",
         projected_bytes=35_893, measured_bytes=35_893,
     ),
     McapSizeMeasurement(
         fixture="declared_violation", seed=0, frames=251,
-        topics=("/joint_states",), preset="mcap_compressed_nocrc",
+        topics=("/joint_states",), preset="reference_zstd_l3",
         projected_bytes=11_685, measured_bytes=11_358,
     ),
     McapSizeMeasurement(
         fixture="long_run_3000", seed=0, frames=3_000,
-        topics=("/joint_states",), preset="mcap_default",
+        topics=("/joint_states",), preset="none",
         projected_bytes=429_000, measured_bytes=429_000,
     ),
     McapSizeMeasurement(
         fixture="long_run_3000", seed=0, frames=3_000,
-        topics=("/joint_states",), preset="mcap_compressed_nocrc",
+        topics=("/joint_states",), preset="reference_zstd_l3",
         projected_bytes=136_500, measured_bytes=133_134,
     ),
     McapSizeMeasurement(
         fixture="long_run_3000", seed=0, frames=3_000,
-        topics=("/tf",), preset="mcap_default",
+        topics=("/tf",), preset="none",
         projected_bytes=1_209_000, measured_bytes=1_209_000,
     ),
     McapSizeMeasurement(
         fixture="long_run_3000", seed=0, frames=3_000,
-        topics=("/tf",), preset="mcap_compressed_nocrc",
+        topics=("/tf",), preset="reference_zstd_l3",
         projected_bytes=170_628, measured_bytes=154_040,
     ),
     McapSizeMeasurement(
         fixture="long_run_3000", seed=0, frames=3_000,
-        topics=("/joint_states", "/tf"), preset="mcap_default",
+        topics=("/joint_states", "/tf"), preset="none",
         projected_bytes=1_638_000, measured_bytes=1_638_000,
     ),
     McapSizeMeasurement(
         fixture="long_run_3000", seed=0, frames=3_000,
-        topics=("/joint_states", "/tf"), preset="mcap_compressed_nocrc",
+        topics=("/joint_states", "/tf"), preset="reference_zstd_l3",
         projected_bytes=307_128, measured_bytes=284_259,
     ),
 )
@@ -2500,6 +2632,423 @@ def projection_drift(measurement: McapSizeMeasurement, path: str | Path) -> str:
         if computed == measurement.projected_bytes
         else PROJECTION_DRIFTED
     )
+
+
+# --- what rosbag2 itself produced, once, out of band (issue #232) ------------
+#
+# WHY A SECOND MEASUREMENT. The one above was written by the reference Python
+# MCAP writer, so what it validated was the record layout, the CDR payload and
+# the index arithmetic — one implementation of the spec against another. It
+# could not validate the thing issue #117 got wrong, which was the *profile*:
+# rosbag2 rejects both names this module published before now, so a practitioner
+# following the procedure in `docs/sensor-baseline.md` met an error rather than
+# a bag. That is what this run fixes, and it is why the names moved.
+#
+# WHAT IS RECORDED AND WHAT IS NOT. Only the measurement, again: no `mcap`
+# library is imported here and no `zstd` is run. There is no ROS 2 on the host
+# that writes this repository's unattended changes, so **these numbers cannot be
+# regenerated by it** — they are given data, recorded with the versions and the
+# host that produced them, exactly as the sensor figure in that document is.
+#
+# WHAT IS BEING COMPARED, WHICH IS NOT WHAT #221 COMPARED. These are whole bag
+# files, as the filesystem reports them. The projection excludes every
+# file-level record, so it is a *lower bound* on a file rather than a like-for-
+# like with one, and the two rows say by how much: solving the two `none` rows
+# for a fixed cost and a per-frame rate puts the file-level records at about
+# 11.8 kB and the projection about 4 B per frame-pair above the real per-message
+# rate. At 3,000 frames those two cancel to 0.002%, which is nearer than either
+# part deserves; at 251 frames the fixed cost is 7.9% of the bag and shows.
+#
+# WHY ONLY ONE ROW CARRIES A BAND. Issue #232 fixed it before the rows were
+# written down: the uncompressed projection stands or falls within 1% of the
+# 3,000-frame bag. Everything else is recorded without one. The compressed
+# projection is a single number applied to two profiles that differ by 43%, so
+# no band could be honest about it, and a band chosen now would be a band chosen
+# after seeing the number — the failure the whole subsection exists to prevent.
+
+#: Where the bags came from, and what cannot write another one here.
+ROSBAG2_PROVENANCE = (
+    "2026-09-06, outside this repository. `ros2 bag record` via rosbag2_py in "
+    "the `ros:jazzy` image under Docker 29.4.0, on an arm64 Darwin host, over "
+    "/joint_states (sensor_msgs/JointState) and /tf (tf2_msgs/TFMessage). "
+    "Whole-file byte counts. There is NO ROS 2 on the host that writes this "
+    "repository's unattended changes, so this measurement cannot be regenerated "
+    "here and is recorded as given data; the procedure that produced it is "
+    "published in docs/sensor-baseline.md so a third party can."
+)
+
+#: How far the uncompressed projection may sit from the 3,000-frame bag and
+#: still stand. Decided by issue #232 in its acceptance criteria, before the
+#: rows below were written, and deliberately not a parameter — a tolerance a
+#: caller supplies is one that can be chosen after seeing the number it judges.
+ROSBAG2_UNCOMPRESSED_TOLERANCE = 0.01
+
+#: A row this module computes a projection for, recorded against no band. The
+#: measurement stands on its own; the delta beside it is published and is not
+#: called a pass. Never resolves to `WITHIN_TOLERANCE`: a figure with no band is
+#: a could-not-evaluate about the projection, not a verdict in its favour.
+NOT_BANDED = "NOT BANDED"
+
+#: A row this module computes no projection for at all — `fastwrite`, which
+#: writes no message index this encoder can charge, and the bag recorded with no
+#: profile passed. The bytes are kept because they are what settles two
+#: questions the projection cannot settle from the spec alone.
+NOT_PROJECTED = "NOT PROJECTED"
+
+#: How the unset bag is labelled in a report: `--storage-preset-profile` was not
+#: passed. Not spelled `none`, which is a profile you can pass and a different
+#: row — the whole point of that pair is that the two were measured separately
+#: and came out 4 B apart.
+PROFILE_UNSET = "unset"
+
+
+@dataclass(frozen=True)
+class Rosbag2Measurement:
+    """One bag rosbag2 wrote, and this module's projection for it if it has one.
+
+    `profile` is `str | None` and the `None` is load-bearing: it is the bag
+    recorded without `--storage-preset-profile`, which is a different
+    measurement from the one recorded with `none` even though the two came out
+    4 B apart. That they came out 4 B apart is the finding; collapsing them into
+    one row would assume it.
+
+    `projected_bytes` and `tolerance` are both `int | None` and `float | None`
+    for the same reason. A profile this module does not model gets no
+    projection, and a projection this issue did not band gets no band — neither
+    is filled in with something plausible, because a plausible number here would
+    be indistinguishable downstream from one somebody decided.
+    """
+
+    fixture: str
+    frames: int
+    messages: int
+    topics: tuple[str, ...]
+    profile: str | None
+    measured_bytes: int
+    projected_bytes: int | None
+    tolerance: float | None
+    note: str
+
+    def __post_init__(self) -> None:
+        if self.profile is not None and self.profile not in ROSBAG2_STORAGE_PRESET_PROFILES:
+            raise BenchError(
+                f"{self.fixture}: {self.profile!r} is not a profile rosbag2 "
+                "accepts, so no bag was written under it. "
+                f"--storage-preset-profile takes "
+                f"{list(ROSBAG2_STORAGE_PRESET_PROFILES)}, or None for a run "
+                "that passed no profile at all. A measurement filed under a "
+                "name that cannot be run is a byte count nobody can reproduce."
+            )
+        if not self.topics:
+            raise BenchError(
+                f"{self.fixture}: a measurement over no topics prices nothing. "
+                "The arrangement is what the byte count is *of*."
+            )
+        if not self.note.strip():
+            raise BenchError(
+                f"{self.fixture} {self.profile!r}: the row says nothing about "
+                "what it is for. Every row here is either a comparison or a "
+                "piece of evidence for something else, and one that says which "
+                "is the difference between a record and a number."
+            )
+        for field, value in (("measured_bytes", self.measured_bytes),
+                             ("frames", self.frames),
+                             ("messages", self.messages)):
+            if value <= 0:
+                raise BenchError(
+                    f"{self.fixture} {self.profile!r}: {field} is {value}. A "
+                    "zero here reads downstream as a bag that costs nothing, "
+                    "which is the one error this comparison cannot afford to "
+                    "make quietly."
+                )
+        if self.projected_bytes is not None and self.projected_bytes <= 0:
+            raise BenchError(
+                f"{self.fixture} {self.profile!r}: projected_bytes is "
+                f"{self.projected_bytes}. A projection of zero or less is an "
+                "encoder that did not run, and it is not the same thing as no "
+                "projection — which is spelled None."
+            )
+        if self.tolerance is not None:
+            if self.tolerance < 0:
+                raise BenchError(
+                    f"{self.fixture} {self.profile!r}: tolerance is "
+                    f"{self.tolerance}. A negative band is one no measurement "
+                    "can be inside."
+                )
+            if self.projected_bytes is None:
+                raise BenchError(
+                    f"{self.fixture} {self.profile!r}: a band of "
+                    f"{self.tolerance} was set on a row with no projection in "
+                    "it. There is nothing for the band to judge, and a verdict "
+                    "computed from it would be a verdict about nothing."
+                )
+
+    @property
+    def label(self) -> str:
+        """The profile as a report prints it, with the unset run named as unset."""
+        return PROFILE_UNSET if self.profile is None else self.profile
+
+    @property
+    def delta(self) -> float | None:
+        """Measured over projected, minus one. `None` when there is no projection.
+
+        Positive means the projection understates the real bag. That is the
+        direction the file-level exclusions predict, and it is the direction
+        against this project: a cheaper projected bag makes the artifact's ratio
+        against the incumbent larger than the bag deserves.
+        """
+        if self.projected_bytes is None:
+            return None
+        return self.measured_bytes / self.projected_bytes - 1.0
+
+    @property
+    def verdict(self) -> str:
+        """One of `NOT_PROJECTED`, `NOT_BANDED`, `WITHIN_TOLERANCE`, `OUTSIDE_TOLERANCE`.
+
+        Computed, never stored, for the reason `McapSizeMeasurement.verdict` is:
+        a verdict written down beside the numbers it is derived from can
+        disagree with them invisibly. Two of the four values are
+        could-not-evaluate and neither can reach the third by any input.
+        """
+        delta = self.delta
+        if delta is None:
+            return NOT_PROJECTED
+        if self.tolerance is None:
+            return NOT_BANDED
+        return WITHIN_TOLERANCE if abs(delta) <= self.tolerance else OUTSIDE_TOLERANCE
+
+    def sentence(self) -> str:
+        """The row as one line, verdict included, for a report or a PR body."""
+        head = (
+            f"{self.fixture} {self.frames:,} frames, {'+'.join(self.topics)}, "
+            f"{self.label}: measured {self.measured_bytes:,} B"
+        )
+        if self.projected_bytes is None:
+            return f"{head}, no projection -> {self.verdict} ({self.note})"
+        band = (
+            "no band" if self.tolerance is None
+            else f"tolerance +/-{self.tolerance * 100:.0f}%"
+        )
+        return (
+            f"{head}, projected {self.projected_bytes:,} B, delta "
+            f"{self.delta * 100:+.3f}% ({band}) -> {self.verdict}"
+        )
+
+
+#: Every bag the 2026-09-06 rosbag2 run wrote: two fixtures, five writer
+#: settings each, whole files. One row carries a band and nine do not, and the
+#: nine are why the ten are here — the two `fastwrite` rows isolate the message
+#: index, the two unset rows settle what rosbag2 does when nobody chooses, and
+#: the four compressed rows are the finding that there is no single compressed
+#: figure to be right about.
+ROSBAG2_SIZE_MEASUREMENTS: tuple[Rosbag2Measurement, ...] = (
+    Rosbag2Measurement(
+        fixture="declared_violation", frames=251, messages=502,
+        topics=("/joint_states", "/tf"), profile=None,
+        measured_bytes=147_827, projected_bytes=None, tolerance=None,
+        note=(
+            "no --storage-preset-profile passed; 4 B from the `none` bag, "
+            "which is what makes the default uncompressed a measurement"
+        ),
+    ),
+    Rosbag2Measurement(
+        fixture="declared_violation", frames=251, messages=502,
+        topics=("/joint_states", "/tf"), profile="none",
+        measured_bytes=147_831, projected_bytes=137_046, tolerance=None,
+        note=(
+            "no band: the file-level records this projection excludes are 7.9% "
+            "of a 251-frame bag, and issue #232 banded the 3,000-frame row "
+            "rather than this one"
+        ),
+    ),
+    Rosbag2Measurement(
+        fixture="declared_violation", frames=251, messages=502,
+        topics=("/joint_states", "/tf"), profile="fastwrite",
+        measured_bytes=139_621, projected_bytes=None, tolerance=None,
+        note="writes no message index, which this encoder charges per message",
+    ),
+    Rosbag2Measurement(
+        fixture="declared_violation", frames=251, messages=502,
+        topics=("/joint_states", "/tf"), profile="zstd_fast",
+        measured_bytes=39_227, projected_bytes=25_225, tolerance=None,
+        note=(
+            "gzip -9 stands in for zstd and one projection is applied to both "
+            "compressed profiles, so no band could be honest about it"
+        ),
+    ),
+    Rosbag2Measurement(
+        fixture="declared_violation", frames=251, messages=502,
+        topics=("/joint_states", "/tf"), profile="zstd_small",
+        measured_bytes=28_295, projected_bytes=25_225, tolerance=None,
+        note="the same projection as zstd_fast, against a bag 28% smaller",
+    ),
+    Rosbag2Measurement(
+        fixture="long_run_3000", frames=3_000, messages=6_000,
+        topics=("/joint_states", "/tf"), profile=None,
+        measured_bytes=1_637_963, projected_bytes=None, tolerance=None,
+        note=(
+            "no --storage-preset-profile passed; 4 B from the `none` bag on "
+            "1.6 MB, the second of the two rows that settle the default"
+        ),
+    ),
+    Rosbag2Measurement(
+        fixture="long_run_3000", frames=3_000, messages=6_000,
+        topics=("/joint_states", "/tf"), profile="none",
+        measured_bytes=1_637_967,
+        projected_bytes=1_638_000,
+        tolerance=ROSBAG2_UNCOMPRESSED_TOLERANCE,
+        note=(
+            "the one banded row: the figure docs/sensor-baseline.md and "
+            "retention.md publish as the incumbent, against the bag itself"
+        ),
+    ),
+    Rosbag2Measurement(
+        fixture="long_run_3000", frames=3_000, messages=6_000,
+        topics=("/joint_states", "/tf"), profile="fastwrite",
+        measured_bytes=1_541_617, projected_bytes=None, tolerance=None,
+        note=(
+            "no message index; against the `none` bag over 6,000 messages it "
+            "is what isolates MCAP_MESSAGE_INDEX_PER_MESSAGE from a bag"
+        ),
+    ),
+    Rosbag2Measurement(
+        fixture="long_run_3000", frames=3_000, messages=6_000,
+        topics=("/joint_states", "/tf"), profile="zstd_fast",
+        measured_bytes=360_798, projected_bytes=307_128, tolerance=None,
+        note="the compressed projection sits 14.9% under this profile",
+    ),
+    Rosbag2Measurement(
+        fixture="long_run_3000", frames=3_000, messages=6_000,
+        topics=("/joint_states", "/tf"), profile="zstd_small",
+        measured_bytes=252_034, projected_bytes=307_128, tolerance=None,
+        note=(
+            "and 21.9% over this one, on the same projection — which is why "
+            "neither compressed figure is claimed to project a profile"
+        ),
+    ),
+)
+
+
+def rosbag2_measurement(fixture: str, profile: str | None) -> Rosbag2Measurement:
+    """The recorded bag for that pair, or a refusal naming the ones that exist.
+
+    `profile` has no default and `None` is a value rather than an omission: it
+    names the bag written with no profile passed. Not a nearest match, for the
+    reason `mcap_size_measurement` is not — a row selected loosely would set one
+    writer setting's bytes beside another's projection and publish the delta
+    between two different bags.
+    """
+    for row in ROSBAG2_SIZE_MEASUREMENTS:
+        if (row.fixture, row.profile) == (fixture, profile):
+            return row
+    raise BenchError(
+        f"no bag was recorded for fixture {fixture!r} at profile {profile!r}. "
+        f"Recorded: {[(r.fixture, r.profile) for r in ROSBAG2_SIZE_MEASUREMENTS]}"
+        ". The run happened once and cannot be repeated here, so an unrecorded "
+        "pair is a could-not-evaluate rather than the nearest row."
+    )
+
+
+def stream_frames(path: str | Path) -> int:
+    """Frames in a stream CSV: data rows, comments and header excluded."""
+    rows = [
+        line for line in Path(path).read_text(encoding="utf-8").splitlines()
+        if not line.startswith("#")
+    ]
+    if len(rows) < 2:
+        raise BenchError(
+            f"{path} holds no frames. A stream with a header and nothing under "
+            "it is a step of the pipeline that did not run."
+        )
+    return len(rows) - 1
+
+
+def rosbag2_projection_drift(
+    measurement: Rosbag2Measurement, path: str | Path
+) -> str:
+    """`PROJECTION_HOLDS` if the recorded projection is still the computed one.
+
+    The measurement is frozen — the bag was written once, on a host with a ROS 2
+    on it, and nothing here can write another — so the only half that can move
+    is the projection, and one that moved would leave a published delta
+    describing an encoder this module no longer has.
+
+    Refuses rather than compares in the two cases where the answer would be
+    meaningless. A row with no projection has nothing to hold, and a stream
+    whose frame count is not the row's is a different fixture: comparing the
+    3,000-frame record against a 251-frame stream would report drift that is
+    only the caller having handed it the wrong file.
+    """
+    if measurement.projected_bytes is None:
+        raise BenchError(
+            f"{measurement.fixture} at profile {measurement.profile!r} has no "
+            "projection, so there is nothing for this to hold to. It is "
+            f"recorded as {measurement.verdict} because {measurement.note}, and "
+            "computing one for it now would invent the number the row exists to "
+            "say nobody has."
+        )
+    if measurement.profile is None:
+        raise BenchError(
+            f"{measurement.fixture}'s unset row carries a projection, which no "
+            "row should: the projection is computed from a named profile and "
+            "the unset bag is recorded precisely because nobody named one."
+        )
+    frames = stream_frames(path)
+    if frames != measurement.frames:
+        raise BenchError(
+            f"{path} holds {frames} frames and the recorded bag for "
+            f"{measurement.fixture} holds {measurement.frames}. That is a "
+            "different fixture, and projecting it would compare a measurement "
+            "of one run against a projection of another — a delta about two "
+            "different bags, reported as though it were about one."
+        )
+    computed = project_for_topics(
+        path, topics=measurement.topics, preset=measurement.profile
+    )
+    return (
+        PROJECTION_HOLDS
+        if computed == measurement.projected_bytes
+        else PROJECTION_DRIFTED
+    )
+
+
+def rosbag2_index_bytes_per_message(fixture: str) -> float:
+    """`MCAP_MESSAGE_INDEX_PER_MESSAGE`, isolated from two measured bags.
+
+    The same content under `none` and under `fastwrite` differs by one thing:
+    `fastwrite` writes no message index. Subtract, divide by the messages, and
+    what is left is the per-message index width — measured from a real bag,
+    where the constant it is compared against was read off the specification.
+
+    Slightly above 16 on both fixtures — 16.06 over 6,000 messages and 16.35
+    over 502 — and the excess is the per-chunk fixed part of each MessageIndex
+    record, which this module excludes with the file-level records and which is
+    a larger share of fewer messages. So the two derivations agree to the byte
+    and disagree in the direction the exclusions predict, which is a stronger
+    result than agreeing exactly would have been.
+    """
+    with_index = rosbag2_measurement(fixture, "none")
+    without = rosbag2_measurement(fixture, "fastwrite")
+    if with_index.messages != without.messages:
+        raise BenchError(
+            f"{fixture}: the `none` bag holds {with_index.messages} messages "
+            f"and the `fastwrite` bag {without.messages}. Two bags of different "
+            "content cannot isolate a per-message term between them, and the "
+            "difference divided by either count would be a number about "
+            "nothing."
+        )
+    if with_index.measured_bytes <= without.measured_bytes:
+        raise BenchError(
+            f"{fixture}: the indexed bag is {with_index.measured_bytes} B and "
+            f"the unindexed one {without.measured_bytes} B, so the bag with an "
+            "index in it is not the larger of the two. Subtracting these would "
+            "report a negative index width, which is not a measurement of "
+            "anything."
+        )
+    return (
+        with_index.measured_bytes - without.measured_bytes
+    ) / with_index.messages
+
 
 
 # --------------------------------------------------------------------------

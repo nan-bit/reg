@@ -1217,6 +1217,20 @@ the whole-stream bag is **4.75x** the gzipped CSV compressed, so the artifact is
 **8.42x** that bag rather than `~40x` a gzipped CSV. `39.98x / 4.75x` is the
 division neither earlier comparison could do.
 
+**Corrected again 2026-09-06 (issue #233).** The **4.75x** and **8.42x** above
+are superseded and left standing as what that pass was given: both rest on one
+compressed projection, filed under `mcap_compressed_nocrc` — a preset name
+`ros2 bag record` answers with an error. rosbag2 ships **two** compressed
+profiles and the bags it wrote bracket that projection, so the figure is a
+**pair**: the artifact is **7.16x** a `zstd_fast` bag and **10.25x** a
+`zstd_small` one. The uncompressed half stands unedited: **25.34x** and
+**1.58x** become measurements.
+
+That moves the entry both ways: against `zstd_fast` the real bag is 17.5% dearer
+than projected, **5.58x** the gzipped CSV, and against `zstd_small` 17.9%
+cheaper, **3.90x**. What this pass argued — the incumbent is dearer than the
+gzipped baseline this project chose to lose against — holds at both.
+
 ---
 
 ## 17. SOTER — Simplex with an implementation, in robotics, in 2019

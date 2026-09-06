@@ -207,6 +207,12 @@ ARGUMENT: dict[str, str] = {
 #         the two-term budget was designed for and the first time it has
 #         happened: the prose describes fifteen new symbols, so the denominator
 #         moved with it and the density fell without anything being cut
+#   88.8  2026-09-06, after #233 republished the incumbent figures from the
+#         measured bags. Unchanged and re-measured: `README.md` 3,503 -> 3,547
+#         and `docs/sensor-baseline.md` 6,213 -> 6,164, 25,747 / 290 = 88.79.
+#         The republication is paid for inside the same file that carries it —
+#         three 2026-09-06 provenance rows merged into one, and four paragraphs
+#         restating the projection cut to what the tables already say
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -252,7 +258,18 @@ RATE = 88.8
 #           `tests/test_published_figures.py` carries, and the 13x condition
 #           `retention.md` was stating at both ends of one subsection —
 #           measured, no headroom
-ARGUMENT_MAX = 73968
+#   73,962  today, 2026-09-06, after #233 republished those figures from the
+#           bags rosbag2 wrote. `prior-art.md` gained a third dated correction
+#           and `plan.md` a longer Claim 1 condition, because the compressed
+#           figure is now a pair and both ends of it are published: +169 words
+#           between them. `retention.md` paid for it and 6 words over, going
+#           -175 — it was still restating `prior-art.md` §8's Gorilla slice,
+#           `plan.md`'s Art. 26(7) entry, the same 13x condition at both ends of
+#           one subsection, and the answer to the original framing twice in one
+#           screen. Six words lower than the last ceiling rather than level with
+#           it, because a ceiling set above the measurement banks the difference
+#           as headroom — measured, no headroom
+ARGUMENT_MAX = 73962
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.

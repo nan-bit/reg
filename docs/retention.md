@@ -12,25 +12,21 @@ CI run: the control-rate ladder's **50 Hz row**, the coarsest level's **label**
 and the record and node counts behind it, the **byte attribution**, and the
 **Layer-A comparison** table.
 
-Everything else is prose or arithmetic over those — including the six-month
-totals in the resolution table below, `265 GB` among them, and every ratio
-against the sensor assumption. That module's own *What this does not cover* is
-the authority on the boundary; this line exists so that nothing here reads as
-guaranteed when it is not.
+Everything else is prose or arithmetic over those, `265 GB` among them; that
+module's own *What this does not cover* is the authority on the boundary, and
+this line exists so that nothing here reads as guaranteed when it is not.
 
-This is [`plan.md`](plan.md) Claim 1's measurement record. It lives in its own
-file because it is not a plan: it is a set of measured figures, the arithmetic
-behind them, and the record of how they moved. `plan.md` states the claim and
-the conditions that travel with it, and republishes the headline figures; the
-derivations, the ladder and the record of the corrections are here.
+This is [`plan.md`](plan.md) Claim 1's measurement record: a set of measured
+figures, the arithmetic behind them, and the record of how they moved. `plan.md`
+states the claim and the conditions that travel with it; the derivations, the
+ladder and the corrections are here.
 
 **The artifact side of every figure here is measured on the fixed-base planar
 arm** — 2–3 revolute links, base at the origin. That is a condition on all of
 them, and moving the robot would move all of them. The **control rate** is not a
 single condition in the same way: the resolution table below is at the 50 Hz
-`reg.scenarios.DEFAULT_DT` runs at, and *The control rate* then measures the
-same curve at 100 Hz, 250 Hz and 1 kHz. Every table says which rate it is at,
-because every figure in them is linear in it.
+`reg.scenarios.DEFAULT_DT` runs at, and *The control rate* measures the same
+curve at 100 Hz, 250 Hz and 1 kHz. Every table says which rate it is at.
 
 **This document has been wrong twice and the corrections are kept in place
 rather than tidied away** — refuted against a baseline that was never the claim,
@@ -78,8 +74,7 @@ would have been read.)
 prices** (issue #101). Every figure below is what it costs to keep the artifact
 for the mandated window; none of them is a claim that keeping it for that window
 is permitted. Stated in full, once, where the claim is: [`plan.md`](plan.md)
-Claim 1. The entry it rests on — with Art. 26(7) and the DPIA obligation named,
-and no claim of compliance — is [`limitations.md` §8](limitations.md).
+Claim 1.
 
 Per robot, from the measured resolution curve:
 
@@ -434,60 +429,53 @@ from it:
 rather than a byte of stream.* `reg.sim.PROVENANCE_VERSION` went to 2 when
 `reg.stream` gained the two optional base blocks (issue #176) — one character in
 the banner above every raw stream, which gzip rendered one byte longer. **No
-fixture grew a column**: the blocks are present only in a stream whose frames
-carry a base and every robot here is bolted to the origin, so
-`reg.stream.expected_header(2, 3)` is the same 24 columns and every ratio,
-MB/hour and GB figure in this document is unchanged. Recorded rather than
+fixture grew a column**, every robot here being bolted to the origin, so every
+ratio, MB/hour and GB figure in this document is unchanged. Recorded rather than
 absorbed, because a figure that moves for a reason nobody wrote down is the thing
 the pin exists to prevent.
 
-**That baseline is not the incumbent, and the gap is measured under both
-configurations rosbag2 writes.** Nobody retains a gzipped CSV; practitioners
-retain rosbag2, in MCAP. Every figure below is a projection computed from the
-MCAP specification, recorded in [`sensor-baseline.md`](sensor-baseline.md) and
-held to the byte by `tests/test_incumbent_encoding.py`. The whole-stream rows put
-the Layer B half on `/tf` — the arrangement most favourable to the incumbent of
-those that document prices, with the decision, its alternatives and the three
-discounts it hands the bag.
+**That baseline is not the incumbent.** Nobody retains a gzipped CSV;
+practitioners retain rosbag2, in MCAP. The five-column rows below are a
+projection computed from the MCAP specification, recorded in
+[`sensor-baseline.md`](sensor-baseline.md) and held to the byte by
+`tests/test_incumbent_encoding.py`; the 24-column rows are bags `ros2 bag record`
+wrote on 2026-09-06, whole files (`reg.bench.ROSBAG2_SIZE_MEASUREMENTS`), against
+the 2,584,576 B artifact above. Both put the Layer B half on `/tf`, the
+arrangement most favourable to the incumbent of those that document prices.
 
-| MCAP against a gzipped CSV of the same content | `mcap_default` | `mcap_compressed_nocrc` |
-|---|---|---|
-| `/joint_states`, 5 columns / 251 frames, vs 3,053 B | 35,893 B, **11.76x** | 11,685 B, **3.83x** |
-| `/joint_states` + `/tf`, 24 columns / 3,000 frames, vs 64,652 B | 1,638,000 B, **25.34x** | 307,128 B, **4.75x** |
-| **artifact / bag**, 24 columns / 3,000 frames | **1.58x** | **8.42x** |
+| MCAP against a gzipped CSV of the same content | bag | bag / gz CSV | artifact / bag |
+|---|---|---|---|
+| 5 columns / 251 frames, **projected**, vs 3,053 B — `none` | 35,893 B | **11.76x** | |
+| the same, one compressed projection for both zstd profiles | 11,685 B | **3.83x** | |
+| 24 columns / 3,000 frames, **measured**, vs 64,652 B — no profile passed | 1,637,963 B | **25.34x** | **1.58x** |
+| the same, `zstd_fast` | 360,798 B | **5.58x** | **7.16x** |
+| the same, `zstd_small` | 252,034 B | **3.90x** | **10.25x** |
 
 The **2.51x** published here from 2026-08-26 is superseded: it priced
 compression as a default rosbag2 does not apply and left the message index out,
 and both made the incumbent look cheap.
 
-**The one figure to quote beside `~40x` is 8.42x**, and the content belongs in
-the same clause as the number: the artifact is 8.42x a rosbag2 bag of the same 24
-columns of the same run, where `~40x` is against a gzipped CSV of those same
-columns. The two divide — `39.98x / 4.75x` — which a five-column ratio against a
-24-column headline could never do. 1.58x is that comparison at the preset a
-practitioner gets without choosing, published beside 8.42x and not instead of it:
-8.42x leads because it is the preset favourable to the incumbent.
+**Beside `~40x` the figure is a pair, and the pair is a range with its ends
+named**: the artifact is **7.16x** a `zstd_fast` bag and **10.25x** a
+`zstd_small` one, of the same 24 columns of the same run, where `~40x` is against
+a gzipped CSV of those same columns. Each end composes — `39.98x / 5.58x` and
+`39.98x / 3.90x` — which a five-column ratio against a 24-column headline could
+never do. **If one number is wanted it is 7.16x**, because `zstd_fast` is the
+larger bag and so the smaller ratio: the end least flattering to this project.
+Quoting either alone is preset-shopping. 1.58x is the same comparison at the
+uncompressed default, beside them and not instead of them.
 
 **The answer to the original framing does not move.** The artifact is larger than
-the bag at both presets, so *is the graph smaller than the stream it replaces* is
-still **no**, Claim 1's status stands and the prohibition below still binds.
-`reg.bench.FullContentComparison.claim_1_status` computes that rather than
+the bag under every profile measured, so *is the graph smaller than the stream it
+replaces* is still **no**, Claim 1's status stands and the prohibition below still
+binds. `reg.bench.FullContentComparison.claim_1_status` computes that rather than
 leaving it to a document, and its outcome for the artifact coming out *smaller*
 is the one that would oblige the status line to change.
 
-**~40x is the number to quote**, and 13x may be quoted only with the condition
-above — **no record stream** in the artifact it was measured on — attached in the
-same sentence, which `tests/test_published_figures.py` checks in every document
-that quotes it.
-
-The table itself is pinned rather than asserted: the same module re-measures this
-build on every CI run and compares it against the table above, and it fails in both
-directions — a code change that moves the measurement fails it, and a table edited
-to match a regression fails it too.
-
-Nothing here changes the conclusion this comparison exists for. The answer to
-*is the graph smaller than the stream it replaces* is still **no**, by rather
-more than it looked, and for the same structural reason.
+The Layer-A table itself is pinned rather than asserted: the same module
+re-measures this build on every CI run and compares it against the table above,
+and it fails in both directions — a code change that moves the measurement fails
+it, and a table edited to match one fails it too.
 
 ### Success, restated to something a measurement can meet or miss
 
@@ -517,9 +505,6 @@ one governs.
    headed *superseded* is a rule nobody can safely cite. It is
    [`plan.md`](plan.md) Claim 1's, where the code that obeys it already points.
 
-The original criterion is kept above rather than deleted: it is what the project
-set out to show, and the gap between it and the table is the finding.
-
 ## Why it lost — three things the measurement exposed (2026-08-19)
 
 **1. The baseline was never the thesis.** The claim argues from
@@ -536,11 +521,8 @@ the thesis.
 
 *What ~21 B/frame may and may not be compared against.* It is the full
 24-column stream, so it is not a per-point figure and does not sit beside
-Gorilla's **1.37 bytes per point**. The like-for-like slice is the five
-proprioceptive columns alone, **12.2 B/frame** on the same fixture and seed;
-[`prior-art.md`](prior-art.md) §8 carries that comparison and what is still
-unlike about it. ~21 B/frame is unchanged and is what the retention arithmetic
-above uses.
+Gorilla's **1.37 bytes per point**; [`prior-art.md`](prior-art.md) §8 carries the
+like-for-like slice and what is still unlike about it.
 
 **2. The number that is actually about retention is absolute, and we have it.**
 At 30,000 frames / 600 s **at 50 Hz** the artifact is 7.89 MB, i.e. **47.3

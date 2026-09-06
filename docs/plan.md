@@ -260,18 +260,22 @@ condition that is part of the number:
 - The gzipped state CSV is **not what practitioners retain**. Against
   **rosbag2/MCAP**, the incumbent, the same proprioceptive content costs
   **11.76x** what the gzipped CSV does at rosbag2's default preset and **3.83x**
-  at its opt-in compressed one — and both are a **hand-built encoding comparison
-  and not a real bag**, which [`sensor-baseline.md`](sensor-baseline.md) requires
-  be said wherever any figure from it is quoted until a measurement retires it.
-- **The figure to quote against the incumbent is 8.42x**: the same encoder priced
-  over all 24 columns rather than 5, so it composes with the `~40x` instead of
-  standing beside it. The artifact is **8.42x** a rosbag2 bag of those columns at
-  the compressed preset and **1.58x** at the default one — the bag being 4.75x
-  and 25.34x the gzipped CSV, and `39.98x / 4.75x` is where 8.42x comes from. Its
-  Layer B half goes on `/tf`, the arrangement most favourable to the incumbent of
-  those [`sensor-baseline.md`](sensor-baseline.md) prices, so nothing here is won
-  by choosing the comparator. **The artifact is larger than the bag at both
-  presets**, so the original framing is still answered **no**.
+  at one compressed projection standing for both zstd profiles — and both are a
+  **hand-built encoding comparison and not a real bag**, which
+  [`sensor-baseline.md`](sensor-baseline.md) requires be said wherever a
+  projected figure from it is quoted until a measurement retires it.
+- **The figure to quote against the incumbent is a pair, 7.16x and 10.25x**: the
+  same 24 columns rather than 5, so it composes with the `~40x` instead of
+  standing beside it, and measured on bags `ros2 bag record` wrote. The artifact
+  is **7.16x** a `zstd_fast` bag of those columns, **10.25x** a `zstd_small` one
+  and **1.58x** the uncompressed default — the bags being 5.58x, 3.90x and 25.34x
+  the gzipped CSV, and `39.98x / 5.58x` is where 7.16x comes from. **Both
+  compressed profiles are published**, rosbag2 shipping both; if a single number
+  is wanted it is 7.16x, the larger bag and so the smaller ratio. Its Layer B
+  half goes on `/tf`, the arrangement most favourable to the incumbent of those
+  [`sensor-baseline.md`](sensor-baseline.md) prices, so nothing here is won by
+  choosing the comparator. **The artifact is larger than the bag under every
+  profile**, so the original framing is still answered **no**.
 
 **And the prohibition those conditions imply, stated as a rule here because
 code cites it as one.** *Nothing in this repository may quote a compression ratio

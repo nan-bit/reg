@@ -23,6 +23,14 @@ The reporter has a negative of its own: fed an incumbent cheaper than the
 baseline, it must say so in words. A comparison that can only flatter is not a
 measurement, and that case is the one no fixture in this repository produces.
 
+Issue #233 moved the whole-content figures again, and this time off the
+projection entirely: the bags of the 2026-09-06 rosbag2 run are what the
+documents publish against the incumbent, the uncompressed one keeping its value
+and changing its status, the compressed one becoming a **pair** because rosbag2
+ships two compressed profiles and one projection cannot be right about both. So
+the document checks below read `ROSBAG2_SIZE_MEASUREMENTS`, and half a pair is a
+failure with a negative under it.
+
 Issue #220 added the second half of the file, and the difference is what is being
 priced rather than how. The comparison above covers five of the fixture's
 twenty-four columns; the retention headline is measured over all twenty-four, so
@@ -719,28 +727,58 @@ FULL_FRAMES = 3000
 #: `DOCS_PUBLISHING_THE_RATIO` is: every check below goes green on a document
 #: that quietly stopped quoting the number, and a figure that vanishes from the
 #: front page is a larger change than one that moves. The sets differ because
-#: the documents differ — `README.md` carries the ratio against the artifact and
-#: not the encoding ratios behind it, `sensor-baseline.md` carries the encoding
+#: the documents differ — `README.md` carries the ratios against the artifact and
+#: not the encoding ratios behind them, `sensor-baseline.md` carries the encoding
 #: and hands the artifact comparison to `retention.md`, and `prior-art.md` carries
-#: exactly what its dated correction needed to state.
+#: exactly what its dated corrections needed to state.
+#:
+#: **One set per family rather than one per profile, and that is the pair rule
+#: in the pin** (issue #233). rosbag2 ships two compressed profiles and the
+#: measured bags are 43% apart, so a document may publish all three writer
+#: settings or none of them, never whichever suits it.
+#: `compressed_pair_verdict` is the same rule with a negative under it.
 DOCS_PUBLISHING: dict[str, frozenset[str]] = {
-    "artifact_over_bag_compressed": frozenset(
+    "artifact_over_bag": frozenset(
         {"README.md", "plan.md", "prior-art.md", "retention.md"}
     ),
-    "artifact_over_bag_default": frozenset({"README.md", "plan.md", "retention.md"}),
-    "bag_over_gzip_default": frozenset(
-        {"plan.md", "retention.md", "sensor-baseline.md"}
-    ),
-    "bag_over_gzip_compressed": frozenset(
+    "bag_over_gzip": frozenset(
         {"plan.md", "prior-art.md", "retention.md", "sensor-baseline.md"}
     ),
     "artifact_over_gzip": frozenset({"plan.md", "prior-art.md", "retention.md"}),
 }
 
-#: The whole-stream byte counts, and the shorter list of documents that publish
-#: them: a ratio travels, an arithmetic does not.
-DOCS_PUBLISHING_THE_FULL_BYTES = frozenset({"retention.md", "sensor-baseline.md"})
+#: The whole-stream byte counts the *projection* computes, and the one document
+#: that publishes them. It is one document since issue #233 and was two before:
+#: a projected byte count is the arithmetic behind a figure and stays where the
+#: arithmetic is, and what travels to `retention.md` is the bag rosbag2 wrote.
+DOCS_PUBLISHING_THE_FULL_BYTES = frozenset({"sensor-baseline.md"})
 DOCS_PUBLISHING_THE_HALVES = frozenset({"sensor-baseline.md"})
+
+#: The fixture the published incumbent figures are measured on: the 3,000-frame
+#: run `ros2 bag record` wrote bags of, which is what every document publishes
+#: against the incumbent since issue #233. The byte counts stay in
+#: `reg.bench.ROSBAG2_SIZE_MEASUREMENTS`; nothing here restates one.
+MEASURED_FIXTURE = "long_run_3000"
+
+#: The three writer settings the documents publish, in publication order: the
+#: uncompressed default and the two compressed profiles. `None` is a value and
+#: not an omission — it is the bag written with no `--storage-preset-profile`
+#: passed, which is what a practitioner keeps without choosing anything, and it
+#: is a different measurement from the `none` bag beside it.
+PUBLISHED_PROFILES: tuple[str | None, ...] = (None, COMPRESSED, COMPRESSED_SMALL)
+
+#: The measured bag sizes, and the two documents that publish them: the record
+#: of the run, and the document where the artifact meets it.
+DOCS_PUBLISHING_THE_MEASURED_BYTES = frozenset(
+    {"retention.md", "sensor-baseline.md"}
+)
+
+#: The compressed figures issue #233 retired, and the one document they may
+#: still stand in. `prior-art.md` is a dated survey corrected by addition, so the
+#: number a pass was given stays where that pass is; anywhere else it is simply
+#: the figure of a projection that models neither profile rosbag2 ships.
+RETIRED_COMPRESSED = ("4.75x", "8.42x")
+DOCS_KEEPING_THE_RETIRED_COMPRESSED = frozenset({"prior-art.md"})
 
 #: `docs/retention.md`'s Layer-A comparison row, which is where the artifact side
 #: of the corrected ratio is read from. Anchored on the label rather than on
@@ -1249,39 +1287,62 @@ def test_claim_1s_status_line_is_the_one_the_measurement_licenses(
     )
 
 
+def measured_comparison(
+    profile: str | None, *, artifact_bytes: int, gzip_csv_bytes: int
+) -> FullContentComparison:
+    """The artifact against one bag rosbag2 wrote, as the documents publish it.
+
+    Constructed from `ROSBAG2_SIZE_MEASUREMENTS` rather than from the
+    projection: since issue #233 the whole-content incumbent figures are
+    measurements, and a comparison built from the projection would recompute the
+    number the documents no longer quote. The measurement is frozen and the
+    artifact side is read out of the document that publishes it, so nothing here
+    invents either side.
+    """
+    row = rosbag2_measurement(MEASURED_FIXTURE, profile)
+    return FullContentComparison(
+        preset=row.label, option=TF, artifact_bytes=artifact_bytes,
+        incumbent_bytes=row.measured_bytes, gzip_csv_bytes=gzip_csv_bytes,
+        messages=row.messages, uncharged=(),
+    )
+
+
 def test_every_document_quoting_the_whole_stream_figures_quotes_the_measured_ones(
     full_stream: Path,
 ) -> None:
-    """The published ratios, re-derived from the encoder on every run.
+    """**THE ACCEPTANCE CRITERION FOR ISSUE #233.** Every published incumbent
+    ratio, re-derived from a measured bag on every run.
 
     No constant is compared against another constant: the strings searched for
-    are formatted from a live measurement of the fixture and a document-published
-    artifact size, so a document edited to match a regression fails exactly as a
-    regression does, and one left behind when the encoder moves fails too.
+    are formatted from the recorded bags, a live gzip of the fixture and a
+    document-published artifact size, so a document edited to match a regression
+    fails exactly as a regression does, and one left behind when a figure moves
+    fails too.
+
+    All three writer settings are checked in one loop against one set of
+    documents per family, which is what makes *published as a pair* a property
+    of this pin rather than a sentence in a document.
     """
     artifact = published_artifact_bytes()
-    default = compare_full_content(
-        full_stream, preset=DEFAULT, artifact_bytes=artifact
-    )
-    compressed = compare_full_content(
-        full_stream, preset=COMPRESSED, artifact_bytes=artifact
-    )
-    ratios = {
-        "artifact_over_bag_default": default.corrected_ratio,
-        "artifact_over_bag_compressed": compressed.corrected_ratio,
-        "bag_over_gzip_default": default.incumbent_over_gzip,
-        "bag_over_gzip_compressed": compressed.incumbent_over_gzip,
-        "artifact_over_gzip": default.gzip_ratio,
-    }
-    for key, ratio in ratios.items():
-        rendered = f"{ratio:.2f}x"
-        assert _quoting(rendered) == set(DOCS_PUBLISHING[key]), (
-            f"the documents quoting {rendered} for {key} are "
-            f"{sorted(_quoting(rendered))}, not {sorted(DOCS_PUBLISHING[key])}. "
-            "A document that gained the figure belongs in DOCS_PUBLISHING; one "
-            "that lost it either dropped the comparison or is quoting a stale "
-            "number."
+    gzip_csv = gzip_bytes(full_stream)
+    for profile in PUBLISHED_PROFILES:
+        c = measured_comparison(
+            profile, artifact_bytes=artifact, gzip_csv_bytes=gzip_csv
         )
+        ratios = {
+            "artifact_over_bag": c.corrected_ratio,
+            "bag_over_gzip": c.incumbent_over_gzip,
+            "artifact_over_gzip": c.gzip_ratio,
+        }
+        for key, ratio in ratios.items():
+            rendered = f"{ratio:.2f}x"
+            assert _quoting(rendered) == set(DOCS_PUBLISHING[key]), (
+                f"the documents quoting {rendered} for {key} at profile "
+                f"{profile!r} are {sorted(_quoting(rendered))}, not "
+                f"{sorted(DOCS_PUBLISHING[key])}. A document that gained the "
+                "figure belongs in DOCS_PUBLISHING; one that lost it either "
+                "dropped the comparison or is quoting a stale number."
+            )
     for preset in (DEFAULT, COMPRESSED):
         measured = full_content_mcap_bytes(full_stream, preset=preset)[1]
         assert _quoting(f"{measured:,} B") == set(DOCS_PUBLISHING_THE_FULL_BYTES)
@@ -1296,6 +1357,241 @@ def test_every_document_quoting_the_whole_stream_figures_quotes_the_measured_one
                 "arithmetic behind the whole-stream figures and one document "
                 "carries them."
             )
+
+
+# --- the measured bag, published as a pair (issue #233) ---------------------
+#
+# WHAT CHANGED AND WHAT DID NOT. The uncompressed figures keep their values: the
+# projection came in 0.002% from the bag, so 25.34x and 1.58x are the same
+# strings and a different kind of claim. The compressed figure was one
+# projection of a configuration rosbag2 does not offer under that name, and it
+# sits between the two profiles it does offer, matching neither — so it is
+# replaced by a pair rather than re-measured, and the pair is what the checks
+# below hold the documents to.
+
+#: The verdicts of `compressed_pair_verdict`. Three-valued, and the third is a
+#: could-not-evaluate that never resolves to the first: a document quoting
+#: neither profile has published no compressed figure, which is not the same
+#: thing as having published both.
+PAIR_PUBLISHED = "PAIR PUBLISHED"
+PAIR_HALF_PUBLISHED = "PAIR HALF PUBLISHED"
+PAIR_ABSENT = "PAIR ABSENT"
+
+
+def compressed_pair_verdict(
+    text: str, fast: str, small: str
+) -> tuple[str, list[str]]:
+    """Verdict on whether `text` publishes the compressed pair as a pair.
+
+    Half a pair is the failure this exists for, and it is the failure that looks
+    like success: rosbag2 ships two compressed profiles whose bags are 43%
+    apart, so a document quoting the one that suits it has published a real byte
+    count under a choice it did not disclose. That is the error the gzipped
+    baseline already makes one layer down, which is why it is checked here
+    rather than left to a reviewer.
+    """
+    quoted = [figure for figure in (fast, small) if figure in text]
+    if not quoted:
+        return PAIR_ABSENT, []
+    if len(quoted) == 2:
+        return PAIR_PUBLISHED, []
+    return PAIR_HALF_PUBLISHED, quoted
+
+
+def test_no_document_publishes_one_compressed_profile_without_the_other(
+    full_stream: Path,
+) -> None:
+    """**Issue #233's third criterion**, over the whole corpus.
+
+    Not a restatement of `DOCS_PUBLISHING`: that pins which documents carry the
+    family, this asks of each document separately whether what it carries is a
+    pair. A corpus where every document had gone silent would satisfy the first
+    and say nothing, so at least one document is required to publish both.
+    """
+    artifact = published_artifact_bytes()
+    gzip_csv = gzip_bytes(full_stream)
+    fast, small = (
+        measured_comparison(
+            profile, artifact_bytes=artifact, gzip_csv_bytes=gzip_csv
+        )
+        for profile in (COMPRESSED, COMPRESSED_SMALL)
+    )
+    families = (
+        (f"{fast.corrected_ratio:.2f}x", f"{small.corrected_ratio:.2f}x"),
+        (f"{fast.incumbent_over_gzip:.2f}x", f"{small.incumbent_over_gzip:.2f}x"),
+    )
+    published = 0
+    for doc, path in CORPUS:
+        text = path.read_text(encoding="utf-8")
+        for one, other in families:
+            verdict, quoted = compressed_pair_verdict(text, one, other)
+            assert verdict != PAIR_HALF_PUBLISHED, (
+                f"{doc} quotes {quoted} and not the other half of the pair. "
+                f"rosbag2 ships both compressed profiles and the measured bags "
+                "are 43% apart, so one of them alone is a figure chosen rather "
+                "than measured."
+            )
+            published += verdict == PAIR_PUBLISHED
+    assert published, (
+        "no document publishes the compressed pair at all. That is a "
+        "could-not-evaluate about the whole corpus, not a clean run: every "
+        "check above is satisfied by a document that stopped quoting the "
+        "incumbent."
+    )
+
+
+def test_half_a_pair_is_caught_and_silence_does_not_read_as_a_pair() -> None:
+    """**THE NEGATIVE.** Fed the condition it guards against, it must say no.
+
+    Both could-not-evaluate cases are here with it: a text quoting neither
+    figure comes back `PAIR_ABSENT`, and `PAIR_ABSENT` is asserted not to be
+    `PAIR_PUBLISHED`, because the one way a check of this shape dies is by
+    grading silence as agreement.
+    """
+    assert compressed_pair_verdict(
+        "the artifact is 7.16x a zstd_fast bag and 10.25x a zstd_small one",
+        "7.16x", "10.25x",
+    ) == (PAIR_PUBLISHED, [])
+    verdict, quoted = compressed_pair_verdict(
+        "the artifact is 10.25x the bag", "7.16x", "10.25x"
+    )
+    assert (verdict, quoted) == (PAIR_HALF_PUBLISHED, ["10.25x"])
+    assert compressed_pair_verdict("no figures here", "7.16x", "10.25x") == (
+        PAIR_ABSENT, []
+    )
+    assert PAIR_ABSENT != PAIR_PUBLISHED
+
+
+def test_the_measured_bags_are_published_beside_the_ratios_taken_from_them() -> None:
+    """The byte counts behind the published ratios, held to the record.
+
+    A ratio with no byte count beside it cannot be recomputed by a reader, and
+    these three came from a run this host cannot repeat. `retention.md` carries
+    them because it is where the artifact meets them; `sensor-baseline.md`
+    carries them because it is where the run is recorded.
+    """
+    for profile in PUBLISHED_PROFILES:
+        row = rosbag2_measurement(MEASURED_FIXTURE, profile)
+        assert _quoting(f"{row.measured_bytes:,}") == set(
+            DOCS_PUBLISHING_THE_MEASURED_BYTES
+        ), (
+            f"{row.measured_bytes:,} B is published in "
+            f"{sorted(_quoting(f'{row.measured_bytes:,}'))}, not "
+            f"{sorted(DOCS_PUBLISHING_THE_MEASURED_BYTES)}."
+        )
+
+
+def test_the_retired_compressed_projection_stands_only_in_the_dated_record() -> None:
+    """**Issue #233's first criterion, as a negative.** 4.75x and 8.42x may not travel.
+
+    They were one projection of `mcap_compressed_nocrc`, a preset name
+    `ros2 bag record` answers with an error, and the measured bags bracket them.
+    `prior-art.md` keeps them because a dated pass is evidence of what was
+    believed on its date and is corrected by addition; everywhere else they are
+    the figure of a projection that models neither profile rosbag2 ships, and a
+    reader meeting one has to meet the word `superseded` in the same document.
+    """
+    for figure in RETIRED_COMPRESSED:
+        assert _quoting(figure) == set(DOCS_KEEPING_THE_RETIRED_COMPRESSED), (
+            f"{figure} is quoted in {sorted(_quoting(figure))}, not "
+            f"{sorted(DOCS_KEEPING_THE_RETIRED_COMPRESSED)}. Republish it from "
+            "the measured bags, or leave it where the dated pass that was given "
+            "it stands."
+        )
+    for doc, path in CORPUS:
+        text = path.read_text(encoding="utf-8")
+        if any(figure in text for figure in RETIRED_COMPRESSED):
+            assert RETIRED_IS_MARKED.search(text), (
+                f"{doc} quotes a compressed figure issue #233 retired without "
+                "saying anywhere that it is superseded."
+            )
+    assert not _quoting("mcap_compressed_nocrc") - set(
+        DOCS_KEEPING_THE_RETIRED_COMPRESSED
+    ), (
+        "a preset name `ros2 bag record` refuses is published outside the dated "
+        f"record: {sorted(_quoting('mcap_compressed_nocrc'))}."
+    )
+
+
+def test_a_retired_figure_republished_without_its_marking_is_caught() -> None:
+    """THE NEGATIVE for the marking. The check must fail on the case it guards.
+
+    Constructed rather than found, because no document in the corpus is in this
+    state — which is the point: a check nothing exercises is a check nobody
+    knows the sense of.
+    """
+    unmarked = "the artifact is 8.42x that bag, over the same 24 columns\n"
+    assert any(figure in unmarked for figure in RETIRED_COMPRESSED)
+    assert RETIRED_IS_MARKED.search(unmarked) is None
+    marked = unmarked + "That figure is superseded by the measured bags.\n"
+    assert RETIRED_IS_MARKED.search(marked) is not None
+
+
+def test_the_uncompressed_figures_keep_their_values_as_they_become_measurements(
+    full_stream: Path,
+) -> None:
+    """**Issue #233's second criterion.** Projection and bag render the same strings.
+
+    The uncompressed projection came in 0.002% from the bag rosbag2 wrote, which
+    is inside the band issue #232 fixed ahead of the run. So the two ratios
+    round to the same published figure and what moved is their status, not their
+    value — and that is asserted rather than assumed, because the whole
+    republication rests on it: if the two ever stopped rounding together, one of
+    the documents would be quoting the other side's number.
+    """
+    artifact = published_artifact_bytes()
+    gzip_csv = gzip_bytes(full_stream)
+    projected = compare_full_content(
+        full_stream, preset=DEFAULT, artifact_bytes=artifact
+    )
+    measured = measured_comparison(
+        None, artifact_bytes=artifact, gzip_csv_bytes=gzip_csv
+    )
+    assert measured.incumbent_bytes != projected.incumbent_bytes, (
+        "the recorded bag and the projection came out at the same byte count, "
+        "so this test is comparing a number against itself."
+    )
+    for from_bag, from_projection in (
+        (measured.corrected_ratio, projected.corrected_ratio),
+        (measured.incumbent_over_gzip, projected.incumbent_over_gzip),
+    ):
+        assert f"{from_bag:.2f}x" == f"{from_projection:.2f}x", (
+            f"the measured bag gives {from_bag:.2f}x and the projection "
+            f"{from_projection:.2f}x. They are published as one figure, so a "
+            "divergence here is a republication, not a rounding."
+        )
+
+
+def test_claim_1s_status_line_is_licensed_by_every_measured_bag(
+    full_stream: Path,
+) -> None:
+    """**Issue #233's sixth criterion**, asserted rather than assumed.
+
+    `landed, reframed` rests on one measured fact — the artifact is not smaller
+    than what it would replace — and this issue re-measures that fact against
+    three bags rather than two projections, the smallest of which is 10x cheaper
+    than the artifact. It stands only while every one of them says
+    `ARTIFACT LARGER`, and the reporter's own negative above — fed an artifact
+    smaller than the bag — is what the other outcome reads like.
+    """
+    artifact = published_artifact_bytes()
+    gzip_csv = gzip_bytes(full_stream)
+    for profile in PUBLISHED_PROFILES:
+        c = measured_comparison(
+            profile, artifact_bytes=artifact, gzip_csv_bytes=gzip_csv
+        )
+        assert c.verdict == ARTIFACT_LARGER, c.sentence()
+        assert c.claim_1_status == CLAIM_1_STATUS_STANDS, c.sentence()
+    row = next(
+        line
+        for line in (REPO / "README.md").read_text(encoding="utf-8").splitlines()
+        if line.startswith("| **1** |")
+    )
+    assert "`landed, reframed`" in row, (
+        "README.md's Claim 1 status is no longer `landed, reframed`, and the "
+        "artifact is still larger than every bag rosbag2 wrote — which is the "
+        "fact that wording states."
+    )
 
 
 # ==========================================================================

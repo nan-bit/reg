@@ -2177,6 +2177,331 @@ def full_content_report(path: str | Path, *, artifact_bytes: int) -> str:
     )
 
 
+# --- what a real encoder produced, once, out of band (issue #221) -----------
+#
+# WHY THIS EXISTS. Everything above is computed from the MCAP specification and
+# had never met a real encoder. A specification can be read correctly and still
+# be applied to the wrong configuration — issue #117 is the worked example, where
+# the constants were right and the preset was wrong — so the projection stayed a
+# claim about somebody else's software that nobody outside this repository could
+# regenerate. `docs/prior-art.md` §27: a result nobody else can regenerate is an
+# assertion.
+#
+# WHAT IS RECORDED HERE AND WHAT IS NOT. Only the *measurement*. No `mcap`
+# library is imported and no `zstd` is run — the rule that made this a projection
+# in the first place has not moved. The bags were written outside this repository
+# by the procedure `docs/sensor-baseline.md` publishes, and what comes back is a
+# table of byte counts with the tool versions and the date beside them, exactly
+# as the sensor figure in that document is recorded.
+#
+# WHY THE TOLERANCE IS A CONSTANT AND NOT AN ARGUMENT. It was registered in
+# commit e8f1534, before the measurement was taken. A tolerance supplied by the
+# caller at comparison time is one that can be chosen after seeing the number,
+# which is the failure the whole subsection exists to prevent.
+
+# THE ONE SETTING THE RUN COULD NOT PIN, AND WHY IT DOES NOT DECIDE ANYTHING.
+# rosbag2 selects a zstd compression level and no ROS 2 installation was
+# available to read it off, so the level was swept rather than assumed. Message
+# records only, at the writer's own chunk boundaries, against the gzip -9
+# projection in the same row (delta of the whole scaling total, index included):
+#
+#   arrangement                 projected      L1        L3        L5        L9       L19
+#   /joint_states, 251 f           11,685    11,515    11,358    11,335    11,318    10,540
+#   /joint_states, 3,000 f        136,500   136,659   133,134   132,228   129,827   123,219
+#   /tf, 3,000 f                  170,628   156,135   154,040   142,660   143,529   134,166
+#   the bag, 3,000 f              307,128   276,728   284,259   274,483   267,322   250,537
+#
+# `/tf` is outside the band at every level (-8.49% to -21.37%) and the whole bag
+# at every level (-7.45% to -18.43%), so neither verdict turns on the setting
+# this run could not pin. The recorded rows below are level 3, which is what
+# `zstandard.compress` and therefore the writer used. One row changes sides:
+# `/joint_states` at 3,000 frames is 0.12% *larger* under zstd at level 1 than
+# under gzip -9, which is the honest reading of *comparable in class* and the
+# reason the direction could not have been asserted from the specification.
+
+#: The date the bags were written, and the versions that wrote them. Provenance
+#: for a measurement, in the shape `docs/sensor-baseline.md` uses for the sensor
+#: rate: what ran, when, and — the part that is easiest to leave out — what did
+#: **not** run.
+MCAP_VALIDATION_PROVENANCE = (
+    "2026-09-06, outside this repository, on x86_64 Linux. Bags written by the "
+    "reference Python MCAP writer: mcap 1.4.0, mcap-ros2-support 0.5.7, "
+    "zstandard 0.25.0 (libzstd 1.5.7), CPython 3.12.3, chunked at 768 KiB. "
+    "rosbag2's own C++ writer was NOT run, so what is validated is the record "
+    "layout, the CDR payload and the index arithmetic — not rosbag2's choice of "
+    "preset, which remains a citation to "
+    "mcap.dev/guides/benchmarks/rosbag2-storage-plugins."
+)
+
+#: How far the compressed projection may sit from the measurement and still
+#: stand. Fixed before the measurement, and deliberately not a parameter.
+#:
+#: Five percent is the one figure with a substitution in it — gzip -9 standing in
+#: for zstd — and `docs/sensor-baseline.md`, *Assumptions*, is where the floor
+#: claim was withdrawn for it because nobody here could state the direction. The
+#: uncompressed preset gets no tolerance at all: it is a sum of two exact
+#: per-message terms over a known message count, so if it is not exactly right it
+#: is wrong.
+MCAP_VALIDATION_TOLERANCE = 0.05
+
+#: The projection is the measurement to within its tolerance, so it stands.
+WITHIN_TOLERANCE = "WITHIN TOLERANCE"
+
+#: It is not, so it does not. `docs/sensor-baseline.md` marks the figure as not
+#: standing at every place it publishes it, and republishing it needs a run that
+#: pins what this one could not. A verdict with only one reachable value would
+#: not be a verdict, and two of the recorded rows below reach this one.
+OUTSIDE_TOLERANCE = "OUTSIDE TOLERANCE"
+
+#: The recorded projection is still what this module computes for that stream.
+PROJECTION_HOLDS = "PROJECTION HOLDS"
+
+#: It is not. Either the encoder moved or the fixture did, and the validated pair
+#: has come apart — which is the silent failure the record exists to make loud.
+PROJECTION_DRIFTED = "PROJECTION DRIFTED"
+
+
+@dataclass(frozen=True)
+class McapStructuralCheck:
+    """One per-message term the projection asserts, compared exactly.
+
+    These are byte counts read off the format specification and the IDL, so
+    there is nothing in them to be approximately right about. A mismatch is a
+    misread spec and is reported as one.
+    """
+
+    what: str
+    projected: int
+    measured: int
+
+    def __post_init__(self) -> None:
+        for field, value in (("projected", self.projected),
+                             ("measured", self.measured)):
+            if value <= 0:
+                raise BenchError(
+                    f"{self.what}: {field} is {value}. A per-message term of "
+                    "zero or less is a measurement that did not happen, and "
+                    "recording it would put a term nobody observed beside terms "
+                    "that were."
+                )
+
+    @property
+    def matches(self) -> bool:
+        """Exactly, or not at all. There is no tolerance on a spec constant."""
+        return self.projected == self.measured
+
+
+@dataclass(frozen=True)
+class McapSizeMeasurement:
+    """One published byte count, beside what a real encoder produced for it.
+
+    `topics` is the arrangement priced and is part of the identity of the row:
+    the same fixture at the same preset costs four different things over
+    `/joint_states`, over `/tf`, and over both, and a row that did not say which
+    would be a byte count with no content attached to it.
+    """
+
+    fixture: str
+    seed: int
+    frames: int
+    topics: tuple[str, ...]
+    preset: str
+    projected_bytes: int
+    measured_bytes: int
+
+    def __post_init__(self) -> None:
+        mcap_preset(self.preset)
+        if not self.topics:
+            raise BenchError(
+                f"{self.fixture}: a measurement over no topics prices nothing. "
+                "The arrangement is what the byte count is *of*, so a row "
+                "without one is a could-not-evaluate rather than a total."
+            )
+        for field, value in (("projected_bytes", self.projected_bytes),
+                             ("measured_bytes", self.measured_bytes),
+                             ("frames", self.frames)):
+            if value <= 0:
+                raise BenchError(
+                    f"{self.fixture} {self.topics} {self.preset}: {field} is "
+                    f"{value}. A zero here reads downstream as an encoding that "
+                    "costs nothing, which is the one error this whole comparison "
+                    "cannot afford to make quietly."
+                )
+
+    @property
+    def delta(self) -> float:
+        """Measured over projected, minus one. Negative means the projection
+
+        overstates the incumbent — which is the direction that flatters this
+        project, because a dearer bag makes the artifact's ratio against it
+        smaller.
+        """
+        return self.measured_bytes / self.projected_bytes - 1.0
+
+    @property
+    def tolerance(self) -> float:
+        """Zero for a preset with no compressor in it, `MCAP_VALIDATION_TOLERANCE`
+
+        for the one that has. Read off the preset rather than supplied, so a
+        caller cannot widen the band that decides its own verdict.
+        """
+        return (
+            MCAP_VALIDATION_TOLERANCE if mcap_preset(self.preset).compressed else 0.0
+        )
+
+    @property
+    def verdict(self) -> str:
+        """`WITHIN_TOLERANCE` or `OUTSIDE_TOLERANCE`. Computed, never stored.
+
+        A verdict written down beside the numbers it is supposed to be derived
+        from is a verdict that can disagree with them, and the disagreement is
+        invisible. This one cannot: change either byte count and it moves.
+        """
+        return (
+            WITHIN_TOLERANCE
+            if abs(self.delta) <= self.tolerance
+            else OUTSIDE_TOLERANCE
+        )
+
+    def sentence(self) -> str:
+        """The row as one line, verdict included, for a report or a PR body."""
+        return (
+            f"{self.fixture} seed {self.seed}, {'+'.join(self.topics)}, "
+            f"{self.preset}: projected {self.projected_bytes:,} B, measured "
+            f"{self.measured_bytes:,} B, delta {self.delta * 100:+.2f}% "
+            f"(tolerance +/-{self.tolerance * 100:.0f}%) -> {self.verdict}"
+        )
+
+
+#: The per-message terms, every one of them exact. The CDR payloads came back
+#: byte-identical to what `joint_state_cdr` and `tf_message_cdr` produce, not
+#: merely the same length, which is the strongest single result of the
+#: validation: the two encoders agree on where CDR puts its padding.
+MCAP_STRUCTURAL_CHECKS: tuple[McapStructuralCheck, ...] = (
+    McapStructuralCheck("sensor_msgs/msg/JointState CDR payload, 2 joints", 96, 96),
+    McapStructuralCheck("tf2_msgs/msg/TFMessage CDR payload, 4 entities", 356, 356),
+    McapStructuralCheck(
+        "Message record framing, per message", MCAP_MESSAGE_RECORD_OVERHEAD, 31
+    ),
+    McapStructuralCheck(
+        "MessageIndex entry, per message", MCAP_MESSAGE_INDEX_PER_MESSAGE, 16
+    ),
+    McapStructuralCheck("MessageIndex fixed part, per chunk per channel", 15, 15),
+)
+
+#: Every byte count `docs/sensor-baseline.md` publishes, beside the bag. Eight
+#: rows: four arrangements at two presets. Six stand and two do not, and the two
+#: that do not are both compressed — which is the figure that carried the
+#: substitution, so the validation found the thing it was pointed at.
+MCAP_SIZE_MEASUREMENTS: tuple[McapSizeMeasurement, ...] = (
+    McapSizeMeasurement(
+        fixture="declared_violation", seed=0, frames=251,
+        topics=("/joint_states",), preset="mcap_default",
+        projected_bytes=35_893, measured_bytes=35_893,
+    ),
+    McapSizeMeasurement(
+        fixture="declared_violation", seed=0, frames=251,
+        topics=("/joint_states",), preset="mcap_compressed_nocrc",
+        projected_bytes=11_685, measured_bytes=11_358,
+    ),
+    McapSizeMeasurement(
+        fixture="long_run_3000", seed=0, frames=3_000,
+        topics=("/joint_states",), preset="mcap_default",
+        projected_bytes=429_000, measured_bytes=429_000,
+    ),
+    McapSizeMeasurement(
+        fixture="long_run_3000", seed=0, frames=3_000,
+        topics=("/joint_states",), preset="mcap_compressed_nocrc",
+        projected_bytes=136_500, measured_bytes=133_134,
+    ),
+    McapSizeMeasurement(
+        fixture="long_run_3000", seed=0, frames=3_000,
+        topics=("/tf",), preset="mcap_default",
+        projected_bytes=1_209_000, measured_bytes=1_209_000,
+    ),
+    McapSizeMeasurement(
+        fixture="long_run_3000", seed=0, frames=3_000,
+        topics=("/tf",), preset="mcap_compressed_nocrc",
+        projected_bytes=170_628, measured_bytes=154_040,
+    ),
+    McapSizeMeasurement(
+        fixture="long_run_3000", seed=0, frames=3_000,
+        topics=("/joint_states", "/tf"), preset="mcap_default",
+        projected_bytes=1_638_000, measured_bytes=1_638_000,
+    ),
+    McapSizeMeasurement(
+        fixture="long_run_3000", seed=0, frames=3_000,
+        topics=("/joint_states", "/tf"), preset="mcap_compressed_nocrc",
+        projected_bytes=307_128, measured_bytes=284_259,
+    ),
+)
+
+
+def mcap_size_measurement(
+    fixture: str, topics: Sequence[str], preset: str
+) -> McapSizeMeasurement:
+    """The recorded row for that triple, or a refusal naming the ones that exist.
+
+    Not `dict.get` with a fallback and not a nearest match. A row selected
+    loosely would set one arrangement's measurement beside another's projection
+    and publish the delta between two different things.
+    """
+    wanted = tuple(topics)
+    for row in MCAP_SIZE_MEASUREMENTS:
+        if (row.fixture, row.topics, row.preset) == (fixture, wanted, preset):
+            return row
+    raise BenchError(
+        f"nothing was measured for fixture {fixture!r}, topics {wanted!r}, "
+        f"preset {preset!r}. Measured: "
+        f"{[(r.fixture, r.topics, r.preset) for r in MCAP_SIZE_MEASUREMENTS]}. "
+        "An unmeasured arrangement is a could-not-evaluate: the validation "
+        "covers what it covers, and inferring a row for one it does not would "
+        "publish a delta nobody observed."
+    )
+
+
+def project_for_topics(path: str | Path, *, topics: Sequence[str], preset: str) -> int:
+    """This module's projection for `path` under that arrangement, in bytes.
+
+    The dispatch is explicit and an unknown arrangement is refused. Falling back
+    to `/joint_states` for a topic set this does not price would silently compare
+    the recorded whole-bag measurement against half of it.
+    """
+    wanted = tuple(topics)
+    if wanted == ("/joint_states",):
+        return mcap_joint_states_bytes(path, preset=preset)
+    if wanted == ("/tf",):
+        return layer_b_mcap_bytes(path, preset=preset, option="tf_tree")
+    if wanted == ("/joint_states", "/tf"):
+        return full_content_mcap_bytes(path, preset=preset)[1]
+    raise BenchError(
+        f"{wanted!r} is not an arrangement this module projects. Known: "
+        "('/joint_states',), ('/tf',), ('/joint_states', '/tf'). A topic set "
+        "with no projection behind it cannot be compared against a measurement "
+        "of one, and guessing which projection was meant would compare two "
+        "different bags."
+    )
+
+
+def projection_drift(measurement: McapSizeMeasurement, path: str | Path) -> str:
+    """`PROJECTION_HOLDS` if the recorded projection is still the computed one.
+
+    This is what keeps the validated pair from coming apart afterwards. The
+    measurement is frozen — the bag was written once, out of band, and cannot be
+    recomputed here — so the only half that can move is the projection, and a
+    projection that moved would leave a published delta describing an encoder
+    this module no longer has.
+    """
+    computed = project_for_topics(
+        path, topics=measurement.topics, preset=measurement.preset
+    )
+    return (
+        PROJECTION_HOLDS
+        if computed == measurement.projected_bytes
+        else PROJECTION_DRIFTED
+    )
+
+
 # --------------------------------------------------------------------------
 # The fixed question, answered from each side.
 # --------------------------------------------------------------------------

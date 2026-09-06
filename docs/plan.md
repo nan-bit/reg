@@ -248,9 +248,9 @@ none of them is a claim that keeping it for that window is permitted. The
 entry — with Art. 26(7) and the DPIA obligation named, and no claim of
 compliance — is [`docs/limitations.md` §8](limitations.md).
 
-**Two conditions that travel with the comparison figures wherever they are
+**Three conditions that travel with the comparison figures wherever they are
 quoted.** The original framing — is the graph smaller than the stream it
-replaces — is answered **no**, and both of the numbers that answer it carry a
+replaces — is answered **no**, and every number that answers it carries a
 condition that is part of the number:
 
 - A **13x** figure appears in that comparison measured on a build holding **no
@@ -262,12 +262,18 @@ condition that is part of the number:
   **11.76x** what the gzipped CSV does at rosbag2's default preset and **3.83x**
   at its opt-in compressed one — and both are a **hand-built encoding comparison
   and not a real bag**, which [`sensor-baseline.md`](sensor-baseline.md) requires
-  be said wherever either figure is quoted until a measurement retires it. So the
-  artifact's disadvantage against a real bag is smaller than the figures suggest;
-  by how much is not measured, because the two comparisons do not carry the same
-  content.
+  be said wherever any figure from it is quoted until a measurement retires it.
+- **The figure to quote against the incumbent is 8.42x**: the same encoder priced
+  over all 24 columns rather than 5, so it composes with the `~40x` instead of
+  standing beside it. The artifact is **8.42x** a rosbag2 bag of those columns at
+  the compressed preset and **1.58x** at the default one — the bag being 4.75x
+  and 25.34x the gzipped CSV, and `39.98x / 4.75x` is where 8.42x comes from. Its
+  Layer B half goes on `/tf`, the arrangement most favourable to the incumbent of
+  those [`sensor-baseline.md`](sensor-baseline.md) prices, so nothing here is won
+  by choosing the comparator. **The artifact is larger than the bag at both
+  presets**, so the original framing is still answered **no**.
 
-**And the prohibition those two conditions imply, stated as a rule here because
+**And the prohibition those conditions imply, stated as a rule here because
 code cites it as one.** *Nothing in this repository may quote a compression ratio
 as the commercial argument while the measured one is below 1.* `reg.bench` refuses
 to carry such a column at all and prints `bytes/hour` instead — a column nobody is

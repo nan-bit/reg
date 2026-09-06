@@ -310,13 +310,18 @@ artifact's disadvantage against what practitioners keep is correspondingly
 smaller than the published figure against gzipped CSV.
 
 **This document does not restate the headline.** The ratio above is an encoding
-ratio, free of fixed cost on both sides. Translating it into Claim 1 needs
-`reg.bench` measuring its own fixtures, which is open work ([Why](#why) says
-whose). A short-run artifact measurement will not do it: over a five-second
-fixture the artifact's fixed schema and index cost dominates, and any ratio taken
-there says more about the schema than the encoding.
+ratio, free of fixed cost on both sides, and over 5 columns of 24.
+[`retention.md`](retention.md) is where Claim 1's headline meets it, on the
+whole-stream figures two sections below — measured on the same 3,000-frame
+fixture the retention curve is, because over a five-second one the artifact's
+fixed schema and index cost dominates and any ratio taken there says more about
+the schema than about either encoding.
 
 ### Assumptions, each of which can move the number
+
+These govern both tables in this section — the five-column one above and the
+24-column one below — because both are the same encoder over different
+columns of the same fixture.
 
 - **`mcap_default` is a floor and the compressed figure is not.** Every
   assumption below makes the default preset look cheaper than a real bag, so
@@ -339,27 +344,95 @@ there says more about the schema than the encoding.
   publishing effort, or publishing at a higher rate than it commands, differs.
 - **XCDR1 little-endian**, the ROS 2 default via Fast-CDR.
 
-### The Layer B asymmetry
+### The Layer B asymmetry, and what closing it costs
 
-The two sides do not carry the same information about the world, and the
-comparison is only honest with that stated rather than footnoted. The fixture
-stream carries `human_x`, `human_y`, `human_vx`, `human_vy` — **simulator ground
-truth for the person**. No robot's `/joint_states` contains that and no bag does
-either; a real system carries perception output, and the sensing that produced
-it. Neither is priced here.
+The two sides of the table above do not carry the same information about the
+world, and the comparison is only honest with that stated rather than footnoted.
+The fixture stream carries `human_x`, `human_y`, `human_vx`, `human_vy` —
+**simulator ground truth for the person**. No robot's `/joint_states` contains
+that and no bag does either; a real system carries perception output, and the
+sensing that produced it. Neither is priced there.
 
-This comparison therefore prices **proprioception only, on both sides**. It says
-nothing about what it costs to know where the human was. That is Layer B, the
-expensive half, and the half this document projects rather than measures
+That table therefore prices **proprioception only, on both sides**: five of the
+fixture's 24 columns. The section below prices the other nineteen, so that this
+encoding ratio and [`retention.md`](retention.md)'s headline cover the same
+content and divide into one another. What neither prices is the *sensing*
+that would produce a real system's version of those nineteen columns. That is
+the expensive half, and the half this document projects rather than measures
 everywhere else.
+
+### The same encoding, over the whole stream
+
+**What a real system publishes for the world half is a decision, and the decision
+is the deliverable.** The human and the obstacles are entities with poses, and a
+ROS 2 system puts them on topics of its own choosing. Every choice moves the
+number, so `reg.bench.LAYER_B_OPTIONS` prices the candidates and
+`cheapest_layer_b_option` takes the **smallest** one — the arrangement most
+favourable to the incumbent:
+
+| arrangement for the 19 Layer B columns, 3,000 frames | `mcap_default` | `mcap_compressed_nocrc` |
+|---|---|---|
+| **`/tf`** — one `tf2_msgs/TFMessage` per control period, one `TransformStamped` per entity | **1,209,000 B** | **170,628 B** |
+| `geometry_msgs/PoseStamped` per entity per control period, each on its own topic | 1,476,000 B | 315,225 B |
+
+`/tf` is smaller at both presets and is chosen at both. It carries the per-message
+MCAP framing and the 16 B message index once per control period instead of once
+per entity, each entity's identity rides in its child frame name, and a tf tree
+is what a great many ROS 2 systems publish entity poses on to begin with.
+
+**`visualization_msgs/MarkerArray` is the third candidate and it is not priced.**
+A Marker states an extent in `scale`; the stream carries an extent for each
+obstacle and none for the human, and nothing here may choose one. A plausible
+metre would sit inside a published byte count looking exactly like a measured
+one, so `reg.bench.marker_cdr` refuses that entity by name.
+
+**Refusing it costs the comparison nothing**, because a Marker cannot be the most
+favourable arrangement in any case. It carries the same Header and the same Pose
+as a `TransformStamped` and adds a namespace, an id, a type, an action, a scale,
+a colour, a lifetime, a frame-locked flag, two empty arrays and two empty
+strings on top of them — dearer per entity term by term, at the same one message
+per control period. `tests/test_incumbent_encoding.py` measures that on an
+obstacle rather than leaving it as a remark.
+
+**The bag, both halves, over the same 3,000-frame fixture the retention figures
+are measured on:**
+
+| Encoding, all 24 columns | `mcap_default` | `mcap_compressed_nocrc` |
+|---|---|---|
+| `/joint_states` — the 5 proprioceptive columns | 429,000 B | 136,500 B |
+| `/tf` — the 19 Layer B columns | 1,209,000 B | 170,628 B |
+| **the bag** | **1,638,000 B** | **307,128 B** |
+| the same 24 columns as CSV, gzip -9 | 64,652 B | 64,652 B |
+| x gz CSV | **25.34x** | **4.75x** |
+
+[`retention.md`](retention.md), *The same comparison, measured on the artifact
+that carries Layer A*, is where those become a ratio against the artifact.
+
+#### Three discounts this hands the incumbent, each one deliberate
+
+- **Eight of the nineteen columns are charged nothing per frame** — `human_vx`,
+  `human_vy`, and each obstacle's `kind` and `r`, itemised by
+  `reg.bench.uncharged_layer_b_columns`. An obstacle's extent and kind hold
+  still across the run and a real system latches them once; the human's velocity
+  is a finite difference of the two pose columns the bag already carries. The
+  gzipped CSV pays for all eight on every one of 3,000 rows.
+- **The parent frame is `map`**, three characters, on the wire in every
+  transform of every message. A deployment on `odom_combined` pays more.
+- **Every file-level record is excluded**, exactly as in the table above. The
+  per-entity alternative gains most from that, since it is the arrangement whose
+  entity names live in topic strings rather than in the payload.
+
+Each of the three runs the same way: it makes the bag cheaper, which makes the
+artifact's ratio against the bag larger, which is the direction that goes
+against this project.
 
 ### What would retire this section
 
 A rosbag2 writer with the real `mcap` library and real `zstd`, run once outside
-this repository against the same fixture, recorded here with its version and
-command line, and priced under both presets. That replaces a projection with a
-measurement and should be done before any outside-facing document leans on the
-11.76x.
+this repository against the same fixtures, recorded here with its version and
+command line, and priced under both presets over both column sets. That replaces
+a projection with a measurement and should be done before any outside-facing
+document leans on the 11.76x or on the whole-stream figures beside it.
 
 ## A premise this document does not carry: air-gapped sites
 
@@ -442,6 +515,7 @@ worth least once nobody remembers what it was weighed against.
 | *The control rate* and its ladder; run identity and the outer-envelope scalars in the sizes; the ladder republished | #68, #82, #83, #94 | 2026-08-21 |
 | *The incumbent encoding*; the premise this document does not carry | #117, #102 | 2026-08-26 |
 | *The incumbent encoding* republished under both rosbag2 presets, with the message index priced | #117 | 2026-09-06 |
+| *The same encoding, over the whole stream* — the `/tf` decision, its alternatives and the whole-stream figures | #220 | 2026-09-06 |
 | The priced stream, as 24 columns and 19 Layer B | #123 | 2026-08-27 |
 | Three sensitivity rows recomputed from the sizes | — | 2026-08-28 |
 | The base pose on `robot_config`; the ladder re-measured, three rungs of it stale | #166 | 2026-09-02 |
@@ -478,12 +552,16 @@ at 1 kHz, i.e. ~36x, flagged explicitly as unverified. The measured figures are
 for the reason *The control rate* gives: it assumed the whole level scales, and
 1.5% of it does not.
 
-### Whose work the incumbent ratio is waiting on
+### Whose work the incumbent ratio was waiting on
 
-Translating the 11.76x into Claim 1 is not #117's work but its successor's: the
-two comparisons are not composable. Until that lands the ratio travels with the
-condition that it is a hand-built encoding comparison and not a real bag, which
-is what `README.md` and [`plan.md`](plan.md) state wherever they quote it.
+Translating the 11.76x into Claim 1 was not #117's work but its successor's,
+because the two comparisons were not composable: five columns on one side of the
+encoding ratio and 24 on both sides of the headline. Issue #220 closed
+that by pricing the same encoder over the other nineteen columns, and
+[`retention.md`](retention.md) now publishes one ratio of the artifact against
+the bag. Both figures still travel with the condition that this is a hand-built
+encoding comparison and not a real bag, which is what `README.md` and
+[`plan.md`](plan.md) state wherever they quote either.
 
 ### What the 2026-09-06 re-measurement moved, and why
 

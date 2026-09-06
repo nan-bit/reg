@@ -234,28 +234,22 @@ recomputes and gets the other answer knows which step they took differently.
 
 **Two of those rungs are above the artifact's own declared domain of validity, and
 that is stated here rather than two documents away.**
-`reg.tolerances.TIME_BASE_MAX_RATE_HZ` is 100 Hz — the reciprocal of `TIME_TOL_S`
-— and above it several control frames share one addressable instant, so a
-per-frame value read back out of an interval is the value of whichever frame
-opened it ([`limitations.md`](limitations.md) §5). The 250 Hz and 1 kHz rows are
-real retention costs a real manipulator really pays, and they are what a reader
-should budget from; what they are not is rates at which every per-frame query
-answers inside its published tolerance. The `DISAGREE` below is the same fact
-arriving from the other side. Wherever these two rungs are quoted, §5 is quoted
-with them.
+`reg.tolerances.TIME_BASE_MAX_RATE_HZ` is 100 Hz, above which several control
+frames share one addressable instant ([`limitations.md`](limitations.md) §5). The
+250 Hz and 1 kHz rows are real retention costs a real manipulator really pays and
+are what a reader should budget from; what they are not is rates at which every
+per-frame query answers inside its published tolerance. The `DISAGREE` below is
+the same fact arriving from the other side. Wherever these two rungs are quoted,
+§5 is quoted with them.
 
 **They are also not pinned, and this is the record of that decision (issue #98).**
-`tests/test_published_figures.py` re-measures the published curve on every CI run
-and compares it against the tables in this repository — but only the **50 Hz**
-row, which is the curve it builds. Extending it to the ladder means running
-`--control-rate-hz 50,100,250,1000` in the test session, and the 1 kHz point alone
-is twenty times the frames of the pinned build, for rows that can only move when
-the 50 Hz row moves: every one of them is the same curve at a different `dt`.
-**The decision is to leave the pin where it is and to stop the unpinned rungs
-being quoted as though they were pinned** — the ladder is a manual measurement,
-dated and commanded in the blockquote above, and `README.md` now says so in the
-same breath as it quotes the 1 kHz figure rather than leading with it. Silence was
-the third option and it is the one this project keeps having to correct.
+`tests/test_published_figures.py` re-measures and pins the **50 Hz** row alone,
+and its own *What this does not cover* carries the reasoning. **The decision is
+to leave the pin where it is and to stop the unpinned rungs being quoted as
+though they were pinned** — the ladder is a manual measurement, dated and
+commanded in the blockquote above, and `README.md` says so in the same breath as
+it quotes the 1 kHz figure rather than leading with it. Silence was the third
+option and it is the one this project keeps having to correct.
 
 **So the two-order claim is a claim about the control rate as well as about the
 sensor rate, and at 1 kHz it does not hold.** At occurrence resolution a 1 kHz
@@ -337,26 +331,20 @@ at ~15x, reading it off *row* counts; measured in bytes it is 5.8x against the
 term that actually carries it. Same direction, same conclusion, and now an
 arithmetic anybody can re-run.
 
-**And it is no longer a document's job to be right about it.** `reg.bench`
-prints the whole attribution at **every** rung of any ladder it is asked for,
-and an exact identity over it — what each table would hold had it grown with the
-rate, minus what it holds, summing to the difference with no remainder — under
-*Where the `occurrence` bytes are, and which of them the rate moves*. The cause
-is read off a column instead of being asserted in prose. On a SQLite build
-without `dbstat` the report states that the cause **could not be established**
-and substitutes nothing for it, which is the failure mode this subsection is
-repairing, made unavailable.
+**And it is no longer a document's job to be right about it.** `reg.bench` prints
+the whole attribution at **every** rung of any ladder it is asked for, under
+*Where the `occurrence` bytes are, and which of them the rate moves*, with an
+exact identity over it and no remainder. The cause is read off a column instead
+of being asserted in prose. On a SQLite build without `dbstat` the report states
+that the cause **could not be established** and substitutes nothing for it, which
+is the failure mode this subsection is repairing, made unavailable.
 
-**And the finer levels stop answering before they stop being affordable.** At
-250 Hz and 1 kHz the transition and per-frame levels return `DISAGREE` on
-`separation_timeline`: the edge layer's endpoints are quantized to `TIME_TOL_S`
-= 0.01 s, which is coarser than the control period above 100 Hz, so a per-frame
-separation read back out of an interval can miss by more than `DISTANCE_TOL_M`.
-That is a measurement, not a tolerance to widen (`docs/lossiness.md`), and it is
-a finding about the **graph builder** rather than about retention cost — so it
-is reported here and in the benchmark's own table, and repairing it is a
-separate piece of work in `reg.graph`, not something this measurement is
-permitted to tune away.
+**And the finer levels stop answering before they stop being affordable.** The
+`DISAGREE` on `separation_timeline` at 250 Hz and 1 kHz is *The control rate*'s
+domain-of-validity limit arriving from the other side — a finding about the
+**graph builder** rather than about retention cost, so repairing it is work in
+`reg.graph` and not a tolerance this measurement may widen
+([`limitations.md`](limitations.md) §5, [`lossiness.md`](lossiness.md)).
 
 **This is a purchasing decision, not a slogan.** 265 GB buys *did contact
 occur*, *how close did it come*, every refused action with its fault code and
@@ -419,8 +407,10 @@ and no chain record.** The ladder above sets `records=None` at every rung, for t
 reason the blockquote gives: a record stream adds a term that scales with the
 replan interval rather than with the run, and the study's variable is the run.
 That is the right parameterization for a study about *length* and the wrong number
-to quote as the cost of the artifact this project ships — which is issue #59's
-error, found in the resolution curve, surviving in the front page until issue #98.
+to quote as the cost of the artifact this project ships — issue #59's error,
+surviving in the front page until issue #98. The baseline is the same 64,652 B on
+both sides, so the whole of the distance to **~40x** is the Layer A this build
+carries: 3,120 chain records of it.
 
 **What was measured** on the build the retention figures above come from
 (`python -m reg.bench --resolution --seed 0`; `long_run` at 3,000 frames **at a
@@ -442,44 +432,53 @@ from it:
 
 *The baseline moved by one byte on 2026-09-03, and it is a byte of provenance
 rather than a byte of stream.* `reg.sim.PROVENANCE_VERSION` went to 2 when
-`reg.stream` gained the two optional base blocks (issue #176): the banner above
-every raw stream reads `v2` instead of `v1`, one character, which gzip happened
-to render one byte longer. **No fixture grew a column.** The base blocks are
-present only in a stream whose frames carry a base and every robot in this
-repository is bolted to the origin, so `reg.stream.expected_header(2, 3)` is the
-same 24 columns it has always been and every ratio, MB/hour and GB figure in this
-document is unchanged. Recorded here rather than absorbed, because a figure that
-moves for a reason nobody wrote down is the thing the pin exists to prevent.
+`reg.stream` gained the two optional base blocks (issue #176) — one character in
+the banner above every raw stream, which gzip rendered one byte longer. **No
+fixture grew a column**: the blocks are present only in a stream whose frames
+carry a base and every robot here is bolted to the origin, so
+`reg.stream.expected_header(2, 3)` is the same 24 columns and every ratio,
+MB/hour and GB figure in this document is unchanged. Recorded rather than
+absorbed, because a figure that moves for a reason nobody wrote down is the thing
+the pin exists to prevent.
 
-**That baseline is not the incumbent, and the gap is now measured, under both
+**That baseline is not the incumbent, and the gap is measured under both
 configurations rosbag2 writes.** Nobody retains a gzipped CSV; practitioners
-retain rosbag2, in MCAP. For the same proprioceptive content — `t`, `q`, `qd`
-over the same fixture — MCAP `/joint_states` costs **11.76x** what the gzipped
-CSV costs at the `mcap_default` preset a practitioner gets without choosing:
-35,893 B against 3,053 B, uncompressed and chunked with a 16 B/message index. At
-the opt-in `mcap_compressed_nocrc` preset it costs **3.83x**, 11,685 B. Both are
-computed from the MCAP specification, recorded as a projection in
-[`sensor-baseline.md`](sensor-baseline.md) *The incumbent encoding* and held to
-the byte by `tests/test_incumbent_encoding.py`.
+retain rosbag2, in MCAP. Every figure below is a projection computed from the
+MCAP specification, recorded in [`sensor-baseline.md`](sensor-baseline.md) and
+held to the byte by `tests/test_incumbent_encoding.py`. The whole-stream rows put
+the Layer B half on `/tf` — the arrangement most favourable to the incumbent of
+those that document prices, with the decision, its alternatives and the three
+discounts it hands the bag.
 
-The **2.51x** published here from 2026-08-26 is superseded. It priced
-compression as a default rosbag2 does not apply and left the message index out;
-both of those made the incumbent look cheap.
+| MCAP against a gzipped CSV of the same content | `mcap_default` | `mcap_compressed_nocrc` |
+|---|---|---|
+| `/joint_states`, 5 columns / 251 frames, vs 3,053 B | 35,893 B, **11.76x** | 11,685 B, **3.83x** |
+| `/joint_states` + `/tf`, 24 columns / 3,000 frames, vs 64,652 B | 1,638,000 B, **25.34x** | 307,128 B, **4.75x** |
+| **artifact / bag**, 24 columns / 3,000 frames | **1.58x** | **8.42x** |
 
-So **~40x overstates the artifact's disadvantage against what a buyer actually
-keeps**, and by an amount this project has not measured: the incumbent ratio is
-proprioception on both sides, while the ~40x baseline carries the human's state
-and three obstacles as well. The two comparisons do not cover the same content
-and are not composable into a single corrected ratio. **~40x remains the number
-to quote**, now with the incumbent named beside it rather than left unstated.
+The **2.51x** published here from 2026-08-26 is superseded: it priced
+compression as a default rosbag2 does not apply and left the message index out,
+and both made the incumbent look cheap.
 
+**The one figure to quote beside `~40x` is 8.42x**, and the content belongs in
+the same clause as the number: the artifact is 8.42x a rosbag2 bag of the same 24
+columns of the same run, where `~40x` is against a gzipped CSV of those same
+columns. The two divide — `39.98x / 4.75x` — which a five-column ratio against a
+24-column headline could never do. 1.58x is that comparison at the preset a
+practitioner gets without choosing, published beside 8.42x and not instead of it:
+8.42x leads because it is the preset favourable to the incumbent.
 
-The baseline is the same 64,652 B on both sides of the comparison — same fixture,
-same seed, same stream — so the whole of the distance between 13x and **~40x** is
-the Layer A the build carries: the ladder above has **no record stream** in it and
-this build has 3,120 chain records in it. **~40x is the number to quote**, and 13x
-may be quoted only with that condition attached in the same sentence, which
-`tests/test_published_figures.py` now checks in every document that quotes it.
+**The answer to the original framing does not move.** The artifact is larger than
+the bag at both presets, so *is the graph smaller than the stream it replaces* is
+still **no**, Claim 1's status stands and the prohibition below still binds.
+`reg.bench.FullContentComparison.claim_1_status` computes that rather than
+leaving it to a document, and its outcome for the artifact coming out *smaller*
+is the one that would oblige the status line to change.
+
+**~40x is the number to quote**, and 13x may be quoted only with the condition
+above — **no record stream** in the artifact it was measured on — attached in the
+same sentence, which `tests/test_published_figures.py` checks in every document
+that quotes it.
 
 The table itself is pinned rather than asserted: the same module re-measures this
 build on every CI run and compares it against the table above, and it fails in both
@@ -536,19 +535,12 @@ float compressors are for. It was unwinnable, and losing it says nothing about
 the thesis.
 
 *What ~21 B/frame may and may not be compared against.* It is the full
-24-column stream, so it is not a per-point figure and does not sit beside one.
-Until 2026-08-27 this paragraph placed it next to Gorilla's **1.37 bytes per
-point** (`docs/prior-art.md` §8) as though the two were the same measurement;
-they are not, because most of those 24 columns are entity state no time-series
-compressor is benchmarked on. The like-for-like slice, measured on the same
-fixture and the same seed, is the five proprioceptive columns alone: **3,053 B
-gzipped over 251 frames = 12.2 B/frame**, ~2.4 B per recorded value. That is the
-number to put beside Gorilla — and even it is not a clean comparison, since a
-Gorilla *point* is a (timestamp, value) pair while `t` here is shared across the
-four joint values in a frame. Both figures come from
-`python -m reg.sim --scenario declared_violation --seed 0`, the second through
-`reg.bench.gzip_bytes_of_columns` over `reg.bench.proprioceptive_columns`;
-~21 B/frame is unchanged and is what the retention arithmetic above uses.
+24-column stream, so it is not a per-point figure and does not sit beside
+Gorilla's **1.37 bytes per point**. The like-for-like slice is the five
+proprioceptive columns alone, **12.2 B/frame** on the same fixture and seed;
+[`prior-art.md`](prior-art.md) §8 carries that comparison and what is still
+unlike about it. ~21 B/frame is unchanged and is what the retention arithmetic
+above uses.
 
 **2. The number that is actually about retention is absolute, and we have it.**
 At 30,000 frames / 600 s **at 50 Hz** the artifact is 7.89 MB, i.e. **47.3
@@ -563,13 +555,10 @@ Whether it is three orders of magnitude below a real sensor log is
 measure it. Say so wherever the figure appears.
 
 **3. `reg` chose a resolution no standard asks for.** UN R157's DSSAD — the
-mandated evidence recorder for automated driving, and the closest precedent this
-project has — stores **occurrences**: an occurrence flag, a reason, a date, a
-timestamp at **±1.0 second**, and the software version identifier present at the
-event. `reg` stores relationships at **cm / 10 ms, every frame**. Two orders of
-magnitude finer than the only comparable thing that is actually required by law.
-The per-frame cost that sank Claim 1 is the price of a resolution nobody
-specified.
+closest precedent this project has, its data model in
+[`prior-art.md`](prior-art.md) §1 and §9 — records **occurrences**, timestamped
+at **±1.0 second**. `reg` stores relationships at **cm / 10 ms, every frame**. The
+per-frame cost that sank Claim 1 is the price of a resolution nobody specified.
 
 ## What replaces it: resolution as the measured variable
 

@@ -1206,6 +1206,17 @@ charged nothing for the per-message MessageIndex. Republished from
 compressed. Every part of the error ran one way, so this section's conclusion
 stands and its number understated it.
 
+**Corrected again 2026-09-06 (issue #220).** *"That is argued, not measured"* and
+*"neither number is a licence to say the incumbent is 2.51x the `~40x` baseline"*
+are both retired. The incumbent is now priced over all 24 columns rather than 5,
+with the Layer B half on `/tf` — the arrangement most favourable to the incumbent
+of those `docs/sensor-baseline.md` prices.
+
+The direction this pass argued for is confirmed and its size is on the record:
+the whole-stream bag is **4.75x** the gzipped CSV compressed, so the artifact is
+**8.42x** that bag rather than `~40x` a gzipped CSV. `39.98x / 4.75x` is the
+division neither earlier comparison could do.
+
 ---
 
 ## 17. SOTER — Simplex with an implementation, in robotics, in 2019

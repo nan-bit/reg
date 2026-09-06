@@ -180,12 +180,19 @@ ARGUMENT: dict[str, str] = {
 #         classified             20,332 / 260 symbols
 #   94.5  2026-09-05             24,560 / 260 symbols = 94.46, rounded up to
 #         the next tenth and by nothing more
-#   94.3  today, 2026-09-05, after #213 split `docs/sensor-baseline.md` into a
+#   94.3  2026-09-05, after #213 split `docs/sensor-baseline.md` into a
 #         normative core and a `## Why` line: that file went 4,173 -> 4,116, of
 #         which 3,595 is the normative core. 24,503 / 260 = 94.24, rounded up
 #         the same way. The cut is small next to tiers 2-4 because this file's
 #         narration is mostly *figures* — superseded sizes, thresholds and
 #         attributions — and those move below the line rather than out
+#   93.5  today, 2026-09-06, after #214 did the same to `docs/mobile-base.md`:
+#         that file went 8,331 -> 8,129, of which 6,328 is the normative core.
+#         24,301 / 260 = 93.46, rounded up the same way. The cut is smaller than
+#         the shape change: 1,801 words moved below the line and the file is
+#         still the longest in this group, because a design document whose tiers
+#         have all landed carries a build order that is mostly provenance, and
+#         provenance is what moved rather than went
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -196,7 +203,7 @@ ARGUMENT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 94.3
+RATE = 93.5
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -211,7 +218,7 @@ RATE = 94.3
 #           core and a `## Why` line — measured, no headroom
 #   74,230  2026-09-05, after #209 did the same to `docs/lossiness.md`: that
 #           file went 11,116 -> 10,756, of which 9,391 is the normative core
-#   73,969  today, 2026-09-05, after #210 did the same to `docs/sufficiency.md`:
+#   73,969  2026-09-05, after #210 did the same to `docs/sufficiency.md`:
 #           that file went 11,425 -> 11,164, of which 9,707 is the normative
 #           core — measured, no headroom
 ARGUMENT_MAX = 73969
@@ -229,9 +236,12 @@ PARAGRAPH_MAX_WORDS = 120
 #   135  2026-09-05, after #209: docs/lossiness.md went 26 -> 20
 #   121  2026-09-05, after #210: docs/sufficiency.md went 14 -> 0, six of the
 #        fourteen by splitting rather than cutting
-#   116  today, 2026-09-05, after #213: docs/sensor-baseline.md went 5 -> 0,
-#        four of the five by splitting rather than cutting
-LONG_PARAGRAPHS_MAX = 116
+#   116  2026-09-05, after #213: docs/sensor-baseline.md went 5 -> 0, four of
+#        the five by splitting rather than cutting
+#    99  today, 2026-09-06, after #214: docs/mobile-base.md went 17 -> 0,
+#        counted over the whole file rather than over its normative core, so a
+#        paragraph moved below the `## Why` line had to be split there too
+LONG_PARAGRAPHS_MAX = 99
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -244,17 +254,22 @@ LONG_PARAGRAPHS_MAX = 116
 #        `## Why` heading: that file went 38 -> 13
 #   212  2026-09-05, after #209 did the same to docs/lossiness.md: that file
 #        went 39 -> 11
-#   179  today, 2026-09-05, after #210 did the same to docs/sufficiency.md: that
+#   179  2026-09-05, after #210 did the same to docs/sufficiency.md: that
 #        file went 33 -> 0. Zero is what the proxy now counts above that file's
 #        rationale line, not a claim that the file narrates nothing — two of the
 #        33 were the marker set firing on normative text and were reworded in
 #        the present tense, which the docstring below says it over-counts
-#   165  today, 2026-09-05, after #213 did the same to docs/sensor-baseline.md:
-#        that file went 14 -> 0. Same caveat as above — six of the fourteen
-#        fired on nothing but an issue reference, and five of those were live
+#   165  2026-09-05, after #213 did the same to docs/sensor-baseline.md: that
+#        file went 14 -> 0. Same caveat as above — six of the fourteen fired on
+#        nothing but an issue reference, and five of those were live
 #        cross-references in normative text, so what moved below the line was
 #        the reference, into that file's `## Why` provenance table
-NARRATION_MAX = 165
+#   141  today, 2026-09-06, after #214 did the same to docs/mobile-base.md:
+#        that file went 24 -> 0. Seventeen of the 24 carried an issue reference
+#        and eight carried nothing else, which is the same shape #213 found;
+#        the references moved into that file's `## Why` provenance table and
+#        the tier-by-tier archaeology moved with them
+NARRATION_MAX = 141
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

@@ -284,8 +284,7 @@ nobody chooses, **uncompressed** and message-indexed, so **what a practitioner
 retains without choosing anything costs 11.76x the gzipped CSV**. The compressed
 row is one projection standing for both zstd profiles, at 3.83x;
 [the rosbag2 run](#the-rosbag2-run) measures it against each and it matches
-neither. Both are published anyway: quoting whichever suits the argument is the
-error the gzipped baseline already makes, one layer down.
+neither.
 
 The cost is per-message self-description plus a per-message index, which is what
 a bag format is for and is expensive at 50 Hz:
@@ -303,16 +302,12 @@ a bag format is for and is expensive at 50 Hz:
         and outside the chunk, so uncompressed under either preset
 ```
 
-So the gzipped-CSV baseline is **about 12x more efficient than what a
-practitioner retains**, and about 4x more efficient than the same bag
-compressed. The artifact's disadvantage against what practitioners keep is
-correspondingly smaller.
+The artifact's disadvantage against what practitioners keep is correspondingly
+smaller.
 
 **This document does not restate the headline.** The ratio above is an encoding
-ratio, free of fixed cost on both sides and over 5 columns of 24.
-[`retention.md`](retention.md) is where Claim 1's headline meets it, on the
-whole-stream figures below — measured on the 3,000-frame fixture, because over a
-five-second one the artifact's fixed cost dominates.
+ratio over 5 columns of 24; [`retention.md`](retention.md) is where Claim 1's
+headline meets it, on the whole-stream figures below.
 
 ### Assumptions, each of which can move the number
 
@@ -322,9 +317,8 @@ columns of the same fixture.
 - **`none` is a floor; the compressed figure is not.** Every assumption below
   makes the uncompressed profile look cheaper than a real bag, so 11.76x
   understates the incumbent. The compressed figure instead rests on **gzip -9
-  standing in for zstd** — comparable in class, not identical — and that
-  direction is now measured rather than open: it costs both compressed
-  whole-stream figures their standing
+  standing in for zstd** — comparable in class, not identical — which costs both
+  compressed whole-stream figures their standing
   ([Validating the projection](#validating-the-projection-against-a-real-bag)).
 - **File-level records excluded** — header, schema, channel, chunk headers,
   chunk index, statistics, summary, footer, and the 15 B fixed part of each
@@ -351,11 +345,9 @@ system carries perception output and the sensing behind it, neither priced
 here.
 
 That table therefore prices **proprioception only, on both sides**: five of the
-fixture's 24 columns. The section below prices the other nineteen, so this ratio
-and [`retention.md`](retention.md)'s headline cover the same content and divide
-into one another. Neither prices the *sensing* behind a real system's version of
-those nineteen — the expensive half, and the half this document projects rather
-than measures.
+fixture's 24 columns, and the section below prices the other nineteen. Neither
+prices the *sensing* behind a real system's version of those nineteen — the
+expensive half, and the half this document projects rather than measures.
 
 ### The same encoding, over the whole stream
 
@@ -382,12 +374,12 @@ and none for the human, and nothing here may choose one. A plausible metre would
 sit inside a published byte count looking exactly like a measured one, so
 `reg.bench.marker_cdr` refuses that entity by name.
 
-**Refusing it costs the comparison nothing**: a Marker cannot be the most
-favourable arrangement anyway. It carries the same Header and Pose as a
-`TransformStamped` and adds a namespace, an id, a type, an action, a scale, a
-colour, a lifetime, a frame-locked flag, two empty arrays and two empty strings
-on top — dearer per entity term by term, at one message per control period
-either way. `tests/test_incumbent_encoding.py` measures that on an obstacle.
+**Refusing it costs the comparison nothing**: a Marker carries the same Header
+and Pose as a `TransformStamped` and adds a namespace, an id, a type, an action,
+a scale, a colour, a lifetime, a frame-locked flag, two empty arrays and two
+empty strings on top — dearer per entity term by term, at one message per control
+period either way, so it cannot be the most favourable arrangement.
+`tests/test_incumbent_encoding.py` measures that on an obstacle.
 
 **The bag, both halves, over the same 3,000-frame fixture the retention figures
 are measured on:**
@@ -396,19 +388,31 @@ are measured on:**
 |---|---|---|
 | `/joint_states` — the 5 proprioceptive columns | 429,000 B | 136,500 B |
 | `/tf` — the 19 Layer B columns | 1,209,000 B | 170,628 B [^v] |
-| **the bag** | **1,638,000 B** | **307,128 B** [^v] |
+| **the bag, projected** | **1,638,000 B** | **307,128 B** [^v] |
 | the same 24 columns as CSV, gzip -9 | 64,652 B | 64,652 B |
-| x gz CSV | **25.34x** | **4.75x** [^v] |
 
 [^v]: **Outside the validation band; this figure does not stand.** A real MCAP
-    encoder produced 154,040 B for `/tf`, 284,259 B for the bag and **4.40x** —
-    out by -9.72% and -7.45% against a +/-5% band registered ahead of it. It
+    encoder produced 154,040 B for `/tf` and 284,259 B for the bag — out by
+    -9.72% and -7.45% against a +/-5% band registered ahead of it. It
     overstates the incumbent, which flatters this project; the uncompressed
     column beside it is exact.
     [Validating the projection](#validating-the-projection-against-a-real-bag).
 
+**What is published against that gzipped CSV is the bag rosbag2 wrote**, not the
+projection above — [the rosbag2 run](#the-rosbag2-run), whole files, same
+columns, same frames: **25.34x** uncompressed with no profile passed
+(1,637,963 B), **5.58x** at `zstd_fast` (360,798 B), **3.90x** at `zstd_small`
+(252,034 B).
+
+**25.34x keeps its value and becomes a measurement** — the projection came in
+0.002% from that bag, inside the band fixed ahead of the run, so the *hand-built
+encoding comparison and not a real bag* caveat stops applying to it. **The
+compressed figure is replaced by the pair rather than re-measured**: one
+projection cannot model two profiles 43% apart, and both are published, picking
+whichever suits the argument being the error the gzipped baseline makes.
+
 [`retention.md`](retention.md), *The same comparison, measured on the artifact
-that carries Layer A*, is where those become a ratio against the artifact.
+that carries Layer A*, is where these become a ratio against the artifact.
 
 #### Three discounts this hands the incumbent, each one deliberate
 
@@ -554,7 +558,8 @@ settles:
   fixed part this projection excludes.
 - **Neither compressed figure projects a profile**: 307,128 B sits 14.9% under
   `zstd_fast` and 21.9% over `zstd_small`, so the marked figures stay marked,
-  and marked about a model now rather than about a missing measurement.
+  and marked about a model now rather than about a missing measurement. What is
+  published is the two bags, as a pair.
 
 `reg.bench.ROSBAG2_SIZE_MEASUREMENTS` holds the ten rows and derives each verdict
 from its own byte counts; `tests/test_incumbent_encoding.py` fails if page and
@@ -564,11 +569,10 @@ record disagree.
 
 A compressed projection that models one of the two zstd profiles. Everything a
 bag can settle is settled above — record layout, payloads, framing, index and the
-whole uncompressed total. What is left is gzip -9 standing in for zstd, and no
-further `ros2 bag record` closes it: the two profiles bracket the projection, so
-a compressed figure that stands has to name which one it models. That is a
-modelling question ([`plan.md`](plan.md) forbids the dependency that would
-answer it directly).
+whole uncompressed total — and no further `ros2 bag record` closes what is left:
+the two profiles bracket the projection, so a compressed figure that stands has
+to name which one it models. That is a modelling question ([`plan.md`](plan.md)
+forbids the dependency that would answer it directly).
 
 ## A premise this document does not carry: air-gapped sites
 
@@ -615,9 +619,8 @@ duty cycle, and a logged byte count over a known interval. Until then the honest
 form is the one used throughout: an explicit multiplier, a linear sensitivity, and
 the word *projection* on every number derived from it.
 
-That retires the *sensor* side only. The control rate is the other half and is
-already measured rather than assumed: the figure a reader needs is the rate their
-own robot's constraint layer adjudicates at. The rosbag2/MCAP projection retires
+That retires the *sensor* side only; the control rate is the other half and is
+already measured rather than assumed. The rosbag2/MCAP projection retires
 separately — [What would retire this section](#what-would-retire-this-section).
 
 ## See also
@@ -647,8 +650,7 @@ worth least once nobody remembers what it was weighed against.
 | *The incumbent encoding*; the premise this document does not carry | #117, #102 | 2026-08-26 |
 | *The incumbent encoding* republished under both rosbag2 presets, with the message index priced | #117 | 2026-09-06 |
 | *The same encoding, over the whole stream* — the `/tf` decision, its alternatives and the whole-stream figures | #220 | 2026-09-06 |
-| *Validating the projection against a real bag* — the procedure, the tolerance registered ahead of it, and the measurement | #221 | 2026-09-06 |
-| *The rosbag2 run* — the real profile names, the measured bags and the 1% band on the uncompressed projection | #232 | 2026-09-06 |
+| *Validating the projection against a real bag* and *The rosbag2 run* — the procedure, the tolerance registered ahead of it, the real profile names and the measured bags; then the incumbent figures republished from those bags, as a pair | #221, #232, #233 | 2026-09-06 |
 | The priced stream, as 24 columns and 19 Layer B | #123 | 2026-08-27 |
 | Three sensitivity rows recomputed from the sizes | — | 2026-08-28 |
 | The base pose on `robot_config`; the ladder re-measured, three rungs of it stale | #166 | 2026-09-02 |
@@ -686,20 +688,14 @@ gives — it assumed the whole level scales, and 1.5% of it does not.
 
 Translating the 11.76x into Claim 1 was not #117's work but its successor's: the
 two comparisons were not composable, five columns on one side and 24 on the
-other. Issue #220 closed that, and [`retention.md`](retention.md) now publishes
-one ratio of the artifact against the bag. `README.md`, [`plan.md`](plan.md),
-[`retention.md`](retention.md) and [`prior-art.md`](prior-art.md) still carry the
-condition that no rosbag2 run stands behind the figures, and still carry the two
-retired preset names; #232 measured the bags and left that republication to the
-issue that depends on it.
+other. Issue #220 closed that; #232 measured the bags; #233 republished every
+document that quoted the projection, retiring the two preset names with it.
 
 ### What the 2026-09-06 re-measurement moved, and why
 
 This section published **2.51x** and **7,669 B** from 2026-08-26. That figure is
 superseded: it priced chunk compression as though rosbag2 applied it by default
 and left the message index out, so it modelled a configuration a practitioner has
-to select and undercharged even that one. Both errors made the incumbent look
-cheap, which made this project's disadvantage look worse than it is — the same
-direction of error the gzipped-CSV baseline has. Correcting them gives 35,893 B
-at the default preset and 11,685 B at the compressed one, against the same
-3,053 B of gzipped CSV.
+to select and undercharged even that one. Both errors ran the same way, making
+the incumbent look cheap. Correcting them gives 35,893 B at the default preset
+and 11,685 B compressed, against the same 3,053 B of gzipped CSV.

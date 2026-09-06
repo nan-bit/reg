@@ -68,10 +68,11 @@ scope was knowingly left unfinished, and then the PR body says exactly what rema
 ## What is off limits
 
 `.github/workflows/**` and `.runner.conf` are the machinery that runs the writer,
-not the product, and [`CLAUDE.md`](../CLAUDE.md) puts them off limits to it. Changes
-there are made by a human, in a separate PR. An issue that genuinely requires them
-gets the rest of its scope done and a note in the PR body naming the change that was
-not made.
+not the product, and [`CLAUDE.md`](../CLAUDE.md) puts them off limits to it. An agent
+editing them mid-flight would be changing the rules of the run it is inside, and a
+writer that breaks itself cannot report that it did. Changes there are made by a
+human, in a separate PR. An issue that genuinely requires them gets the rest of its
+scope done, and a note in the PR body naming the change a human still has to make.
 
 ## For humans working directly
 

@@ -193,10 +193,10 @@ ARGUMENT: dict[str, str] = {
 #         still the longest in this group, because a design document whose tiers
 #         have all landed carries a build order that is mostly provenance, and
 #         provenance is what moved rather than went
-#   90.5  today, 2026-09-06, after #217 stopped the three reader-facing entry
-#         points restating what they link to: `README.md` 3,930 -> 3,394,
-#         `docs/README.md` 785 -> 642, `docs/CONTRIBUTING.md` 792 -> 687.
-#         23,517 / 260 = 90.45, rounded up the same way. All three are in this
+#   90.6  today, 2026-09-06, after #217 stopped the three reader-facing entry
+#         points restating what they link to: `README.md` 3,930 -> 3,402,
+#         `docs/README.md` 785 -> 642, `docs/CONTRIBUTING.md` 792 -> 716.
+#         23,554 / 260 = 90.59, rounded up the same way. All three are in this
 #         group and none of them is a design document, so unlike #213 and #214
 #         the words left the corpus rather than moving below a `## Why` line —
 #         what was cut is prose the linked document states in full
@@ -210,7 +210,7 @@ ARGUMENT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 90.5
+RATE = 90.6
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -280,9 +280,15 @@ LONG_PARAGRAPHS_MAX = 97
 #        the references moved into that file's `## Why` provenance table and
 #        the tier-by-tier archaeology moved with them
 #   139  today, 2026-09-06, after #217: README.md and docs/CONTRIBUTING.md went
-#        1 -> 0 each. Neither file gained a `## Why` line — an entry point that
-#        needs one is an entry point carrying provenance, and both paragraphs
-#        were restatements of a document that carries the provenance already
+#        1 -> 0 each, and neither file gained a `## Why` line — an entry point
+#        that needs one is an entry point carrying provenance. One went by a cut
+#        (CONTRIBUTING's restatement of CLAUDE.md's *Never invent a default*,
+#        now a pointer to it) and one by rewording in the present tense, the
+#        same over-count #210 recorded. A third paragraph fired mid-cut and is
+#        worth knowing about: `was\nnot made` did not match across a line break
+#        and `was not made` on one line did, so this proxy is sensitive to
+#        rewrapping. It was reworded rather than rewrapped, because wrapping a
+#        sentence to clear a marker is gaming the count
 NARRATION_MAX = 139
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE

@@ -62,11 +62,11 @@ Entity positions are ground truth from the simulator, and 2D planar demonstrates
 every claim. The list is [`docs/plan.md`](docs/plan.md)'s non-goals table, with
 the reason under each, and it is binding for scope.
 
-Two entries the front page is asked about often. It is not an **HJ reachability
-solver**: sampling on 4–6D state is enough, and both directions ship —
-`compute_envelope` is an **inner** approximation and `reg.envelope.outer_envelope`
-an over-approximation of the set the robot cannot leave within the horizon, which
-is what `enforce.horizon_bound` adjudicates against
+Two of them are worth stating here rather than only pointing at. It is not an
+**HJ reachability solver**: sampling on 4–6D state is enough, and both directions
+ship — `compute_envelope` is an **inner** approximation and
+`reg.envelope.outer_envelope` an over-approximation of the set the robot cannot
+leave within the horizon, which is what `enforce.horizon_bound` adjudicates against
 ([`docs/limitations.md` §2](docs/limitations.md)). And it is not a **proposed
 standard, or a research contribution to reachability analysis**: every design
 element traces to an existing precedent — see below.
@@ -112,8 +112,9 @@ old one, and `reg`'s keys are static for the life of a run.
 
 Anyone holding the keyring can also re-sign the whole history, and deleting the
 *last* records of a chain breaks no link — Ma and Tsudik's truncation attack,
-named against exactly this construction. All three are deliberate absences rather
-than oversights, and what this project adds to the ancestor is not cryptographic
+named against exactly this construction. Those two and the missing forward
+security are deliberate absences rather than oversights, and what this project
+adds to the ancestor is not cryptographic
 ([`docs/limitations.md` §7](docs/limitations.md),
 [`docs/prior-art.md` §14 and §18](docs/prior-art.md)).
 

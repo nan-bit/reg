@@ -426,6 +426,101 @@ Each of the three runs the same way: it makes the bag cheaper, which makes the
 artifact's ratio against the bag larger, which is the direction that goes
 against this project.
 
+### Validating the projection against a real bag
+
+**Status of this subsection: the procedure and the tolerance, registered before
+the measurement was taken.** Everything above is computed from the MCAP
+specification and has never met a real encoder. A specification can be read
+correctly and applied to the wrong configuration — that is exactly what issue
+#117 found, where the constants were right and the preset was wrong — so the
+projection is a claim about somebody else's software until somebody outside this
+repository can regenerate it. [`prior-art.md`](prior-art.md) §27 is where that
+standard comes from: reproducibility is defined relative to a stated
+environment, and a result nobody else can regenerate is an assertion.
+
+#### The procedure, so a third party can run it
+
+Both fixtures come from this repository at the seed every figure above is
+measured at. Neither the seed nor the scenario has a default: quoting a byte
+count without them prices a stream nobody can reproduce.
+
+```bash
+python -m reg.sim --scenario declared_violation --seed 0 --out dv.csv        #   251 frames
+python -m reg.sim --scenario long_run_3000      --seed 0 --out long_run.csv  # 3,000 frames
+```
+
+Republish each row as ROS 2 messages and record them with rosbag2's MCAP
+storage plugin. **The mapping is the specification of the comparison**, so it is
+stated field by field rather than left to a reader's reconstruction:
+
+| | |
+|---|---|
+| **Topic `/joint_states`** | `sensor_msgs/msg/JointState` |
+| | `header.stamp` = `t` split into `sec` / `nanosec`; `header.frame_id` = `""` |
+| | `name` = `joint_0`, `joint_1`; `position` = `q_0`, `q_1`; `velocity` = `qd_0`, `qd_1`; `effort` = `[]` |
+| **Topic `/tf`** | `tf2_msgs/msg/TFMessage`, one message per control period |
+| | one `TransformStamped` per entity, in header order: `human`, then each `obs_<j>_id` |
+| | `header.frame_id` = `map` (`reg.bench.LAYER_B_PARENT_FRAME`); `child_frame_id` = the entity name |
+| | `translation` = (`x`, `y`, `0.0`); `rotation` = identity |
+| **Framing, both topics** | `log_time` = `publish_time` = `round(t x 1e9)`; `sequence` = the row index |
+| **Serialization** | XCDR1 little-endian — the ROS 2 default |
+| **Presets** | `mcap_default`: uncompressed, chunked at 768 KiB, message index on. `mcap_compressed_nocrc`: zstd chunks, CRCs off, message index on |
+
+Three bags per preset, so the two halves and the whole are each priced: the
+251-frame `/joint_states` bag that the five-column table above is measured on,
+and over the 3,000-frame fixture a `/joint_states` bag, a `/tf` bag and a bag
+carrying both topics.
+
+**What is compared against what.** Not file sizes. The projection deliberately
+excludes every file-level record — header, schema, channel, chunk headers, chunk
+index, statistics, summary, footer, and the 15 B fixed part of each MessageIndex
+record — so a whole-file comparison would measure the exclusion rather than the
+projection. What is compared is the **per-message scaling total**, which is what
+the projection actually asserts and the only part that grows with the run:
+
+- walk the bag by opcode from the spec — 1 B opcode, 8 B record length, content;
+- inside each chunk (decompressing it first), sum the byte length of every
+  Message record, framing included;
+- under `mcap_compressed_nocrc`, compress those Message records with the
+  writer's own compressor, one frame per chunk at the boundaries the writer
+  chose, so the chunking is the real one and the schema and channel records are
+  excluded exactly as the projection excludes them;
+- add 16 B per MessageIndex entry, read out of the MessageIndex records
+  themselves rather than assumed.
+
+Compare that against `reg.bench.mcap_joint_states_bytes`,
+`reg.bench.layer_b_mcap_bytes(option="tf_tree")` and
+`reg.bench.full_content_mcap_bytes` at the same preset. Record the tool
+versions and the date beside the numbers, the way the sensor figure above is
+recorded.
+
+#### The tolerance, decided in advance
+
+**A tolerance chosen after seeing the number is not a tolerance**, so this is
+fixed here before anything was measured, and it is not one number because the
+projection does not make one kind of claim.
+
+| what | tolerance | why that one |
+|---|---|---|
+| CDR payload length, per message type | **exact** | The payload is derived from the IDL field by field. There is no estimate in it, so a mismatch is a misread specification and not a tolerance question |
+| Per-message MCAP framing, and the MessageIndex entry width | **exact** | `MCAP_MESSAGE_RECORD_OVERHEAD` and `MCAP_MESSAGE_INDEX_PER_MESSAGE` are byte counts read off the format spec. Same reasoning |
+| `mcap_default` scaling total | **exact** | It contains no compressor and therefore no stand-in. It is a sum of two exact terms over a known message count; if it is not exactly right it is wrong |
+| `mcap_compressed_nocrc` scaling total | **±5%** | The one place the projection knowingly substitutes: gzip -9 stands in for zstd, and *Assumptions* above withdraws the floor claim for it because nobody here could state the direction. ±5% is the issue's own "within a few percent" |
+
+**What happens on each side of it**, also fixed in advance:
+
+- **Within** — the projection stands as published, the delta is recorded beside
+  the figure, and the substitution above stops being an assumption of unstated
+  direction and becomes a measured one.
+- **Outside** — the projection does **not** stand for that figure. It is marked
+  as not standing at every place in this document that publishes it, the
+  measured value and the delta are published next to it, and the figure is
+  re-derived from a run that pins the remaining configuration. A figure that
+  fails its own tolerance and stays on the page unmarked is the failure this
+  subsection exists to prevent.
+
+Either outcome is a result. A validation that can only confirm is not one.
+
 ### What would retire this section
 
 A rosbag2 writer with the real `mcap` library and real `zstd`, run once outside

@@ -1540,6 +1540,643 @@ def incumbent_report(path: str | Path) -> str:
     )
 
 
+# --- the same incumbent, priced over the whole stream ------------------------
+#
+# WHY A SECOND INCUMBENT FIGURE. The one above prices `t`, `q` and `qd` — five
+# of the fixture's twenty-four columns — and the headline retention ratio is
+# measured against a gzipped CSV of all twenty-four. Two ratios over different
+# content do not compose: dividing one by the other says nothing, because the
+# denominators are not the same object. So the incumbent is priced a second time
+# over **everything the headline baseline covers**, and the two ratios then
+# divide: `artifact / gzipped CSV` over `MCAP / gzipped CSV` is
+# `artifact / MCAP`, all three over the same twenty-four columns.
+#
+# WHAT A REAL SYSTEM PUBLISHES FOR THE OTHER NINETEEN COLUMNS IS A DECISION, AND
+# IT IS MADE HERE RATHER THAN LEFT TO THE ENCODER. The human and the obstacles
+# are entities with poses, and a ROS 2 system puts them on topics of its own
+# choosing. `LAYER_B_OPTIONS` holds the candidates, each is priced, and
+# `cheapest_layer_b_option` takes the **smallest** one — the arrangement most
+# favourable to the incumbent. A comparison that picked the arrangement making
+# the incumbent look worst would be the baseline-shopping this whole section was
+# built to correct, one topic further down. `docs/sensor-baseline.md`, *The same
+# encoding over the whole stream*, carries the decision, the alternatives and
+# what each one does and does not carry.
+
+#: The parent frame every Layer B pose is expressed in.
+#:
+#: Three characters, which is the shortest name a real deployment uses, and the
+#: string is repeated in every message of every candidate below — so this is the
+#: choice most favourable to the incumbent, on the same terms as `joint_0` in
+#: `mcap_joint_states_bytes`. It is a named constant rather than a parameter
+#: default because every encoder below takes `frame_id` as a required keyword:
+#: the value moves the answer, so nothing invents it at a call site.
+LAYER_B_PARENT_FRAME = "map"
+
+
+@dataclass(frozen=True)
+class StreamEntity:
+    """One Layer B entity as the stream carries it, ready to be encoded.
+
+    `radius` is `float | None` and the `None` is load-bearing: the stream carries
+    an extent for every obstacle and none for the human, and an encoding that
+    needs one has to refuse rather than choose a plausible metre.
+    """
+
+    name: str
+    x: float
+    y: float
+    radius: float | None
+
+
+def stream_entities(header: Sequence[str], row: Sequence[str]) -> tuple[StreamEntity, ...]:
+    """The human and every obstacle of one stream row, in header order.
+
+    Every Layer B column of `header` must be one this knows how to read, and one
+    that is not is refused by name. The whole point of this section is that the
+    incumbent is priced over the *same* content as the baseline, so a column
+    silently left unencoded would be a discount handed to the incumbent by
+    omission — the one direction of error nothing downstream could see.
+    """
+    layer_b = layer_b_columns(header)
+    missing = [c for c in ("human_x", "human_y") if c not in header]
+    if missing:
+        raise BenchError(
+            f"the stream is missing {missing}, so it carries no entity for a "
+            "Layer B topic to publish. That is a could-not-evaluate: an "
+            "encoding priced over no entities would come out cheap and read as "
+            "a finding about the format."
+        )
+    entities = [
+        StreamEntity(
+            name="human",
+            x=float(row[header.index("human_x")]),
+            y=float(row[header.index("human_y")]),
+            radius=None,
+        )
+    ]
+    for j in sorted(
+        {c.split("_")[1] for c in layer_b if re.fullmatch(r"obs_\d+_\w+", c)},
+        key=int,
+    ):
+        entities.append(
+            StreamEntity(
+                name=row[header.index(f"obs_{j}_id")],
+                x=float(row[header.index(f"obs_{j}_x")]),
+                y=float(row[header.index(f"obs_{j}_y")]),
+                radius=float(row[header.index(f"obs_{j}_r")]),
+            )
+        )
+    return tuple(entities)
+
+
+def layer_b_columns(header: Sequence[str]) -> list[str]:
+    """The Layer B half of `header`, in header order. The complement of the other.
+
+    `proprioceptive_columns` names the Layer A half and refuses a column with no
+    rule; this refuses the same way and for the same reason, through the same
+    classifier. The two together are the whole header, which is what makes
+    *priced over the same content as the baseline* a statement anything can
+    check.
+    """
+    return [c for c in header if column_layer(c) == LAYER_B]
+
+
+def _append_time(buf: bytes, t_s: float) -> bytes:
+    """A `builtin_interfaces/Time`: int32 seconds, uint32 nanoseconds."""
+    sec = int(t_s)
+    nsec = int(round((t_s - sec) * 1e9))
+    return _cdr_align(buf, 4) + struct.pack("<i", sec) + struct.pack("<I", nsec)
+
+
+def _append_string(buf: bytes, value: str) -> bytes:
+    """A CDR string: uint32 length including the terminator, then the bytes."""
+    return (
+        _cdr_align(buf, 4)
+        + struct.pack("<I", len(value) + 1)
+        + value.encode()
+        + b"\x00"
+    )
+
+
+def _append_pose(buf: bytes, x: float, y: float) -> bytes:
+    """A `geometry_msgs/Pose`: a 3-vector and a quaternion, all float64.
+
+    The plane the fixture lives in is `z = 0` with no rotation, so `z` and the
+    quaternion are the identity — and every one of those seven doubles is on the
+    wire regardless, which is a real part of what a pose message costs against
+    two CSV columns.
+    """
+    buf = _cdr_align(buf, 8) + b"".join(struct.pack("<d", v) for v in (x, y, 0.0))
+    return buf + b"".join(struct.pack("<d", v) for v in (0.0, 0.0, 0.0, 1.0))
+
+
+def tf_message_cdr(
+    t_s: float, entities: Sequence[StreamEntity], *, frame_id: str
+) -> bytes:
+    """One `tf2_msgs/msg/TFMessage` in XCDR1 little-endian.
+
+    A sequence of `geometry_msgs/TransformStamped`, one per entity: a Header
+    with the stamp and the parent frame, the child frame name, and a Transform
+    of a 3-vector and a quaternion. Derived from the IDL field by field, so the
+    padding is where CDR puts it.
+
+    `frame_id` is required. It is on the wire in every transform of every
+    message, so a default here would move the answer by inventing the input.
+    """
+    if not entities:
+        raise BenchError(
+            "tf_message_cdr got no entities. An empty transform array prices "
+            "nothing, and a message that carries no pose is not what a tf tree "
+            "publishing this stream would look like."
+        )
+    body = struct.pack("<I", len(entities))
+    for entity in entities:
+        body = _append_time(body, t_s)
+        body = _append_string(body, frame_id)
+        body = _append_string(body, entity.name)
+        body = _append_pose(body, entity.x, entity.y)
+    return b"\x00\x01\x00\x00" + body
+
+
+def pose_stamped_cdr(t_s: float, x: float, y: float, *, frame_id: str) -> bytes:
+    """One `geometry_msgs/msg/PoseStamped` in XCDR1 little-endian.
+
+    A Header — stamp and frame — and a Pose. One entity per message, so the
+    entity's own name is not in the payload at all: it is the topic, and a topic
+    name is a file-level Channel record, which this module excludes. That
+    exclusion is a discount to this candidate and it still comes out dearer.
+    """
+    body = _append_time(b"", t_s)
+    body = _append_string(body, frame_id)
+    body = _append_pose(body, x, y)
+    return b"\x00\x01\x00\x00" + body
+
+
+def marker_cdr(
+    t_s: float, entity: StreamEntity, *, frame_id: str, namespace: str, marker_id: int
+) -> bytes:
+    """One `visualization_msgs/msg/Marker`, as it sits inside a `MarkerArray`.
+
+    Encoded from the IDL with `points`, `colors`, `text` and `mesh_resource`
+    empty, which is the cheapest a Marker can be. It exists so that *a Marker is
+    dearer per entity than a TransformStamped* is a measurement rather than a
+    remark: the two carry the same header and the same pose, and this adds a
+    namespace, an id, a type, an action, a scale, a colour, a lifetime, a
+    frame-locked flag, two empty arrays and two empty strings on top of it.
+
+    It refuses an entity with no `radius`, which is why `MarkerArray` is not one
+    of `LAYER_B_OPTIONS`: `scale` is where a Marker states an extent, the stream
+    carries none for the human, and a plausible metre written there would be an
+    invented input in a byte count published as a measurement.
+
+    The encapsulation header is deliberately absent — a Marker is an array
+    element, never a message on its own — so this is not directly comparable to
+    the two encoders above without adding `CDR_ENCAPSULATION`.
+    """
+    if entity.radius is None:
+        raise BenchError(
+            f"{entity.name!r} has no radius in the stream, and a Marker states "
+            "an extent in `scale`. Nothing here may choose one: a size nobody "
+            "measured would sit in a published byte count looking exactly like "
+            "a size somebody did."
+        )
+    body = _append_time(b"", t_s)
+    body = _append_string(body, frame_id)
+    body = _append_string(body, namespace)
+    body = _cdr_align(body, 4) + struct.pack("<iii", marker_id, 3, 0)  # id, type, action
+    body = _append_pose(body, entity.x, entity.y)
+    body = _cdr_align(body, 8) + b"".join(
+        struct.pack("<d", v) for v in (2 * entity.radius, 2 * entity.radius, 1.0)
+    )
+    body = _cdr_align(body, 4) + b"".join(
+        struct.pack("<f", v) for v in (1.0, 1.0, 1.0, 1.0)
+    )                                                              # ColorRGBA
+    body = _cdr_align(body, 4) + struct.pack("<iI", 0, 0)          # lifetime
+    body += struct.pack("<?", False)                               # frame_locked
+    body = _cdr_align(body, 4) + struct.pack("<I", 0)              # points[]
+    body = _cdr_align(body, 4) + struct.pack("<I", 0)              # colors[]
+    body = _append_string(body, "")                                # text
+    body = _append_string(body, "")                                # mesh_resource
+    return body + struct.pack("<?", False)   # mesh_use_embedded_materials
+
+
+@dataclass(frozen=True)
+class LayerBTopicOption:
+    """One answer to *what does a real system publish for the world half*.
+
+    `carries` is the part that keeps this honest. It is the set of stream
+    columns this arrangement puts on the wire once per frame, as `re.fullmatch`
+    patterns; every Layer B column outside it is content the baseline pays for
+    on every row and this candidate pays for on none, which is a discount and is
+    reported as one by `uncharged_layer_b_columns`.
+
+    `what` carries the claim about somebody else's software, for the reason
+    `McapPreset.what` does.
+    """
+
+    name: str
+    per_entity: bool
+    carries: tuple[str, ...]
+    what: str
+
+    def messages_per_frame(self, n_entities: int) -> int:
+        """How many MCAP Message records one frame of this stream becomes."""
+        return n_entities if self.per_entity else 1
+
+
+#: The candidates, and the reason there is more than one.
+#:
+#: Every choice here moves the number, so the choice is made by measurement:
+#: `cheapest_layer_b_option` prices all of them and takes the smallest, which is
+#: the arrangement most favourable to the incumbent. A third candidate,
+#: `visualization_msgs/MarkerArray`, is argued and not listed — `marker_cdr`
+#: says why, and `docs/sensor-baseline.md` carries the argument.
+LAYER_B_OPTIONS: tuple[LayerBTopicOption, ...] = (
+    LayerBTopicOption(
+        name="tf_tree",
+        per_entity=False,
+        carries=(r"human_(?:x|y)", r"obs_\d+_(?:id|x|y)"),
+        what=(
+            "One `tf2_msgs/TFMessage` per control period on `/tf`, carrying a "
+            "`geometry_msgs/TransformStamped` per entity. What a great many ROS "
+            "2 systems actually do with entity poses, and the arrangement that "
+            "charges the MCAP framing and the message index once per frame "
+            "rather than once per entity. Each entity's identity is its child "
+            "frame name, so it is on the wire in every message "
+            "(docs.ros.org/en/rolling/p/tf2_msgs)."
+        ),
+    ),
+    LayerBTopicOption(
+        name="pose_per_entity",
+        per_entity=True,
+        carries=(r"human_(?:x|y)", r"obs_\d+_(?:x|y)"),
+        what=(
+            "One `geometry_msgs/PoseStamped` per entity per control period, "
+            "each on its own topic. The obvious arrangement, and the dearer "
+            "one: a Header and a full Pose per entity, and the per-message MCAP "
+            "framing and index charged once per entity rather than once per "
+            "frame (docs.ros.org/en/rolling/p/geometry_msgs)."
+        ),
+    ),
+)
+
+
+def layer_b_option(name: str) -> LayerBTopicOption:
+    """The option called `name`, or a refusal naming the ones that exist.
+
+    Not a lookup with a fallback, for the reason `mcap_preset` is not: the two
+    candidates differ by a fifth on the same content, and a near-miss name
+    resolving to the other would publish a real number under the name of an
+    arrangement nobody encoded.
+    """
+    for option in LAYER_B_OPTIONS:
+        if option.name == name:
+            return option
+    raise BenchError(
+        f"{name!r} is not a Layer B topic option this module prices. Known "
+        f"options: {[o.name for o in LAYER_B_OPTIONS]}. What a real system "
+        "publishes for the world half is a decision with a number attached, so "
+        "it is named rather than inferred."
+    )
+
+
+def uncharged_layer_b_columns(
+    header: Sequence[str], *, option: str
+) -> list[str]:
+    """The Layer B columns `option` does not put on the wire once per frame.
+
+    This is the discount the incumbent is being handed, itemised. The gzipped
+    CSV pays for these on every row; a bag arranged this way pays for them once
+    at most — an obstacle's extent and kind are constant over the run and are
+    latched, and the human's velocity is a finite difference of the two pose
+    columns the bag already carries. Both are defensible and both are in the
+    incumbent's favour, which is why the list is published rather than assumed
+    empty.
+    """
+    chosen = layer_b_option(option)
+    return [
+        column
+        for column in layer_b_columns(header)
+        if not any(re.fullmatch(p, column) for p in chosen.carries)
+    ]
+
+
+def layer_b_mcap_bytes(path: str | Path, *, preset: str, option: str) -> int:
+    """Bytes a rosbag2/MCAP bag would hold for this stream's Layer B content.
+
+    The other half of `full_content_mcap_bytes`, laid out exactly as
+    `mcap_joint_states_bytes` lays out the Layer A half: real framing with a
+    sequence number and two advancing timestamps, the chunk body compressed only
+    under a preset that compresses, and the message index charged at full width
+    outside the chunk under both.
+
+    Neither `preset` nor `option` has a default. Both move the answer by more
+    than a factor, and a figure published under the name of a configuration
+    nobody encoded is worse than no figure.
+    """
+    chosen_preset = mcap_preset(preset)
+    chosen_option = layer_b_option(option)
+    path = Path(path)
+    rows = [
+        line for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("#")
+    ]
+    if len(rows) < 2:
+        raise BenchError(
+            f"{path} holds no frames to price. An empty stream cannot be "
+            "compared against an encoding of it, and a zero here would read as "
+            "an encoding that costs nothing."
+        )
+    reader = csv.reader(rows)
+    header = next(reader)
+    stream = bytearray()
+    messages = 0
+    for seq, row in enumerate(reader):
+        t_s = float(row[header.index("t")])
+        entities = stream_entities(header, row)
+        if chosen_option.per_entity:
+            payloads = [
+                pose_stamped_cdr(t_s, e.x, e.y, frame_id=LAYER_B_PARENT_FRAME)
+                for e in entities
+            ]
+        else:
+            payloads = [
+                tf_message_cdr(t_s, entities, frame_id=LAYER_B_PARENT_FRAME)
+            ]
+        ns = int(t_s * 1_000_000_000)
+        for payload in payloads:
+            record = struct.pack("<HIQQ", 0, seq, ns, ns) + payload
+            stream += b"\x05" + struct.pack("<Q", len(record)) + record
+            messages += 1
+    if not messages:
+        raise BenchError(
+            f"{path} produced no Layer B messages, so this priced nothing. A "
+            "zero would read downstream as an encoding that carries the world "
+            "for free."
+        )
+    body = (
+        len(
+            gzip.compress(
+                bytes(stream), compresslevel=GZIP_COMPRESSLEVEL, mtime=GZIP_MTIME
+            )
+        )
+        if chosen_preset.compressed
+        else len(stream)
+    )
+    return body + messages * MCAP_MESSAGE_INDEX_PER_MESSAGE
+
+
+def cheapest_layer_b_option(path: str | Path, *, preset: str) -> tuple[str, int]:
+    """`(option name, bytes)` for the smallest candidate in `LAYER_B_OPTIONS`.
+
+    Smallest, deliberately: the arrangement most favourable to the incumbent is
+    the one that makes this project's corrected ratio hardest to defend, so if
+    the artifact still comes out larger nobody can say the comparator was
+    chosen to lose.
+
+    A tie is a refusal rather than a coin toss. Two arrangements at the same
+    byte count carry different content — one of them is paying for an entity
+    name and the other is not — so *the most favourable* stops naming one thing,
+    and a report that picked either would be stating a decision nothing made.
+    """
+    priced = sorted(
+        (layer_b_mcap_bytes(path, preset=preset, option=o.name), o.name)
+        for o in LAYER_B_OPTIONS
+    )
+    if len(priced) > 1 and priced[0][0] == priced[1][0]:
+        tied = sorted(name for size, name in priced if size == priced[0][0])
+        raise BenchError(
+            f"{tied} price identically at {priced[0][0]:,} B under {preset!r}, "
+            "so there is no single arrangement most favourable to the "
+            "incumbent. That is a could-not-evaluate: the choice is what this "
+            "comparison publishes, and picking one of a tie would put a "
+            "decision nobody made behind a figure."
+        )
+    size, name = priced[0]
+    return name, size
+
+
+def full_content_mcap_bytes(path: str | Path, *, preset: str) -> tuple[str, int]:
+    """`(Layer B option, bytes)` for the whole stream, both halves, one preset.
+
+    `/joint_states` for the five proprioceptive columns and the cheapest
+    `LAYER_B_OPTIONS` arrangement for the other nineteen. This is the number the
+    headline retention ratio is composable with, because it covers the content
+    the headline's gzipped CSV covers.
+    """
+    option, layer_b = cheapest_layer_b_option(path, preset=preset)
+    return option, mcap_joint_states_bytes(path, preset=preset) + layer_b
+
+
+#: The artifact is larger than a bag of the same content. The answer to *is the
+#: graph smaller than the stream it replaces* is still no, and Claim 1's
+#: reframing away from compression stands on it.
+ARTIFACT_LARGER = "ARTIFACT LARGER"
+
+#: The artifact is smaller than a bag of the same content. Claim 1 is stated on
+#: the premise that it is not, so this is the outcome that obliges the status
+#: line to change — and it is this project's favour, which is exactly why it
+#: gets a named constant instead of being left to be read off a ratio below 1.
+ARTIFACT_SMALLER = "ARTIFACT SMALLER"
+
+#: The two come out at the same number of bytes. Not folded into either: at a
+#: tie the artifact is not smaller and it is not larger, and a comparison that
+#: rounded a knife-edge towards its own conclusion is what this whole section
+#: exists to avoid.
+ARTIFACT_LEVEL = "ARTIFACT LEVEL"
+
+#: The corrected ratio leaves `README.md`'s Claim 1 status where it is.
+CLAIM_1_STATUS_STANDS = "CLAIM 1 STATUS STANDS"
+
+#: The corrected ratio contradicts the premise the status was written on, so the
+#: status line has to be rewritten before the figure is published beside it.
+CLAIM_1_STATUS_MUST_CHANGE = "CLAIM 1 STATUS MUST CHANGE"
+
+#: Neither. The third verdict, and it does not resolve to the first: a ratio of
+#: exactly 1 says the artifact is not smaller *and* not larger, which is not the
+#: premise the status was written on and is not its negation either.
+CLAIM_1_STATUS_UNDECIDED = "CLAIM 1 STATUS UNDECIDED"
+
+
+@dataclass(frozen=True)
+class FullContentComparison:
+    """The artifact against a bag of the same twenty-four columns, and the verdict.
+
+    Constructed from byte counts rather than from a build, so the reporter can be
+    handed the case no fixture in this repository produces — the artifact coming
+    out *smaller* than the incumbent, which is the case that decides whether
+    Claim 1's status line is a finding or a fixture.
+    """
+
+    preset: str
+    option: str
+    artifact_bytes: int
+    incumbent_bytes: int
+    gzip_csv_bytes: int
+    messages: int
+    uncharged: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        sides = {
+            "artifact": self.artifact_bytes,
+            "incumbent": self.incumbent_bytes,
+            "gzipped CSV": self.gzip_csv_bytes,
+        }
+        empty = sorted(name for name, size in sides.items() if size <= 0)
+        if empty:
+            raise BenchError(
+                f"{self.preset}: {empty} came out at zero bytes or less. A side "
+                "that came out at zero is an encoding that did not run, and a "
+                "ratio against it would print as a result."
+            )
+        if self.messages <= 0:
+            raise BenchError(
+                f"{self.preset}: {self.messages} messages. A comparison over no "
+                "messages prices nothing, and reporting it beside comparisons "
+                "that priced something would read as agreement with them."
+            )
+
+    @property
+    def corrected_ratio(self) -> float:
+        """Artifact bytes over incumbent bytes, same content on both sides."""
+        return self.artifact_bytes / self.incumbent_bytes
+
+    @property
+    def gzip_ratio(self) -> float:
+        """Artifact bytes over the gzipped CSV. The headline, over that content."""
+        return self.artifact_bytes / self.gzip_csv_bytes
+
+    @property
+    def incumbent_over_gzip(self) -> float:
+        """Incumbent bytes over the gzipped CSV, which is what makes the two divide."""
+        return self.incumbent_bytes / self.gzip_csv_bytes
+
+    @property
+    def verdict(self) -> str:
+        """`ARTIFACT_LARGER`, `ARTIFACT_SMALLER` or `ARTIFACT_LEVEL`."""
+        if self.artifact_bytes > self.incumbent_bytes:
+            return ARTIFACT_LARGER
+        if self.artifact_bytes < self.incumbent_bytes:
+            return ARTIFACT_SMALLER
+        return ARTIFACT_LEVEL
+
+    @property
+    def claim_1_status(self) -> str:
+        """What this ratio obliges `README.md`'s Claim 1 status line to do.
+
+        `landed, reframed` is written on one premise: the artifact is not
+        smaller than what it would replace, so the claim is a retention cost and
+        not a compression ratio. That premise survives `ARTIFACT_LARGER` and
+        nothing else — a tie does not sustain it either, and is not folded in.
+        """
+        if self.verdict == ARTIFACT_LARGER:
+            return CLAIM_1_STATUS_STANDS
+        if self.verdict == ARTIFACT_SMALLER:
+            return CLAIM_1_STATUS_MUST_CHANGE
+        return CLAIM_1_STATUS_UNDECIDED
+
+    def sentence(self) -> str:
+        """The comparison in words, with the content on both sides in the same one.
+
+        The content clause is not decoration. `~40x` and the corrected ratio
+        differ by more than an order of magnitude for no reason other than what
+        each denominator holds, so a sentence that gave the number without the
+        content would be the thing this section was built to stop.
+        """
+        head = (
+            f"{self.preset} / {self.option}: {self.artifact_bytes:,} B of "
+            f"artifact against {self.incumbent_bytes:,} B of MCAP and "
+            f"{self.gzip_csv_bytes:,} B of gzipped CSV, all three over the same "
+            f"whole stream, {self.messages:,} messages. The artifact is "
+            f"{self.corrected_ratio:.2f}x the bag and {self.gzip_ratio:.2f}x "
+            f"the gzipped CSV; the bag is {self.incumbent_over_gzip:.2f}x the "
+            "gzipped CSV, which is what makes the first two divide."
+        )
+        if self.uncharged:
+            head += (
+                f" The bag is charged nothing per frame for "
+                f"{list(self.uncharged)}, a discount to the incumbent."
+            )
+        if self.verdict == ARTIFACT_LARGER:
+            return (
+                f"{head} The artifact is LARGER than a bag of the same content, "
+                "so the answer to *is the graph smaller than the stream it "
+                f"replaces* is still no and {CLAIM_1_STATUS_STANDS}."
+            )
+        if self.verdict == ARTIFACT_SMALLER:
+            return (
+                f"{head} The artifact is SMALLER than a bag of the same "
+                "content. Claim 1 is stated on the premise that it is not, so "
+                f"{CLAIM_1_STATUS_MUST_CHANGE}: the reframing away from "
+                "compression was made against a baseline nobody retains, and "
+                "the status line says so before this figure is published "
+                "beside it."
+            )
+        return (
+            f"{head} The artifact and the bag cost the SAME, so the artifact is "
+            "neither smaller nor larger than what it would replace and "
+            f"{CLAIM_1_STATUS_UNDECIDED}."
+        )
+
+
+def compare_full_content(
+    path: str | Path, *, preset: str, artifact_bytes: int
+) -> FullContentComparison:
+    """The corrected comparison for one preset, over the whole of `path`.
+
+    `artifact_bytes` is required and has no default. It is not a function of the
+    stream — it is what `reg.graph.build` produced from this run, and the two
+    differ by which resolution level was materialized and what Layer A the build
+    carries. An invented one would produce a plausible corrected ratio for a
+    build nobody made, which is the failure mode a figure replacing `~40x` must
+    not have.
+    """
+    path = Path(path)
+    option, incumbent = full_content_mcap_bytes(path, preset=preset)
+    rows = [
+        line for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("#")
+    ]
+    if len(rows) < 2:
+        raise BenchError(
+            f"{path} holds no frames to compare. An empty stream cannot decide "
+            "between an artifact and an encoding of it."
+        )
+    reader = csv.reader(rows)
+    header = next(reader)
+    frames = sum(1 for _ in reader)
+    chosen = layer_b_option(option)
+    n_entities = 1 + len(
+        {c.split("_")[1] for c in layer_b_columns(header)
+         if re.fullmatch(r"obs_\d+_\w+", c)}
+    )
+    return FullContentComparison(
+        preset=mcap_preset(preset).name,
+        option=option,
+        artifact_bytes=int(artifact_bytes),
+        incumbent_bytes=incumbent,
+        gzip_csv_bytes=gzip_bytes(path),
+        messages=frames * (1 + chosen.messages_per_frame(n_entities)),
+        uncharged=tuple(uncharged_layer_b_columns(header, option=option)),
+    )
+
+
+def full_content_report(path: str | Path, *, artifact_bytes: int) -> str:
+    """Every preset in `MCAP_PRESETS`, one sentence each, in order.
+
+    Both presets, always, for the reason `incumbent_report` prints both: the
+    corrected ratio is five times larger at one than at the other, and a report
+    that printed whichever suited the argument would be preset-shopping in place
+    of the baseline-shopping this section corrects.
+    """
+    return "\n".join(
+        compare_full_content(
+            path, preset=preset.name, artifact_bytes=artifact_bytes
+        ).sentence()
+        for preset in MCAP_PRESETS
+    )
+
+
 # --------------------------------------------------------------------------
 # The fixed question, answered from each side.
 # --------------------------------------------------------------------------

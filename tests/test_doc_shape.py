@@ -200,6 +200,13 @@ ARGUMENT: dict[str, str] = {
 #         group and none of them is a design document, so unlike #213 and #214
 #         the words left the corpus rather than moving below a `## Why` line —
 #         what was cut is prose the linked document states in full
+#   88.8  today, 2026-09-06, after #220 priced the incumbent over the whole
+#         stream: `docs/sensor-baseline.md` 4,541 -> 5,310 and `README.md`
+#         3,402 -> 3,502, against 265 -> 280 public symbols in `reg/`.
+#         24,848 / 280 = 88.74, rounded up to the next tenth. This is the case
+#         the two-term budget was designed for and the first time it has
+#         happened: the prose describes fifteen new symbols, so the denominator
+#         moved with it and the density fell without anything being cut
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -210,7 +217,7 @@ ARGUMENT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 90.6
+RATE = 88.8
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -236,6 +243,15 @@ RATE = 90.6
 #           section three screens below it. A ceiling one word lower than the
 #           last one is what a change that adds prose looks like when it finds
 #           the room rather than asking for it — measured, no headroom
+#   73,968  2026-09-06, after #220 published the whole-stream incumbent figures.
+#           Unchanged, which is the point: `retention.md`, `plan.md` and
+#           `prior-art.md` gained 492 words between them and gave back 492, all
+#           of it prose restating a document it links to — the `TIME_TOL_S`
+#           caveat `sensor-baseline.md` carries, the Gorilla comparison
+#           `prior-art.md` §8 carries, the pin boundary
+#           `tests/test_published_figures.py` carries, and the 13x condition
+#           `retention.md` was stating at both ends of one subsection —
+#           measured, no headroom
 ARGUMENT_MAX = 73968
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
@@ -256,10 +272,14 @@ PARAGRAPH_MAX_WORDS = 120
 #    99  2026-09-06, after #214: docs/mobile-base.md went 17 -> 0,
 #        counted over the whole file rather than over its normative core, so a
 #        paragraph moved below the `## Why` line had to be split there too
-#    97  today, 2026-09-06, after #217: README.md went 2 -> 0. Both were in the
+#    97  2026-09-06, after #217: README.md went 2 -> 0. Both were in the
 #        honesty note and both were split rather than cut, because what made
 #        them long was two claims sharing a paragraph, not restatement
-LONG_PARAGRAPHS_MAX = 97
+#    94  today, 2026-09-06, after #220: docs/retention.md went 11 -> 7. All four
+#        went by cutting rather than splitting, because each was restating a
+#        document it links to; docs/prior-art.md's dated correction was written
+#        as two paragraphs rather than one for the same ceiling
+LONG_PARAGRAPHS_MAX = 94
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -297,13 +317,19 @@ LONG_PARAGRAPHS_MAX = 97
 #        and `was not made` on one line did, so this proxy is sensitive to
 #        rewrapping. It was reworded rather than rewrapped, because wrapping a
 #        sentence to clear a marker is gaming the count
+#   137  today, 2026-09-06, after #220: `docs/prior-art.md` gained a second
+#        dated correction, which narrates for the same structural reason, and
+#        `docs/retention.md` lost two — the `TIME_TOL_S` caveat and the Gorilla
+#        comparison, both cut to a pointer at the document that carries them in
+#        full. Net one, and set to what is above the line rather than left at
+#        138, which would have banked the difference as headroom
 #   138  2026-09-06, after #117: `docs/prior-art.md` gained a dated correction,
 #        which narrates by construction — a survey pass is corrected by adding
 #        to it and dating the addition, never by rewriting the entry — and
 #        `docs/retention.md` lost two, both of them paragraphs that restated a
 #        document they linked to. Set to what is now above the line rather than
 #        left at 139, which would have banked the difference as headroom
-NARRATION_MAX = 138
+NARRATION_MAX = 137
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

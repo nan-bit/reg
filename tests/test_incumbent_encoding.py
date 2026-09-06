@@ -38,6 +38,7 @@ import gzip
 import inspect
 import re
 import struct
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -60,10 +61,20 @@ from reg.bench import (
     MCAP_MESSAGE_INDEX_PER_MESSAGE,
     MCAP_MESSAGE_RECORD_OVERHEAD,
     MCAP_PRESETS,
+    MCAP_SIZE_MEASUREMENTS,
+    MCAP_STRUCTURAL_CHECKS,
+    MCAP_VALIDATION_PROVENANCE,
+    MCAP_VALIDATION_TOLERANCE,
+    OUTSIDE_TOLERANCE,
+    PROJECTION_DRIFTED,
+    PROJECTION_HOLDS,
+    WITHIN_TOLERANCE,
     BenchError,
     FullContentComparison,
     IncumbentComparison,
     LayerBTopicOption,
+    McapSizeMeasurement,
+    McapStructuralCheck,
     StreamEntity,
     cheapest_layer_b_option,
     compare_full_content,
@@ -80,7 +91,10 @@ from reg.bench import (
     marker_cdr,
     mcap_joint_states_bytes,
     mcap_preset,
+    mcap_size_measurement,
     pose_stamped_cdr,
+    project_for_topics,
+    projection_drift,
     proprioceptive_columns,
     stream_entities,
     tf_message_cdr,
@@ -1156,3 +1170,376 @@ def test_every_document_quoting_the_whole_stream_figures_quotes_the_measured_one
                 "arithmetic behind the whole-stream figures and one document "
                 "carries them."
             )
+
+
+# ==========================================================================
+# THE OUT-OF-BAND VALIDATION (issue #221).
+#
+# Everything above prices an encoder written here from the MCAP specification.
+# Issue #221 wrote real `.mcap` files once, outside this repository, and recorded
+# what they cost. That turns two of the figures above into measurements and
+# refutes two others, and it creates a new failure mode with it: the recorded
+# pair can come apart. The measurement is frozen — the bag was written once and
+# cannot be rewritten here — so the half that can move is the projection, and
+# these tests are what makes it move loudly.
+#
+# WHAT THEY HAVE TO HOLD, BEYOND THE BYTES. A validation that can only confirm is
+# not a validation, so the verdict is computed from the two byte counts rather
+# than stored beside them, the tolerance is read off the preset rather than
+# supplied by a caller, and the negatives below feed each check the condition it
+# guards against and assert it says no.
+# ==========================================================================
+
+#: The document that carries the validation. One document, because the record is
+#: the arithmetic behind the figures rather than a figure that travels.
+VALIDATION_DOC = REPO / "docs" / "sensor-baseline.md"
+
+#: One row of the published measurement block. Anchored on the fixture name in
+#: the first column rather than on position: a table read by counting rows moves
+#: the first time somebody adds one.
+VALIDATION_ROW = re.compile(
+    r"^(declared_violation|long_run_3000)\s+([\d,]+)\s+(\S+)\s+(\w+)\s+"
+    r"([\d,]+)\s+([\d,]+)\s+([-+][\d.]+)%\s+(\S+)\s*$",
+    re.MULTILINE,
+)
+
+
+def _published_rows() -> list[tuple]:
+    """The measurement block as tuples, read out of the document that publishes it."""
+    rows = []
+    for m in VALIDATION_ROW.finditer(VALIDATION_DOC.read_text(encoding="utf-8")):
+        rows.append((
+            m.group(1), int(m.group(2).replace(",", "")),
+            tuple(m.group(3).split("+")), m.group(4),
+            int(m.group(5).replace(",", "")), int(m.group(6).replace(",", "")),
+            float(m.group(7)), m.group(8),
+        ))
+    return rows
+
+
+def _fixture_for(measurement: McapSizeMeasurement, stream: Path,
+                 full_stream: Path) -> Path:
+    return stream if measurement.fixture == "declared_violation" else full_stream
+
+
+# --- the pair, and that it cannot come apart quietly ------------------------
+
+
+def test_the_recorded_projection_is_still_what_reg_bench_computes(
+    stream: Path, full_stream: Path
+) -> None:
+    """**THE ACCEPTANCE CRITERION.** Every recorded row, recomputed live.
+
+    The measurement half is frozen. If the projection half moves, the published
+    delta describes a comparison between a bag that was written and an encoder
+    that no longer exists — and nothing else in this repository would say so,
+    because every other test holds the projection to its own constants rather
+    than to what a real encoder produced.
+    """
+    assert MCAP_SIZE_MEASUREMENTS, (
+        "no measurement is recorded at all. An empty validation is a "
+        "could-not-evaluate that reads exactly like a clean one."
+    )
+    for m in MCAP_SIZE_MEASUREMENTS:
+        path = _fixture_for(m, stream, full_stream)
+        assert projection_drift(m, path) == PROJECTION_HOLDS, (
+            f"{m.sentence()} — but reg.bench now computes "
+            f"{project_for_topics(path, topics=m.topics, preset=m.preset):,} B "
+            "for that stream. The validated pair has come apart: either the "
+            "encoder changed or the fixture did, and the published delta is "
+            "against a projection nobody can reproduce."
+        )
+
+
+def test_a_projection_that_moved_away_from_the_record_is_reported_as_drift(
+    stream: Path,
+) -> None:
+    """THE NEGATIVE for the drift check. One byte is enough.
+
+    A check that only ever sees the matching case proves nothing about whether
+    it can fail, and this one guards the only half of the validated pair that is
+    able to move.
+    """
+    recorded = mcap_size_measurement("declared_violation", ("/joint_states",), DEFAULT)
+    assert projection_drift(recorded, stream) == PROJECTION_HOLDS
+    moved = replace(recorded, projected_bytes=recorded.projected_bytes + 1)
+    assert projection_drift(moved, stream) == PROJECTION_DRIFTED
+
+
+def test_the_arrangement_has_no_fallback_and_an_unmeasured_one_is_refused(
+    stream: Path,
+) -> None:
+    """THE NEGATIVE for the lookup and the dispatch. Neither may guess.
+
+    A topic set resolving to the nearest priced arrangement would set the whole
+    bag's measurement beside half of it and publish the difference as a delta,
+    which is the one error a validation must not be able to make.
+    """
+    with pytest.raises(BenchError, match="not an arrangement this module projects"):
+        project_for_topics(stream, topics=("/odom",), preset=DEFAULT)
+    with pytest.raises(BenchError, match="nothing was measured"):
+        mcap_size_measurement("declared_violation", ("/tf",), DEFAULT)
+    with pytest.raises(BenchError, match="nothing was measured"):
+        mcap_size_measurement("long_run", ("/joint_states",), DEFAULT)
+
+
+# --- the verdict, and that it can come out either way -----------------------
+
+
+def test_the_verdict_is_computed_from_the_two_byte_counts(stream: Path) -> None:
+    """Not stored beside them. A stored verdict can disagree with its own numbers.
+
+    Both sides of the band are reached from the same constructor, so the check
+    that says *stands* is demonstrably the same one that can say *does not*.
+    """
+    base = dict(fixture="long_run_3000", seed=0, frames=3_000,
+                topics=("/tf",), preset=COMPRESSED, projected_bytes=100_000)
+    inside = McapSizeMeasurement(**base, measured_bytes=96_000)    # -4.0%
+    outside = McapSizeMeasurement(**base, measured_bytes=94_000)   # -6.0%
+    assert inside.tolerance == MCAP_VALIDATION_TOLERANCE
+    assert inside.verdict == WITHIN_TOLERANCE
+    assert outside.verdict == OUTSIDE_TOLERANCE
+    # And symmetrically above the projection: a bag that came back *dearer* than
+    # projected fails the same way. A one-sided band would pass every error in
+    # the direction that flatters this project.
+    assert McapSizeMeasurement(**base, measured_bytes=106_000).verdict == (
+        OUTSIDE_TOLERANCE
+    )
+    assert McapSizeMeasurement(**base, measured_bytes=104_000).verdict == (
+        WITHIN_TOLERANCE
+    )
+
+
+def test_the_uncompressed_preset_is_held_exactly_and_one_byte_fails_it() -> None:
+    """THE NEGATIVE for the preset-dependent tolerance.
+
+    `mcap_default` contains no compressor, so there is no substitution in it to
+    be approximately right about. A shared +/-5% band would have let a 5% error in
+    a sum of exact per-message terms through as a pass.
+    """
+    base = dict(fixture="long_run_3000", seed=0, frames=3_000,
+                topics=("/tf",), preset=DEFAULT, projected_bytes=1_209_000)
+    assert McapSizeMeasurement(**base, measured_bytes=1_209_000).tolerance == 0.0
+    assert McapSizeMeasurement(**base, measured_bytes=1_209_000).verdict == (
+        WITHIN_TOLERANCE
+    )
+    assert McapSizeMeasurement(**base, measured_bytes=1_209_001).verdict == (
+        OUTSIDE_TOLERANCE
+    )
+
+
+def test_the_tolerance_cannot_be_supplied_by_whoever_wants_a_verdict() -> None:
+    """The band is read off the preset, never passed in.
+
+    A tolerance that arrives with the comparison is one that can be chosen after
+    the number is known, which is the failure the registered threshold exists to
+    prevent. It is a property with no setter and a constructor with no field.
+    """
+    fields = inspect.signature(McapSizeMeasurement).parameters
+    assert "tolerance" not in fields, (
+        "McapSizeMeasurement gained a tolerance field. A recorded row that "
+        "carries its own band can be made to pass by editing the band."
+    )
+    assert isinstance(MCAP_VALIDATION_TOLERANCE, float)
+    assert 0.0 < MCAP_VALIDATION_TOLERANCE < 1.0
+
+
+def test_the_recorded_validation_reached_both_verdicts() -> None:
+    """A validation that can only confirm is not one, and this one did not.
+
+    Six rows stand and two do not. If a future re-measurement makes every row
+    pass, this assertion is the place to record that deliberately — but it must
+    not go green by the verdict quietly losing its other value.
+    """
+    verdicts = {m.verdict for m in MCAP_SIZE_MEASUREMENTS}
+    assert verdicts == {WITHIN_TOLERANCE, OUTSIDE_TOLERANCE}, (
+        f"the recorded validation reaches only {sorted(verdicts)}. A comparison "
+        "with one reachable outcome is not evidence about the projection; it is "
+        "evidence about the comparison."
+    )
+    failing = [m for m in MCAP_SIZE_MEASUREMENTS if m.verdict == OUTSIDE_TOLERANCE]
+    assert all(mcap_preset(m.preset).compressed for m in failing), (
+        "an uncompressed figure failed its exact comparison. That is a misread "
+        "specification rather than a compressor substitution, and it retires "
+        "the section rather than footnoting it."
+    )
+
+
+def test_a_measurement_with_an_impossible_byte_count_is_refused() -> None:
+    """THE NEGATIVE for the record itself. A zero reads as a free encoding.
+
+    Every other check here compares two numbers; this is what stops one of them
+    being a step of the pipeline that did not run.
+    """
+    base = dict(fixture="long_run_3000", seed=0, frames=3_000,
+                topics=("/tf",), preset=COMPRESSED)
+    with pytest.raises(BenchError, match="measured_bytes is 0"):
+        McapSizeMeasurement(**base, projected_bytes=1, measured_bytes=0)
+    with pytest.raises(BenchError, match="projected_bytes is -1"):
+        McapSizeMeasurement(**base, projected_bytes=-1, measured_bytes=1)
+    with pytest.raises(BenchError, match="prices nothing"):
+        McapSizeMeasurement(
+            fixture="long_run_3000", seed=0, frames=3_000, topics=(),
+            preset=COMPRESSED, projected_bytes=1, measured_bytes=1,
+        )
+    with pytest.raises(BenchError, match="not an MCAP preset"):
+        McapSizeMeasurement(
+            fixture="long_run_3000", seed=0, frames=3_000, topics=("/tf",),
+            preset="zstd_fast", projected_bytes=1, measured_bytes=1,
+        )
+
+
+# --- the per-message terms, which are held exactly --------------------------
+
+
+def test_the_structural_terms_measured_are_the_constants_this_module_encodes_with(
+    stream: Path, full_stream: Path
+) -> None:
+    """The five per-message terms, and that the record is about *these* constants.
+
+    A structural table whose projected column had drifted away from
+    `MCAP_MESSAGE_RECORD_OVERHEAD` would still show five green ticks while
+    describing an encoder this module no longer has.
+    """
+    by_what = {c.what: c for c in MCAP_STRUCTURAL_CHECKS}
+    assert all(c.matches for c in MCAP_STRUCTURAL_CHECKS), (
+        f"{[c.what for c in MCAP_STRUCTURAL_CHECKS if not c.matches]} came back "
+        "from a real encoder at a different width. These are byte counts read "
+        "off a specification, so a mismatch is a misread spec."
+    )
+    assert by_what["Message record framing, per message"].projected == (
+        MCAP_MESSAGE_RECORD_OVERHEAD
+    )
+    assert by_what["MessageIndex entry, per message"].projected == (
+        MCAP_MESSAGE_INDEX_PER_MESSAGE
+    )
+    assert by_what["sensor_msgs/msg/JointState CDR payload, 2 joints"].projected == (
+        len(joint_state_cdr(1.0, [0.1, 0.2], [0.3, 0.4], ["joint_0", "joint_1"]))
+    )
+    entities = _entities(full_stream)
+    assert by_what["tf2_msgs/msg/TFMessage CDR payload, 4 entities"].projected == (
+        len(tf_message_cdr(0.0, entities, frame_id=bench.LAYER_B_PARENT_FRAME))
+    )
+    assert len(entities) == ENTITIES
+
+
+def test_a_structural_term_that_came_back_different_does_not_match() -> None:
+    """THE NEGATIVE for the exact comparison. There is no band on a spec constant."""
+    assert McapStructuralCheck("a payload", 96, 96).matches is True
+    assert McapStructuralCheck("a payload", 96, 97).matches is False
+    with pytest.raises(BenchError, match="measured is 0"):
+        McapStructuralCheck("a payload", 96, 0)
+
+
+# --- what the document publishes, held to the record ------------------------
+
+
+def test_the_document_publishes_every_recorded_row_and_its_delta() -> None:
+    """The table and the record, cell by cell, in both directions.
+
+    Neither is allowed to be the other's summary. A row edited in the document
+    fails, a row added to the record and not published fails, and a delta typed
+    by hand that does not follow from its own two byte counts fails.
+    """
+    published = _published_rows()
+    assert len(published) == len(MCAP_SIZE_MEASUREMENTS), (
+        f"{VALIDATION_DOC.name} publishes {len(published)} measured rows and "
+        f"reg.bench records {len(MCAP_SIZE_MEASUREMENTS)}. A recorded row that "
+        "is not on the page is a measurement nobody outside this repository can "
+        "see, which is the whole point of taking it."
+    )
+    for row, m in zip(published, MCAP_SIZE_MEASUREMENTS):
+        fixture, frames, topics, preset, projected, measured, delta, verdict = row
+        assert (fixture, frames, topics, preset) == (
+            m.fixture, m.frames, m.topics, m.preset
+        ), f"{VALIDATION_DOC.name} row {row!r} is not {m.sentence()}"
+        assert (projected, measured) == (m.projected_bytes, m.measured_bytes)
+        assert delta == pytest.approx(round(m.delta * 100, 2), abs=0.005), (
+            f"{VALIDATION_DOC.name} publishes {delta:+.2f}% for {m.fixture} "
+            f"{m.topics} {m.preset}, and the two byte counts beside it give "
+            f"{m.delta * 100:+.2f}%. A delta typed rather than derived is a "
+            "number with nothing behind it."
+        )
+        expected = "DOES-NOT-STAND" if m.verdict == OUTSIDE_TOLERANCE else "stands"
+        assert verdict == expected, (
+            f"{VALIDATION_DOC.name} calls {m.fixture} {m.topics} {m.preset} "
+            f"{verdict!r}, and its own numbers make it {m.verdict}."
+        )
+
+
+def test_a_figure_that_failed_is_marked_where_the_document_publishes_it() -> None:
+    """The registered consequence, enforced rather than remembered.
+
+    *Outside tolerance* was defined in advance as *marked as not standing at
+    every place this document publishes it*. A figure that fails its own
+    tolerance and stays on the page unmarked is the failure the whole subsection
+    exists to prevent, and it is exactly the kind that nothing else would catch.
+    """
+    text = VALIDATION_DOC.read_text(encoding="utf-8")
+    failing = [m for m in MCAP_SIZE_MEASUREMENTS if m.verdict == OUTSIDE_TOLERANCE]
+    assert failing, "nothing failed, so this check has nothing to enforce"
+    assert "does not stand" in text
+    for m in failing:
+        published = f"{m.projected_bytes:,} B"
+        for line in text.splitlines():
+            if line.startswith("|") and published in line:
+                assert "[^v]" in line, (
+                    f"{VALIDATION_DOC.name} publishes {published} on the line "
+                    f"{line!r} with no mark, and that figure is "
+                    f"{m.delta * 100:+.2f}% from the measurement against a "
+                    f"+/-{m.tolerance * 100:.0f}% band. It does not stand and "
+                    "the page has to say so where it says the number."
+                )
+        assert f"{m.measured_bytes:,} B" in text, (
+            f"the measurement {m.measured_bytes:,} B is not published beside the "
+            "projection it refutes. The delta is stated, not absorbed."
+        )
+
+
+def test_the_procedure_names_what_a_third_party_needs() -> None:
+    """The other half of the acceptance criterion: repeatable by somebody else.
+
+    Not a prose check for its own sake. `prior-art.md` §27's finding is that
+    reproducibility is relative to a stated environment, so a procedure missing
+    the seed, the message type or the preset leaves a reader to invent it — and
+    an invented input is what produced the wrong preset in issue #117.
+    """
+    text = VALIDATION_DOC.read_text(encoding="utf-8")
+    start = text.index("### Validating the projection against a real bag")
+    end = text.index("### What would retire this section")
+    section = text[start:end]
+    for needed in (
+        "--scenario declared_violation", "--scenario long_run_3000", "--seed 0",
+        "/joint_states", "/tf",
+        "sensor_msgs/msg/JointState", "tf2_msgs/msg/TFMessage",
+        DEFAULT, COMPRESSED, "768 KiB", "XCDR1", "LAYER_B_PARENT_FRAME",
+        "log_time", "sequence",
+    ):
+        assert needed in section, (
+            f"the procedure does not name {needed!r}. A third party would have "
+            "to choose it, and a chosen input is the failure issue #117 found."
+        )
+    for m in MCAP_SIZE_MEASUREMENTS:
+        assert str(m.frames) in section or f"{m.frames:,}" in section
+
+
+def test_the_provenance_states_what_was_not_run() -> None:
+    """The date, the versions, and the part that is easiest to leave out.
+
+    Every tool that ran is recorded, and so is the one that did not: rosbag2's
+    own writer. A provenance listing only what ran reads as a complete
+    validation, and this one is not — *rosbag2 writes this preset* is still a
+    citation.
+    """
+    text = VALIDATION_DOC.read_text(encoding="utf-8")
+    for needed in ("2026-09-06", "mcap 1.4.0", "mcap-ros2-support 0.5.7",
+                   "zstandard 0.25.0"):
+        assert needed in MCAP_VALIDATION_PROVENANCE, f"provenance omits {needed}"
+    assert "NOT run" in MCAP_VALIDATION_PROVENANCE, (
+        "the provenance does not say what was not exercised. rosbag2's own "
+        "writer was not installed, and a record that omits that reads as a "
+        "measurement of rosbag2 rather than of a second implementation of the "
+        "same specification."
+    )
+    assert "rosbag2" in MCAP_VALIDATION_PROVENANCE
+    assert "2026-09-06" in text and "mcap-ros2-support` 0.5.7" in text

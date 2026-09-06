@@ -41,10 +41,9 @@ finish it. Concretely, it names three things:
   that command *is* the definition of done, and its output belongs in the PR body.
 
 Anything the writer would otherwise have to invent — a threshold, a limit, a
-filename, a default — belongs in the issue. An agent that guesses produces something
-indistinguishable from a specified value at every point downstream; the guess does
-not surface as a bug, it surfaces months later as behaviour nobody can explain. If
-it is missing, the writer is expected to say so loudly rather than fill the gap.
+filename, a default — belongs in the issue, for the reason [`CLAUDE.md`](../CLAUDE.md)
+gives under *Never invent a default*. If it is missing, the writer is expected to
+say so loudly rather than fill the gap.
 
 ### Dependencies between issues
 
@@ -57,31 +56,25 @@ scope was knowingly left unfinished, and then the PR body says exactly what rema
 ## What lands in a pull request
 
 - **Always a draft.** A human marks it ready.
-- **Tests are the deliverable**, not a courtesy. New behaviour without a test that
-  would fail if the behaviour regressed is incomplete work. Anything that acts as a
-  check ships with the negative test too: feed it the condition it guards against
-  and assert it says no. A check that has only ever been shown to pass healthy input
-  has not been shown to be able to fail at all.
 - **The verification output**, pasted into the body.
 - **`Closes #N`** when the acceptance criteria are met.
-- **Conventional-commit subjects** (`feat:`, `fix:`, `docs:`, `chore:`) referencing
-  the issue number. No `Co-Authored-By` trailer, no "Generated with Claude Code"
-  trailer.
-- **A smaller correct change** in preference to a larger speculative one. A coherent
-  first slice with passing tests beats a complete implementation nobody could verify.
+- **The repo's rules for the change itself** — tests as the deliverable, the
+  negative test beside anything that acts as a check, a smaller correct change in
+  preference to a larger speculative one, and conventional-commit subjects with no
+  `Co-Authored-By` and no "Generated with Claude Code" trailer. Each is stated in
+  full in [`CLAUDE.md`](../CLAUDE.md), and they apply to the writer because they are
+  the repo's, not the other way round.
 
 ## What is off limits
 
 `.github/workflows/**` and `.runner.conf` are the machinery that runs the writer,
-not the product. An agent editing them mid-flight would be changing the rules of the
-run it is inside, and a writer that breaks itself cannot report that it did. Changes
+not the product, and [`CLAUDE.md`](../CLAUDE.md) puts them off limits to it. Changes
 there are made by a human, in a separate PR. An issue that genuinely requires them
 gets the rest of its scope done and a note in the PR body naming the change that was
 not made.
 
 ## For humans working directly
 
-The same conventions apply — the writer is held to them because they are the repo's
-conventions, not the other way round. Branch, open a draft PR, name what verifies
-it. If you are touching something an `agent-ready` issue also names, expect a
-conflict and say so in the PR.
+The same conventions apply. Branch, open a draft PR, name what verifies it. If you
+are touching something an `agent-ready` issue also names, expect a conflict and say
+so in the PR.

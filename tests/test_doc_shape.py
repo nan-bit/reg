@@ -186,13 +186,20 @@ ARGUMENT: dict[str, str] = {
 #         the same way. The cut is small next to tiers 2-4 because this file's
 #         narration is mostly *figures* — superseded sizes, thresholds and
 #         attributions — and those move below the line rather than out
-#   93.5  today, 2026-09-06, after #214 did the same to `docs/mobile-base.md`:
+#   93.5  2026-09-06, after #214 did the same to `docs/mobile-base.md`:
 #         that file went 8,331 -> 8,129, of which 6,328 is the normative core.
 #         24,301 / 260 = 93.46, rounded up the same way. The cut is smaller than
 #         the shape change: 1,801 words moved below the line and the file is
 #         still the longest in this group, because a design document whose tiers
 #         have all landed carries a build order that is mostly provenance, and
 #         provenance is what moved rather than went
+#   90.6  today, 2026-09-06, after #217 stopped the three reader-facing entry
+#         points restating what they link to: `README.md` 3,930 -> 3,402,
+#         `docs/README.md` 785 -> 642, `docs/CONTRIBUTING.md` 792 -> 716.
+#         23,554 / 260 = 90.59, rounded up the same way. All three are in this
+#         group and none of them is a design document, so unlike #213 and #214
+#         the words left the corpus rather than moving below a `## Why` line —
+#         what was cut is prose the linked document states in full
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -203,7 +210,7 @@ ARGUMENT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 93.5
+RATE = 90.6
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -238,10 +245,13 @@ PARAGRAPH_MAX_WORDS = 120
 #        fourteen by splitting rather than cutting
 #   116  2026-09-05, after #213: docs/sensor-baseline.md went 5 -> 0, four of
 #        the five by splitting rather than cutting
-#    99  today, 2026-09-06, after #214: docs/mobile-base.md went 17 -> 0,
+#    99  2026-09-06, after #214: docs/mobile-base.md went 17 -> 0,
 #        counted over the whole file rather than over its normative core, so a
 #        paragraph moved below the `## Why` line had to be split there too
-LONG_PARAGRAPHS_MAX = 99
+#    97  today, 2026-09-06, after #217: README.md went 2 -> 0. Both were in the
+#        honesty note and both were split rather than cut, because what made
+#        them long was two claims sharing a paragraph, not restatement
+LONG_PARAGRAPHS_MAX = 97
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -264,12 +274,22 @@ LONG_PARAGRAPHS_MAX = 99
 #        nothing but an issue reference, and five of those were live
 #        cross-references in normative text, so what moved below the line was
 #        the reference, into that file's `## Why` provenance table
-#   141  today, 2026-09-06, after #214 did the same to docs/mobile-base.md:
+#   141  2026-09-06, after #214 did the same to docs/mobile-base.md:
 #        that file went 24 -> 0. Seventeen of the 24 carried an issue reference
 #        and eight carried nothing else, which is the same shape #213 found;
 #        the references moved into that file's `## Why` provenance table and
 #        the tier-by-tier archaeology moved with them
-NARRATION_MAX = 141
+#   139  today, 2026-09-06, after #217: README.md and docs/CONTRIBUTING.md went
+#        1 -> 0 each, and neither file gained a `## Why` line — an entry point
+#        that needs one is an entry point carrying provenance. One went by a cut
+#        (CONTRIBUTING's restatement of CLAUDE.md's *Never invent a default*,
+#        now a pointer to it) and one by rewording in the present tense, the
+#        same over-count #210 recorded. A third paragraph fired mid-cut and is
+#        worth knowing about: `was\nnot made` did not match across a line break
+#        and `was not made` on one line did, so this proxy is sensitive to
+#        rewrapping. It was reworded rather than rewrapped, because wrapping a
+#        sentence to clear a marker is gaming the count
+NARRATION_MAX = 139
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

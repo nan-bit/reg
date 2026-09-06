@@ -9,20 +9,10 @@ wins when two of them disagree.
 
 ## Precedence
 
-There is one rule and the front page states it too: **where `plan.md` and
-`prior-art.md` disagree, prior art wins and `plan.md` gets edited.** A phase is
-cut when research shows it reinvents something with a name. That rule has been
-exercised four times and each pass is kept whole and dated, because half of what
-`prior-art.md` records is *when* something was found.
-
-Five rows below are marked normative, and they do not all bind the same way.
-Two — [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) —
-are *normative for what this project may claim*: they do not describe the code,
-they constrain what may be said about it, and a claim contradicting one of them
-is wrong even if the code supports it. [`lossiness.md`](lossiness.md) binds in
-the other direction, on the code rather than the prose — it is a design
-constraint on the graph. [`retention.md`](retention.md) binds every published
-retention figure, and [`prior-art.md`](prior-art.md) binds `plan.md`.
+There is one rule: **where [`plan.md`](plan.md) and
+[`prior-art.md`](prior-art.md) disagree, prior art wins and `plan.md` gets
+edited.** Five of the rows below are marked normative and they do not all bind
+the same way; the Standing column says how each one does.
 
 ## The documents
 
@@ -47,9 +37,8 @@ retention figure, and [`prior-art.md`](prior-art.md) binds `plan.md`.
 - **To check a number:** [`retention.md`](retention.md) for what it is and
   [`sensor-baseline.md`](sensor-baseline.md) for what it is measured against.
   The `bytes/hour` tables are re-derived from the code on each CI run by
-  `tests/test_published_figures.py`, so those cannot drift quietly. The
-  six-month totals computed from them — `265 GB` among them — are arithmetic
-  stated in prose and are **not** re-derived; that module's own
+  `tests/test_published_figures.py`; the six-month totals computed from them —
+  `265 GB` among them — are **not**. That module's own
   *What this does not cover* is the list, and it is worth reading before
   treating any figure here as machine-checked.
 - **To write code here:** [`CLAUDE.md`](../CLAUDE.md), then
@@ -59,10 +48,8 @@ retention figure, and [`prior-art.md`](prior-art.md) binds `plan.md`.
 ## A convention worth knowing before editing any of these
 
 Parts of some of these documents are held to their contents by tests rather
-than by review — `plan.md`'s and `prior-art.md`'s status headers, the citations
-those headers claim have landed, the `bytes/hour` tables, and the conditions
-certain figures must be quoted with. **That is a list, not a guarantee**: most
-prose here is checked by nobody, and each of those checks exists because one
-specific thing was quietly wrong for a while. If an edit turns a test red, read
-the failure before changing the test — it is usually telling you the edit moved
-a claim rather than a sentence.
+than by review — status headers, the citations they claim have landed, the
+`bytes/hour` tables, and the conditions certain figures must be quoted with.
+**That is a list, not a guarantee**: most prose here is checked by nobody. If an
+edit turns a test red, read the failure before changing the test — it is usually
+telling you the edit moved a claim rather than a sentence.

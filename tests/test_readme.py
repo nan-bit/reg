@@ -168,6 +168,61 @@ def test_a_claim_1_that_cannot_be_located_is_not_a_pass() -> None:
     assert claim_1("# A plan\n\nNo claims here.\n") == ""
 
 
+# ==========================================================================
+# THE DOCS INDEX QUOTES A FIGURE TOO, AND NOTHING HELD IT (issue #217)
+#
+# `docs/README.md` names `265 GB` where it tells a reader which of this
+# repository's figures are re-derived and which are arithmetic in prose. Issue
+# #217 cut the entry points by mutation rather than by a green run, and this is
+# what that method found: setting that figure to `999 GB` left the whole suite
+# green. It is a Claim 1 figure restated on a second index page, which is the
+# same shape as the drift `plan.md` was pinned for on 2026-08-31 — one document
+# restating a measurement, with the measurement free to move underneath it.
+#
+# So it gets the same link the front page has, against the same target:
+# `retention.md`, the document that publishes Claim 1's figures. Containment,
+# with the limits the module docstring already states — it says the two
+# documents agree, not that either is anchored to a measurement.
+# ==========================================================================
+
+DOCS_INDEX = REPO / "docs" / "README.md"
+
+
+def test_every_figure_the_docs_index_quotes_is_published_in_the_record() -> None:
+    verdict, missing = check(DOCS_INDEX.read_text(), RETENTION.read_text())
+    assert verdict == AGREE, (
+        f"docs/README.md quotes {missing}, which docs/retention.md does not "
+        "publish. The index restates Claim 1's figures to say which of them are "
+        "machine-checked; a figure here that is not there is one the sentence "
+        "about checking is wrong about."
+    )
+
+
+def test_the_docs_index_still_quotes_a_figure() -> None:
+    """**SILENCE IS NOT A PASS.** `check` returns COULD-NOT-EVALUATE on a
+    document with no figures in it, so deleting the number is otherwise the way
+    to satisfy the test above — and the number is the whole point of the
+    sentence it sits in, which is about what is and is not re-derived."""
+    assert figures(DOCS_INDEX.read_text()), (
+        "docs/README.md quotes no figure at all. Its *To check a number* entry "
+        "names a derived total to show what the pin does not cover; without one "
+        "the entry has nothing to be concrete about."
+    )
+
+
+def test_a_drifted_figure_in_the_docs_index_is_caught() -> None:
+    """**The negative**, and it is the mutation issue #217 ran: the index's own
+    sentence with the figure moved to one no measurement of this artifact
+    reaches. Before this check it was green."""
+    verdict, missing = check(
+        "The six-month totals computed from them — `999 GB` among them — are "
+        "**not** re-derived.",
+        RETENTION.read_text(),
+    )
+    assert verdict == DISAGREE
+    assert missing == ["999 GB"]
+
+
 def test_the_front_page_still_quotes_a_retention_size_and_a_ratio() -> None:
     """The check above passes trivially on a README with the numbers removed."""
     quoted = figures(README.read_text())

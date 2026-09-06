@@ -11,22 +11,20 @@ stopped, what the system knew, what it intended, and what constrained it.
 **Robotics already has an answer to that.** The Ethical Black Box was proposed in
 2017 by Winfield and Jirotka and drafted as an open standard in 2022 — a
 flight-data-recorder equivalent carried by the robot so an accident can be
-reconstructed ([`docs/prior-art.md`](docs/prior-art.md) §11). `reg` is that idea
-with three things changed, and each is checkable against their published draft:
+reconstructed. `reg` is a narrower instance of that proposal with three things
+changed, each checkable against their published draft and each argued in full in
+[`docs/prior-art.md` §11](docs/prior-art.md):
 
 1. **The record is not the robot's self-report.** An EBB is passive: everything in
    it arrives on the authority of the system under investigation. Here, what the
    policy *declared* it would do and what an independent check *concluded* are
    separate records, computed and signed by different parties. When they disagree,
    the artifact says which one was wrong.
-2. **Integrity is a keyed hash chain**, not a per-record checksum. The EBB draft's
-   `chkS` is an unkeyed 64-bit non-cryptographic value covering a single record,
-   with no link between records — delete a run of records and every remaining
-   checksum still verifies.
+2. **Integrity is a keyed hash chain**, not an unkeyed per-record checksum with no
+   link between records.
 3. **It is built for the six months *after* an incident**, not the hours before
-   it. An EBB is a ring buffer; the 2017 paper's own arithmetic is roughly three
-   hours on a 1 TB drive. The window that matters for liability is the retention
-   period, and that is a different engineering problem.
+   it. An EBB is a ring buffer; the window that matters for liability is the
+   retention period, and that is a different engineering problem.
 
 Keeping the record that long is what makes it practical rather than theoretical,
 and it is measured rather than asserted: **265 GB** per robot for six months at
@@ -38,7 +36,7 @@ The sensor side is a **projection** from a sourced assumption, never measured he
 ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)).
 
 The figure at a 1 kHz control rate, and the rate ceiling above which the artifact
-can no longer address every frame of the run it prices, are in
+stops addressing every frame of the run it prices, are in
 [`docs/retention.md`](docs/retention.md) and
 [`docs/limitations.md` §5](docs/limitations.md). *Cheap enough to keep* is the
 only property the rest of the argument needs from this.
@@ -58,16 +56,20 @@ Everything in the project serves one sentence:
 
 ## What this is not
 
-| Not this | Why |
-|---|---|
-| A perception system — no vision, no SLAM | The thesis is evidence, not perception. Entity positions are ground truth from the simulator. |
-| A 3D or realistic robot model | 2D planar demonstrates every claim. |
-| An HJ reachability solver | Sampling on 4–6D state is enough, and both directions ship: `compute_envelope` is an **inner** approximation — the set the robot demonstrably swept, which the graph records — and `reg.envelope.outer_envelope` is an **over**-approximation of the set it cannot leave within the horizon, which is what `enforce.horizon_bound` adjudicates against. Reporting the two together is a bracket, not a solver. |
-| A physics engine | Nobody evaluating this cares about the dynamics; the torque limit is treated as an acceleration bound. |
-| A real-time system | Offline batch. |
-| A learned policy | Scripted trajectories. The policy being a black box is the *premise*, not something to implement. |
-| A real PKI | Two keys in a keyring file. |
-| A proposed standard, or a research contribution to reachability analysis | Every design element traces to an existing precedent — see below. |
+No perception, vision or SLAM; no 3D or realistic robot model; no physics engine;
+no real-time path; no learned policy; no PKI beyond two keys in a keyring file.
+Entity positions are ground truth from the simulator, and 2D planar demonstrates
+every claim. The list is [`docs/plan.md`](docs/plan.md)'s non-goals table, with
+the reason under each, and it is binding for scope.
+
+Two of them are worth stating here rather than only pointing at. It is not an
+**HJ reachability solver**: sampling on 4–6D state is enough, and both directions
+ship — `compute_envelope` is an **inner** approximation and
+`reg.envelope.outer_envelope` an over-approximation of the set the robot cannot
+leave within the horizon, which is what `enforce.horizon_bound` adjudicates against
+([`docs/limitations.md` §2](docs/limitations.md)). And it is not a **proposed
+standard, or a research contribution to reachability analysis**: every design
+element traces to an existing precedent — see below.
 
 It is an argument about evidence, made concrete.
 
@@ -78,12 +80,13 @@ repository as it stands, not the plan.
 
 | | Claim | Status |
 |---|---|---|
-| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed, minus the passivation half` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no. All of that is exercisable end to end, from a shipped fixture to a query. What the chain binds is the *party that made each record*, not the build of the policy under investigation — DSSAD's `R157SWIN` element is **not implemented**, because nothing here has a policy version to bind ([`docs/prior-art.md` §9](docs/prior-art.md)). **Passivation and reintegration are not exercisable.** They exist only in `reg/enforce.py`: the record reaches no table, no edge type and no query, no shipped fixture produces one, and `graph.build` *refuses* a run containing one rather than write a chain link over the gap. The refusal is deliberate and documented where it happens; what it costs is that **"was the passivation acknowledged, and by whom" is a question this artifact cannot be asked**. Issue #112 is where that would change, and it is a claim change, not a refactor. [`docs/lossiness.md`](docs/lossiness.md) *Retained* #7 states the same gap |
-| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim: which audit questions the artifact answers on its own authority and which are only as strong as whatever supplied the entity positions. The rule is not name-based alone, because a taint can arrive in a *value*: `Limits.source` is required with no default, `reg.envelope.envelope_layer` maps it to a layer, and the `HAS_ENVELOPE` edge is tagged from that — proprioceptive bounds give `A`, bounds derived from a measured separation give `B`, which is the ISO/TS 15066 speed-and-separation case. An artifact carrying no `meta['limits_source']` is a **could-not-evaluate** rather than a clean Layer A one, and an unknown provenance string is refused outright (`tests/test_layer_boundary.py`) |
+| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed, minus the passivation half` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no, all exercisable end to end from a shipped fixture to a query. What the chain binds is the *party that made each record*, not the build of the policy under investigation — DSSAD's `R157SWIN` element is **not implemented**, because nothing here has a policy version to bind ([`docs/prior-art.md` §9](docs/prior-art.md)). **Passivation and reintegration are not exercisable.** They exist only in `reg/enforce.py`, and `graph.build` *refuses* a run containing one rather than write a chain link over the gap, so **"was the passivation acknowledged, and by whom" is a question this artifact cannot be asked** — the same gap, with what closing it would take, is [`docs/lossiness.md`](docs/lossiness.md) *Retained* #7 |
+| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim. The rule is not name-based alone, because a taint can arrive in a *value*: `Limits.source` is required with no default, `reg.envelope.envelope_layer` maps it to a layer, and the `HAS_ENVELOPE` edge is tagged from that. An artifact carrying no `meta['limits_source']` is a **could-not-evaluate** rather than a clean Layer A one |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
-| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the claim is [`docs/plan.md`](docs/plan.md) Claim 1 and the measurements are [`docs/retention.md`](docs/retention.md): **265 GB** per robot for six months at occurrence resolution (±1 s), **~689x** below an assumed 182.5 TB sensor log at a 50 Hz control rate. That coarsest level is **98.5% attestation records** — 3,120 declarations and verdicts against 42 occurrences — so the figure is the price of retaining *attestation*, not of a DSSAD-equivalent event log; the label said the opposite until issue #116, and the positioning decision behind the new one is recorded in [`docs/retention.md`](docs/retention.md), *What the coarsest level actually holds*. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: **~40x** *larger* than a gzipped copy of the raw state stream — which is **24 columns** for the priced fixture, **19 of them Layer B**: the human's pose and velocity and every obstacle's, beside 5 proprioceptive ones (`reg.stream.expected_header`, `reg.bench.proprioceptive_columns`) — measured on the artifact that carries Layer A. That baseline is not what practitioners retain: against rosbag2/MCAP, the incumbent, the same proprioceptive content costs **2.51x** what the gzipped CSV does — on a **hand-built encoding comparison and not a real bag**, which [`docs/sensor-baseline.md`](docs/sensor-baseline.md) requires be said wherever the figure is quoted until issue #117 retires it. So the artifact's disadvantage against a real bag is smaller than this figure — by how much is not measured, because the two comparisons do not carry the same content. A **13x** figure appears in the same comparison measured on a build holding **no declaration, verdict, fault or chain record at all**, and that condition travels with it wherever it is quoted. Published beside the retention figure because it is the comparison a skeptic runs. The 1 kHz rung and the rate ceiling above which the time base cannot place a frame are in [`docs/limitations.md` §5](docs/limitations.md). `python -m reg.bench --all` reports the per-scenario table for all eleven scenarios; `--resolution` produces the curve, and `--control-rate-hz` the curve at a ladder of control rates |
+| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the claim is [`docs/plan.md`](docs/plan.md) Claim 1 and the measurements, the arithmetic and the record of how they moved are [`docs/retention.md`](docs/retention.md): **265 GB** per robot for six months at occurrence resolution (±1 s), **~689x** below an assumed 182.5 TB sensor log at a 50 Hz control rate. That coarsest level is **98.5% attestation records**, so the figure is the price of retaining *attestation*, not of a DSSAD-equivalent event log. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: **~40x** *larger* than a gzipped copy of the raw state stream — which is **24 columns** for the priced fixture, **19 of them Layer B**: the human's pose and velocity and every obstacle's, beside 5 proprioceptive ones (`reg.stream.expected_header`, `reg.bench.proprioceptive_columns`) — measured on the artifact that carries Layer A. That baseline is not what practitioners retain: against rosbag2/MCAP, the incumbent, the same proprioceptive content costs **2.51x** what the gzipped CSV does — on a **hand-built encoding comparison and not a real bag**, which [`docs/sensor-baseline.md`](docs/sensor-baseline.md) requires be said wherever the figure is quoted. A **13x** figure appears in the same comparison measured on a build holding **no declaration, verdict, fault or chain record at all**, and that condition travels with it wherever it is quoted |
 
-The number is an identifier, not a rank — it is referenced throughout this repository and does not move. The **order** is the argument: what the artifact proves, what that proof is worth, how you ask it, and what it costs to keep.
+The number is an identifier, not a rank; the **order** is the argument
+([`docs/plan.md`](docs/plan.md), *The four claims*).
 
 
 ## The honesty note: this is the structure of non-repudiation, not non-repudiation
@@ -105,16 +108,15 @@ weaker one.** A per-record MAC plus a per-record hash link to the predecessor is
 Schneier and Kelsey's 1998 construction for secure logs on untrusted machines
 (USENIX Security 1998; ACM TISSEC, 1999), and `reg` implements it **without its
 forward security**: their scheme evolves the key after every entry and deletes the
-old one, so an attacker who takes the machine cannot forge what was written before
-they arrived, and `reg`'s keys are static for the life of a run. Anyone holding the
-keyring can also re-sign the whole history. Both are named, deliberate absences
-rather than oversights ([`docs/limitations.md` §7](docs/limitations.md)), and what
-this project adds to the ancestor — two chains under role-typed keys, and a
-verifier with three outcomes — is not cryptographic. Deleting the *last* records of
-a chain, which breaks no link, is likewise a named attack against exactly this
-construction — Ma and Tsudik's truncation attack — with a published fix in a
-different data structure that `reg` does not use
-([`docs/prior-art.md` §14 and §18](docs/prior-art.md)).
+old one, and `reg`'s keys are static for the life of a run.
+
+Anyone holding the keyring can also re-sign the whole history, and deleting the
+*last* records of a chain breaks no link — Ma and Tsudik's truncation attack,
+named against exactly this construction. Those two and the missing forward
+security are deliberate absences rather than oversights, and what this project
+adds to the ancestor is not cryptographic
+([`docs/limitations.md` §7](docs/limitations.md),
+[`docs/prior-art.md` §14 and §18](docs/prior-art.md)).
 
 **The chain alone deters editing, not re-issuance**, and the two are different
 faults. A chain under keys held by the record's own author cannot notice the
@@ -133,30 +135,31 @@ verifies perfectly. Two things bear on that:
 at the same site saw these heads, not that they existed by any instant to someone
 with no relationship to the operator. RFC 3161 and transparency-log adapters
 would; both need a network call at the moment the artifact closes, and this
-artifact is meant to be verifiable years later with no service still running and
-no call to anyone. Both are documented and deliberately unimplemented
+artifact is meant to be verifiable years later with no service still running, so
+both are documented and deliberately unimplemented
 ([`docs/limitations.md` §6](docs/limitations.md)). An artifact closed without a
 witness records `commitment: none` in so many words — silence never reads as
 commitment.
 
 **The artifact contains personal data, and this project has not addressed that.**
 Every other limitation on this page bounds what the artifact can *answer*. This
-one bounds whether it may be *kept*. Per shift it records the robot's proximity
+one bounds whether it may be *kept*: per shift it records the robot's proximity
 to an entity whose `kind` is `human`, contact and closest-approach occurrences
 naming that entity with a wall-clock datum, and `meta[operator_id]` beside
 `meta[run_start_utc]` — which together select a shift, and a shift resolves
-against any roster to a person. Retained six months and handed to an assessor,
-that is processing of personal data in an employment context. The minimisation is
-real and in the schema, not in a policy: no column here names anybody. The
-obligations that remain are named and not discharged, and the AI Act's six-month
-period is expressly subordinate to data-protection law — so for that half of the
-artifact it may be a ceiling rather than the floor Claim 1 prices against
-([`docs/limitations.md` §8](docs/limitations.md)).
+against any roster to a person.
 
-Two smaller admissions in the same spirit:
+The minimisation is real and in the schema, not in a policy: no column here names
+anybody. The obligations that remain are named and not discharged, and the AI
+Act's six-month period is expressly subordinate to data-protection law — so for
+that half of the artifact it may be a ceiling rather than the floor Claim 1
+prices against ([`docs/limitations.md` §8](docs/limitations.md)).
 
-- The keyring is a JSON file of two hex keys. There is no PKI, no key rotation
-  and no revocation, and the file's only protection is its filesystem mode.
+Two smaller admissions in the same spirit, stated here because nothing else in
+the repository states them:
+
+- The keyring is a JSON file of two hex keys. There is no key rotation and no
+  revocation, and the file's only protection is its filesystem mode.
 - The record commits to floats at the raw stream's fixed precision
   (`reg.stream.FLOAT_PRECISION`), so the chain is tamper-evident at that
   resolution and not below it.
@@ -164,10 +167,10 @@ Two smaller admissions in the same spirit:
 Intent attestation of this shape is **not a new idea and this project does not
 claim it as one** — there is a 2026 line of work on cryptographic runtime
 governance in which software agents declare intent before acting and receive
-signed authority tokens ([`docs/prior-art.md` §10](docs/prior-art.md)). What is
-distinct here is the domain (a physical control policy, where the bound is a
-region of space and the failure is contact with a person) and the lineage
-(IEC 61784-3 and machinery safety, not zero-trust).
+signed authority tokens. This applies that pattern to a physical control policy
+under machinery-safety precedent, which is second in a field and first in a
+domain; what is still distinct, stated carefully, is
+[`docs/prior-art.md` §10](docs/prior-art.md).
 
 ## Standards baseline
 
@@ -176,9 +179,9 @@ the full treatment, including what this project must *not* claim as novel.
 
 | Precedent | What it establishes | Status |
 |---|---|---|
-| **UNECE DSSAD** (Data Storage System for Automated Driving, mandated by UN R157) | A regulator already requires a retained evidence recorder for autonomy — and it stores *discrete events*, not continuous state, which is the same retention granularity this project argues for. Its event vocabulary does not transfer: it records transitions of authority between human and system, not the failure modes of a manipulator working near a person. `reg`'s occurrence layer implements four of its five data elements; the fifth, `R157SWIN`, is **not implemented** and is recorded as such ([`docs/prior-art.md` §9](docs/prior-art.md)). | In force. The informal group's work ran past its June 2026 target and a mandate extension is being sought, so the event vocabulary is still moving |
-| **EU AI Act Article 12** (with the retention period in Article 19) | High-risk AI systems must technically allow automatic recording of events over their lifetime, retained at least six months. Commentary reads this as requiring decision-level traceability — reconstructing individual decisions, not an activity log. The regulation mandates the capability and says nothing about the artifact. | In force |
-| **IEC 61784-3 black channel** / PROFIsafe | Assurance lives in the endpoints; the uncertifiable middle is declared out of scope. `reg` applies this to a learned policy — and deviates deliberately by using HMAC rather than PROFIsafe's CRC, because its threat model includes an adversary who has read the spec. | Published |
+| **UNECE DSSAD** (Data Storage System for Automated Driving, mandated by UN R157) | A regulator already requires a retained evidence recorder for autonomy — and it stores *discrete events*, not continuous state, which is the same retention granularity this project argues for. Its event vocabulary does not transfer, and `reg`'s occurrence layer implements four of its five data elements ([`docs/prior-art.md` §9](docs/prior-art.md)). | In force. The informal group's work ran past its June 2026 target and a mandate extension is being sought, so the event vocabulary is still moving |
+| **EU AI Act Article 12** (with the retention period in Article 19) | High-risk AI systems must technically allow automatic recording of events over their lifetime, retained at least six months, which commentary reads as decision-level traceability ([`docs/prior-art.md` §2](docs/prior-art.md)). The regulation mandates the capability and says nothing about the artifact. | In force |
+| **IEC 61784-3 black channel** / PROFIsafe | Assurance lives in the endpoints; the uncertifiable middle is declared out of scope. `reg` applies this to a learned policy, and deviates deliberately by using HMAC rather than PROFIsafe's CRC ([`docs/prior-art.md` §5](docs/prior-art.md)). | Published |
 | **UL 4600** | Autonomous systems are certified through a structured claim → argument → evidence safety case rather than a test result. | Published (ANSI/UL 4600) |
 
 The gap: ISO 25785-1 will specify what the *robot* must do and UL 4600 specifies
@@ -200,16 +203,15 @@ pytest                      # the whole suite; CI runs exactly this
 ```
 
 The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`,
-`python -m reg.query` and `python -m reg.bench`; each takes `--help`. The build
-order is in [`docs/plan.md`](docs/plan.md).
+`python -m reg.query` and `python -m reg.bench`; each takes `--help`.
 
 ## Reading an incident
 
 The demo sentence of [`docs/plan.md`](docs/plan.md) Phase 7, answered end to end
 as one query. Reproduce it with a keyring of your own — key material is the one
 thing in this project that is deliberately **not** derivable from a seed. The run
-start is the same kind of input: required, no default, and *declared* rather than
-read from your clock, so the build below is still byte-reproducible.
+start is the same kind of required, no-default input, and the build below is
+still byte-reproducible for the reason the note above gives.
 
 ```bash
 python -c "from reg.chain import generate_keyring, write_keyring; write_keyring(generate_keyring(), 'keyring.json')"
@@ -292,15 +294,10 @@ witness signature is what stops the recorded heads being rewritten to match.
 
 ## Status
 
-**Built.** The shared record types and the Layer A/B split (`reg/types.py`, and
-Claim 3 above), the simulator and its eleven scenario fixtures, the
-proprioception-only envelope, the evidence graph and its SQLite store, the
-benchmarks and the viz, the hash chain with its two keyed MACs (`reg/chain.py`),
-the `Declaration` record and the scripted policy that emits it
-(`reg/declare.py`), independent adjudication and the nine-fault taxonomy
-(`reg/enforce.py`), chain verification with the `--tamper` demonstration that it
-can fail, and the query API in full (`reg/query.py`): the four scene questions,
-the four attestation questions, and `incident_report()` above them.
+**Built.** Everything the four claims above name, plus what carries them: the
+shared record types (`reg/types.py`), the simulator and its eleven scenario
+fixtures, the proprioception-only envelope, the evidence graph and its SQLite
+store, the benchmarks and the viz.
 
 **Published.** The write-up — [`docs/plan.md`](docs/plan.md) Phase 10 — is at
 [ernan.dev/projects/reg](https://ernan.dev/projects/reg). The GIF that phase also
@@ -323,10 +320,9 @@ The two disagree in places; prior art wins.
 
 Groom an issue, label it `agent-ready`, and an unattended writer picks it up,
 cuts a worktree, implements it, and opens a **draft PR**. A human marks it ready;
-nothing on the worker host merges. Dependencies are `Depends-on: #N` trailers in
-the issue body, and `epic-advance.yml` flips the next tier when they close. An
-issue is ready when it names its **acceptance criteria**, its **affected areas**,
-and the **command that verifies it**.
+nothing on the worker host merges. What makes an issue ready, how issues declare
+their order, and what has to be in the PR are in
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
 
 Every PR the writer opens carries an **impact report** — what the change touches
 and what that reaches. It is advisory: it informs the human review, it does not
@@ -337,8 +333,7 @@ gh issue edit N --add-label agent-ready
 journalctl --user -u reg-runner -f
 ```
 
-The conventions code here must follow are in [`CLAUDE.md`](CLAUDE.md); the path a
-change takes in and out is in [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md). The
+The conventions code here must follow are in [`CLAUDE.md`](CLAUDE.md). The
 harness itself is [`nan-bit/wake-runner`](https://github.com/nan-bit/wake-runner),
 installed on the worker host — this repo configures it through `.runner.conf`.
 [`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner) is its archived

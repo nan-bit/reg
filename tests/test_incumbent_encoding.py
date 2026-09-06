@@ -11,10 +11,13 @@ hold both presets to their published figures, to the arithmetic the constants
 state, and to the failure modes that would each have made the incumbent look
 cheaper than it is.
 
-Two presets are priced because rosbag2 has two: `mcap_default`, which is what a
-practitioner gets without choosing, and `mcap_compressed_nocrc`, which is the
-like-for-like against a gzipped baseline. Pricing one of them is how a comparison
-comes out whichever way its author wanted, so the tests below hold both.
+Three profiles are priced because rosbag2 ships them: `none`, which is what a
+practitioner gets without choosing, and `zstd_fast` and `zstd_small`, which are
+the two like-for-likes against a gzipped baseline. Pricing one of them is how a
+comparison comes out whichever way its author wanted, so the tests below hold
+all three — and hold the names to what `--storage-preset-profile` accepts, since
+the two this module published before issue #232 were names rosbag2 answers with
+an error.
 
 The reporter has a negative of its own: fed an incumbent cheaper than the
 baseline, it must say so in words. A comparison that can only flatter is not a
@@ -60,21 +63,31 @@ from reg.bench import (
     LAYER_B_OPTIONS,
     MCAP_MESSAGE_INDEX_PER_MESSAGE,
     MCAP_MESSAGE_RECORD_OVERHEAD,
+    MCAP_NON_PROFILE_CONFIGURATIONS,
     MCAP_PRESETS,
+    MCAP_PRICED_CONFIGURATIONS,
     MCAP_SIZE_MEASUREMENTS,
     MCAP_STRUCTURAL_CHECKS,
     MCAP_VALIDATION_PROVENANCE,
     MCAP_VALIDATION_TOLERANCE,
+    NOT_BANDED,
+    NOT_PROJECTED,
     OUTSIDE_TOLERANCE,
     PROJECTION_DRIFTED,
     PROJECTION_HOLDS,
+    ROSBAG2_PROVENANCE,
+    ROSBAG2_SIZE_MEASUREMENTS,
+    ROSBAG2_STORAGE_PRESET_PROFILES,
+    ROSBAG2_UNCOMPRESSED_TOLERANCE,
     WITHIN_TOLERANCE,
     BenchError,
     FullContentComparison,
     IncumbentComparison,
     LayerBTopicOption,
+    McapPreset,
     McapSizeMeasurement,
     McapStructuralCheck,
+    Rosbag2Measurement,
     StreamEntity,
     cheapest_layer_b_option,
     compare_full_content,
@@ -96,6 +109,10 @@ from reg.bench import (
     project_for_topics,
     projection_drift,
     proprioceptive_columns,
+    rosbag2_index_bytes_per_message,
+    rosbag2_measurement,
+    rosbag2_projection_drift,
+    stream_frames,
     stream_entities,
     tf_message_cdr,
     uncharged_layer_b_columns,
@@ -103,8 +120,32 @@ from reg.bench import (
 
 REPO = Path(__file__).resolve().parents[1]
 
-DEFAULT = "mcap_default"
-COMPRESSED = "mcap_compressed_nocrc"
+#: rosbag2's uncompressed profile, which is also what a bag costs when nobody
+#: passes `--storage-preset-profile`.
+DEFAULT = "none"
+
+#: One of the two compressed profiles. `reg.bench` computes a single compressed
+#: projection and applies it to both, so this name stands for that projection
+#: wherever a test is about the arithmetic rather than about the profile —
+#: `test_the_two_compressed_profiles_share_one_projection` is what keeps the
+#: substitution honest, and the measured bags are what say it matches neither.
+COMPRESSED = "zstd_fast"
+
+#: The other one, and the reason a single compressed figure was never going to
+#: be right about "the compressed preset".
+COMPRESSED_SMALL = "zstd_small"
+
+#: The names this module published before issue #232, neither of which rosbag2
+#: accepts. Kept as the negative: they are what `mcap_preset` must refuse.
+RETIRED_PRESET_NAMES = ("mcap_default", "mcap_compressed_nocrc")
+
+#: A real rosbag2 profile that is deliberately not priced: it writes no message
+#: index, and this encoder charges one per message.
+UNPRICED_PROFILE = "fastwrite"
+
+#: The configuration the reference-writer run of issue #221 encoded under, which
+#: is not a profile and cannot be passed to `ros2 bag record`.
+REFERENCE_ZSTD = "reference_zstd_l3"
 
 #: What the fixture holds. 251 frames of the two-joint `declared_violation` run
 #: at 50 Hz, one `/joint_states` message each, 96 B of CDR payload per message.
@@ -194,20 +235,92 @@ def test_the_cdr_payload_is_the_size_the_idl_says(stream: Path) -> None:
     assert payload[:CDR_ENCAPSULATION] == b"\x00\x01\x00\x00"
 
 
-def test_both_rosbag2_presets_are_priced_and_each_cites_its_source() -> None:
-    """Two presets, named after rosbag2's, each carrying what it claims.
+def test_every_priced_profile_is_a_name_rosbag2_accepts() -> None:
+    """**THE FINDING ISSUE #232 CARRIES.** The names have to be runnable ones.
 
-    The default preset is the one that decides whether this comparison is about
-    what practitioners retain. An entry whose `what` says nothing is a claim
-    about somebody else's software with no source, which is the same silence as
-    no entry.
+    A preset name is the one part of this projection a practitioner types. The
+    two this module published before — `mcap_default`, `mcap_compressed_nocrc` —
+    were mcap.dev's benchmark vocabulary, and `ros2 bag record` answers both
+    with *unknown MCAP storage preset profile*. So every name priced is checked
+    against the list rosbag2 accepts, and the retired pair is checked to be
+    gone: a figure published under a name nobody can pass is a figure nobody can
+    reproduce.
     """
     names = [p.name for p in MCAP_PRESETS]
-    assert names == [DEFAULT, COMPRESSED]
+    assert names == [DEFAULT, COMPRESSED, COMPRESSED_SMALL]
+    for preset in MCAP_PRESETS:
+        assert preset.name in ROSBAG2_STORAGE_PRESET_PROFILES, (
+            f"{preset.name!r} is priced as a rosbag2 profile and is not one of "
+            f"{list(ROSBAG2_STORAGE_PRESET_PROFILES)}"
+        )
+    priced = [p.name for p in MCAP_PRICED_CONFIGURATIONS]
+    for retired in RETIRED_PRESET_NAMES:
+        assert retired not in priced, (
+            f"{retired!r} is a name rosbag2 rejects and it is still priced "
+            "under. It may appear in prose that says it is retired; it may not "
+            "be a configuration this module will resolve."
+        )
     assert mcap_preset(DEFAULT).compressed is False
     assert mcap_preset(COMPRESSED).compressed is True
-    for preset in MCAP_PRESETS:
-        assert "mcap.dev" in preset.what, f"{preset.name} cites no source"
+    assert mcap_preset(COMPRESSED_SMALL).compressed is True
+
+
+def test_each_priced_configuration_says_what_it_is_and_where_that_came_from() -> None:
+    """A claim about somebody else's software carries its citation, or it is silence.
+
+    Both halves are required and the negative is here rather than in a separate
+    test: an entry constructed with an empty `source` is refused, so the field
+    cannot become decoration by being left blank one row at a time.
+    """
+    for preset in MCAP_PRICED_CONFIGURATIONS:
+        assert preset.what.strip(), f"{preset.name} says nothing about itself"
+        assert preset.source.strip(), f"{preset.name} cites no source"
+    with pytest.raises(BenchError, match="empty source"):
+        McapPreset(name="none", compressed=False, what="something", source="  ")
+    with pytest.raises(BenchError, match="empty what"):
+        McapPreset(name="none", compressed=False, what="", source="somewhere")
+
+
+def test_the_one_configuration_that_is_not_a_profile_is_kept_out_of_the_profiles(
+) -> None:
+    """The reference-writer run encoded under something nobody can pass.
+
+    Its rows are real measurements and they are not measurements of `zstd_fast`
+    or of `zstd_small` — python-zstandard's default level is neither. Filing
+    them under either name would put a real byte count under the name of a
+    configuration nobody encoded, which is the failure this issue is fixing one
+    layer up. So the configuration keeps its own name, stays out of
+    `MCAP_PRESETS`, and says in `what` that it cannot be run.
+    """
+    assert [p.name for p in MCAP_NON_PROFILE_CONFIGURATIONS] == [REFERENCE_ZSTD]
+    profile_names = {p.name for p in MCAP_PRESETS}
+    for config in MCAP_NON_PROFILE_CONFIGURATIONS:
+        assert config.name not in profile_names
+        assert config.name not in ROSBAG2_STORAGE_PRESET_PROFILES
+        assert "NOT a rosbag2 profile" in config.what
+    assert {m.preset for m in MCAP_SIZE_MEASUREMENTS} == {DEFAULT, REFERENCE_ZSTD}
+
+
+def test_the_two_compressed_profiles_share_one_projection(stream: Path) -> None:
+    """What separates `zstd_fast` from `zstd_small` here is measured, not projected.
+
+    This module runs gzip -9 in place of zstd and has no model of a zstd level,
+    so the two profiles come out at the same byte count. That is stated rather
+    than hidden: both are reported, the equality is asserted here, and
+    `ROSBAG2_SIZE_MEASUREMENTS` is where the real bags put them 43% apart with
+    the projection between them, matching neither.
+    """
+    fast = mcap_joint_states_bytes(stream, preset=COMPRESSED)
+    small = mcap_joint_states_bytes(stream, preset=COMPRESSED_SMALL)
+    assert fast == small, (
+        "the two compressed profiles came out at different byte counts, so this "
+        "module has grown a model of the zstd level. That is the thing the "
+        "compressed figures are marked for lacking, and it needs the marks "
+        "revisited rather than this assertion updated."
+    )
+    report = incumbent_report(stream)
+    for name in (DEFAULT, COMPRESSED, COMPRESSED_SMALL):
+        assert name in report, f"the report drops {name}"
 
 
 def test_the_preset_has_no_default_and_an_unknown_one_is_refused(
@@ -215,10 +328,16 @@ def test_the_preset_has_no_default_and_an_unknown_one_is_refused(
 ) -> None:
     """THE NEGATIVE for the configuration. Neither call may guess.
 
-    The two presets differ by a factor of three on the same messages, so a
-    default would let this module pick its own answer, and a near-miss name
-    silently resolving to the compressed preset would publish a real number
-    under the name of a configuration nobody encoded.
+    Compressed and uncompressed differ by a factor of three on the same
+    messages, so a default would let this module pick its own answer, and a
+    near-miss name silently resolving to a compressed profile would publish a
+    real number under the name of a configuration nobody encoded.
+
+    Two refusals, because they are two different things to whoever reads them. A
+    name rosbag2 rejects cannot be run at all, and the error says so by listing
+    what `--storage-preset-profile` takes. `fastwrite` is a name rosbag2 accepts
+    and this module does not price, and telling a practitioner that one is
+    *unknown* would send them looking for a typo they did not make.
     """
     for func in (mcap_joint_states_bytes, compare_incumbent):
         assert inspect.signature(func).parameters["preset"].default is (
@@ -226,8 +345,15 @@ def test_the_preset_has_no_default_and_an_unknown_one_is_refused(
         ), f"{func.__name__} invented a default preset"
     with pytest.raises(BenchError, match="not an MCAP preset"):
         mcap_joint_states_bytes(stream, preset="mcap_compressed")
-    with pytest.raises(BenchError, match="not an MCAP preset"):
-        mcap_preset("zstd_fast")
+    for retired in RETIRED_PRESET_NAMES:
+        with pytest.raises(BenchError, match="not a profile rosbag2 accepts"):
+            mcap_joint_states_bytes(stream, preset=retired)
+    with pytest.raises(BenchError, match="is a rosbag2 storage preset profile"):
+        mcap_preset(UNPRICED_PROFILE)
+    assert UNPRICED_PROFILE in ROSBAG2_STORAGE_PRESET_PROFILES, (
+        "the unpriced profile is not one rosbag2 accepts, so the refusal above "
+        "is no longer telling the two cases apart"
+    )
 
 
 # --- the figures, held to the arithmetic the constants state ----------------
@@ -1385,7 +1511,7 @@ def test_a_measurement_with_an_impossible_byte_count_is_refused() -> None:
     with pytest.raises(BenchError, match="not an MCAP preset"):
         McapSizeMeasurement(
             fixture="long_run_3000", seed=0, frames=3_000, topics=("/tf",),
-            preset="zstd_fast", projected_bytes=1, measured_bytes=1,
+            preset=RETIRED_PRESET_NAMES[0], projected_bytes=1, measured_bytes=1,
         )
 
 
@@ -1543,3 +1669,448 @@ def test_the_provenance_states_what_was_not_run() -> None:
     )
     assert "rosbag2" in MCAP_VALIDATION_PROVENANCE
     assert "2026-09-06" in text and "mcap-ros2-support` 0.5.7" in text
+
+
+# ==========================================================================
+# THE ROSBAG2 RUN (issue #232).
+#
+# Everything above this line is a projection, validated once against a second
+# implementation of the MCAP specification. What it could not validate is the
+# thing this module got wrong twice: the *profile*. `mcap_default` and
+# `mcap_compressed_nocrc` are names `ros2 bag record` answers with an error, so
+# the procedure `docs/sensor-baseline.md` publishes could not be run as written.
+#
+# WHAT THE ROWS ARE. Ten bags rosbag2 wrote on 2026-09-06, whole files, two
+# fixtures at five writer settings each. They are given data: there is no ROS 2
+# on the host that runs these tests, so nothing here can regenerate them and
+# nothing here tries. What the tests hold is the half that *can* move — the
+# projection each row is set beside — and the discipline around the comparison.
+#
+# WHAT THEY HAVE TO HOLD, BEYOND THE BYTES. One row carries a band, fixed by the
+# issue rather than by the result, and it is the only row that can read as a
+# pass. The rest are recorded with their deltas and no verdict in this project's
+# favour, and the negatives below feed each check the condition it guards
+# against: a projection outside the band, a band on a row with no projection, a
+# profile rosbag2 does not accept, and a measurement compared against a stream
+# of a different fixture.
+# ==========================================================================
+
+#: One row of the rosbag2 block, read out of the document that publishes it.
+#: Anchored on the fixture name and the profile column, so a row added anywhere
+#: in the block is read rather than counted past.
+ROSBAG2_ROW = re.compile(
+    r"^(declared_violation|long_run_3000)\s+([\d,]+)\s+"
+    r"(unset|none|fastwrite|zstd_fast|zstd_small)\s+"
+    r"([\d,]+)\s+([\d,]+|-)\s+([-+][\d.]+%|-)\s+(\S+)\s*$",
+    re.MULTILINE,
+)
+
+#: How each verdict is spelled in the published table. A row with no band and a
+#: row that passed one must not read the same on the page, which is the whole
+#: reason `NOT_BANDED` is a separate value rather than a blank cell.
+ROSBAG2_VERDICT_WORDS = {
+    WITHIN_TOLERANCE: "stands",
+    OUTSIDE_TOLERANCE: "DOES-NOT-STAND",
+    NOT_BANDED: "no-band",
+    NOT_PROJECTED: "not-projected",
+}
+
+
+def _rosbag2_published() -> list[tuple]:
+    text = VALIDATION_DOC.read_text(encoding="utf-8")
+    rows = []
+    for m in ROSBAG2_ROW.finditer(text):
+        rows.append((
+            m.group(1),
+            int(m.group(2).replace(",", "")),
+            m.group(3),
+            int(m.group(4).replace(",", "")),
+            None if m.group(5) == "-" else int(m.group(5).replace(",", "")),
+            None if m.group(6) == "-" else float(m.group(6).rstrip("%")),
+            m.group(7),
+        ))
+    return rows
+
+
+def _rosbag2_stream(row: Rosbag2Measurement, stream: Path,
+                    full_stream: Path) -> Path:
+    return stream if row.fixture == "declared_violation" else full_stream
+
+
+# --- the band, which one row carries and the rest are honest about ----------
+
+
+def test_the_uncompressed_projection_is_inside_the_band_the_issue_fixed() -> None:
+    """**THE ACCEPTANCE CRITERION.** 1% on `long_run_3000`, uncompressed.
+
+    The band is `ROSBAG2_UNCOMPRESSED_TOLERANCE` and it was written into the
+    issue before the rows were written into this repository, which is what makes
+    it a tolerance rather than a description of the result. The projection comes
+    in at -0.002% of a bag rosbag2 actually wrote.
+    """
+    row = rosbag2_measurement("long_run_3000", "none")
+    assert row.tolerance == ROSBAG2_UNCOMPRESSED_TOLERANCE == 0.01
+    assert row.verdict == WITHIN_TOLERANCE, row.sentence()
+    assert abs(row.delta) < 0.01
+    banded = [r for r in ROSBAG2_SIZE_MEASUREMENTS if r.tolerance is not None]
+    assert banded == [row], (
+        "a second row has acquired a band. Issue #232 banded exactly one, and a "
+        "band added to another after its measurement was known is a band chosen "
+        "by the result."
+    )
+
+
+def test_a_projection_that_missed_the_band_does_not_stand() -> None:
+    """THE NEGATIVE for the band. Feed it a projection 2% out and it must say no.
+
+    A check that only ever passes is not a check. The measurement is frozen, so
+    the half moved here is the projection — which is also the half that can
+    really move, because `reg.bench` recomputes it on every run.
+    """
+    row = rosbag2_measurement("long_run_3000", "none")
+    missed = replace(row, projected_bytes=int(row.measured_bytes * 0.98))
+    assert missed.verdict == OUTSIDE_TOLERANCE, missed.sentence()
+    assert "DOES-NOT-STAND" == ROSBAG2_VERDICT_WORDS[missed.verdict]
+    just_inside = replace(row, projected_bytes=int(row.measured_bytes / 1.009))
+    assert just_inside.verdict == WITHIN_TOLERANCE, (
+        "a projection 0.9% out came back outside a 1% band, so the band is not "
+        "the number it says it is"
+    )
+
+
+def test_a_row_with_no_band_never_reads_as_a_pass() -> None:
+    """COULD-NOT-EVALUATE DOES NOT RESOLVE TO PASS, on the record itself.
+
+    Nine of the ten rows have no band. Four of those carry a compressed
+    projection that the measured bags put 43% apart from itself, and the
+    temptation is to let a small-looking delta stand in for a verdict. It cannot:
+    `NOT_BANDED` is its own value, it is what the page prints, and no input to a
+    row without a tolerance produces `WITHIN_TOLERANCE`.
+    """
+    unbanded = [r for r in ROSBAG2_SIZE_MEASUREMENTS if r.tolerance is None]
+    assert len(unbanded) == 9
+    for row in unbanded:
+        assert row.verdict in (NOT_BANDED, NOT_PROJECTED), row.sentence()
+        assert row.verdict != WITHIN_TOLERANCE
+    exact = replace(
+        rosbag2_measurement("long_run_3000", "zstd_fast"),
+        projected_bytes=rosbag2_measurement(
+            "long_run_3000", "zstd_fast"
+        ).measured_bytes,
+    )
+    assert exact.delta == 0.0
+    assert exact.verdict == NOT_BANDED, (
+        "a row with no tolerance reported a pass when its delta happened to be "
+        "zero. A band nobody set is not a band every number is inside."
+    )
+
+
+def test_a_band_on_a_row_with_no_projection_is_refused() -> None:
+    """THE NEGATIVE for the record's own shape.
+
+    `fastwrite` and the unset bags have no projection: one writes no message
+    index and the other names no profile. A tolerance set on either would be a
+    verdict about nothing, computed from a number that is not there.
+    """
+    row = rosbag2_measurement("long_run_3000", "fastwrite")
+    assert row.projected_bytes is None
+    assert row.delta is None
+    assert row.verdict == NOT_PROJECTED
+    with pytest.raises(BenchError, match="nothing for the band to judge"):
+        replace(row, tolerance=0.01)
+    with pytest.raises(BenchError, match="projection of zero"):
+        replace(rosbag2_measurement("long_run_3000", "none"), projected_bytes=0)
+
+
+def test_a_profile_rosbag2_does_not_accept_is_refused_by_the_record() -> None:
+    """THE NEGATIVE for the names, on the measurement side.
+
+    A bag cannot have been written under a profile rosbag2 rejects, so a row
+    filed under one is a byte count nobody can reproduce. `None` is the only
+    non-profile value the record takes, and it means one specific thing: the run
+    that passed no profile at all.
+    """
+    row = rosbag2_measurement("declared_violation", "none")
+    for name in RETIRED_PRESET_NAMES:
+        with pytest.raises(BenchError, match="not a profile rosbag2 accepts"):
+            replace(row, profile=name)
+    assert replace(row, profile=None).label == "unset"
+    for profile in ROSBAG2_STORAGE_PRESET_PROFILES:
+        assert replace(row, profile=profile).label == profile
+
+
+def test_an_unrecorded_pair_is_refused_rather_than_answered_by_the_nearest_row(
+) -> None:
+    """The run happened once and cannot be repeated here.
+
+    A lookup that fell back to the nearest row would set one writer setting's
+    bytes beside another's projection and publish the delta between two
+    different bags — with both numbers real and the label on them false.
+    """
+    with pytest.raises(BenchError, match="no bag was recorded"):
+        rosbag2_measurement("long_run_3000", "zstd_medium")
+    with pytest.raises(BenchError, match="no bag was recorded"):
+        rosbag2_measurement("no_such_fixture", "none")
+    assert rosbag2_measurement("declared_violation", None).profile is None
+
+
+# --- the pair, and that it cannot come apart quietly ------------------------
+
+
+def test_every_recorded_rosbag2_projection_is_still_what_reg_bench_computes(
+    stream: Path, full_stream: Path
+) -> None:
+    """The measurement is frozen; the projection is not, so it is recomputed.
+
+    Six of the ten rows carry a projection and all six are recomputed here from
+    the fixture the bag was recorded from. If one moves, the published delta
+    describes a comparison between a bag that was written and an encoder this
+    module no longer has — and nothing else would say so, because every other
+    test holds the projection to its own constants.
+    """
+    checked = 0
+    for row in ROSBAG2_SIZE_MEASUREMENTS:
+        if row.projected_bytes is None:
+            continue
+        path = _rosbag2_stream(row, stream, full_stream)
+        assert rosbag2_projection_drift(row, path) == PROJECTION_HOLDS, (
+            f"{row.sentence()} — the recorded projection is not what reg.bench "
+            f"computes for {row.fixture} today."
+        )
+        checked += 1
+    assert checked == 6, f"{checked} rows carried a projection, not 6"
+
+
+def test_a_projection_that_moved_away_from_the_rosbag2_record_is_drift(
+    stream: Path,
+) -> None:
+    """THE NEGATIVE for the pair. One byte of movement is reported, not absorbed."""
+    row = rosbag2_measurement("declared_violation", "zstd_fast")
+    moved = replace(row, projected_bytes=row.projected_bytes + 1)
+    assert rosbag2_projection_drift(moved, stream) == PROJECTION_DRIFTED, (
+        "a projection one byte from the recorded one was reported as holding"
+    )
+    assert rosbag2_projection_drift(row, stream) == PROJECTION_HOLDS
+
+
+def test_a_record_compared_against_another_fixtures_stream_is_refused(
+    stream: Path, full_stream: Path
+) -> None:
+    """**THE NEGATIVE THE ISSUE NAMES.** A row is only about its own fixture.
+
+    Handed the 3,000-frame stream, the 251-frame record would report drift that
+    is nothing but the caller having passed the wrong file — and handed the
+    other way round it would report a projection for a bag nobody recorded. The
+    frame count is what tells them apart, so it is checked rather than assumed.
+    """
+    long_row = rosbag2_measurement("long_run_3000", "none")
+    short_row = rosbag2_measurement("declared_violation", "none")
+    with pytest.raises(BenchError, match="different fixture"):
+        rosbag2_projection_drift(long_row, stream)
+    with pytest.raises(BenchError, match="different fixture"):
+        rosbag2_projection_drift(short_row, full_stream)
+    assert stream_frames(stream) == short_row.frames
+    assert stream_frames(full_stream) == long_row.frames
+
+
+def test_a_row_with_no_projection_cannot_be_drift_checked(
+    full_stream: Path,
+) -> None:
+    """THE OTHER REFUSAL. There is nothing to hold a `fastwrite` row to.
+
+    Computing one now would invent exactly the number the row exists to say
+    nobody has — the projection for a profile whose defining cost this encoder
+    does not model.
+    """
+    for profile in (None, "fastwrite"):
+        row = rosbag2_measurement("long_run_3000", profile)
+        with pytest.raises(BenchError, match="no projection|carries a projection"):
+            rosbag2_projection_drift(row, full_stream)
+
+
+# --- what the run settles, each derived from the rows rather than asserted --
+
+
+def test_the_message_index_width_is_confirmed_from_the_measured_bags() -> None:
+    """`MCAP_MESSAGE_INDEX_PER_MESSAGE` from a second direction.
+
+    16 was read off the specification. `none` minus `fastwrite` over the same
+    messages isolates it from a real bag, because the index is the one thing
+    those two profiles differ by. It comes back a fraction above 16 on both
+    fixtures — the excess is the per-chunk fixed part this projection excludes,
+    which is a larger share of fewer messages — so the two derivations agree to
+    the byte and disagree in the direction the exclusions predict.
+    """
+    for fixture in ("declared_violation", "long_run_3000"):
+        measured = rosbag2_index_bytes_per_message(fixture)
+        assert round(measured) == MCAP_MESSAGE_INDEX_PER_MESSAGE, (
+            f"{fixture}: the measured index is {measured:.2f} B per message and "
+            f"the spec constant is {MCAP_MESSAGE_INDEX_PER_MESSAGE}. Those "
+            "round to different integers, so one of the two derivations is "
+            "wrong and the projection is charging the wrong per-message term."
+        )
+        assert measured >= MCAP_MESSAGE_INDEX_PER_MESSAGE, (
+            f"{fixture}: the bag's index is cheaper than the spec constant, "
+            "which is the direction that would make this projection overcharge "
+            "the incumbent. The excluded per-chunk part can only add."
+        )
+    assert rosbag2_index_bytes_per_message("long_run_3000") == pytest.approx(
+        16.06, abs=0.005
+    )
+
+
+def test_the_index_cannot_be_isolated_from_bags_of_different_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE NEGATIVE for the derivation. Two bags of different content subtract to nothing.
+
+    The whole argument is that the two bags hold the same messages and differ by
+    one term. Take that away — different message counts, or an indexed bag that
+    is somehow the smaller of the two — and the difference divided by either
+    count is a number about nothing. The record is doctored rather than the
+    arithmetic, because the arithmetic is what is being checked.
+    """
+    with pytest.raises(BenchError, match="no bag was recorded"):
+        rosbag2_index_bytes_per_message("declared_violation_2")
+    indexed = rosbag2_measurement("long_run_3000", "none")
+    plain = rosbag2_measurement("long_run_3000", "fastwrite")
+    for doctored, expected in (
+        (replace(indexed, messages=5_999), "cannot isolate a per-message term"),
+        (replace(indexed, measured_bytes=1), "not the larger of the two"),
+    ):
+        monkeypatch.setattr(
+            bench, "ROSBAG2_SIZE_MEASUREMENTS", (doctored, plain)
+        )
+        with pytest.raises(BenchError, match=expected):
+            rosbag2_index_bytes_per_message("long_run_3000")
+
+
+def test_the_default_is_uncompressed_and_that_is_measured() -> None:
+    """*The default is uncompressed* stops being a citation.
+
+    The bag written with no `--storage-preset-profile` and the bag written with
+    `none` come out 4 B apart on both fixtures — under one message of framing,
+    so they are the same encoding rather than two that happen to be close. A
+    compressed default would have shown as a factor, not as four bytes.
+    """
+    for fixture in ("declared_violation", "long_run_3000"):
+        unset = rosbag2_measurement(fixture, None)
+        named = rosbag2_measurement(fixture, "none")
+        gap = abs(unset.measured_bytes - named.measured_bytes)
+        assert gap < MCAP_MESSAGE_RECORD_OVERHEAD, (
+            f"{fixture}: the unset bag and the `none` bag are {gap} B apart, "
+            "which is more than one message of framing. They are no longer "
+            "evidence that the two are the same encoding."
+        )
+        compressed = rosbag2_measurement(fixture, "zstd_fast")
+        assert compressed.measured_bytes < unset.measured_bytes / 2, (
+            f"{fixture}: the compressed bag is not dramatically smaller than "
+            "the default one, so this fixture cannot tell a compressed default "
+            "from an uncompressed one and the check has nothing to say"
+        )
+
+
+def test_the_compressed_projection_matches_neither_profile() -> None:
+    """The second finding: there is no single compressed preset to be right about.
+
+    rosbag2 ships two compressed profiles and this module has one compressed
+    projection, which lands between them. That is why neither compressed figure
+    is claimed to project a profile, and it is why both measurements are
+    published instead of the nearer one.
+    """
+    fast = rosbag2_measurement("long_run_3000", "zstd_fast")
+    small = rosbag2_measurement("long_run_3000", "zstd_small")
+    assert fast.projected_bytes == small.projected_bytes
+    assert small.measured_bytes < fast.projected_bytes < fast.measured_bytes, (
+        "the compressed projection no longer sits between the two profiles. If "
+        "it has come to match one of them, the figures marked as not standing "
+        "need re-deciding rather than this assertion updating."
+    )
+    spread = fast.measured_bytes / small.measured_bytes - 1
+    assert spread > 0.4, (
+        f"the two compressed profiles are {spread:.0%} apart, and the argument "
+        "for publishing both rests on their being far apart"
+    )
+
+
+# --- what the document publishes, held to the record ------------------------
+
+
+def test_the_document_publishes_every_rosbag2_row_and_its_delta() -> None:
+    """The table and the record, cell by cell, in both directions.
+
+    Neither is allowed to be the other's summary. A row edited on the page
+    fails, a row recorded and not published fails, and a delta typed by hand
+    that does not follow from its own two byte counts fails.
+    """
+    published = _rosbag2_published()
+    assert len(published) == len(ROSBAG2_SIZE_MEASUREMENTS), (
+        f"{VALIDATION_DOC.name} publishes {len(published)} rosbag2 rows and "
+        f"reg.bench records {len(ROSBAG2_SIZE_MEASUREMENTS)}. A recorded bag "
+        "that is not on the page is a measurement nobody outside this "
+        "repository can see, which is the whole point of taking it."
+    )
+    for row, m in zip(published, ROSBAG2_SIZE_MEASUREMENTS):
+        fixture, frames, profile, measured, projected, delta, verdict = row
+        assert (fixture, frames, profile) == (m.fixture, m.frames, m.label), (
+            f"{VALIDATION_DOC.name} row {row!r} is not {m.sentence()}"
+        )
+        assert (measured, projected) == (m.measured_bytes, m.projected_bytes)
+        if m.delta is None:
+            assert delta is None, (
+                f"{VALIDATION_DOC.name} publishes a delta for {m.label} on "
+                f"{m.fixture}, which has no projection to take one from."
+            )
+        else:
+            assert delta == pytest.approx(round(m.delta * 100, 3), abs=0.0005), (
+                f"{VALIDATION_DOC.name} publishes {delta:+.3f}% for {m.fixture} "
+                f"{m.label}, and the two byte counts beside it give "
+                f"{m.delta * 100:+.3f}%. A delta typed rather than derived is a "
+                "number with nothing behind it."
+            )
+        assert verdict == ROSBAG2_VERDICT_WORDS[m.verdict], (
+            f"{VALIDATION_DOC.name} calls {m.fixture} {m.label} {verdict!r}, "
+            f"and its own numbers make it {m.verdict}."
+        )
+
+
+def test_the_rosbag2_provenance_states_the_host_and_what_cannot_be_rerun() -> None:
+    """The date, the versions, the host — and the part easiest to leave out.
+
+    This measurement cannot be regenerated by the machine that writes this
+    repository's unattended changes, so a record that omits that reads as
+    something a later run could check by re-running it. It cannot; it checks it
+    by reading the procedure and doing it somewhere with a ROS 2 on it.
+    """
+    for needed in ("2026-09-06", "ros:jazzy", "Docker 29.4.0", "arm64 Darwin",
+                   "rosbag2_py", "/joint_states", "/tf"):
+        assert needed in ROSBAG2_PROVENANCE, f"provenance omits {needed}"
+    assert "NO ROS 2" in ROSBAG2_PROVENANCE, (
+        "the provenance does not say that the host running these tests cannot "
+        "write another bag. A record that omits it reads as reproducible here."
+    )
+    text = VALIDATION_DOC.read_text(encoding="utf-8")
+    for needed in ("ros:jazzy", "Docker 29.4.0", "arm64 Darwin", "rosbag2_py",
+                   "unknown MCAP storage preset profile"):
+        assert needed in text, f"{VALIDATION_DOC.name} omits {needed}"
+
+
+def test_the_document_names_every_profile_rosbag2_accepts() -> None:
+    """The names on the page are the names a practitioner types.
+
+    The error rosbag2 raises lists all four, and the page quotes it. A document
+    that named only the three priced here would leave a reader to guess what
+    `fastwrite` is and why no figure is published under it.
+    """
+    text = VALIDATION_DOC.read_text(encoding="utf-8")
+    for profile in ROSBAG2_STORAGE_PRESET_PROFILES:
+        assert f"`{profile}`" in text or f"'{profile}'" in text, (
+            f"{VALIDATION_DOC.name} does not name the {profile!r} profile"
+        )
+    for retired in RETIRED_PRESET_NAMES:
+        for line in text.splitlines():
+            if line.startswith("|") and retired in line:
+                raise AssertionError(
+                    f"{VALIDATION_DOC.name} still publishes a table row under "
+                    f"{retired!r}, which rosbag2 answers with an error."
+                )

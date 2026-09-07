@@ -260,7 +260,12 @@ from reg.commit import (
     load_witness,
 )
 from reg.declare import Declaration, DeclarationError
-from reg.enforce import PASSIVATING_FAULTS, EnforcementError, Verdict
+from reg.enforce import (
+    PASSIVATING_FAULTS,
+    Acknowledgment,
+    EnforcementError,
+    Verdict,
+)
 from reg.envelope import (
     SUBSTEP_DT,
     compute_envelope,
@@ -308,6 +313,7 @@ __all__ = [
     "GEOMETRY_RETENTION",
     "HUMAN_ENTITY_ID",
     "HUMAN_KIND",
+    "META_ACKNOWLEDGMENT_COUNT",
     "META_ATTESTATION_RECORDS",
     "META_ATTESTATION_RETENTION",
     "META_DECLARATION_COUNT",
@@ -667,7 +673,8 @@ META_OCCURRENCE_RECORDER_VERSION = "occurrence_recorder_version"
 
 #: The rule, as it is recorded in the artifact's meta table.
 ATTESTATION_RETENTION = (
-    "every Declaration and every Verdict the run produced is stored in full and "
+    "every Declaration, every Verdict and every Acknowledgment the run produced "
+    "is stored in full and "
     "verbatim — every field, including prev_hash and mac, exactly as the record "
     "was signed. Nothing is summarised, sampled or dropped (docs/lossiness.md "
     "Retained #4 and #5), and nothing is re-signed or re-hashed on the way in: "
@@ -684,9 +691,15 @@ ATTESTATION_RETENTION = (
     "watchdog_expiry look like in the record — has no ADJUDICATED edge, and that "
     "absence is the finding. An ENFORCED edge runs from a verdict to the bound "
     "it actually applied and exists only for a CLAMP: a PERMIT bounds nothing, "
-    "and a VETO or a SAFE_STATE permits no action to bound. A FOLLOWS edge links "
+    "and a VETO or a SAFE_STATE permits no action to bound. An ACKNOWLEDGED edge "
+    "runs from each acknowledgment to the verdict whose passivation it cleared, "
+    "at the instant the acknowledgment was made; there is exactly one per "
+    "acknowledgment, its verdict is required rather than nullable, and a "
+    "passivating verdict with no such edge pointing at it was never acknowledged "
+    "in this run. A FOLLOWS edge links "
     "each record to its predecessor in its own chain; declarations chain under "
-    "the policy key and verdicts under the enforcement key, so this artifact "
+    "the policy key, and verdicts and acknowledgments interleave into one chain "
+    "under the enforcement key, so this artifact "
     "holds two chains and each begins at the genesis hash. Record timestamps are "
     "stored as the record carries them and are NOT quantized to the tolerance "
     "the edge layer's endpoints use — the record commits to its own instants and "
@@ -696,7 +709,9 @@ ATTESTATION_RETENTION = (
     "from a policy is not a function of any configuration here. The absence of "
     "the declaration_count key from this meta table means this build was given "
     "no record stream at all, which is not the same fact as a run that produced "
-    "no records."
+    "no records, and the same holds of acknowledgment_count: absent means no "
+    "stream was offered, and 0 means this run passivated nothing or nobody "
+    "cleared what it passivated."
 )
 
 #: Where the attestation-layer facts land in `meta`.
@@ -709,6 +724,7 @@ META_ATTESTATION_RETENTION = "attestation_retention"
 META_ATTESTATION_RECORDS = "attestation_records"
 META_DECLARATION_COUNT = "declaration_count"
 META_VERDICT_COUNT = "verdict_count"
+META_ACKNOWLEDGMENT_COUNT = "acknowledgment_count"
 
 # --------------------------------------------------------------------------
 # The time base, and the rate range in which this artifact's own tolerances
@@ -914,38 +930,49 @@ class GraphQueryError(Exception):
 class AttestationRecords:
     """One run's signed record stream, as the producers emitted it.
 
-    Both fields are required and neither has a default. `AttestationRecords((),
-    ())` is a run that produced nothing, and passing `records=None` to `build` is
-    a build that was not given a record stream; those are different facts, the
-    artifact records which one it holds, and a default here would collapse them
-    at the one place where the distinction is still available.
+    All three fields are required and none has a default. `AttestationRecords((),
+    (), ())` is a run that produced nothing, and passing `records=None` to
+    `build` is a build that was not given a record stream; those are different
+    facts, the artifact records which one it holds, and a default here would
+    collapse them at the one place where the distinction is still available.
 
-    The two tuples are two chains, not one interleaved stream: declarations link
-    to declarations under the policy key and verdicts to verdicts under the
-    enforcement key, each starting at `GENESIS_HASH`. Both must be in chain
-    order — `build` refuses a stream whose links do not hold, because a FOLLOWS
-    edge written across a break asserts a link that is not there.
+    The tuples are **two chains, not three**: declarations link to declarations
+    under the policy key, and verdicts and acknowledgments interleave into one
+    chain under the enforcement key. Both chains must be in chain order — `build`
+    refuses a stream whose links do not hold, because a FOLLOWS edge written
+    across a break asserts a link that is not there.
 
-    Acknowledgments are not here, and that is a **deliberate refusal, not an
-    omission** (issue #110). They share the verdict chain, so a run that contains
-    one has a verdict whose `prev_hash` names a record this artifact does not
-    hold; `build` refuses that stream rather than writing a FOLLOWS edge over the
-    gap. Two checks do it and both must keep doing it while the schema has no row
-    for the record: the type check below refuses an `Acknowledgment` offered as a
-    `Verdict`, and `_check_link` refuses the verdict that follows one. The cost is
-    that no artifact can be asked whether a passivation was acknowledged — stated
-    in `docs/lossiness.md` *Retained* #7 and in `README.md`'s Claim 4 row, and
-    issue #112 is where it would change. Until then, removing either check is not
-    a widening; it is a chain that walks cleanly over a record nobody ever saw.
+    ACKNOWLEDGMENTS ARE HERE NOW, AND THE REFUSAL THEY REPLACE WAS CORRECT
+    ----------------------------------------------------------------------
+    Until issue #247 there was no third field and `build` refused any run
+    containing an acknowledgment (issue #110). That was not conservatism: the
+    schema had no row for the record, so a run holding one had a verdict whose
+    `prev_hash` named a record the artifact could not hold, and the alternative
+    to refusing was writing a FOLLOWS edge over a gap — a chain that walks
+    cleanly over records nobody ever saw, which is the one thing `verify_chain`
+    must never be able to do. The cost was stated rather than hidden: no artifact
+    could be asked whether a passivation was acknowledged.
+
+    What changed is the schema, not the standard. `reg.store` holds the record,
+    the enforcement chain runs over both tables, and the link check below now has
+    something to check. **One of the two old refusals stays exactly as it was:**
+    the type check still rejects an `Acknowledgment` offered inside `verdicts`,
+    because storing an acknowledgment's fields in a verdict's columns would
+    record a passivation's *clearing* as a passivation. The other has not been
+    deleted either — `_check_link` still refuses the verdict that follows a
+    record this stream does not carry, which is now how an acknowledgment
+    *omitted* from a run that produced one is caught.
     """
 
     declarations: tuple[Declaration, ...]
     verdicts: tuple[Verdict, ...]
+    acknowledgments: tuple[Acknowledgment, ...]
 
     def __post_init__(self) -> None:
         for name, expected in (
             ("declarations", Declaration),
             ("verdicts", Verdict),
+            ("acknowledgments", Acknowledgment),
         ):
             values = getattr(self, name)
             if not isinstance(values, tuple):
@@ -965,6 +992,20 @@ class AttestationRecords:
                         "record."
                     )
 
+    @property
+    def enforcement_chain(self) -> tuple[Verdict | Acknowledgment, ...]:
+        """The verdicts and acknowledgments in one order: the enforcer's own.
+
+        Sorted on `seq`, which both kinds draw from the single counter
+        `reg.enforce.Enforcer` advances per record — so the order is total and is
+        the order the `prev_hash` links were written in. Assembling it by
+        following those links instead would build the sequence out of the very
+        claims `_check_link` exists to check.
+        """
+        merged: list[Verdict | Acknowledgment] = [*self.verdicts, *self.acknowledgments]
+        merged.sort(key=lambda record: (int(record.seq), _record_id(record)))
+        return tuple(merged)
+
 
 @dataclass(frozen=True)
 class BuildResult:
@@ -972,11 +1013,13 @@ class BuildResult:
 
     path: Path
     frames: int
-    #: Rows per edge type, all four keys always present. A zero is a fact ("no
-    #: contact in this run"); a missing key would be indistinguishable from one.
+    #: Rows per edge type, every key in `reg.store.EDGE_SPECS` always present. A
+    #: zero is a fact ("no contact in this run"); a missing key would be
+    #: indistinguishable from one.
     edges: dict[str, int]
-    #: Rows per node kind, all six keys always present, for the same reason.
-    #: `Declaration` and `Verdict` count 0 on a build handed no record stream —
+    #: Rows per node kind, every key in `reg.store.NODE_TABLES`, for the same
+    #: reason. `Declaration`, `Verdict` and `Acknowledgment` count 0 on a build
+    #: handed no record stream —
     #: whose artifact has no such tables at all (issue #54) — and 0 is the count
     #: of rows written either way. Whether a stream was offered is
     #: `meta[attestation_records]`, not a row count, in both versions of the
@@ -1707,21 +1750,32 @@ class _OccurrenceLog:
 
 
 # --------------------------------------------------------------------------
-# The attestation layer: the records, their regions, and the four edges.
+# The attestation layer: the records, their regions, and the five edges.
 # --------------------------------------------------------------------------
 
 
-def _record_id(record: Declaration | Verdict) -> str:
-    return (
-        record.declaration_id
-        if isinstance(record, Declaration)
-        else record.verdict_id
-    )
+#: Record class -> the field naming it. One table, so a record kind added
+#: without an entry here fails loudly at the first link rather than being
+#: silently identified by whichever branch an if/else fell through to.
+_RECORD_ID_FIELDS: dict[type, str] = {
+    Declaration: "declaration_id",
+    Verdict: "verdict_id",
+    Acknowledgment: "ack_id",
+}
 
 
-def _check_link(
-    record: Declaration | Verdict, previous: Declaration | Verdict | None
-) -> None:
+def _record_id(record: object) -> str:
+    field = _RECORD_ID_FIELDS.get(type(record))
+    if field is None:
+        raise GraphBuildError(
+            f"a {type(record).__name__} is not one of this artifact's record "
+            f"kinds {[cls.__name__ for cls in _RECORD_ID_FIELDS]}, so there is "
+            "no field naming it and nothing to write a chain link between."
+        )
+    return str(getattr(record, field))
+
+
+def _check_link(record: object, previous: object | None) -> None:
     """Refuse a record that does not link to the one before it. No repair.
 
     The `FOLLOWS` edge asserts that one record commits to another, and it is only
@@ -1813,12 +1867,15 @@ def _attestation_envelope(
 def _write_attestation(
     conn, records: AttestationRecords, occurrences: _OccurrenceLog
 ) -> None:
-    """The record tables, the regions they name, and the four edges.
+    """The record tables, the regions they name, and the five edges.
 
     Declarations first, and not for tidiness: `reg.store.insert_verdict` refuses
     a verdict naming a declaration the artifact does not hold, so the order is
     what turns "this verdict adjudicated something not in the file" from a
-    dangling edge into a refusal.
+    dangling edge into a refusal. The enforcement chain is written as one
+    interleaved stream for the same reason at one level down —
+    `insert_acknowledgment` refuses an acknowledgment whose verdict is not yet in
+    the file, and the chain order puts it there.
 
     Edge times come from the records and are not quantized — see the module
     header.
@@ -1850,57 +1907,90 @@ def _write_attestation(
             _open_follows(conn, declaration, previous_declaration, "Declaration")
         previous_declaration = declaration
 
-    previous_verdict: Verdict | None = None
-    for verdict in records.verdicts:
-        _check_link(verdict, previous_verdict)
-        store.insert_verdict(conn, verdict)
+    previous_record: Verdict | Acknowledgment | None = None
+    for record in records.enforcement_chain:
+        _check_link(record, previous_record)
 
-        # One ADJUDICATED edge per verdict, at the instant of the commanded
-        # action. **Not one per declaration** — see ATTESTATION_RETENTION and
-        # `reg.enforce`'s module header: on `declared_violation` a single
-        # declaration is adjudicated PERMIT dozens of times and then CLAMP, and
-        # collapsing that would destroy the ability to say when the violation
-        # began.
-        if verdict.declaration_id is not None:
-            store.open_edge(
-                conn,
-                "ADJUDICATED",
-                verdict.verdict_id,
-                verdict.declaration_id,
-                verdict.t,
-            )
+        if isinstance(record, Verdict):
+            store.insert_verdict(conn, record)
 
-        clamped = verdict.envelope()
-        if clamped is not None:
-            store.open_edge(
-                conn,
-                "ENFORCED",
-                verdict.verdict_id,
-                _attestation_envelope(
+            # One ADJUDICATED edge per verdict, at the instant of the commanded
+            # action. **Not one per declaration** — see ATTESTATION_RETENTION and
+            # `reg.enforce`'s module header: on `declared_violation` a single
+            # declaration is adjudicated PERMIT dozens of times and then CLAMP,
+            # and collapsing that would destroy the ability to say when the
+            # violation began.
+            if record.declaration_id is not None:
+                store.open_edge(
                     conn,
-                    clamped,
-                    source=CLAMPED_ENVELOPE_SOURCE,
-                    # The Verdict record states no horizon for the bound it
-                    # applied, and there is none to be had: it is the region one
-                    # action was held inside, not a window. NULL is that silence
-                    # carried through rather than a number invented here.
-                    horizon=None,
-                ),
-                verdict.t,
+                    "ADJUDICATED",
+                    record.verdict_id,
+                    record.declaration_id,
+                    record.t,
+                )
+
+            clamped = record.envelope()
+            if clamped is not None:
+                store.open_edge(
+                    conn,
+                    "ENFORCED",
+                    record.verdict_id,
+                    _attestation_envelope(
+                        conn,
+                        clamped,
+                        source=CLAMPED_ENVELOPE_SOURCE,
+                        # The Verdict record states no horizon for the bound it
+                        # applied, and there is none to be had: it is the region
+                        # one action was held inside, not a window. NULL is that
+                        # silence carried through rather than a number invented
+                        # here.
+                        horizon=None,
+                    ),
+                    record.t,
+                )
+        else:
+            # The acknowledgment goes in after the verdict it names, which the
+            # chain order already guarantees: `Enforcer.acknowledge` refuses to
+            # issue one unless a verdict has passivated, so the record it names
+            # is behind it in `seq`. `insert_acknowledgment` refuses it anyway if
+            # the artifact does not hold that verdict — the order is a property
+            # of the producer, and a check that trusted it would be checking the
+            # producer rather than the stream.
+            store.insert_acknowledgment(conn, record)
+            # One ACKNOWLEDGED edge, at the instant the acknowledgment was made
+            # and NOT spanning back to the passivation. The span between the two
+            # is the passivation's own duration, and it is a fact about the run
+            # rather than about the record; writing it here would put a claim
+            # about how long the robot was stopped into an edge whose MAC covers
+            # neither endpoint's time but its own.
+            store.open_edge(
+                conn,
+                "ACKNOWLEDGED",
+                record.ack_id,
+                record.verdict_id,
+                record.t,
             )
 
-        if previous_verdict is not None:
-            _open_follows(conn, verdict, previous_verdict, "Verdict")
-        previous_verdict = verdict
+        if previous_record is not None:
+            _open_follows(
+                conn,
+                record,
+                previous_record,
+                type(record).__name__,
+                type(previous_record).__name__,
+            )
+        previous_record = record
 
-        occurrences.verdict_recorded(verdict)
+        if isinstance(record, Verdict):
+            occurrences.verdict_recorded(record)
 
 
 def _open_follows(
     conn,
-    record: Declaration | Verdict,
-    previous: Declaration | Verdict,
+    record: object,
+    previous: object,
     kind: str,
+    previous_kind: str | None = None,
 ) -> None:
     """One chain link, from a record to the record it commits to.
 
@@ -1910,6 +2000,11 @@ def _open_follows(
     clock: a verdict raised against a declaration issued earlier can carry the
     earlier timestamp, and an interval that ran backwards would drop out of every
     timeline query instead of erroring.
+
+    `previous_kind` defaults to `kind` — the policy chain, where both ends are
+    always declarations. The enforcement chain states both, because a link there
+    runs between whichever two of a verdict and an acknowledgment happen to be
+    consecutive, and an endpoint stored against the wrong table points at nothing.
     """
     a = _record_time(record)
     b = _record_time(previous)
@@ -1921,11 +2016,11 @@ def _open_follows(
         min(a, b),
         t_end=max(a, b),
         src_kind=kind,
-        dst_kind=kind,
+        dst_kind=kind if previous_kind is None else previous_kind,
     )
 
 
-def _record_time(record: Declaration | Verdict) -> float:
+def _record_time(record: object) -> float:
     return float(
         record.t_issued if isinstance(record, Declaration) else record.t
     )
@@ -2853,6 +2948,13 @@ def _write_provenance(
     if records is not None:
         store.put_meta(conn, META_DECLARATION_COUNT, str(len(records.declarations)))
         store.put_meta(conn, META_VERDICT_COUNT, str(len(records.verdicts)))
+        # A third count, not a widening of the second: the enforcement chain's
+        # length is the sum, and two keys are what let a walk say which table a
+        # record went missing from. It is written even at zero, for the reason
+        # the other two are — an absent key means no record stream was offered.
+        store.put_meta(
+            conn, META_ACKNOWLEDGMENT_COUNT, str(len(records.acknowledgments))
+        )
 
     store.put_meta(conn, "tolerance_distance_tol_m", _float_text(DISTANCE_TOL_M))
     store.put_meta(conn, "tolerance_area_quant_sigfigs", str(AREA_QUANT_SIGFIGS))
@@ -3779,7 +3881,14 @@ def attestation_from_stream(
         id_prefix=scenario.name,
     )
 
+    # The instants this fixture's operator acknowledges a passivation at, in
+    # the same rounded-instant form the declarations use. A scenario that
+    # acknowledges nothing has an empty tuple and this loop does nothing —
+    # `acknowledge` refuses a pre-emptive acknowledgment, so there is no way for
+    # an empty catalogue field to be read as a clearance.
+    acknowledging = {round(float(point.t), 9): point for point in scenario.acknowledged_at}
     verdicts: list[Verdict] = []
+    acknowledgments: list[Acknowledgment] = []
     for state in states:
         due = pending.pop(round(state.t, 9), None)
         if due is not None:
@@ -3793,6 +3902,24 @@ def attestation_from_stream(
             if refusal is not None:
                 verdicts.append(refusal)
         verdicts.append(enforcer.adjudicate(state))
+        # After the frame's verdict, not before it: the fixture states an instant
+        # at which somebody acknowledged, and at that instant the run's own
+        # adjudication has already happened. Acknowledging first would clear a
+        # passivation the frame was about to re-report.
+        point = acknowledging.pop(round(state.t, 9), None)
+        if point is not None:
+            acknowledgments.append(
+                enforcer.acknowledge(t=float(state.t), reason=point.reason)
+            )
+
+    if acknowledging:
+        raise GraphBuildError(
+            f"{sorted(acknowledging)}: the scenario acknowledges a passivation "
+            "at instant(s) no frame of the stream carries, so no enforcer state "
+            "exists to acknowledge. Storing the acknowledgment would put a "
+            "record in the artifact that no run ever made; dropping it would "
+            "shorten the chain with nothing saying so."
+        )
 
     if pending:
         raise GraphBuildError(
@@ -3803,7 +3930,9 @@ def attestation_from_stream(
             "the chain with nothing saying so."
         )
     return AttestationRecords(
-        declarations=tuple(declarations), verdicts=tuple(verdicts)
+        declarations=tuple(declarations),
+        verdicts=tuple(verdicts),
+        acknowledgments=tuple(acknowledgments),
     )
 
 

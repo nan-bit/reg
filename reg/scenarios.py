@@ -86,6 +86,38 @@ def _is_number(value: object) -> bool:
 
 
 @dataclass(frozen=True)
+class AckPoint:
+    """One instant at which this fixture's operator acknowledges a passivation.
+
+    A **policy/operator** field, in the same sense `silent_windows` is: a run
+    includes what the people around it did while it happened, and a trajectory
+    alone cannot express somebody clearing a fault. It carries no fault code and
+    no verdict id — `reg.enforce.Enforcer.acknowledge` reads both off the
+    passivation actually in force, and a fixture stating them would be a second
+    source for a fact the enforcer already holds.
+
+    `reason` is required and non-empty for the reason `Acknowledgment.reason` is:
+    an acknowledgment with no stated reason is a rubber stamp, and the whole
+    point of the record is that somebody had to say something a reader can later
+    disagree with.
+    """
+
+    t: float
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not _is_number(self.t) or not np.isfinite(float(self.t)):
+            raise ValueError(f"AckPoint.t must be a finite number, got {self.t!r}")
+        if not isinstance(self.reason, str) or not self.reason.strip():
+            raise ValueError(
+                f"AckPoint at t={self.t} has reason={self.reason!r}. An "
+                "acknowledgment with no stated reason is a rubber stamp, and a "
+                "fixture that produced one would put a rubber stamp in the "
+                "artifact this project asks people to audit."
+            )
+
+
+@dataclass(frozen=True)
 class Waypoint:
     """One scripted knot: a time and the values held at it.
 
@@ -106,9 +138,9 @@ class Scenario:
     not state its own jitter would be claiming an invented number as a fixture
     parameter, and every compression figure downstream would inherit it.
 
-    Five fields describe the **policy** rather than the motion:
-    `declared_q_bounds`, `declared_margin_m`, `silent_windows`,
-    `declared_action_class` and `fault`. A fixture is a *run*, and a run includes
+    Six fields describe the **policy and the people around it** rather than the
+    motion: `declared_q_bounds`, `declared_margin_m`, `silent_windows`,
+    `declared_action_class`, `fault` and `acknowledged_at`. A fixture is a *run*, and a run includes
     what the policy said while it happened — a trajectory alone cannot express a
     declaration that expired, one that was never issued, or one that claimed
     space the robot cannot reach. Each defaults to the not-applicable value and
@@ -205,6 +237,23 @@ class Scenario:
     #: time. It is a claim about the run, not a switch: nothing here changes what
     #: the fixture does.
     fault: str | None = None
+    #: Instants at which somebody acknowledges the passivation in force, as
+    #: `AckPoint(t, reason)` (issue #247). Empty means nobody acknowledges
+    #: anything in this run, which is what ten of the fixtures do.
+    #:
+    #: A **sixth policy field** and the first that is about neither the policy
+    #: nor the robot: it is what an operator did. It is here for the reason
+    #: `silent_windows` is — a run is not a trajectory, and *the passivation was
+    #: cleared at t=6.0 because the cell had been inspected* is a fact about the
+    #: run that no joint path can carry.
+    #:
+    #: Empty is not a default standing in for a value: `reg.enforce` refuses a
+    #: pre-emptive acknowledgment outright, so an instant nobody stated cannot
+    #: become one this module invented, and an instant at which nothing is
+    #: passivated makes the build fail loudly rather than quietly recording a
+    #: clearance. What an empty tuple says is *this fixture's operator did
+    #: nothing*, which is a statement about the run.
+    acknowledged_at: tuple[AckPoint, ...] = ()
     #: The base's scripted room-frame path: knots of `(x, y, theta)` in metres
     #: and radians, interpolated exactly as `joint_waypoints` is and integrated
     #: under the base's own bounds exactly as the joints are (see `states`).
@@ -537,6 +586,38 @@ class Scenario:
                     "and which one a reader is looking at changes the answer."
                 )
             previous_end = t1
+
+        if not isinstance(self.acknowledged_at, tuple):
+            raise TypeError(
+                f"{self.name}: acknowledged_at must be a tuple, not "
+                f"{type(self.acknowledged_at)}. It reaches the record with the "
+                "fixture, and a record that can be edited after the fact is not "
+                "evidence."
+            )
+        previous_t = None
+        for k, point in enumerate(self.acknowledged_at):
+            if not isinstance(point, AckPoint):
+                raise TypeError(
+                    f"{self.name}: acknowledged_at[{k}] = {point!r} is not an "
+                    "AckPoint. The instant and the stated reason arrive together "
+                    "or the fixture is a clearance nobody signed for."
+                )
+            if not 0.0 <= point.t <= self.duration:
+                raise ValueError(
+                    f"{self.name}: acknowledged_at[{k}] is at t={point.t}, "
+                    f"outside [0.0, {self.duration}]. An acknowledgment at an "
+                    "instant the run does not reach acknowledges nothing, and "
+                    "the fixture that stated it would look like it exercised a "
+                    "clearance it never made."
+                )
+            if previous_t is not None and point.t <= previous_t:
+                raise ValueError(
+                    f"{self.name}: acknowledged_at[{k}] is at t={point.t}, at or "
+                    f"before the previous one ({previous_t}). Two "
+                    "acknowledgments at one instant are one record written "
+                    "twice, and out of order they describe a run nobody had."
+                )
+            previous_t = point.t
 
         for label, value in (
             ("declared_action_class", self.declared_action_class),

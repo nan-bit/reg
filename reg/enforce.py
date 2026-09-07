@@ -143,9 +143,10 @@ for two structural reasons rather than preferences. RTD's guarantee lives inside
 the **planner** — the same party that chooses the trajectory proves it safe,
 which is the common-cause structure CLAUDE.md rule 3 exists to refuse. And this
 module VETOes a *declaration* and commands nothing; the one thing in the tree
-that resembles a fail-safe, passivation, reaches no table, no edge type and no
-query (issue #112), so a project that cannot represent a stop cannot rest a bound
-on having one. §23 also records the consolation: RTD's own set is horizon-limited
+that resembles a fail-safe, passivation, is a record about a stop and not a stop
+— since issue #247 it reaches the artifact, and what reaches it is the
+acknowledgment that a party cleared one — so a project that cannot command a
+stop cannot rest a bound on having one. §23 also records the consolation: RTD's own set is horizon-limited
 and per-step, so resting on the outer envelope alone is **the position that
 literature works from**, not a degraded one.
 
@@ -248,6 +249,15 @@ the verdict that caused the passivation. Either alone resumes nothing. That
 asymmetry is the part people omit when they copy the pattern, and the
 acknowledgment is signed with the **enforcement** key precisely so that the
 policy cannot clear its own fault — the gate would otherwise be decorative.
+
+**And since issue #247 the record leaves this module.** `reg.store` holds it,
+`reg.graph` writes an `ACKNOWLEDGED` edge from it to the verdict it clears,
+`reg.query.acknowledgments` answers *was the passivation acknowledged, and by
+whom*, and `reg.chain.verify_chain` walks it in the enforcement chain beside the
+verdicts. Nothing here changed for it: the enforcer numbers it out of the same
+`seq` counter the verdicts use and chains it onto the same `prev_hash`, which is
+what it always did — what changed is that an artifact can now hold what this
+module already knew.
 
 NO DEFAULTS
 -----------
@@ -506,11 +516,21 @@ class Acknowledgment:
     declaration at t=3 must not silently clear a different stale declaration at
     t=9. `Enforcer.acknowledge` binds it to the verdict that actually passivated.
 
+    **`seq` is the enforcement chain's position, shared with the verdicts**
+    (issue #247). It is not a second counter: `Enforcer` draws one `seq` for
+    every record it emits, so a verdict and an acknowledgment never carry the
+    same one and sorting the two tables together by it reproduces the order the
+    chain was written in. That is what lets `reg.chain` walk one enforcement
+    chain over two tables — an acknowledgment stored without a position in that
+    order would be a record the walk could only place by trusting the links it
+    is there to check.
+
     Args:
         ack_id: deterministic and unique within a run.
+        verdict_id: the verdict that passivated the enforcer.
+        seq: position in the enforcement chain, shared with the verdicts.
         t: seconds, when the acknowledgment was made.
         fault: the fault being acknowledged, from `FAULTS`.
-        verdict_id: the verdict that passivated the enforcer.
         reason: free text saying why it is safe to resume. Required and
             non-empty — an acknowledgment with no stated reason is a rubber
             stamp, and the whole point of the record is that somebody had to say
@@ -524,15 +544,26 @@ class Acknowledgment:
     SIGNING_ROLE: ClassVar[Role] = "enforcement"
 
     ack_id: str
+    verdict_id: str
+    seq: int
     t: float
     fault: str
-    verdict_id: str
     reason: str
     prev_hash: str
     mac: str
 
     def __post_init__(self) -> None:
         _check_id(self.ack_id, "ack_id")
+        if isinstance(self.seq, bool) or not isinstance(self.seq, (int, np.integer)):
+            raise EnforcementError(
+                f"seq must be an int, got {self.seq!r}. It is this record's "
+                "position in the enforcement chain, not a time."
+            )
+        object.__setattr__(self, "seq", int(self.seq))
+        if self.seq < 0:
+            raise EnforcementError(
+                f"seq {self.seq} is negative. The chain's first record is 0."
+            )
         object.__setattr__(self, "t", _finite(self.t, "t"))
         if self.fault not in FAULTS:
             raise EnforcementError(
@@ -1757,9 +1788,13 @@ class Enforcer:
 
         ack = Acknowledgment(
             ack_id=f"{self._id_prefix}-ack-{len(self._acknowledgments):05d}",
+            verdict_id=self._passivating_verdict_id,
+            # The enforcement chain's own counter, the one the verdicts draw
+            # from. A second counter would number two records 0 and leave the
+            # merged stream with no order a reader could recover.
+            seq=self._seq,
             t=_finite(t, "t"),
             fault=self._passivation_fault,
-            verdict_id=self._passivating_verdict_id,
             reason=reason,
             prev_hash=self._prev_hash,
             mac=UNSIGNED_MAC,
@@ -1767,6 +1802,7 @@ class Enforcer:
         signed = sign_acknowledgment(ack, self._key)
         self._acknowledgments.append(signed)
         self._prev_hash = chain_hash(signed, self._prev_hash)
+        self._seq += 1
         self._acknowledged_verdict_id = self._passivating_verdict_id
         return signed
 

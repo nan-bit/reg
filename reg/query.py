@@ -167,6 +167,7 @@ from reg.tolerances import (
 
 __all__ = [
     "ABSENT",
+    "ACKNOWLEDGING_PARTY",
     "ANSWERED",
     "ATTESTATION_LAYER",
     "ATTESTATION_PRESENT",
@@ -205,11 +206,14 @@ __all__ = [
     "META_OCCURRENCE_RETENTION",
     "META_T_FIRST",
     "META_T_LAST",
+    "META_OPERATOR_ID",
     "META_VERDICT_COUNT",
     "OCCURRENCE_LAYER",
+    "PASSIVATING_OUTCOMES",
     "PERMITTED_OUTCOME",
     "QUERIES",
     "READABLE_NOT_CHECKABLE",
+    "Acknowledged",
     "Adjudication",
     "Answer",
     "Clause",
@@ -223,6 +227,8 @@ __all__ = [
     "FramesAtRisk",
     "IncidentReport",
     "OverlapInterval",
+    "Passivation",
+    "Passivations",
     "QueryError",
     "QuerySpec",
     "ReachableEntities",
@@ -231,6 +237,7 @@ __all__ = [
     "SeparationTimeline",
     "ViolatingAction",
     "Violations",
+    "acknowledgments",
     "attestation_state",
     "available_layers",
     "cold_read",
@@ -382,6 +389,23 @@ META_ATTESTATION_RETENTION = "attestation_retention"
 META_DECLARATION_COUNT = "declaration_count"
 META_VERDICT_COUNT = "verdict_count"
 
+#: Who the build said was responsible for the run (issue #83). Read only by
+#: `acknowledgments`, and read as *the operator this artifact names* and never as
+#: *the person who acknowledged*: the record is signed under the enforcement key
+#: and carries no human field, so these are two facts and the answer keeps them
+#: apart. Absent is `None` — an artifact that names no operator is not one whose
+#: operator this module may guess.
+META_OPERATOR_ID = "operator_id"
+
+#: The party an acknowledgment is attributable to: the role whose key signed it,
+#: which is `reg.enforce.Acknowledgment.SIGNING_ROLE`. Spelled here rather than
+#: imported for the reason the `meta` keys above are, and
+#: `tests/test_query.py::test_the_acknowledging_party_is_the_signing_role`
+#: compares the two sides. It is a **party and not a person**, and that is the
+#: honest limit of what the file can attribute: the policy cannot clear its own
+#: fault (`reg.enforce`), which is what the role being *enforcement* records.
+ACKNOWLEDGING_PARTY = "enforcement"
+
 #: The one outcome that is not a finding against the commanded action. Named
 #: here rather than imported from `reg.enforce.OUTCOMES`, which is the
 #: vocabulary's single definition, because importing it would pull `reg.declare`
@@ -390,6 +414,18 @@ META_VERDICT_COUNT = "verdict_count"
 #: compares the two sides and fails on a rename, which is the same bargain the
 #: `meta` keys above are held to.
 PERMITTED_OUTCOME = "PERMIT"
+
+#: The two outcomes that stop the robot, so a verdict carrying one opens a
+#: **passivation** (issue #247). Named here rather than imported from
+#: `reg.enforce.PASSIVATING_FAULTS` for `PERMITTED_OUTCOME`'s reason, and
+#: `tests/test_query.py::test_the_passivating_outcomes_are_the_enforcers`
+#: compares the two sides: enforcement passivates on every fault except
+#: `declaration_action_mismatch`, whose response is the CLAMP, so *outcome is
+#: VETO or SAFE_STATE* and *fault passivates* pick out the same verdicts. Two
+#: definitions that must agree is a thing this module already lives with; a
+#: definition that reached into `reg.enforce` would cost Claim 2's import
+#: property, which is the more expensive of the two.
+PASSIVATING_OUTCOMES: tuple[str, ...] = ("VETO", "SAFE_STATE")
 
 #: `reg.chain.ChainState.VERIFIED`'s value, for the same reason and under the
 #: same test. A report that compared against a misspelled state would report
@@ -623,6 +659,26 @@ QUERIES: dict[str, QuerySpec] = {
         why_not=(
             "The verdict stream is the answer and the scene layers hold none of "
             "it."
+        ),
+        layer_tag=_RECORD_LAYER,
+    ),
+    "acknowledgments": QuerySpec(
+        name="acknowledgments",
+        question=(
+            "every passivation of the run, and for each one whether it was "
+            "acknowledged, by which party, when and why"
+        ),
+        answerable_from=frozenset({ATTESTATION_LAYER}),
+        arguments=(),
+        tolerance=(
+            "none — exact field equality against the stored records. The "
+            "instants are the ones the acknowledgment and the verdict were "
+            "signed at and are not quantized"
+        ),
+        why_not=(
+            "An acknowledgment is a signed record of what a party stated. It is "
+            "in the enforcement chain or it is nowhere; no density of scene "
+            "edges reconstructs a party clearing a fault."
         ),
         layer_tag=_RECORD_LAYER,
     ),
@@ -929,6 +985,93 @@ class DeclarationVerdicts:
     def outcomes(self) -> tuple[str, ...]:
         """Every distinct outcome this declaration received, sorted."""
         return tuple(sorted({a.outcome for a in self.adjudications}))
+
+
+@dataclass(frozen=True)
+class Acknowledged:
+    """One acknowledgment as the artifact holds it: who, when and why.
+
+    **`party` is the honest answer to "by whom", and it is a party and not a
+    person.** The record is signed under the enforcement key, so what the
+    artifact can attribute is the key-holding role; the human who decided is not
+    a field of `reg.enforce.Acknowledgment` and is not invented here.
+    `operator_id` is the run's own `meta` value — the operator the build was told
+    was responsible for the run (issue #83) — and it is `None` when the artifact
+    states none. Between them they say as much as the file holds and no more,
+    which is why they are two fields and not one blended attribution.
+    """
+
+    ack_id: str
+    seq: int
+    t: float
+    fault: str
+    reason: str
+    #: The signing role of the enforcement chain. A constant of the record's
+    #: class rather than a column, carried here so a reader of an `Answer` does
+    #: not have to know which key signs what.
+    party: str
+    #: `meta[operator_id]`, or `None` if the artifact states none.
+    operator_id: str | None
+
+
+@dataclass(frozen=True)
+class Passivation:
+    """One stretch of the run in which enforcement had the robot stopped.
+
+    `verdict_id` is the verdict that opened it — the one an `Acknowledgment` may
+    name. `t_end` is the instant of the first verdict that resumed adjudicating,
+    or `None` for a passivation the run never came out of, which is a fact about
+    the run and not a missing value.
+
+    `acknowledgment` is `None` when this artifact holds no acknowledgment naming
+    the opening verdict. That is **not** a statement that nobody acknowledged it:
+    the record is of what enforcement was told, and an operator who cleared the
+    cell without telling it leaves the same absence. `Passivations.answered` is
+    what turns that into the query's three-valued verdict.
+    """
+
+    verdict_id: str
+    seq: int
+    fault: str
+    t_start: float
+    t_end: float | None
+    #: Verdicts emitted while this passivation was in force, including the one
+    #: that opened it. Every one after the first is enforcement *reporting* the
+    #: stop rather than raising a new fault.
+    verdicts: int
+    acknowledgment: Acknowledged | None
+
+    @property
+    def acknowledged(self) -> bool:
+        return self.acknowledgment is not None
+
+
+@dataclass(frozen=True)
+class Passivations:
+    """docs/plan.md Phase 4's asymmetry, answered from the file (issue #247).
+
+    An empty `passivations` is a run enforcement never stopped, and it is an
+    **answer**: nothing needed acknowledging, so the question is closed rather
+    than unanswerable. That is the one case where an empty list here is not
+    silence, and it is why `answered` is a property of this shape rather than a
+    count somewhere else.
+    """
+
+    passivations: tuple[Passivation, ...]
+    #: Acknowledgments the artifact holds that name no passivation this walk
+    #: found. Empty in any artifact `reg.graph` wrote — it is here because the
+    #: alternative to carrying them is dropping them, and a record nobody can
+    #: see is worse than one nobody expected.
+    unmatched: tuple[Acknowledged, ...]
+
+    @property
+    def unacknowledged(self) -> tuple[Passivation, ...]:
+        return tuple(p for p in self.passivations if not p.acknowledged)
+
+    @property
+    def answered(self) -> bool:
+        """Whether *and by whom* has an answer for every passivation of the run."""
+        return not self.unacknowledged and not self.unmatched
 
 
 @dataclass(frozen=True)
@@ -2201,6 +2344,177 @@ def verdicts(conn: sqlite3.Connection, declaration_id: str) -> Answer:
             f"{len(adjudications)} adjudication(s) of {declaration_id!r}, read "
             f"closed-world under meta[{META_ATTESTATION_RETENTION!r}]"
         ),
+    )
+
+
+def _acknowledgment_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every acknowledgment with the verdict it names, in chain order."""
+    return list(
+        conn.execute(
+            """
+            SELECT an.node_id AS ack_id,
+                   vn.node_id AS verdict_id,
+                   a.seq      AS seq,
+                   a.t        AS t,
+                   a.fault    AS fault,
+                   a.reason   AS reason
+            FROM acknowledgment a
+            JOIN node an ON an.node_key = a.acknowledgment_key
+            JOIN node vn ON vn.node_key = a.verdict_key
+            ORDER BY a.seq, an.node_id
+            """
+        ).fetchall()
+    )
+
+
+def _acknowledged(row: sqlite3.Row, operator_id: str | None) -> Acknowledged:
+    return Acknowledged(
+        ack_id=str(row["ack_id"]),
+        seq=int(row["seq"]),
+        t=float(row["t"]),
+        fault=str(row["fault"]),
+        reason=str(row["reason"]),
+        party=ACKNOWLEDGING_PARTY,
+        operator_id=operator_id,
+    )
+
+
+def acknowledgments(conn: sqlite3.Connection) -> Answer:
+    """Query 9 — was the passivation acknowledged, and by whom (issue #247).
+
+    **Layer A.** An acknowledgment is attestation-shaped, not perception-shaped:
+    a signed record of what a party stated, whose failure modes are the chain's
+    — who held the key, whether the record was truncated, whether it was
+    reordered. A person is involved in one, and that is deliberately not the
+    argument for its layer; the argument is in `docs/sufficiency.md` §5.10 and in
+    `reg.store.EDGE_SPECS`.
+
+    It takes no arguments, unlike `verdicts`. The question is about the run:
+    *were the stops cleared, and by whom*, and a caller who had to name the
+    passivating verdict first would have to have answered half of it already.
+
+    THE THREE-VALUED PART, WHICH IS THE POINT
+    -----------------------------------------
+    * **ANSWERED, with an empty list** — enforcement never stopped the robot, so
+      nothing needed clearing. A closed question, not an unanswerable one.
+    * **ANSWERED, with every passivation carrying its acknowledgment** — the
+      case the `stale_declaration` fixture ships.
+    * **COULD-NOT-EVALUATE** — the run holds a passivation this artifact holds no
+      acknowledgment of. That is **not** "nobody acknowledged it", and the
+      distinction is the whole reason this query exists rather than a `WHERE
+      acknowledgment IS NULL`. What the artifact records is what *enforcement was
+      told*: an operator who inspected the cell and never told the enforcer
+      leaves exactly this absence, and so does an operator who did nothing. The
+      question has two halves and the second — *by whom* — has no answer here, so
+      the answer is that it could not be evaluated, naming which passivation.
+
+    A passivation is derived from the verdict stream in chain order and by the
+    rule `reg.graph._OccurrenceLog` records with: a VETO or a SAFE_STATE arriving
+    while enforcement is already stopped is that stop being *reported* again, not
+    a new one, and the first PERMIT or CLAMP after it is the resumption. Derived
+    rather than read off a column because the record carries no "this one
+    passivated" flag — and cross-checked against the `safe_state_entered`
+    occurrences by `tests/test_query.py`, so the two derivations of one fact in
+    this repository are held against each other rather than trusted apart.
+    """
+    spec = QUERIES["acknowledgments"]
+    refusal = _no_record_layer(conn, spec)
+    if refusal is not None:
+        return refusal
+
+    operator_id = store.get_meta(conn, META_OPERATOR_ID)
+    by_verdict = {
+        str(row["verdict_id"]): _acknowledged(row, operator_id)
+        for row in _acknowledgment_rows(conn)
+    }
+    matched: set[str] = set()
+
+    found: list[Passivation] = []
+    open_at: dict[str, object] | None = None
+    for row in _verdict_rows(conn):
+        outcome = str(row["outcome"])
+        if outcome in PASSIVATING_OUTCOMES:
+            if open_at is None:
+                verdict_id = str(row["verdict_id"])
+                open_at = {
+                    "verdict_id": verdict_id,
+                    "seq": int(row["seq"]),
+                    "fault": str(row["fault"]) if row["fault"] is not None else "",
+                    "t_start": float(row["t"]),
+                    "verdicts": 1,
+                }
+            else:
+                open_at["verdicts"] = int(open_at["verdicts"]) + 1
+            continue
+        if open_at is not None:
+            found.append(_passivation(open_at, float(row["t"]), by_verdict, matched))
+            open_at = None
+    if open_at is not None:
+        found.append(_passivation(open_at, None, by_verdict, matched))
+
+    unmatched = tuple(
+        ack for verdict_id, ack in by_verdict.items() if verdict_id not in matched
+    )
+    value = Passivations(passivations=tuple(found), unmatched=unmatched)
+
+    if value.answered:
+        return Answer(
+            query=spec.name,
+            verdict=ANSWERED,
+            layer=ATTESTATION_LAYER,
+            value=value,
+            tolerances={},
+            reason=(
+                f"{len(found)} passivation(s), every one of them acknowledged "
+                f"under the {ACKNOWLEDGING_PARTY} key, read closed-world under "
+                f"meta[{META_ATTESTATION_RETENTION!r}]"
+                if found
+                else "enforcement stopped the robot at no point in this run, so "
+                "there was no passivation to acknowledge, read closed-world "
+                f"under meta[{META_ATTESTATION_RETENTION!r}]"
+            ),
+        )
+
+    if value.unmatched:
+        return _refuse_record(
+            spec,
+            f"this artifact holds {len(value.unmatched)} acknowledgment(s) "
+            f"naming a verdict that opened no passivation in it — "
+            f"{[a.ack_id for a in value.unmatched]}. An acknowledgment of "
+            "something the verdict stream does not show being stopped is a "
+            "record this walk cannot place, and placing it anyway would report "
+            "a passivation nobody made.",
+        )
+    return _refuse_record(
+        spec,
+        f"{len(value.unacknowledged)} of {len(found)} passivation(s) in this run "
+        f"are named by no acknowledgment — "
+        f"{[p.verdict_id for p in value.unacknowledged]}. That is not 'nobody "
+        "acknowledged them': this artifact records what enforcement was told, "
+        "and an operator who cleared the cell without telling it leaves the same "
+        "absence as one who did nothing. The question asks *and by whom*, and "
+        "for these there is nobody to name.",
+    )
+
+
+def _passivation(
+    open_at: dict[str, object],
+    t_end: float | None,
+    by_verdict: dict[str, Acknowledged],
+    matched: set[str],
+) -> Passivation:
+    verdict_id = str(open_at["verdict_id"])
+    ack = by_verdict.get(verdict_id)
+    if ack is not None:
+        matched.add(verdict_id)
+    return Passivation(
+        verdict_id=verdict_id,
+        seq=int(open_at["seq"]),
+        fault=str(open_at["fault"]),
+        t_start=float(open_at["t_start"]),
+        t_end=t_end,
+        verdicts=int(open_at["verdicts"]),
+        acknowledgment=ack,
     )
 
 

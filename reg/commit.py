@@ -189,6 +189,11 @@ class ChainHeads:
     """
 
     declaration_head: str
+    #: The **enforcement** chain's head, which since issue #247 folds the
+    #: verdicts and the acknowledgments together in `seq` order. The field keeps
+    #: its name because the stored `meta` key does, and renaming a committed key
+    #: would make every artifact written before this one unreadable to the check
+    #: that reads it back.
     verdict_head: str
 
     def __post_init__(self) -> None:
@@ -225,7 +230,11 @@ def chain_heads(conn: sqlite3.Connection) -> ChainHeads:
     heads: dict[str, str] = {}
     for spec in chain.CHAINS:
         try:
-            records = getattr(store, spec.reader)(conn)
+            # `read_chain_records`, not one table's reader: since issue #247 the
+            # enforcement chain runs over the verdicts *and* the acknowledgments,
+            # and a head folded over half of it would be a commitment that does
+            # not move when an acknowledgment is rewritten.
+            records = chain.read_chain_records(conn, spec)
         except (store.StoreError, ValueError, sqlite3.DatabaseError) as exc:
             raise CommitmentError(
                 f"the {spec.role} chain could not be read, so this artifact has "

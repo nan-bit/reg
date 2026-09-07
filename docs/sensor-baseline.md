@@ -102,7 +102,7 @@ The artifact sizes below are **measured**, from one execution of
 `python -m reg.bench --resolution --seed 0`: `long_run` at 3,000 frames **at a
 50 Hz control rate**, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
 resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. Each
-size is that level's measured `bytes/hour` — 60.42, 150.15 and 218.00 MB/h —
+size is that level's measured `bytes/hour` — 60.54, 150.27 and 218.12 MB/h —
 times the 4,380 hours in the retention floor, and all three are **linear in the
 control rate**, which [The control rate](#the-control-rate) measures. The
 sensitivity establishes *the shape of the dependence*; the conclusion drawn from
@@ -177,7 +177,7 @@ which is what makes the other three comparable to it.
 
 | control rate | frames | records retained | occurrence | transition | per-frame |
 |---|---|---|---|---|---|
-| **50 Hz (published above)** | 3,000 | 3,120 | **60.42 MB/h** | 150.15 MB/h | 218.00 MB/h |
+| **50 Hz (published above)** | 3,000 | 3,120 | **60.54 MB/h** | 150.27 MB/h | 218.12 MB/h |
 | 100 Hz | 5,999 | 6,119 | 106.57 MB/h | 247.19 MB/h | 410.37 MB/h |
 | 250 Hz | 14,996 | 15,116 | 247.32 MB/h | 529.79 MB/h | 1.04 GB/h |
 | **1 kHz (a real manipulator)** | 59,981 | 60,101 | **1.08 GB/h** | 2.08 GB/h | 4.52 GB/h |

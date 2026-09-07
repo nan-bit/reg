@@ -219,7 +219,7 @@ that reading. The label, the two rejected alternatives and what the choice
 commits this project to are in [`retention.md`](retention.md), *What the coarsest
 level actually holds*.
 
-**And 265 GB is derived, not measured.** It is the measured **60.42 MB/h** — at
+**And 265 GB is derived, not measured.** It is the measured **60.54 MB/h** — at
 the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs at, and linear in it —
 times the 4,380 hours in the 182.5-day retention floor. `bytes/hour` is itself
 `size × 3600 / run seconds` over a 59.98-second run, so the artifact's fixed
@@ -264,14 +264,14 @@ condition that is part of the number:
   **hand-built encoding comparison and not a real bag**, which
   [`sensor-baseline.md`](sensor-baseline.md) requires be said wherever a
   projected figure from it is quoted until a measurement retires it.
-- **The figure to quote against the incumbent is a pair, 7.16x and 10.25x**: the
+- **The figure to quote against the incumbent is a pair, 7.17x and 10.27x**: the
   same 24 columns rather than 5, so it composes with the `~40x` instead of
   standing beside it, and measured on bags `ros2 bag record` wrote. The artifact
-  is **7.16x** a `zstd_fast` bag of those columns, **10.25x** a `zstd_small` one
+  is **7.17x** a `zstd_fast` bag of those columns, **10.27x** a `zstd_small` one
   and **1.58x** the uncompressed default — the bags being 5.58x, 3.90x and 25.34x
-  the gzipped CSV, and `39.98x / 5.58x` is where 7.16x comes from. **Both
+  the gzipped CSV, and `40.02x / 5.58x` is where 7.17x comes from. **Both
   compressed profiles are published**, rosbag2 shipping both; if a single number
-  is wanted it is 7.16x, the larger bag and so the smaller ratio. Its Layer B
+  is wanted it is 7.17x, the larger bag and so the smaller ratio. Its Layer B
   half goes on `/tf`, the arrangement most favourable to the incumbent of those
   [`sensor-baseline.md`](sensor-baseline.md) prices, so nothing here is won by
   choosing the comparator. **The artifact is larger than the bag under every
@@ -432,15 +432,9 @@ these sites already run is that party's. The `Committer` interface exists so tha
 a deployment prepared to take the dependency gets an adapter rather than a
 rewrite.
 
-**What this claim does not cover, stated here rather than left to be inferred.**
-Passivation and reintegration — Phase 4's asymmetry, the part the plan says people
-omit — is implemented in `reg/enforce.py` and reaches no artifact, so *was the
-passivation acknowledged, and by whom* is not among the questions this claim's
-evidence answers. The refusal that keeps the `Acknowledgment` out is deliberate
-and documented (Phase 4 below, [`docs/lossiness.md`](lossiness.md) *Retained* #7);
-what it means for the claim is that the attestation an artifact carries is
-declaration, verdict and chain, and not the record that cleared a fault. Issue
-#112.
+**What this claim now covers.** *Was the passivation acknowledged, and by whom*
+is a question this claim's evidence answers, on the terms
+[`docs/sufficiency.md`](sufficiency.md) §5.10 states.
 
 **Success:** the demo sentence answered end to end, as one query, with
 `verify_chain` able to say no — demonstrated by `--tamper`, not asserted.
@@ -681,24 +675,17 @@ After VETO or SAFE_STATE, recovery is **not** automatic. Requires a fresh
 declaration plus an explicit acknowledgment record. That asymmetry is deliberate
 and it's the part people omit when they copy the pattern — implement it.
 
-**It is implemented, and it is implemented here and nowhere else.**
-`reg.enforce.Acknowledgment` is signed with the enforcement key, names the
-`verdict_id` that passivated rather than just the fault, refuses a second
-acknowledgment of the same passivation, and refuses a pre-emptive one outright;
-`Enforcer.acknowledge` and a fresh accepted declaration are both required, and
-either alone resumes nothing. That is the mechanism, and it is Phase 4's
-deliverable.
+**It is implemented.** `reg.enforce.Acknowledgment` is signed with the
+enforcement key, names the `verdict_id` that passivated rather than just the
+fault, and refuses both a second acknowledgment of one passivation and a
+pre-emptive one; `Enforcer.acknowledge` and a fresh accepted declaration are both
+required, and either alone resumes nothing.
 
-**What it does not do is reach an artifact, and Phase 5 onwards does not carry
-it.** There is no acknowledgment table, no edge type and no query for one, and
-`graph.build` *refuses* a record stream containing one — twice, deliberately, and
-pinned by `tests/test_graph.py`. So a passivation is auditable after the fact and
-its *clearing* is not: the run's own enforcer knew who acknowledged it and why,
-and the file that outlives the run does not. Issue #112 is where that changes, and
-it changes what Claim 4 claims — a schema change, a new edge type, a query, a
-fixture and a re-measurement. See [`docs/lossiness.md`](lossiness.md) *Retained*
-#7, which states the same gap, and `README.md`'s Claim 4 row, which is worded to
-agree with both.
+**And it reaches the artifact** — a table, an `ACKNOWLEDGED` edge, one
+enforcement chain over both record kinds, `reg.query.acknowledgments`, and
+`stale_declaration` as the fixture that produces one. What the schema refused
+before it could hold the record is [`docs/lossiness.md`](lossiness.md)
+*Retained* #7.
 
 **Deliverable:** verdict stream, and a scenario where the `declared_violation` run
 produces a clean CLAMP with a named fault.

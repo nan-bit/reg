@@ -2380,7 +2380,17 @@ def _acknowledged(row: sqlite3.Row, operator_id: str | None) -> Acknowledged:
 
 
 def acknowledgments(conn: sqlite3.Connection) -> Answer:
-    """Query 9 — was the passivation acknowledged, and by whom (issue #247).
+    """Was the passivation acknowledged, and by whom (issue #247).
+
+    **Not one of the nine.** `docs/lossiness.md`'s supported question set is
+    `docs/plan.md` Phase 7's and nothing else, and this is a tenth question
+    arriving after it. It is deliberately outside that set rather than quietly
+    inside it: the set is what the *discard contract* is measured against, and
+    `reg.bench.SUPPORTED_QUESTIONS` prices coverage over it, so a question added
+    here without being priced there would widen the denominator of a published
+    coverage figure by claiming an answer nobody measured the cost of. What this
+    question needs is `docs/lossiness.md` *Retained* #7, which is retained at
+    every level, so nothing in the discard contract has to move for it.
 
     **Layer A.** An acknowledgment is attestation-shaped, not perception-shaped:
     a signed record of what a party stated, whose failure modes are the chain's

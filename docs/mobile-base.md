@@ -91,9 +91,10 @@ verified action ([`prior-art.md`](prior-art.md) §23).
 preferences. The guarantee lives in the *planner*, which is the common-cause
 structure [`CLAUDE.md`](../CLAUDE.md) rule 3 refuses; and this project's
 enforcement layer VETOes a declaration and commands nothing, while the one thing
-in the tree that resembles a fail-safe — passivation — reaches no table, no edge
-type and no query and is documented as not exercisable. A project that cannot
-represent a stop cannot rest a bound on having one.
+in the tree that resembles a fail-safe — passivation — is a *record about* a stop
+and not a stop: it reaches a table, an edge and a query, and none of the three
+commands anything. A project that cannot command a stop cannot rest a bound on
+having one.
 
 ## 2. The base pose is Layer B, so the envelope is a body-frame object
 
@@ -636,6 +637,7 @@ after.
 | §7.1, §4 item 4 | The pose written to `robot_config`; `GEOMETRY_RETENTION` on posed frames | #191 | 2026-09-05 |
 | §7.2 | The first three mobile fixtures | #178 | 2026-09-05 |
 | §7.2 | `mobile_derived_velocity`, the fixture §11's gap is observable in | #229 | 2026-09-07 |
+| §1 | The passivation clause: the record reaches a table, an edge and a query | #247 | 2026-09-07 |
 
 Tiers 0 and 2 are absent from the table because this document never recorded the
 issues they arrived on. That is a gap in the record, and a plausible number
@@ -791,8 +793,8 @@ moved.
 eleven fixed-base ones, so their bytes are not identical — #166 is the precedent
 for expecting movement. It was re-measured with `python -m reg.bench --resolution
 --seed 0` and the report is byte-identical to the one before the change:
-1,006,592 B / 2,501,632 B / 3,632,128 B, which at this fixture's 50 Hz control
-rate is 60.42 / 150.15 / 218.00 MB/h.
+1,008,640 B / 2,503,680 B / 3,634,176 B, which at this fixture's 50 Hz control
+rate is 60.54 / 150.27 / 218.12 MB/h.
 
 One longer string in one `meta` row does not cross a page boundary, where #166's
 two nullable columns cost a record-header byte on every one of 2,560

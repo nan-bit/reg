@@ -1328,6 +1328,7 @@ def test_no_attestation_query_touches_an_entity_bearing_edge(attested) -> None:
         (query.declared_bound, (INCIDENT_T,)),
         (query.violations, ((0.0, 5.0),)),
         (query.verdicts, (declarations[0].declaration_id,)),
+        (query.acknowledgments, ()),
     ):
         statements = _traced(artifact, fn, *args)
         assert statements, f"{fn.__name__} issued no SQL at all"
@@ -1365,7 +1366,7 @@ def test_every_attestation_query_declares_layer_a(attested) -> None:
     """And says so in the answer, not only in the SQL it did not issue."""
     artifact, _ = attested
     declarations, _ = _records_of(artifact)
-    for name in ("declared_bound", "violations", "verdicts"):
+    for name in ("declared_bound", "violations", "verdicts", "acknowledgments"):
         spec = query.QUERIES[name]
         assert spec.layer_tag == query.LAYER_A
         assert spec.answerable_from == frozenset({query.ATTESTATION_LAYER})
@@ -1377,6 +1378,10 @@ def test_every_attestation_query_declares_layer_a(attested) -> None:
         _ask(artifact, query.declared_bound, INCIDENT_T),
         _ask(artifact, query.violations, (0.0, 5.0)),
         _ask(artifact, query.verdicts, declarations[0].declaration_id),
+        # `declared_violation` is 122 PERMITs and 129 CLAMPs and stops the robot
+        # at no point, so this one is ANSWERED with an empty list — which is the
+        # case the layer tag has to hold for too.
+        _ask(artifact, query.acknowledgments),
     ):
         assert answer.verdict == ANSWERED, answer.reason
         assert answer.layer == query.ATTESTATION_LAYER
@@ -1439,6 +1444,7 @@ def test_declared_bound_refuses_an_instant_no_declaration_covers(attested) -> No
         (query.declared_bound, (1.0,)),
         (query.violations, ((0.0, 1.0),)),
         (query.verdicts, ("anything",)),
+        (query.acknowledgments, ()),
     ],
 )
 def test_an_artifact_with_no_record_layer_refuses_every_attestation_query(
@@ -1590,6 +1596,277 @@ def test_verdicts_refuses_an_unknown_declaration_and_names_what_is_present(
     message = str(exc.value)
     assert "no-such-declaration" in message
     assert declarations[0].declaration_id in message
+
+
+# --- the acknowledgment query: was the passivation cleared, and by whom -----
+#
+# Issue #247. The three-valued part is what these are about: an ANSWERED with
+# an empty list, an ANSWERED with every passivation carrying its record, and a
+# COULD-NOT-EVALUATE that must never read as "nobody acknowledged it".
+
+
+@pytest.fixture(scope="module")
+def acknowledged(tmp_path_factory) -> tuple[Path, Path]:
+    """`(artifact, keyring)` for the one shipped fixture whose operator clears.
+
+    `stale_declaration` goes silent from t=2.0, its last declaration expires,
+    enforcement passivates, and `AckPoint(2.5, ...)` is the operator saying why
+    it is safe to resume. The policy never speaks again, so the run holds a
+    passivation that was **acknowledged and never lifted** — which is the shape
+    the query has to answer about, not a tidier one.
+    """
+    return _attested_build(
+        tmp_path_factory.mktemp("acknowledged"), "stale_declaration"
+    )
+
+
+def test_the_acknowledgment_query_names_the_passivation_and_who_cleared_it(
+    acknowledged,
+) -> None:
+    """**THE QUESTION ISSUE #247 EXISTS TO MAKE ASKABLE**, from the file alone.
+
+    Field for field against the records the fixture's own enforcer signed, not
+    against constants written here: the reason is the operator's sentence, the
+    instant is the one the acknowledgment was signed at, and the verdict named
+    is the one that actually passivated.
+
+    **`party` and `operator_id` are two fields on purpose.** The record is
+    signed under the enforcement key and carries no human field, so what the
+    artifact can attribute is the key-holding role; `operator_id` is separately
+    what the *build* was told (issue #83). Blending them would answer *by whom*
+    with a name nobody signed for.
+    """
+    artifact, _ = acknowledged
+    _, verdicts = _records_of(artifact)
+    conn = store.connect(artifact)
+    try:
+        stored = store.read_acknowledgments(conn)
+    finally:
+        conn.close()
+    assert len(stored) == 1, (
+        "the fixture stopped producing an acknowledgment, so this test is no "
+        "longer about the query"
+    )
+    record = stored[0]
+
+    answer = _ask(artifact, query.acknowledgments)
+    assert answer.verdict == ANSWERED, answer.reason
+    assert answer.layer == query.ATTESTATION_LAYER
+    assert answer.tolerances == {}
+
+    value = answer.value
+    assert value.answered
+    assert value.unmatched == ()
+    assert len(value.passivations) == 1, (
+        "this fixture stops once and does not resume; more than one passivation "
+        "means the derivation below is not walking the run this test describes"
+    )
+    passivation = value.passivations[0]
+
+    passivating = {v.verdict_id: v for v in verdicts if v.outcome in ("VETO", "SAFE_STATE")}
+    assert passivation.verdict_id in passivating, (
+        "the query opened a passivation on a verdict enforcement did not "
+        "passivate on"
+    )
+    opener = passivating[passivation.verdict_id]
+    assert passivation.fault == opener.fault
+    assert passivation.t_start == opener.t
+    assert passivation.t_end is None, (
+        "the policy never speaks again in this fixture, so the passivation has "
+        "no end — and None is that fact rather than a missing value"
+    )
+    assert passivation.verdicts > 1, (
+        "every frame after the expiry re-reports the stop, so the passivation "
+        "covers more verdicts than the one that opened it"
+    )
+
+    assert passivation.acknowledged
+    ack = passivation.acknowledgment
+    assert (ack.ack_id, ack.seq, ack.t, ack.fault, ack.reason) == (
+        record.ack_id,
+        record.seq,
+        record.t,
+        record.fault,
+        record.reason,
+    )
+    assert ack.party == query.ACKNOWLEDGING_PARTY
+    assert ack.operator_id == TEST_IDENTITY.operator_id
+    assert ack.reason.strip(), "a rubber stamp reached the artifact"
+    assert record.verdict_id == passivation.verdict_id
+
+
+#: The two occurrence types `reg.graph._OccurrenceLog` writes when enforcement
+#: stops the robot: a refused declaration and a passivation entered on some
+#: other fault. Both are written once at the transition and not per frame, which
+#: is what makes their count comparable with a count of passivations.
+PASSIVATION_OCCURRENCES = ("declaration_vetoed", "safe_state_entered")
+
+
+def test_the_passivation_the_query_derives_is_the_one_the_occurrence_log_recorded(
+    acknowledged,
+) -> None:
+    """TWO DERIVATIONS OF ONE FACT, HELD AGAINST EACH OTHER.
+
+    `reg.query.acknowledgments` walks the verdict stream and decides where a
+    passivation opened and where it closed; `reg.graph`'s occurrence log decided
+    the same thing at build time, from the fault taxonomy rather than from the
+    outcome, and wrote it into the occurrence layer. Neither reads the other. If
+    they disagree, one of them is wrong about when the robot was stopped and a
+    reader has no way to tell which, so they are compared here rather than
+    trusted apart.
+
+    **The two rules are not the same rule.** The log passivates on
+    `fault in reg.enforce.PASSIVATING_FAULTS`; the query passivates on
+    `outcome in PASSIVATING_OUTCOMES`. They pick out the same verdicts only
+    because the one non-passivating fault is the one whose response is the
+    CLAMP — which is exactly the coincidence
+    `test_the_passivating_outcomes_are_the_enforcers` pins, and this is that
+    coincidence checked against a real run.
+    """
+    artifact, _ = acknowledged
+    conn = store.connect(artifact)
+    try:
+        opened = [
+            row
+            for kind in PASSIVATION_OCCURRENCES
+            for row in store.read_occurrences(conn, occurrence_type=kind)
+        ]
+        resumed = store.read_occurrences(conn, occurrence_type="reintegrated")
+    finally:
+        conn.close()
+    assert opened, (
+        "the fixture recorded no passivation occurrence, so this comparison has "
+        "only one side and checks nothing"
+    )
+
+    value = _ask(artifact, query.acknowledgments).value
+    assert len(value.passivations) == len(opened)
+    # The occurrence instant is quantized to `OCCURRENCE_TIME_RESOLUTION_S` and
+    # the record's is not — docs/lossiness.md Retained #5 stores a record's own
+    # `t` unquantized on purpose — so the comparison is at the coarser of the
+    # two. Comparing at TIME_TOL_S would be asserting that this level carries a
+    # precision it says it does not.
+    for passivation, row in zip(value.passivations, sorted(opened, key=lambda r: r["t"])):
+        assert passivation.t_start == pytest.approx(
+            float(row["t"]), abs=graph.OCCURRENCE_TIME_RESOLUTION_S
+        )
+    assert len(resumed) == sum(1 for p in value.passivations if p.t_end is not None), (
+        "the two sides disagree about whether the run came back out of its "
+        "passivation, which is the second half of the same derivation"
+    )
+
+
+def test_a_run_that_stopped_for_nothing_is_answered_and_not_a_refusal(
+    clean_attested,
+) -> None:
+    """AN EMPTY LIST THAT IS AN ANSWER, and the only one in this query.
+
+    `contact` declares exactly what it then does, so every action is PERMITted
+    and enforcement never stops the robot. Nothing needed acknowledging, so the
+    question is **closed** — reporting a could-not-evaluate here would make the
+    query unable to say that a run was clean, which is a finding it has to be
+    able to make.
+    """
+    artifact, _ = clean_attested
+    answer = _ask(artifact, query.acknowledgments)
+    assert answer.verdict == ANSWERED, answer.reason
+    assert answer.value.passivations == ()
+    assert answer.value.unmatched == ()
+    assert answer.value.answered
+
+
+def test_a_passivation_nobody_acknowledged_is_a_could_not_evaluate_never_a_no(
+    acknowledged, tmp_path: Path
+) -> None:
+    """**THE NEGATIVE THIS QUERY EXISTS FOR.** Silence is not an acquittal.
+
+    Drop the acknowledgment row from a copy — the shape of an artifact built
+    from a run in which nobody told the enforcer anything — and the passivation
+    is still there and still unexplained. The answer must be a refusal that
+    names the verdict, not an `acknowledged=False` a reader would quote as *the
+    passivation was never acknowledged*. What the artifact records is what
+    enforcement was **told**: an operator who inspected the cell and never said
+    so leaves exactly this absence, and so does one who did nothing.
+    """
+    artifact, _ = acknowledged
+    control = _ask(artifact, query.acknowledgments)
+    assert control.verdict == ANSWERED, (
+        "the control build already refuses, so the refusal below says nothing "
+        "about the dropped record"
+    )
+    verdict_id = control.value.passivations[0].verdict_id
+
+    stripped = _copy(
+        artifact, tmp_path / "unacknowledged.sqlite", "DELETE FROM acknowledgment"
+    )
+    answer = _ask(stripped, query.acknowledgments)
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None, (
+        "a value here would let a reader quote the passivation as unacknowledged"
+    )
+    assert verdict_id in answer.reason
+    assert "by whom" in answer.reason
+
+
+def test_an_acknowledgment_of_a_verdict_that_stopped_nothing_is_refused(
+    acknowledged, tmp_path: Path
+) -> None:
+    """THE OTHER NEGATIVE: a record the walk cannot place is not dropped.
+
+    Turn the passivating verdict into a PERMIT on a copy and the acknowledgment
+    names a verdict that opened no passivation. Placing it anyway would report a
+    passivation nobody made; dropping it would hide a signed record. So the
+    answer is a refusal naming the acknowledgment, and `Passivations.unmatched`
+    is where it stays visible.
+    """
+    artifact, _ = acknowledged
+    control = _ask(artifact, query.acknowledgments)
+    ack_id = control.value.passivations[0].acknowledgment.ack_id
+    verdict_id = control.value.passivations[0].verdict_id
+
+    rewritten = _copy(
+        artifact,
+        tmp_path / "unmatched.sqlite",
+        "UPDATE verdict SET outcome = 'PERMIT', fault = NULL "
+        "WHERE verdict_key = (SELECT node_key FROM node "
+        f"WHERE node_id = '{verdict_id}')",
+    )
+    answer = _ask(rewritten, query.acknowledgments)
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+    assert ack_id in answer.reason
+
+
+def test_the_acknowledging_party_is_the_signing_role() -> None:
+    """`reg.query` may not import `reg.enforce`, so it spells the role itself.
+
+    The cost of that is paid here, exactly as it is for `PERMIT` and `VERIFIED`
+    above: a rename on the enforcement side would otherwise make every answer
+    attribute an acknowledgment to a party that no longer signs one.
+    """
+    from reg import enforce
+
+    assert query.ACKNOWLEDGING_PARTY == enforce.Acknowledgment.SIGNING_ROLE
+
+
+def test_the_passivating_outcomes_are_the_enforcers() -> None:
+    """The same discipline, one vocabulary over — and it is the derivation, not
+    a copy of the tuple.
+
+    `reg.enforce` passivates on every fault except `declaration_action_mismatch`,
+    whose response is the CLAMP. So *the outcomes that are neither PERMIT nor
+    CLAMP* and *the outcomes that passivate* are the same two strings, and this
+    fails if either side moves.
+    """
+    from reg import enforce
+
+    assert set(query.PASSIVATING_OUTCOMES) == set(enforce.OUTCOMES) - {
+        query.PERMITTED_OUTCOME,
+        "CLAMP",
+    }
+    assert enforce.PASSIVATING_FAULTS == frozenset(enforce.FAULTS) - {
+        "declaration_action_mismatch"
+    }
 
 
 # --- query 8: verify_chain, reachable from the query API -------------------

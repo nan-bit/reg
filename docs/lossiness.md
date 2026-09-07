@@ -49,6 +49,11 @@ nothing else:
 | 8 | `verify_chain()` — integrity over the full record | A |
 | 9 | `incident_report(t_incident)` — 1–8 composed into one structured answer | A + B |
 
+**`reg.query.acknowledgments` is a tenth question, deliberately not on this
+list.** It needs nothing in *Discarded*, and `reg.bench.SUPPORTED_QUESTIONS`
+prices coverage over this set — so listing it unpriced would widen a published
+figure by a question nobody measured.
+
 **Adding a query to this list is a change to this contract.** If a new question
 needs something currently in *Discarded*, the discard is what has to change, and it
 changes here first — before the graph is taught to retain it. Answering a new
@@ -103,30 +108,21 @@ Each entry is a claim that the graph can be tested against.
    unbroken, so `verify_chain()` is answerable from the graph alone.
 
    There are **two** chains, not one: declarations link to declarations under the
-   policy key and verdicts to verdicts under the enforcement key, each beginning
-   at the genesis hash. "Unbroken" is enforced at build time — a record whose
-   `prev_hash` is not its predecessor's chain hash is refused, artifact and all,
-   because a `FOLLOWS` edge written across a break would let a chain walk cleanly
-   over records nobody ever saw.
+   policy key, and verdicts and acknowledgments interleave into one chain under
+   the enforcement key, each beginning at the genesis hash. "Unbroken" is enforced
+   at build time — a record whose `prev_hash` is not its predecessor's chain hash
+   is refused, artifact and all, because a `FOLLOWS` edge written across a break
+   would let a chain walk cleanly over records nobody ever saw.
 
-   **`Acknowledgment` is not stored, and the gap is a refusal rather than a
-   hole.** Acknowledgments share the verdict chain, so a run containing one has a
-   verdict whose `prev_hash` names a record the artifact would not hold — and that
-   stream is refused rather than stored with a link written over it. The refusal is
-   two checks, both deliberate: `AttestationRecords` refuses a non-`Verdict` in
-   `verdicts`, so an acknowledgment cannot enter the stream disguised as one, and
-   `_check_link` refuses the verdict that follows an acknowledgment, because its
-   `prev_hash` names the record that is missing. Both are pinned by
-   `tests/test_graph.py`, which feeds `build` a real signed acknowledgment and
-   asserts it says no.
+   **Every `Acknowledgment`, in full** — `ack_id`, the `verdict_id` it clears,
+   `seq`, `t`, `fault`, `reason`, `prev_hash`, `mac` — verbatim on #5's terms. So
+   *was the passivation acknowledged, and by whom* is a question this artifact
+   answers, on [`sufficiency.md`](sufficiency.md) §5.10's terms.
 
-   That is the correct behaviour for an artifact that cannot represent the record,
-   and it is not free: passivation and reintegration are implemented in
-   `reg/enforce.py` and **only** there, so *was the passivation acknowledged, and by
-   whom* is a question no artifact answers. This paragraph and `README.md`'s Claim 4
-   row state the same gap deliberately, and issue #112 is where it would close —
-   which is a schema change, a new edge type, a query, a fixture and a
-   re-measurement, not a repair.
+   **The refusal it replaces was correct, and half of it remains.** While the
+   schema had no row for the record, `build` refused any run containing one rather
+   than write a chain link over the gap. The type check stays: an acknowledgment
+   offered inside `verdicts` would record a clearing as a passivation.
 8. **Envelope *identity and scalars* on every envelope the artifact keeps** — every
    `envelope` row records `envelope_hash`, `area`, `horizon`, and `source`
    (`computed` / `declared` / `clamped`). There is no such thing here as a row that
@@ -979,7 +975,8 @@ this file** note is what stops the old reading.
 
 The clause said "not stored **yet**, arriving with issue #46" until 2026-08-24,
 when issue #110 found #46 closed with the fixtures shipped and the row not. #112
-is the open one, and the core names it instead.
+was re-filed as #247, which closed it on 2026-09-07: the core states what is
+retained rather than what is scheduled, which is what a contract may say.
 
 ### *Retained* #8 — what the base frame cost
 

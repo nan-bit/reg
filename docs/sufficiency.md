@@ -128,7 +128,7 @@ reachability question dies there despite being certifiable.
 
 A Layer B question can be perfectly answerable at the coarsest level: *did the
 robot contact the human* is answered from a DSSAD-shaped occurrence flag in a
-level costing 60.42 MB/h — a figure **at a 50 Hz control rate**, which the level's
+level costing 60.54 MB/h — a figure **at a 50 Hz control rate**, which the level's
 attestation stream and not its occurrence flags is what buys (98.5% of its rows
 are records, [`retention.md`](retention.md)) — and is still only as strong as
 whatever said where the human was.
@@ -146,9 +146,9 @@ with `python -m reg.bench --resolution`:
 
 | level | ts res | SQLite B | bytes/hour @ 50 Hz | nodes | edges | occ | records |
 |---|---|---|---|---|---|---|---|
-| `occurrence` | 1.0 s | 1,006,592 | **60.42 MB/h** | 3,166 | 0 | 42 | 3,120 |
-| `transition` | 0.01 s | 2,501,632 | **150.15 MB/h** | 5,870 | 9,724 | 0 | 3,120 |
-| `per-frame` | 0.01 s | 3,632,128 | **218.00 MB/h** | 5,870 | 18,428 | 0 | 3,120 |
+| `occurrence` | 1.0 s | 1,008,640 | **60.54 MB/h** | 3,166 | 0 | 42 | 3,120 |
+| `transition` | 0.01 s | 2,503,680 | **150.27 MB/h** | 5,870 | 9,724 | 0 | 3,120 |
+| `per-frame` | 0.01 s | 3,634,176 | **218.12 MB/h** | 5,870 | 18,428 | 0 | 3,120 |
 
 The rate is in the column heading because the column **moves with it**:
 enforcement emits one verdict and one chain record per commanded action and no
@@ -215,7 +215,7 @@ not omitted, and it is not softened into a claim.
 | 2 | Did the policy exceed its declared bound? (`violations(window)`) | **A** — [`docs/lossiness.md`](lossiness.md) supported-question set, query 6. No entity is named by a declaration or a verdict | **occurrence** — AGREE at every level. The record tables survive all three views intact, so this is the rare question the coarsest artifact answers in full | **certifiable**, and measured |
 | 3 | What did the policy declare at t? (`declared_bound(t)`) | **A** — same, query 5 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level states no declaration in force at t=30.0"), because the region a declaration names lives in the `edge` and `envelope` tables the occurrence view empties; transition and per-frame: AGREE | **certifiable**, and measured |
 | 4 | Was the record tampered with? (`verify_chain()`) | **A** — same, query 8. A hash chain and a MAC over records that name no entity | **occurrence** — AGREE at every level, walked under `measurement_keyring` over 3,120 chain records. Negative tests feed it a truncated chain, an altered record and a missing key | **certifiable**, and measured |
-| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 60.42 MB/h at 50 Hz. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
+| 5 | Did the robot contact the human? (`did_contact_occur`) | **B** — `CONTACT` is `EdgeSpec("B", "RobotConfig", "Entity", …)`; `contact_began` / `contact_ended` are `OccurrenceSpec("B", "entity", …)` | **occurrence** — AGREE at 1.0 s and 60.54 MB/h at 50 Hz. Caveat kept attached: in this fixture that is **agreement on a negative** (the run contains no contact); `tests/test_bench.py::test_the_contact_check_says_no_when_the_occurrence_layer_is_wrong` is where the check is shown able to say no | **only as strong as perception** |
 | 6 | How close did the robot get to the human? (`min_separation`) | **B** — `SEPARATION` is `EdgeSpec("B", "RobotConfig", "Entity", "min_distance")`; `closest_approach` is `OccurrenceSpec("B", "entity", "min_distance_m")` | **occurrence** — AGREE, Δ 0.0007 m against a 0.01 m (`DISTANCE_TOL_M`) predicate | **only as strong as perception** |
 | 7 | Was the human inside the reachable set, and when did it first enter? (`first_envelope_intersection`) | **B** — `INTERSECTS` is `EdgeSpec("B", "Envelope", "Entity", "overlap_area")` | **transition** — `reg.query` declares it `answerable_from={edge}`: the occurrence layer locates entry only to ±1.0 s and carries no overlap area, so it cannot produce the intervals this query returns. Agreement **unmeasured**, for the same envelope-ground-truth reason as row 1 | **only as strong as perception** |
 | 8 | Which entities were inside the envelope during [t₀, t₁]? (`reachable_entities`) | **B** — `INTERSECTS`, as above | **transition** — `answerable_from={edge}`. The predicate is exact set equality with no tolerance to spend, and membership derived from ±1.0 s events would be exact-looking and wrong at the edges. Agreement **unmeasured**, as row 1 | **only as strong as perception** |
@@ -297,7 +297,7 @@ certifiable *reachability* question stops being answerable.
 ### 5.2 Layer B, and occurrence resolution is enough: contact, and how close
 
 *Did the robot contact the human?* is answered at the coarsest level in the
-project — one occurrence flag, timestamped to ±1.0 s, in a 1,006,592-byte artifact —
+project — one occurrence flag, timestamped to ±1.0 s, in a 1,008,640-byte artifact —
 and it AGREEs with ground truth recomputed from the raw stream by forward
 kinematics. *How close did it get?* likewise, to within 0.0007 m of a 0.01 m
 budget, carried on the `closest_approach` occurrence's `min_distance_m`.
@@ -352,7 +352,7 @@ measures the sustained case coming back `AGREE` at the same 1.0 s. Whether a
 coarse timestamp suffices is a property of the event, not of the recorder.
 
 So this row carries both qualifiers: it is conditional on perception **and** it is
-conditional on retaining 150.15 MB/h instead of 60.42 — both figures **at a 50 Hz
+conditional on retaining 150.27 MB/h instead of 60.54 — both figures **at a 50 Hz
 control rate**, and both linear in it, so the retention this row asks for scales
 with the loop the robot runs. The two qualifiers are independent, and a deployment
 could fail either one on its own.
@@ -646,27 +646,19 @@ real vehicle; a `BaseVelocity` filled from one is a perceiver's output wearing a
 Layer A tag, and no check that inspects field *names* can see it — which is §7's
 first bullet about `Limits`, verbatim, one type over.
 
-**What this is not: a graded integrity attribute.** §7 records that a two-value
-provenance is not how assurance is actually argued, and that a tag plus an
-integrity attribute was considered and rejected for scope; this section does not
-reopen that. A fused wheel/IMU/VO estimator — which is what a real base runs — is
-one number with three provenances and lands in `DERIVED` whole, because a fused
-value inherits the taint of its weakest input. The binary records *which case an
-artifact is in*, and that is all it does.
+**What this is not: a graded integrity attribute.** §7's fourth bullet is that
+argument and this section does not reopen it. One consequence belongs here: a
+fused wheel/IMU/VO estimator, which is what a real base runs, lands in `DERIVED`
+whole, because a fused value inherits the taint of its weakest input.
 
 **`qd` stays untagged, and that is a residual rather than a settled question.**
-The argument for leaving it is a **deployment** argument and not a structural one,
-which by this document's own standard is the weaker kind — §7's third bullet
-states it and [`limitations.md`](limitations.md) §11 carries it as an entry. What
-makes it tolerable meanwhile is the likelihood asymmetry above and nothing
-stronger.
+§7's third bullet states the argument and [`limitations.md`](limitations.md) §11
+carries it; what makes it tolerable meanwhile is the likelihood asymmetry above.
 
 **What was built.** `BaseVelocity.source`, required; `reg.types.VelocitySource`,
 two members; `base_vel_source` in the raw stream's optional velocity block, so a
-recorded provenance survives the round trip and an unreadable cell is a refusal
-rather than a substituted member; and a `reg.bench.COLUMN_RULES` entry, because a
-column with no rule is a could-not-evaluate the classifier is required to raise
-on.
+recorded provenance survives the round trip; and a `reg.bench.COLUMN_RULES`
+entry, a column with no rule being a could-not-evaluate.
 
 **What remains unbuilt, and it is the part a reader should hold this section to.**
 Nothing maps a `VelocitySource` to a `Layer`. `reg.envelope.envelope_layer`
@@ -676,13 +668,42 @@ reads `state.base_vel` into the bound every VETO for a mobile robot rests on —
 tagged from its bounds only. **What the artifact gained is that it records the
 case; what it has yet to gain is the tag following it.**
 
-[`limitations.md`](limitations.md) §11 is that entry, and the reason it is an
-entry rather than a line of code is that the tag is a property of an *edge*, no
-fixture in this repository is mobile, and `reg.enforce.Enforcer` refuses to
-construct for a driven base at all — so the mapping would be written, tested
-against nothing, and first exercised by whoever brings the first mobile fixture.
-That is the same could-not-evaluate held open on purpose that §5.8 describes for
-the attestation edges, and for the same reason.
+It is an entry in [`limitations.md`](limitations.md) §11 rather than a line of
+code because no fixture here is mobile and `reg.enforce.Enforcer` refuses to
+construct for a driven base, so the mapping would be written and tested against
+nothing — the same could-not-evaluate held open on purpose that §5.8 describes.
+
+### 5.10 The acknowledgment, and why a person being involved decides nothing
+
+An `Acknowledgment` records that a party cleared a passivation. §5.6 and §5.9 are
+about a taint arriving in a *value*; this presses the other way — a record in
+which **a person is unmistakably involved** — and that decides nothing.
+
+**The decision: `ACKNOWLEDGED` is Layer A, because an acknowledgment
+is attestation-shaped.** It is a signed record of what a party stated, and its
+failure modes are the chain's — who held the key, whether the record was
+truncated or reordered — not a perceiver's. That is the argument that already
+makes `DECLARED`, `ADJUDICATED`, `ENFORCED` and `FOLLOWS` Layer A.
+
+**And *nobody is named in it* is not the argument.** The edge names no `Entity`,
+which is true and is not why: if a person appearing decided a layer, the taxonomy
+would be pattern-matching on who shows up instead of reasoning about what an
+answer inherits. This is the **third** case the entity-naming heuristic does not
+decide — after §5.7's `Limits` taint and §5.6's posed configuration — so it is
+written as reasoning rather than as a table row, because the next case needs
+something to reason from.
+
+**What would overturn it.** An acknowledgment whose *content* is a perceiver's
+output — an operator confirming *the cell is clear* on the strength of a sensor —
+inherits that perceiver and is Layer B, exactly as perception-derived `Limits`
+are. `reg.enforce.Acknowledgment` has no field that could carry one. That is a
+boundary on the *record*, not on operators.
+
+**What the artifact may therefore claim.** `reg.query.acknowledgments` answers
+*by whom* with the **party** — `Acknowledgment.SIGNING_ROLE` — beside the run's
+own `meta[operator_id]`: two fields rather than one blended attribution, the
+operator the build was told about having signed nothing. A passivation the
+artifact holds no acknowledgment of is a **could-not-evaluate** and never a *no*.
 
 ---
 
@@ -941,6 +962,7 @@ least once nobody remembers which side of it something used to be on.
 | §5.9, the provenance on the velocity | #156 | 2026-09-03 |
 | §5.8's second half, the pose written by `reg.graph.build` | #191 | 2026-09-05 |
 | The condition on the claim above, until the layer basis lands | #243, #227 | 2026-09-07 |
+| §5.10, the acknowledgment's layer | #247 | 2026-09-07 |
 
 ### §3's curve was wrong in every column until 2026-08-20
 

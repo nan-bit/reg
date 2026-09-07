@@ -169,6 +169,7 @@ __all__ = [
     "HASH_HEX_LEN",
     "KEY_BYTES",
     "MAC_FIELD",
+    "META_ACKNOWLEDGMENT_COUNT",
     "META_ATTESTATION_RECORDS",
     "META_DECLARATION_COUNT",
     "META_VERDICT_COUNT",
@@ -180,6 +181,7 @@ __all__ = [
     "ChainReport",
     "ChainResult",
     "ChainSpec",
+    "RecordSpec",
     "ChainState",
     "Key",
     "KeyRoleError",
@@ -197,6 +199,7 @@ __all__ = [
     "generate_keyring",
     "is_hash",
     "load_keyring",
+    "read_chain_records",
     "sign",
     "signing_bytes",
     "tamper",
@@ -812,6 +815,15 @@ META_ATTESTATION_RECORDS = "attestation_records"
 META_DECLARATION_COUNT = "declaration_count"
 META_VERDICT_COUNT = "verdict_count"
 
+#: How many acknowledgments the build says it stored (issue #247). A **third**
+#: count and not a widening of the second: the enforcement chain's length is the
+#: sum of the two, and keeping them apart is what lets a walk say which table a
+#: missing record was removed from. Absent from an artifact that was handed a
+#: record stream is a could-not-evaluate for the whole enforcement chain, exactly
+#: as an absent `verdict_count` is — the walk would otherwise compare its own
+#: length against a number that counts only half of what it read.
+META_ACKNOWLEDGMENT_COUNT = "acknowledgment_count"
+
 #: The value of `META_ATTESTATION_RECORDS` that means a record stream was
 #: supplied. Anything else — including the key being absent — is an artifact
 #: nobody asked to store records in, which is a refusal and not an empty chain.
@@ -879,18 +891,20 @@ FAILURE_KINDS: tuple[str, ...] = (
 
 
 @dataclasses.dataclass(frozen=True)
-class ChainSpec:
-    """One of the two chains: which party signs it and where it is stored.
+class RecordSpec:
+    """One record kind in a chain: where it lives and what names it.
 
-    Two chains and not one interleaved stream — `reg.graph` keeps them separate
-    because they are two parties, and a walker that merged them would check the
-    policy's links under the enforcement key.
+    A chain used to be one of these and is now a **sequence** of them (issue
+    #247). The enforcement key signs verdicts and acknowledgments, they share one
+    `prev_hash` and one `seq` counter, and they live in two tables — so the walk
+    reads both and merges them rather than walking either alone. A verdict-only
+    walk over an artifact holding acknowledgments would report a broken link at
+    every acknowledgment, and an acknowledgment-only one would report a chain
+    that never began.
     """
 
-    #: The party whose key signs every record in this chain.
-    role: Role
     #: The record class name, as `reg.store.RECORD_KINDS` spells it. It is also
-    #: the `src_kind` of this chain's `FOLLOWS` edges.
+    #: the `src_kind` of this record's `FOLLOWS` edges.
     kind: str
     #: The table the records live in, the name of the record's own id field, and
     #: the surrogate key column that field resolves to (issue #55). The row is
@@ -900,32 +914,120 @@ class ChainSpec:
     table: str
     id_field: str
     key_column: str
-    #: The `reg.store` reader for this chain, by name. By name because the
-    #: import is deferred (see `_read_records`).
+    #: The `reg.store` reader for this record kind, by name. By name because the
+    #: import is deferred (see `read_chain_records`).
     reader: str
-    #: The `meta` key stating how many records this chain should hold.
+    #: The `meta` key stating how many of these the artifact should hold.
     count_key: str
+    #: The field naming a record in *another* chain, or `None`. It is inside this
+    #: record's own MAC, which is what makes `_cross_referenced_records` the one
+    #: witness to a deletion that cannot be edited around. `references` is the
+    #: kind it names, and `None` in the field itself is a finding rather than a
+    #: gap only where the schema allows it — see `_cross_referenced_records`.
+    reference_field: str | None
+    references: str | None
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainSpec:
+    """One of the two chains: which party signs it and where it is stored.
+
+    Two chains and not one interleaved stream — `reg.graph` keeps them separate
+    because they are two parties, and a walker that merged them would check the
+    policy's links under the enforcement key. Within one party the records *are*
+    merged, because there they are one chain: `records` is in the order the
+    reports and messages name them, and `records[0]` is the kind a reader thinks
+    of the chain as being made of.
+    """
+
+    #: The party whose key signs every record in this chain.
+    role: Role
+    records: tuple[RecordSpec, ...]
+
+    @property
+    def kind(self) -> str:
+        """The chain's primary record kind, for reports and messages."""
+        return self.records[0].kind
+
+    @property
+    def kinds(self) -> tuple[str, ...]:
+        """Every record kind this chain holds, in `records` order."""
+        return tuple(record.kind for record in self.records)
+
+    @property
+    def table(self) -> str:
+        return self.records[0].table
+
+    @property
+    def id_field(self) -> str:
+        return self.records[0].id_field
+
+    @property
+    def key_column(self) -> str:
+        return self.records[0].key_column
+
+    @property
+    def count_key(self) -> str:
+        return self.records[0].count_key
+
+    def spec_for(self, record: object) -> RecordSpec:
+        """The `RecordSpec` for one record, by class name. Refuses a stranger.
+
+        Refuses rather than falling back on `records[0]`: a fallback would
+        address the wrong table, and a tamper or a read against the wrong table
+        silently touches no row and reports itself as done.
+        """
+        name = type(record).__name__
+        for spec in self.records:
+            if spec.kind == name:
+                return spec
+        raise KeyRoleError(
+            f"a {name} is not a record of the {self.role!r} chain, which holds "
+            f"{list(self.kinds)}."
+        )
 
 
 #: The two chains, in the order a report walks them.
 CHAINS: tuple[ChainSpec, ...] = (
     ChainSpec(
         role="policy",
-        kind="Declaration",
-        table="declaration",
-        id_field="declaration_id",
-        key_column="declaration_key",
-        reader="read_declarations",
-        count_key=META_DECLARATION_COUNT,
+        records=(
+            RecordSpec(
+                kind="Declaration",
+                table="declaration",
+                id_field="declaration_id",
+                key_column="declaration_key",
+                reader="read_declarations",
+                count_key=META_DECLARATION_COUNT,
+                reference_field=None,
+                references=None,
+            ),
+        ),
     ),
     ChainSpec(
         role="enforcement",
-        kind="Verdict",
-        table="verdict",
-        id_field="verdict_id",
-        key_column="verdict_key",
-        reader="read_verdicts",
-        count_key=META_VERDICT_COUNT,
+        records=(
+            RecordSpec(
+                kind="Verdict",
+                table="verdict",
+                id_field="verdict_id",
+                key_column="verdict_key",
+                reader="read_verdicts",
+                count_key=META_VERDICT_COUNT,
+                reference_field="declaration_id",
+                references="Declaration",
+            ),
+            RecordSpec(
+                kind="Acknowledgment",
+                table="acknowledgment",
+                id_field="ack_id",
+                key_column="acknowledgment_key",
+                reader="read_acknowledgments",
+                count_key=META_ACKNOWLEDGMENT_COUNT,
+                reference_field="verdict_id",
+                references="Verdict",
+            ),
+        ),
     ),
 )
 
@@ -1054,17 +1156,36 @@ class ChainReport:
         )
 
 
-def _read_records(conn: sqlite3.Connection, spec: ChainSpec) -> list:
-    """This chain's records, in stored order.
+def _record_id(record: object, spec: ChainSpec) -> str:
+    """One record's own id, read through the `RecordSpec` for its class."""
+    return str(getattr(record, spec.spec_for(record).id_field))
+
+
+def read_chain_records(conn: sqlite3.Connection, spec: ChainSpec) -> list:
+    """This chain's records, in stored order, merged across its record kinds.
 
     Order is `reg.store`'s — `(seq, id)` — which is the order the chain was
     written in and the only one two readers of one artifact are guaranteed to
-    agree on. A stream whose `seq` was reordered by tampering is not re-sorted
-    here into the order that would verify: the links are checked against the
-    order the artifact presents, and a reorder breaks them, which is the
-    `replay_or_reorder` fault being visible rather than repaired.
+    agree on. Merging the enforcement chain's two tables uses the same key, and
+    it is a **total** order because the two kinds draw `seq` from one counter
+    (`reg.enforce.Enforcer`): no verdict and no acknowledgment of one run share
+    a position, so the tie-break on the id is a formality that keeps two readers
+    agreeing rather than a decision about which record came first.
+
+    A stream whose `seq` was reordered by tampering is not re-sorted here into
+    the order that would verify: the links are checked against the order the
+    artifact presents, and a reorder breaks them, which is the
+    `replay_or_reorder` fault being visible rather than repaired. Sorting on the
+    stored `seq` is what makes that true across two tables as well as within one
+    — the alternative, following each record's `prev_hash` to find the next, would
+    assemble the order out of the links the walk exists to check and could never
+    report a break in them.
     """
-    return getattr(store, spec.reader)(conn)
+    out: list = []
+    for record_spec in spec.records:
+        out.extend(getattr(store, record_spec.reader)(conn))
+    out.sort(key=lambda record: (int(record.seq), _record_id(record, spec)))
+    return out
 
 
 def _walk(
@@ -1074,23 +1195,32 @@ def _walk(
     failures: list[ChainFailure] = []
 
     stated: int | None = None
-    stated_text = store.get_meta(conn, spec.count_key)
-    if stated_text is None:
-        failures.append(
-            ChainFailure(
-                chain=spec.role,
-                kind="no-count",
-                state=ChainState.COULD_NOT_EVALUATE,
-                reason=(
-                    f"the artifact states no {spec.count_key!r}, so the walk has "
-                    "nothing to compare its own length against and cannot tell a "
-                    "complete chain from one with its tail removed."
-                ),
+    # The chain's stated length is the sum over its record kinds, because its
+    # records are one chain across however many tables hold them. Any one key
+    # missing or unreadable makes the whole sum a could-not-evaluate: a partial
+    # total compared against the full walk would report a break that is really a
+    # `meta` key nobody wrote.
+    parts: list[int] = []
+    for record_spec in spec.records:
+        stated_text = store.get_meta(conn, record_spec.count_key)
+        if stated_text is None:
+            failures.append(
+                ChainFailure(
+                    chain=spec.role,
+                    kind="no-count",
+                    state=ChainState.COULD_NOT_EVALUATE,
+                    reason=(
+                        f"the artifact states no {record_spec.count_key!r}, so "
+                        "the walk has nothing to compare its own length against "
+                        "and cannot tell a complete chain from one with its tail "
+                        "removed."
+                    ),
+                )
             )
-        )
-    else:
+            parts = []
+            break
         try:
-            stated = int(stated_text)
+            parts.append(int(stated_text))
         except ValueError:
             failures.append(
                 ChainFailure(
@@ -1098,14 +1228,18 @@ def _walk(
                     kind="no-count",
                     state=ChainState.COULD_NOT_EVALUATE,
                     reason=(
-                        f"meta[{spec.count_key!r}] is {stated_text!r}, which is "
-                        "not a count. Refusing to guess what it meant."
+                        f"meta[{record_spec.count_key!r}] is {stated_text!r}, "
+                        "which is not a count. Refusing to guess what it meant."
                     ),
                 )
             )
+            parts = []
+            break
+    if len(parts) == len(spec.records):
+        stated = sum(parts)
 
     try:
-        records = _read_records(conn, spec)
+        records = read_chain_records(conn, spec)
     except (store.StoreError, ValueError, sqlite3.DatabaseError) as exc:
         failures.append(
             ChainFailure(
@@ -1161,7 +1295,7 @@ def _walk(
     walked_ids: set[str] = set()
 
     for record in records:
-        record_id = str(getattr(record, spec.id_field))
+        record_id = _record_id(record, spec)
         seq = int(record.seq)
         walked_ids.add(record_id)
 
@@ -1203,7 +1337,8 @@ def _walk(
                         kind="genesis",
                         state=ChainState.BROKEN,
                         reason=(
-                            f"the first {spec.kind} of this chain carries "
+                            f"the first record of this chain, a "
+                            f"{type(record).__name__}, carries "
                             f"prev_hash={record.prev_hash!r}, not the genesis "
                             f"hash. It claims a predecessor, and this artifact "
                             "holds none — either a record was removed from the "
@@ -1262,8 +1397,9 @@ def _walk(
                 kind="count",
                 state=ChainState.BROKEN,
                 reason=(
-                    f"the artifact states {stated} {spec.kind} record(s) in "
-                    f"meta[{spec.count_key!r}] and the walk found "
+                    f"the artifact states {stated} record(s) for the "
+                    f"{spec.role!r} chain in "
+                    f"{[r.count_key for r in spec.records]} and the walk found "
                     f"{len(records)}. Records were removed from — or added to — "
                     "this artifact after it was built; deleting the last record "
                     "of a chain breaks no link, so this count is one of the two "
@@ -1366,34 +1502,58 @@ def _cross_referenced_records(
     """A record naming another record the artifact no longer holds.
 
     **This is the check that cannot be edited around.** A `Verdict` carries
-    `declaration_id`, and `signing_bytes` covers every field except the MAC, so
-    the reference is *inside the enforcement signature*. Delete the declaration,
-    fix `meta[declaration_count]`, drop the link edges — all unauthenticated, all
-    editable — and the surviving verdict still names the record that is gone, in
-    a field nobody can change without invalidating a MAC they cannot forge.
+    `declaration_id` and an `Acknowledgment` carries `verdict_id`, and
+    `signing_bytes` covers every field except the MAC, so each reference is
+    *inside* the signature. Delete the referenced record, fix its `meta` count,
+    drop the link edges — all unauthenticated, all editable — and the surviving
+    record still names what is gone, in a field nobody can change without
+    invalidating a MAC they cannot forge.
 
     The artifact held that evidence all along and did not look at it.
+
+    A `None` reference is skipped, and only a verdict can have one: it is what
+    `no_declaration` and `watchdog_expiry` look like in the record. An
+    acknowledgment's `verdict_id` is required by `Acknowledgment` itself and its
+    column is NOT NULL, so `None` there cannot arise from a record and is not a
+    case this reads as a finding — a stored row that reached one has already
+    failed to reconstruct, which is the `unreadable` witness.
     """
-    if spec.role != "enforcement":
+    referenced = {
+        record_spec.references
+        for record_spec in spec.records
+        if record_spec.references is not None
+    }
+    if not referenced:
         return []
-    try:
-        held = {d.declaration_id for d in store.read_declarations(conn)}
-    except (store.StoreError, ValueError, sqlite3.DatabaseError) as exc:
-        return [
-            ChainFailure(
-                chain=spec.role,
-                kind="cross-reference-unreadable",
-                state=ChainState.COULD_NOT_EVALUATE,
-                reason=(
-                    "the declarations could not be read, so the verdicts' "
-                    f"references to them were not checked: {exc}"
-                ),
-            )
-        ]
+    held: dict[str, set[str]] = {}
     out: list[ChainFailure] = []
+    for kind in sorted(referenced):
+        target = _record_spec_for_kind(kind)
+        try:
+            rows = getattr(store, target.reader)(conn)
+        except (store.StoreError, ValueError, sqlite3.DatabaseError) as exc:
+            out.append(
+                ChainFailure(
+                    chain=spec.role,
+                    kind="cross-reference-unreadable",
+                    state=ChainState.COULD_NOT_EVALUATE,
+                    reason=(
+                        f"the {kind} records could not be read, so this chain's "
+                        f"references to them were not checked: {exc}"
+                    ),
+                )
+            )
+            continue
+        held[kind] = {str(getattr(row, target.id_field)) for row in rows}
+
     for record in records:
-        named = getattr(record, "declaration_id", None)
-        if named is None or named in held:
+        record_spec = spec.spec_for(record)
+        if record_spec.reference_field is None:
+            continue
+        named = getattr(record, record_spec.reference_field, None)
+        if named is None or record_spec.references not in held:
+            continue
+        if str(named) in held[record_spec.references]:
             continue
         out.append(
             ChainFailure(
@@ -1401,15 +1561,26 @@ def _cross_referenced_records(
                 kind="cross-reference",
                 state=ChainState.BROKEN,
                 reason=(
-                    f"this verdict adjudicates {named!r} and the artifact holds no "
-                    "such declaration. The reference is inside the enforcement "
-                    "MAC, so it is evidence the record was removed that nobody "
-                    "could edit without the enforcement key."
+                    f"this {record_spec.kind} names "
+                    f"{record_spec.reference_field}={str(named)!r} and the "
+                    f"artifact holds no such {record_spec.references}. The "
+                    "reference is inside the enforcement MAC, so it is evidence "
+                    "the record was removed that nobody could edit without the "
+                    "enforcement key."
                 ),
-                record_id=getattr(record, "verdict_id", None),
+                record_id=str(getattr(record, record_spec.id_field)),
             )
         )
     return out
+
+
+def _record_spec_for_kind(kind: str) -> RecordSpec:
+    """The `RecordSpec` for a record kind, whichever chain holds it."""
+    for chain_spec in CHAINS:
+        for record_spec in chain_spec.records:
+            if record_spec.kind == kind:
+                return record_spec
+    raise KeyRoleError(f"no record spec for kind {kind!r}.")
 
 
 def _dangling_links(
@@ -1423,13 +1594,15 @@ def _dangling_links(
     counts it is not covered by any MAC — see the module header.
     """
     rows = store.read_edges(conn, edge_type="FOLLOWS")
+    tables = {record.kind: record.table for record in spec.records}
     out: list[ChainFailure] = []
     for row in rows:
         for end, kind_column, id_column in (
             ("source", "src_kind", "src_id"),
             ("target", "dst_kind", "dst_id"),
         ):
-            if str(row[kind_column]) != spec.kind:
+            kind = str(row[kind_column])
+            if kind not in tables:
                 continue
             record_id = str(row[id_column])
             if record_id in walked_ids:
@@ -1441,7 +1614,7 @@ def _dangling_links(
                     state=ChainState.BROKEN,
                     reason=(
                         f"a FOLLOWS edge names this record as its {end}, and the "
-                        f"{spec.table} table does not hold it. The link was "
+                        f"{tables[kind]} table does not hold it. The link was "
                         "written when the record was there, so the record was "
                         "removed afterwards."
                     ),
@@ -1718,12 +1891,12 @@ def _select(records: list, spec: ChainSpec, selector: str):
             )
         return records[index]
     for record in records:
-        if str(getattr(record, spec.id_field)) == selector:
+        if _record_id(record, spec) == selector:
             return record
     raise TamperError(
-        f"this artifact holds no {spec.kind} with {spec.id_field}={selector!r}. "
-        f"The first few are: "
-        f"{[str(getattr(r, spec.id_field)) for r in records[:5]]}."
+        f"this artifact holds no {' or '.join(spec.kinds)} with "
+        f"{'/'.join(r.id_field for r in spec.records)}={selector!r}. "
+        f"The first few are: {[_record_id(r, spec) for r in records[:5]]}."
     )
 
 
@@ -1821,14 +1994,20 @@ def tamper(
 
     conn = store.connect(copy)
     try:
-        records = _read_records(conn, chain_spec)
+        records = read_chain_records(conn, chain_spec)
         if not records:
             raise TamperError(
-                f"{source} holds no {chain_spec.kind} to tamper with. A "
-                "demonstration on an empty chain would demonstrate nothing."
+                f"{source} holds no {' or '.join(chain_spec.kinds)} to tamper "
+                "with. A demonstration on an empty chain would demonstrate "
+                "nothing."
             )
         record = _select(records, chain_spec, spec.selector)
-        record_id = str(getattr(record, chain_spec.id_field))
+        # The record's own table, not the chain's primary one (issue #247). A
+        # tamper addressed at the wrong table matches no row, commits nothing and
+        # reports itself as applied — the one outcome a tamper demonstration must
+        # never produce.
+        record_spec = chain_spec.spec_for(record)
+        record_id = str(getattr(record, record_spec.id_field))
         seq = int(record.seq)
         row_key = _row_key(conn, chain_spec, record_id)
 
@@ -1839,19 +2018,19 @@ def tamper(
             # is what keeps the second witness readable: the FOLLOWS edge left
             # pointing at this record can still say *which* record is gone.
             conn.execute(
-                f"DELETE FROM {chain_spec.table} "  # noqa: S608
-                f"WHERE {chain_spec.key_column} = ?",
+                f"DELETE FROM {record_spec.table} "  # noqa: S608
+                f"WHERE {record_spec.key_column} = ?",
                 (row_key,),
             )
             after: object = None
             field = None
         else:
             field = str(spec.field)
-            declared = _column_type(conn, chain_spec.table, field)
+            declared = _column_type(conn, record_spec.table, field)
             cast = _TAMPER_TYPES.get(declared)
             if cast is None:
                 raise TamperError(
-                    f"{chain_spec.table}.{field} is a {declared} column, and a "
+                    f"{record_spec.table}.{field} is a {declared} column, and a "
                     "value for one cannot be given as text. The fields this "
                     f"tool can set are the {sorted(_TAMPER_TYPES)} ones."
                 )
@@ -1860,17 +2039,17 @@ def tamper(
             except ValueError:
                 raise TamperError(
                     f"{spec.value!r} is not a value for "
-                    f"{chain_spec.table}.{field}, which is {declared}."
+                    f"{record_spec.table}.{field}, which is {declared}."
                 ) from None
             row = conn.execute(
-                f"SELECT {field} AS v FROM {chain_spec.table} "  # noqa: S608
-                f"WHERE {chain_spec.key_column} = ?",
+                f"SELECT {field} AS v FROM {record_spec.table} "  # noqa: S608
+                f"WHERE {record_spec.key_column} = ?",
                 (row_key,),
             ).fetchone()
             before = None if row is None else row["v"]
             conn.execute(
-                f"UPDATE {chain_spec.table} SET {field} = ? "  # noqa: S608
-                f"WHERE {chain_spec.key_column} = ?",
+                f"UPDATE {record_spec.table} SET {field} = ? "  # noqa: S608
+                f"WHERE {record_spec.key_column} = ?",
                 (after, row_key),
             )
 
@@ -1885,12 +2064,12 @@ def tamper(
                 )
             conn.commit()
             altered = _select(
-                _read_records(conn, chain_spec), chain_spec, record_id
+                read_chain_records(conn, chain_spec), chain_spec, record_id
             )
             fresh = sign(altered, keyring.key(chain_spec.role))
             conn.execute(
-                f"UPDATE {chain_spec.table} SET {MAC_FIELD} = ? "  # noqa: S608
-                f"WHERE {chain_spec.key_column} = ?",
+                f"UPDATE {record_spec.table} SET {MAC_FIELD} = ? "  # noqa: S608
+                f"WHERE {record_spec.key_column} = ?",
                 (fresh, row_key),
             )
             resigned = True
@@ -1910,7 +2089,7 @@ def tamper(
         source=source,
         copy=copy,
         chain=chain_spec.role,
-        kind=chain_spec.kind,
+        kind=record_spec.kind,
         record_id=record_id,
         seq=seq,
         field=field,

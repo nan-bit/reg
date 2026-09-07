@@ -400,9 +400,10 @@ def test_an_acknowledgment_is_signed_by_enforcement_not_the_policy() -> None:
     """The gate would be decorative if the policy could clear its own fault."""
     ack = Acknowledgment(
         ack_id="fixture-ack-00000",
+        verdict_id="fixture-verdict-00003",
+        seq=4,
         t=1.0,
         fault="stale_declaration",
-        verdict_id="fixture-verdict-00003",
         reason="operator confirmed the cell is clear",
         prev_hash=GENESIS_HASH,
         mac=UNSIGNED_MAC,
@@ -418,9 +419,10 @@ def test_an_acknowledgment_with_no_stated_reason_is_refused() -> None:
     with pytest.raises(EnforcementError, match="reason"):
         Acknowledgment(
             ack_id="a",
+            verdict_id="v",
+            seq=0,
             t=0.0,
             fault="stale_declaration",
-            verdict_id="v",
             reason="   ",
             prev_hash=GENESIS_HASH,
             mac=UNSIGNED_MAC,

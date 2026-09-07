@@ -1234,7 +1234,7 @@ are superseded and left standing as what that pass was given: both rest on one
 compressed projection, filed under `mcap_compressed_nocrc` — a preset name
 `ros2 bag record` answers with an error. rosbag2 ships **two** compressed
 profiles and the bags it wrote bracket that projection, so the figure is a
-**pair**: the artifact is **7.16x** a `zstd_fast` bag and **10.25x** a
+**pair**: the artifact is **7.17x** a `zstd_fast` bag and **10.27x** a
 `zstd_small` one. The uncompressed half stands unedited: **25.34x** and
 **1.58x** become measurements.
 
@@ -1242,6 +1242,14 @@ That moves the entry both ways: against `zstd_fast` the real bag is 17.5% dearer
 than projected, **5.58x** the gzipped CSV, and against `zstd_small` 17.9%
 cheaper, **3.90x**. What this pass argued — the incumbent is dearer than the
 gzipped baseline this project chose to lose against — holds at both.
+
+**Corrected again 2026-09-07 (issue #247).** The artifact side moved, not the
+bags: schema 12 added the acknowledgment table, and the build this entry divides
+went 2,584,576 B to 2,587,648 B. So the composition above reads
+**40.02x** / 5.58x and 40.02x / 3.90x, and the pair is 7.17x and 10.27x. The
+`39.98x / 4.75x` two paragraphs up is left as the arithmetic that pass did. What
+this entry argues is unchanged by 0.1%; it is republished because a figure quoted
+against a measurement has to be the measurement.
 
 ---
 
@@ -1302,9 +1310,11 @@ a later reader could check. The artifact stays a bag (§16).
 ### What SOTER does that `reg` does not
 
 - **The recovery half, working, on a real vehicle.** `reg`'s passivation and
-  reintegration reach no table, no edge type and no query, and `graph.build`
-  refuses a run containing one (README; issue #112). ASTM F3269's
-  Complex/Recovery split is cited in §3 and only half of it is exercisable here.
+  reintegration produce a *record* that reaches a table, an edge type and a query
+  (README; [`lossiness.md`](lossiness.md) *Retained* #7), and nothing in `reg`
+  ever brings a vehicle to a stop. ASTM F3269's Complex/Recovery split is cited
+  in §3, and what is exercisable here is the evidence about recovery rather than
+  recovery.
 - **A derived switching condition and a composition proof.** SOTER computes the
   safe set from a model; `reg`'s bound is hand-derived, radial, and incomplete in
   a documented direction.
@@ -1878,9 +1888,10 @@ preference. RTD's guarantee lives in a **planner** — the same party that choos
 the trajectory proves the trajectory safe, which is the common-cause structure
 [`CLAUDE.md`](../CLAUDE.md) rule 3 exists to refuse. And `reg`'s enforcement layer
 VETOes a *declaration*; it commands nothing, and the one thing in the tree that
-resembles a fail-safe — passivation — is documented in the README as **not
-exercisable**, reaching no table, no edge type and no query. A project that cannot
-represent a stop cannot rest a bound on having one. Refusal is right here for
+resembles a fail-safe — passivation — is a **record about** a stop rather than a
+stop, reaching a table, an edge type and a query and commanding nothing through
+any of them. A project that cannot command a stop cannot rest a bound on having
+one. Refusal is right here for
 `reg`'s reasons, and saying so is stronger than concluding it as though nothing
 else had been tried.
 

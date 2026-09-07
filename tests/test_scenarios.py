@@ -46,6 +46,7 @@ from reg.scenarios import (
     MOBILE_SCENARIOS,
     MOBILE_WORLD,
     SCENARIOS,
+    AckPoint,
     Scenario,
     Waypoint,
     scenario,
@@ -983,6 +984,98 @@ def test_the_probe_scenario_accepts_a_well_formed_silence() -> None:
     sc = _scenario(silent_windows=((0.2, 0.5), (1.0, 2.0)))
     assert sc.silent_at(0.2) and sc.silent_at(0.5) and sc.silent_at(2.0)
     assert not sc.silent_at(0.0) and not sc.silent_at(0.75)
+
+
+# --- the acknowledgment instants (issue #247) ------------------------------
+
+
+def test_exactly_one_fixture_acknowledges_a_passivation() -> None:
+    """A sixth behaviour, and it is one fixture's, like the other five.
+
+    `stale_declaration` is the run whose operator clears the stop. The set is
+    asserted rather than described because the control matters: a change that
+    put an `AckPoint` in every fixture would make every artifact hold an
+    acknowledgment, and the query tests that assert one would still pass.
+    """
+    acknowledging = {n for n, sc in SCENARIOS.items() if sc.acknowledged_at}
+    assert acknowledging == {"stale_declaration"}
+
+    stale = SCENARIOS["stale_declaration"]
+    (point,) = stale.acknowledged_at
+    gap_start, _ = stale.silent_windows[0]
+    assert point.t > gap_start, (
+        "the operator acknowledges before the policy has gone quiet, so there "
+        "is no passivation in force to clear and the build would refuse"
+    )
+    assert point.t <= stale.duration
+    assert point.reason.strip()
+
+
+def test_a_fixture_that_acknowledges_nothing_says_so_with_an_empty_tuple() -> None:
+    """The default is a statement about the run, not a placeholder.
+
+    Ten of the eleven fixtures have no `AckPoint`, and what that records is
+    *this run's operator did nothing*. `reg.enforce` refuses a pre-emptive
+    acknowledgment, so an instant nobody stated can never become one this
+    module invented.
+    """
+    quiet = {n for n, sc in SCENARIOS.items() if not sc.acknowledged_at}
+    assert quiet and "stale_declaration" not in quiet
+    for name in quiet:
+        assert SCENARIOS[name].acknowledged_at == ()
+
+
+def test_rejects_an_acknowledgment_with_no_stated_reason() -> None:
+    """NEGATIVE. A rubber stamp in the fixture is a rubber stamp in the artifact."""
+    for reason in ("", "   ", None, 7):
+        with pytest.raises((ValueError, TypeError)):
+            AckPoint(0.5, reason)  # type: ignore[arg-type]
+
+
+def test_rejects_an_acknowledgment_at_an_instant_that_is_not_one() -> None:
+    """NEGATIVE. `t` reaches `Enforcer.acknowledge`; a NaN would clear nothing
+    and say it had."""
+    for t in (float("nan"), float("inf"), "0.5", None):
+        with pytest.raises((ValueError, TypeError)):
+            AckPoint(t, "operator cleared the cell")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("points", "match"),
+    [
+        ((AckPoint(-0.1, "before the run"),), "outside"),
+        ((AckPoint(2.5, "after the run"),), "outside"),  # the probe runs 2.0 s
+        ((AckPoint(0.5, "first"), AckPoint(0.5, "again")), "at or\nbefore"),
+        ((AckPoint(1.0, "first"), AckPoint(0.5, "earlier")), "at or\nbefore"),
+        ((0.5,), "not an\nAckPoint"),
+    ],
+)
+def test_rejects_acknowledgments_that_describe_a_run_nobody_had(
+    points: tuple, match: str
+) -> None:
+    """NEGATIVE. An instant the run never reaches acknowledges nothing, and two
+    at one instant are one record written twice."""
+    with pytest.raises((ValueError, TypeError), match=match.replace("\n", " ")):
+        _scenario(acknowledged_at=points)
+
+
+def test_rejects_a_mutable_acknowledgment_list() -> None:
+    with pytest.raises(TypeError, match="must be a tuple"):
+        _scenario(acknowledged_at=[AckPoint(0.5, "cleared")])  # type: ignore[arg-type]
+
+
+def test_the_probe_scenario_accepts_well_formed_acknowledgments() -> None:
+    """The positive control for the negatives above."""
+    sc = _scenario(
+        acknowledged_at=(
+            AckPoint(0.5, "operator inspected the cell"),
+            AckPoint(1.5, "operator inspected it again"),
+        )
+    )
+    assert [point.t for point in sc.acknowledged_at] == [0.5, 1.5]
+    assert len(list(sc.states(seed=0))) == 101, (
+        "a policy/operator field must not change what the fixture does"
+    )
 
 
 @pytest.mark.parametrize("field", ["declared_action_class", "fault"])

@@ -280,6 +280,21 @@ def test_nothing_to_compare_is_not_a_pass(readme: str, plan: str) -> None:
 # one repository, opposite claims, and nothing failed. This is the same shape of
 # check as the one above: the front page may not be more confident than the
 # lossiness contract about what the artifact holds.
+#
+# ISSUE #247 CLOSED THAT GAP, AND THE CHECK IS NOT DELETED WITH IT. The first
+# version of this check asserted the gap: both documents had to state that an
+# acknowledgment is not stored, and a bare `landed` on Claim 4 was the failure.
+# Written that way it would now have to be deleted to go green, and deleting a
+# check because the fact it pinned changed is how the next drift goes unnoticed.
+#
+# So the fact is read off the **code** instead of written into this module, and
+# the check is that both documents agree with it. `reg.store.EDGE_SPECS` holding
+# `ACKNOWLEDGED` and `reg.query.QUERIES` holding `acknowledgments` is what "the
+# artifact can be asked" means, and either side missing is a
+# could-not-evaluate rather than a licence to read the documents freely. It now
+# fails in both directions: a document still conceding the old gap after the
+# schema grew a table for the record, and — if the record ever stopped reaching
+# the artifact — a front page still claiming it does.
 # ==========================================================================
 
 #: The Claim 4 row of the README's claims table. Anchored on the row's number
@@ -305,31 +320,70 @@ def retained_7(lossiness: str) -> str | None:
     return found.group(0) if found else None
 
 
-def agree_about_acknowledgment(readme: str, lossiness: str) -> tuple[str, list[str]]:
-    """Verdict on whether the two documents say the same thing about passivation.
+#: Phrases that concede the pre-#247 gap. A document carrying one is claiming
+#: the artifact cannot be asked whether a passivation was acknowledged, whatever
+#: else it says around it, so they are what the check reads rather than a
+#: sentiment nobody can evaluate.
+GAP_PHRASES: tuple[str, ...] = (
+    "cannot be asked",
+    "no artifact answers",
+    "is not stored",
+    "reaches no table",
+    "not exercisable",
+)
 
-    An acknowledgment is not stored, and `graph.build` refuses a run containing
-    one (`tests/test_graph.py`). Both documents have to say so, and the front
-    page's status word may not be a bare `landed` over a half nobody can
-    exercise. A README with no Claim 4 row, or a lossiness file with no #7, is
-    COULD-NOT-EVALUATE: this check is meaningless if it cannot find what it
-    compares, and silence must not read as agreement.
+
+def artifact_holds_the_acknowledgment() -> bool | None:
+    """Whether the artifact can be asked, read off the code. `None` = unreadable.
+
+    Two halves and both are required: a place to store the record
+    (`reg.store.EDGE_SPECS`) and a question to ask of it (`reg.query.QUERIES`).
+    One without the other is a structural claim rather than an answer, which is
+    the specific defect issue #247 exists to close. `None` on an import error is
+    a could-not-evaluate — the documents are not read against a fact nobody
+    could establish.
+    """
+    try:
+        from reg import query, store
+    except Exception:  # pragma: no cover - an unimportable package fails louder
+        return None
+    return "ACKNOWLEDGED" in store.EDGE_SPECS and "acknowledgments" in query.QUERIES
+
+
+def agree_about_acknowledgment(
+    readme: str, lossiness: str, holds: bool | None
+) -> tuple[str, list[str]]:
+    """Verdict on whether the two documents say what the code does about
+    passivation.
+
+    `holds` is `artifact_holds_the_acknowledgment()`, passed in so the negative
+    tests can pin both directions. A README with no Claim 4 row, a lossiness file
+    with no #7, or a `holds` of `None` is COULD-NOT-EVALUATE: this check is
+    meaningless if it cannot find what it compares, and silence must not read as
+    agreement.
     """
     row, clause = claim_4(readme), retained_7(lossiness)
-    if row is None or clause is None:
+    if row is None or clause is None or holds is None:
         return COULD_NOT_EVALUATE, []
 
     disagreements = []
-    if "acknowledg" not in row.lower():
-        disagreements.append(
-            "README.md's Claim 4 row does not mention the acknowledgment"
-        )
-    if "acknowledg" not in clause.lower():
-        disagreements.append(
-            "docs/lossiness.md Retained #7 does not mention the acknowledgment"
-        )
+    for name, text in (("README.md's Claim 4 row", row), ("docs/lossiness.md Retained #7", clause)):
+        if "acknowledg" not in text.lower():
+            disagreements.append(f"{name} does not mention the acknowledgment")
+            continue
+        conceded = [phrase for phrase in GAP_PHRASES if phrase in text.lower()]
+        if holds and conceded:
+            disagreements.append(
+                f"{name} still concedes the pre-#247 gap ({conceded}) while the "
+                "artifact holds the record and reg.query can be asked about it"
+            )
+        if not holds and not conceded:
+            disagreements.append(
+                f"{name} does not state the gap, and nothing in the code stores "
+                "an acknowledgment or answers a question about one"
+            )
     status = STATUS.search(row.split("|")[3]) if row.count("|") > 3 else None
-    if status is not None and status.group(1).strip() == "landed":
+    if not holds and status is not None and status.group(1).strip() == "landed":
         disagreements.append(
             "README.md's Claim 4 status is a bare `landed` over a half that is "
             "implemented only in reg/enforce.py"
@@ -338,26 +392,75 @@ def agree_about_acknowledgment(readme: str, lossiness: str) -> tuple[str, list[s
 
 
 def test_the_front_page_and_the_lossiness_contract_agree_about_passivation() -> None:
+    holds = artifact_holds_the_acknowledgment()
+    assert holds is not None, (
+        "reg.store or reg.query could not be imported, so what the two documents "
+        "are checked against could not be established. That is a "
+        "could-not-evaluate for this check, not a pass for either document."
+    )
     verdict, disagreements = agree_about_acknowledgment(
-        README.read_text(), LOSSINESS.read_text()
+        README.read_text(), LOSSINESS.read_text(), holds
     )
     assert verdict == AGREE, (
-        f"{disagreements}. Passivation and reintegration are implemented in "
-        "reg/enforce.py and reach no artifact; graph.build refuses a run "
-        "containing an Acknowledgment. Both documents state that gap, or issue "
-        "#112 closed it and both should stop stating it — not one each."
+        f"{disagreements}. The artifact "
+        f"{'holds' if holds else 'does not hold'} the acknowledgment "
+        "(reg.store.EDGE_SPECS, reg.query.QUERIES), and both documents say so or "
+        "both state the gap — not one each."
     )
+
+
+def test_the_code_is_what_the_documents_are_checked_against() -> None:
+    """Issue #247's own precondition, asserted rather than assumed.
+
+    The check above is only worth its message while both halves are really
+    there. A schema that grew the edge and a query module that never gained the
+    question would make it read the documents against a structural claim.
+    """
+    from reg import query, store
+
+    assert store.EDGE_SPECS["ACKNOWLEDGED"].layer == "A"
+    assert query.QUERIES["acknowledgments"].arguments == ()
+    assert artifact_holds_the_acknowledgment() is True
+
+
+def test_a_document_still_conceding_the_closed_gap_is_caught() -> None:
+    """THE NEGATIVE, in the direction issue #247 created.
+
+    The front page as it read before this issue, against a build that holds the
+    record: the row is not wrong about the acknowledgment existing, it is wrong
+    about what the artifact can be asked, and the phrase is what says so.
+    """
+    verdict, disagreements = agree_about_acknowledgment(
+        '| **4** | **Attestation** | `landed, minus the passivation half` — '
+        '"was the passivation acknowledged" is a question this artifact '
+        "cannot be asked |",
+        LOSSINESS.read_text(),
+        holds=True,
+    )
+    assert verdict == DISAGREE
+    assert any("still concedes" in d for d in disagreements)
 
 
 def test_a_bare_landed_on_claim_4_is_caught() -> None:
-    """The negative test: the exact row this check was written against (#110)."""
+    """The negative test in the other direction: the exact row this check was
+    written against (#110), against a build with no acknowledgment in it."""
     verdict, disagreements = agree_about_acknowledgment(
         "| **4** | **Attestation** | `landed` — the chain and the taxonomy |",
         LOSSINESS.read_text(),
+        holds=False,
     )
     assert verdict == DISAGREE
     assert any("bare `landed`" in d for d in disagreements)
     assert any("does not mention the acknowledgment" in d for d in disagreements)
+
+
+def test_an_unreadable_code_side_is_not_a_pass() -> None:
+    """COULD-NOT-EVALUATE, and it does not resolve to AGREE."""
+    verdict, disagreements = agree_about_acknowledgment(
+        README.read_text(), LOSSINESS.read_text(), holds=None
+    )
+    assert verdict == COULD_NOT_EVALUATE
+    assert disagreements == []
 
 
 def test_a_lossiness_clause_that_dropped_the_concession_is_caught() -> None:
@@ -365,6 +468,7 @@ def test_a_lossiness_clause_that_dropped_the_concession_is_caught() -> None:
     verdict, disagreements = agree_about_acknowledgment(
         README.read_text(),
         "7. **The complete hash chain** — every link, unbroken.\n8. next\n",
+        holds=True,
     )
     assert verdict == DISAGREE
     assert disagreements == [
@@ -381,5 +485,5 @@ def test_a_lossiness_clause_that_dropped_the_concession_is_caught() -> None:
 )
 def test_a_missing_claim_row_or_clause_is_not_a_pass(readme: str, lossiness: str) -> None:
     """Silence is could-not-evaluate. A renamed heading must not read as AGREE."""
-    verdict, _ = agree_about_acknowledgment(readme, lossiness)
+    verdict, _ = agree_about_acknowledgment(readme, lossiness, holds=True)
     assert verdict == COULD_NOT_EVALUATE

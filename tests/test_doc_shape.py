@@ -267,6 +267,16 @@ EXEMPT: dict[str, str] = {
 #         difference; what did *not* grow is the archaeology, because the two
 #         issue references the new prose needed live in §8's build order, below
 #         that file's rationale line, which is where #213 and #214 put theirs
+#   86.2  today, 2026-09-07, after #247 let an `Acknowledgment` reach the
+#         artifact. The denominator moved and the numerator barely did:
+#         `reg.store`, `reg.chain`, `reg.query` and `reg.scenarios` gained nine
+#         public symbols between them — the store's two readers/writers,
+#         `RecordSpec` and `read_chain_records`, the query and its three answer
+#         shapes, and `AckPoint` — against 45 words, almost all of them
+#         `README.md`'s Claim 4 row saying the passivation question is now
+#         answerable. 26,089 / 303 = 86.10, rounded up to the next tenth. A
+#         ceiling left at 88.6 would have banked 726 words of headroom bought by
+#         shipping a feature, which is the raise this ratchet exists to refuse
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -277,7 +287,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 88.6
+RATE = 86.2
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -361,7 +371,19 @@ RATE = 88.6
 #           own deliverable. Six words lower than the last ceiling rather than
 #           level with it, for the reason the #233 row gives — measured, no
 #           headroom
-ARGUMENT_MAX = 47181
+#   47,164  today, 2026-09-07, after #247 let an `Acknowledgment` reach the
+#           artifact. `sufficiency.md` gained §5.10 — the layer argument for the
+#           acknowledgment, which is the third case the entity-naming heuristic
+#           does not decide and so had to be reasoning rather than a table row —
+#           and `lossiness.md` *Retained* #7 was rewritten from a refusal into a
+#           retention clause. Paid for and seventeen words over: `plan.md`'s
+#           Claim 4 and Phase 4 stopped restating what `lossiness.md` #7 and
+#           `sufficiency.md` §5.10 now carry, and `sufficiency.md` §5.9's
+#           graded-attribute paragraph became a pointer at §7's fourth bullet,
+#           which is where that argument is made in full. Seventeen words lower
+#           than the last ceiling rather than level with it, for the reason the
+#           #233 row gives — measured, no headroom
+ARGUMENT_MAX = 47164
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -402,7 +424,12 @@ PARAGRAPH_MAX_WORDS = 120
 #        was cut for the word budget rather than for this ceiling. Lowered for
 #        the reason the #241 row gives: a ceiling that falls out of work done
 #        for another reason is still a ceiling that has fallen
-LONG_PARAGRAPHS_MAX = 91
+#    90  today, 2026-09-07, after #247: `docs/plan.md` went 7 -> 6. The
+#        paragraph that fell below the threshold is Phase 4's account of what
+#        the artifact could not hold, which is now a pointer at
+#        `lossiness.md` *Retained* #7 — cut for the word budget rather than for
+#        this ceiling, and lowered here for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 90
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -452,6 +479,18 @@ LONG_PARAGRAPHS_MAX = 91
 #        `docs/retention.md` lost two, both of them paragraphs that restated a
 #        document they linked to. Set to what is now above the line rather than
 #        left at 139, which would have banked the difference as headroom
+#   137  today, 2026-09-07, after #247. Unchanged, which is the point: the prose
+#        this issue wrote sits above four rationale lines and would have added
+#        six, every one of them by an issue reference and nothing else — the
+#        shape #213 and #214 found. The references went where each file keeps
+#        them, `sufficiency.md`'s *When each section was added* table and
+#        `mobile-base.md`'s *When each part of the track landed* table, and
+#        `plan.md`, which keeps its references inline by its own status header,
+#        had its two paragraphs reworded in the present tense. What is left is
+#        one dated correction in `prior-art.md`, where a survey pass is corrected
+#        by addition and a correction that narrates is the form the file takes,
+#        and it is paid for by §17's SOTER comparison no longer narrating a gap
+#        that has closed
 NARRATION_MAX = 137
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE

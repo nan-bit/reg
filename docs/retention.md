@@ -97,8 +97,8 @@ Per robot, from the measured resolution curve:
 | per-frame (10 ms) | 955 GB | 95.5 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
-Each is the measured `bytes/hour` for that level — 60.42, 150.15 and
-218.00 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
+Each is the measured `bytes/hour` for that level — 60.54, 150.27 and
+218.12 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
 one of those three figures is a figure at 50 Hz**, which is what
 `reg.scenarios.DEFAULT_DT` runs at, and every one of them **moves with that
 rate**: enforcement emits one verdict and one chain record per commanded action
@@ -209,7 +209,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.42 MB/h → 265 GB → ~689x** | 150.15 MB/h → 658 GB → ~277x | 218.00 MB/h → 955 GB → ~191x |
+| **50 Hz (this simulator, published above)** | **60.54 MB/h → 265 GB → ~689x** | 150.27 MB/h → 658 GB → ~277x | 218.12 MB/h → 955 GB → ~191x |
 | 100 Hz | 106.57 MB/h → 467 GB → ~391x | 247.19 MB/h → 1.08 TB → ~169x | 410.37 MB/h → 1.80 TB → ~101x |
 | 250 Hz | 247.32 MB/h → 1.08 TB → ~169x | 529.79 MB/h → 2.32 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
 | **1 kHz (a real manipulator)** | **1.08 GB/h → 4.73 TB → ~39x** | 2.08 GB/h → 9.11 TB → ~20x | 4.52 GB/h → 19.80 TB → ~9x |
@@ -289,15 +289,18 @@ Claim 1 prices:
 
 | table, coarsest level at 50 Hz | bytes | share of the level |
 |---|---|---|
-| `verdict` | 551,936 | 54.8% |
+| `verdict` | 551,936 | 54.7% |
 | `declaration` | 185,344 | 18.4% |
 | `indexes + schema` | 131,072 | 13.0% |
 | `node` | 112,640 | 11.2% |
-| `meta` | 10,240 | 1.0% |
+| `meta` | 11,264 | 1.1% |
 | `occurrence` | 9,216 | 0.9% |
 | `entity` | 3,072 | 0.3% |
-| `envelope`, `robot_config`, `edge` — one empty page each | 3,072 | 0.3% |
-| **file** | **1,006,592** | |
+| `envelope`, `robot_config`, `acknowledgment`, `edge` — one empty page each | 4,096 | 0.4% |
+| **file** | **1,008,640** | |
+
+*`acknowledgment` arrives with schema 12; `long_run` passivates never, so it is
+one empty page.*
 
 1. **The scene rows are 5,120 B**, 0.5% of the level: `entity`, `envelope` and
    `robot_config` together, two of the three being a single empty page at this
@@ -305,9 +308,9 @@ Claim 1 prices:
 2. **`indexes + schema` is not the artifact's fixed cost.** It is 131,072 B
    here and most of it is indexes *over rows*, which arrive with the rows and
    leave with them. The genuinely fixed part is the schema: an artifact created
-   and never written to is **26,624 B** — `reg.store.create(path,
+   and never written to is **28,672 B** — `reg.store.create(path,
    record_tables=True)`, ten tables and their indexes at `reg.store.PAGE_SIZE` —
-   which is 2.6% of this level.
+   which is 2.8% of this level.
 3. **The mass the control rate does not move is the `declaration` table**, at
    185,344 B and 18.4% of the level. The fixture's policy replans on a
    **wall-clock** interval, so it emits the same 120 declarations at every rung
@@ -319,10 +322,10 @@ Claim 1 prices:
    An 18.4% share at 50 Hz is a share of about 1% at 1 kHz, and that dilution is
    where the difference between 20x and 15.8x goes.
 
-**The two terms it named come to 31,744 B, 3.2% of the level; the
+**The two terms it named come to 33,792 B, 3.4% of the level; the
 term it did not name is 185,344 B, 18.4%.** The stated cause is smaller than the
-one that carries the effect by a factor of **5.8**. Issue #116 estimated the miss
-at ~15x, reading it off *row* counts; measured in bytes it is 5.8x against the
+one that carries the effect by a factor of **5.5**. Issue #116 estimated the miss
+at ~15x, reading it off *row* counts; measured in bytes it is 5.5x against the
 term that actually carries it. Same direction, same conclusion, and now an
 arithmetic anybody can re-run.
 
@@ -420,9 +423,9 @@ from it:
 | verdicts | 3,000 |
 | faults | 24 |
 | chain records | 3,120 |
-| artifact on disk | 2,584,576 B |
+| artifact on disk | 2,587,648 B |
 | gzipped CSV baseline | 64,652 B |
-| x gz CSV | 0.03x |
+| x gz CSV | 0.02x |
 | how much larger | ~40x |
 
 *The baseline moved by one byte on 2026-09-03, and it is a byte of provenance
@@ -440,7 +443,7 @@ projection computed from the MCAP specification, recorded in
 [`sensor-baseline.md`](sensor-baseline.md) and held to the byte by
 `tests/test_incumbent_encoding.py`; the 24-column rows are bags `ros2 bag record`
 wrote on 2026-09-06, whole files (`reg.bench.ROSBAG2_SIZE_MEASUREMENTS`), against
-the 2,584,576 B artifact above. Both put the Layer B half on `/tf`, the
+the 2,587,648 B artifact above. Both put the Layer B half on `/tf`, the
 arrangement most favourable to the incumbent of those that document prices.
 
 | MCAP against a gzipped CSV of the same content | bag | bag / gz CSV | artifact / bag |
@@ -448,19 +451,19 @@ arrangement most favourable to the incumbent of those that document prices.
 | 5 columns / 251 frames, **projected**, vs 3,053 B — `none` | 35,893 B | **11.76x** | |
 | the same, one compressed projection for both zstd profiles | 11,685 B | **3.83x** | |
 | 24 columns / 3,000 frames, **measured**, vs 64,652 B — no profile passed | 1,637,963 B | **25.34x** | **1.58x** |
-| the same, `zstd_fast` | 360,798 B | **5.58x** | **7.16x** |
-| the same, `zstd_small` | 252,034 B | **3.90x** | **10.25x** |
+| the same, `zstd_fast` | 360,798 B | **5.58x** | **7.17x** |
+| the same, `zstd_small` | 252,034 B | **3.90x** | **10.27x** |
 
 The **2.51x** published here from 2026-08-26 is superseded: it priced
 compression as a default rosbag2 does not apply and left the message index out,
 and both made the incumbent look cheap.
 
 **Beside `~40x` the figure is a pair, and the pair is a range with its ends
-named**: the artifact is **7.16x** a `zstd_fast` bag and **10.25x** a
+named**: the artifact is **7.17x** a `zstd_fast` bag and **10.27x** a
 `zstd_small` one, of the same 24 columns of the same run, where `~40x` is against
-a gzipped CSV of those same columns. Each end composes — `39.98x / 5.58x` and
-`39.98x / 3.90x` — which a five-column ratio against a 24-column headline could
-never do. **If one number is wanted it is 7.16x**, because `zstd_fast` is the
+a gzipped CSV of those same columns. Each end composes — `40.02x / 5.58x` and
+`40.02x / 3.90x` — which a five-column ratio against a 24-column headline could
+never do. **If one number is wanted it is 7.17x**, because `zstd_fast` is the
 larger bag and so the smaller ratio: the end least flattering to this project.
 Quoting either alone is preset-shopping. 1.58x is the same comparison at the
 uncompressed default, beside them and not instead of them.

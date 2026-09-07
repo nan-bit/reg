@@ -51,6 +51,7 @@ from reg.chain import (
     GENESIS_HASH,
     HASH_HEX_LEN,
     KEY_BYTES,
+    META_ACKNOWLEDGMENT_COUNT,
     META_ATTESTATION_RECORDS,
     META_DECLARATION_COUNT,
     META_VERDICT_COUNT,
@@ -784,7 +785,7 @@ def attested_empty(tmp_path_factory) -> Path:
     return _build(
         tmp_path_factory.mktemp("empty"),
         "empty.sqlite",
-        AttestationRecords(declarations=(), verdicts=()),
+        AttestationRecords(declarations=(), verdicts=(), acknowledgments=()),
     )
 
 
@@ -1059,6 +1060,227 @@ def test_a_missing_count_is_could_not_evaluate(attested: Path, tmp_path: Path) -
     assert result.state is ChainState.COULD_NOT_EVALUATE
     assert _kinds(result) == ["no-count"]
     assert result.stated_records is None
+
+
+# --- the acknowledgment in the enforcement chain (issue #247) --------------
+#
+# Verdicts and acknowledgments interleave into one chain under one key, so the
+# walk reads two tables and merges them on `seq`. These are what make that a
+# checked property rather than a design note: the chain is bound over both
+# kinds, and every way of altering the acknowledgment that a forger would try
+# has to come back BROKEN.
+
+
+@pytest.fixture(scope="module")
+def acknowledged(tmp_path_factory) -> Path:
+    """An artifact whose enforcement chain runs across an acknowledgment.
+
+    `stale_declaration` goes silent at t=2.0, enforcement passivates when the
+    last declaration expires, and the fixture's operator clears it at t=2.5.
+    The run does not resume, so the acknowledgment has verdicts on both sides of
+    it — which is what makes a tamper on it break a *successor's* link and not
+    only its own MAC.
+    """
+    tmp = tmp_path_factory.mktemp("acknowledged")
+    scn = replace(SCENARIOS["stale_declaration"], dt=FIXTURE_DT)
+    csv = write_frames(
+        scn.states(FIXTURE_SEED),
+        tmp / "sd.csv",
+        comments=provenance(scn, FIXTURE_SEED),
+    )
+    records = _records(csv, scn, tmp)
+    assert len(records.acknowledgments) == 1, (
+        "the shipped fixture produced no acknowledgment, so nothing below is "
+        "about one"
+    )
+    out = tmp / "sd.sqlite"
+    graph.build(
+        csv,
+        out,
+        scn.world.limits,
+        identity=TEST_IDENTITY,
+        human_radius=scn.world.human_radius,
+        records=records,
+        **_FAST,
+    )
+    return out
+
+
+def _ack_id(artifact: Path) -> str:
+    conn = store.connect(artifact)
+    try:
+        return store.read_acknowledgments(conn)[0].ack_id
+    finally:
+        conn.close()
+
+
+def test_the_enforcement_chain_is_walked_over_both_record_tables(
+    acknowledged: Path,
+) -> None:
+    """The precondition for every negative below, and a claim in its own right.
+
+    One chain over two tables: the walk's length is the verdicts plus the
+    acknowledgments, every record has its MAC checked under the enforcement key,
+    and the stated length is the sum of the two `meta` counts. A verdict-only
+    walk would report a broken link at the acknowledgment; an acknowledgment
+    dropped from the merge would report a chain one record short.
+    """
+    report = _report(acknowledged)
+    assert report.state is ChainState.VERIFIED, [f.reason for f in report.failures]
+    result = _chain(report, "enforcement")
+    conn = store.connect(acknowledged)
+    try:
+        verdicts = len(store.read_verdicts(conn))
+        acks = len(store.read_acknowledgments(conn))
+        stated = (
+            int(store.get_meta(conn, META_VERDICT_COUNT)),
+            int(store.get_meta(conn, META_ACKNOWLEDGMENT_COUNT)),
+        )
+    finally:
+        conn.close()
+    assert acks == 1
+    assert result.records_walked == verdicts + acks
+    assert result.stated_records == sum(stated) == verdicts + acks
+    assert result.macs_checked == result.records_walked
+    assert result.kind == "Verdict", (
+        "the chain's primary kind names what a reader thinks it is made of; the "
+        "acknowledgment is in it, not a chain of its own"
+    )
+
+
+def test_a_tampered_acknowledgment_is_broken_and_named(
+    acknowledged: Path, tmp_path: Path
+) -> None:
+    """**NEGATIVE, and the one the acceptance criterion names.** A forged
+    acknowledgment is detectable.
+
+    The `reason` is the field a forger would want: it is the sentence an
+    assessor reads, and rewriting it is how a clearance nobody gave becomes one
+    somebody did. It is inside the enforcement MAC like every other field, so
+    the walk comes back BROKEN naming this record.
+    """
+    tampered, copy = _tamper_to(
+        acknowledged,
+        tmp_path,
+        f"enforcement:{_ack_id(acknowledged)}:reason=the cell was clear",
+    )
+    result = _chain(_report(copy), "enforcement")
+    assert result.state is ChainState.BROKEN
+    assert tampered.record_id in _named(result, "mac")
+    assert _chain(_report(copy), "policy").state is ChainState.VERIFIED, (
+        "the policy chain is signed by the other party and must be untouched"
+    )
+
+
+def test_a_resigned_acknowledgment_still_breaks_the_chain(
+    acknowledged: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE, and the stronger half: a MAC that verifies is not a chain that does.
+
+    Re-signed under the enforcement key, the altered record's own MAC passes.
+    The verdict after it still carries the old chain hash, so the link breaks
+    there — which is the case that shows the chain doing work the MAC alone
+    cannot, one record kind over from where `tests/test_chain.py` first showed it.
+    """
+    tampered, copy = _tamper_to(
+        acknowledged,
+        tmp_path,
+        f"enforcement:{_ack_id(acknowledged)}:reason=cleared",
+        keyring=KEYRING,
+        resign=True,
+    )
+    result = _chain(_report(copy), "enforcement")
+    assert result.state is ChainState.BROKEN
+    assert tampered.record_id not in _named(result, "mac"), (
+        "the re-sign did not take, so this test is about a plain tamper"
+    )
+    assert _named(result, "link"), "the successor's link did not break"
+
+
+def test_an_acknowledgment_removed_after_the_build_is_caught(
+    acknowledged: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. Deleting the record that clears a passivation is a tamper.
+
+    A forger who wants the run to read as *never cleared* removes the row, fixes
+    the count and drops the link edges — all unauthenticated, all editable. What
+    they cannot edit is the successor verdict's `prev_hash`, which names the
+    acknowledgment from inside the enforcement MAC.
+    """
+    out = _copy(acknowledged, tmp_path / "removed.sqlite")
+    conn = sqlite3.connect(out)
+    key, = conn.execute(
+        "SELECT acknowledgment_key FROM acknowledgment ORDER BY seq LIMIT 1"
+    ).fetchone()
+    conn.execute("DELETE FROM acknowledgment WHERE acknowledgment_key = ?", (key,))
+    conn.execute("DELETE FROM node WHERE node_key = ?", (key,))
+    conn.execute("UPDATE meta SET value = '0' WHERE key = ?", (META_ACKNOWLEDGMENT_COUNT,))
+    conn.execute(
+        "DELETE FROM edge WHERE src_key = ? OR dst_key = ?", (key, key)
+    )
+    conn.commit()
+    conn.close()
+
+    result = _chain(_report(out), "enforcement")
+    assert result.state is ChainState.BROKEN, (
+        "the acknowledgment was removed and every unauthenticated witness was "
+        "repaired to match; the successor's prev_hash is the one that cannot be"
+    )
+    assert _named(result, "link")
+
+
+def test_a_missing_acknowledgment_count_is_could_not_evaluate(
+    acknowledged: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. A third count, and any one of them missing stops the walk.
+
+    The chain's stated length is the sum over its record kinds, so a partial sum
+    compared against the full walk would report a break that is really a `meta`
+    key nobody wrote. It refuses instead, and the refusal is not a pass.
+    """
+    copy = tmp_path / "no-ack-count.sqlite"
+    copy.write_bytes(acknowledged.read_bytes())
+    conn = store.connect(copy)
+    try:
+        conn.execute("DELETE FROM meta WHERE key = ?", (META_ACKNOWLEDGMENT_COUNT,))
+        conn.commit()
+    finally:
+        conn.close()
+    result = _chain(_report(copy), "enforcement")
+    assert result.state is ChainState.COULD_NOT_EVALUATE
+    assert _kinds(result) == ["no-count"]
+    assert result.stated_records is None
+    assert _chain(_report(copy), "policy").state is ChainState.VERIFIED
+
+
+def test_a_verdict_an_acknowledgment_names_cannot_be_removed(
+    acknowledged: Path, tmp_path: Path
+) -> None:
+    """NEGATIVE. The cross-reference check, pointed at the other reference.
+
+    `Acknowledgment.verdict_id` is inside the enforcement MAC exactly as
+    `Verdict.declaration_id` is, so an artifact that dropped the passivating
+    verdict still holds a signed record naming it.
+    """
+    out = _copy(acknowledged, tmp_path / "orphaned-ack.sqlite")
+    conn = sqlite3.connect(out)
+    key, = conn.execute("SELECT verdict_key FROM acknowledgment LIMIT 1").fetchone()
+    held, = conn.execute("SELECT count(*) FROM verdict").fetchone()
+    conn.execute("DELETE FROM verdict WHERE verdict_key = ?", (key,))
+    conn.execute("DELETE FROM node WHERE node_key = ?", (key,))
+    conn.execute(
+        "UPDATE meta SET value = ? WHERE key = ?", (str(held - 1), META_VERDICT_COUNT)
+    )
+    conn.execute("DELETE FROM edge WHERE src_key = ? OR dst_key = ?", (key, key))
+    conn.commit()
+    conn.close()
+
+    assert _report(out).state is ChainState.BROKEN
+
+
+def test_an_untampered_acknowledged_artifact_verifies(acknowledged: Path) -> None:
+    """The control for all six above. None of them may fire on a clean file."""
+    assert _report(acknowledged).state is ChainState.VERIFIED
 
 
 # --- the tamper tool itself -----------------------------------------------

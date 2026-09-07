@@ -283,6 +283,7 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "DECLARED": 0,
         "ADJUDICATED": 0,
         "ENFORCED": 0,
+        "ACKNOWLEDGED": 0,
         "FOLLOWS": 0,
     }
     # And the nodes those edges anchor, once each — not per frame. There is no
@@ -300,6 +301,7 @@ def test_edge_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "Occurrence": 4,
         "Declaration": 0,
         "Verdict": 0,
+        "Acknowledgment": 0,
     }
 
 
@@ -339,6 +341,7 @@ def test_node_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "Occurrence": 4,
         "Declaration": 0,
         "Verdict": 0,
+        "Acknowledgment": 0,
     }
     assert result.edges == {
         "HAS_ENVELOPE": 2,
@@ -348,6 +351,7 @@ def test_node_rows_do_not_grow_with_frame_count(tmp_path: Path, n_frames: int) -
         "DECLARED": 0,
         "ADJUDICATED": 0,
         "ENFORCED": 0,
+        "ACKNOWLEDGED": 0,
         "FOLLOWS": 0,
     }
 
@@ -4787,7 +4791,11 @@ def test_the_artifact_says_whether_it_was_given_a_record_stream(
 
     produced_none = tmp_path / "empty.sqlite"
     result = _build(
-        csv, produced_none, records=AttestationRecords(declarations=(), verdicts=())
+        csv,
+        produced_none,
+        records=AttestationRecords(
+            declarations=(), verdicts=(), acknowledgments=()
+        ),
     )
     meta = _meta(produced_none)
     assert meta[graph.META_ATTESTATION_RECORDS] == "present"
@@ -4884,7 +4892,8 @@ def test_the_five_enforcement_occurrences_are_emitted(tmp_path: Path) -> None:
         csv,
         out,
         records=AttestationRecords(
-            declarations=(), verdicts=_verdict_chain(_OCCURRENCE_WALK)
+            declarations=(), verdicts=_verdict_chain(_OCCURRENCE_WALK),
+            acknowledgments=(),
         ),
     )
 
@@ -5006,7 +5015,11 @@ def test_a_verdict_naming_no_declaration_is_stored_and_gets_no_edge(
     out = tmp_path / "held.sqlite"
     verdicts = _verdict_chain([(0.0, "SAFE_STATE", "watchdog_expiry")])
     result = _build(
-        csv, out, records=AttestationRecords(declarations=(), verdicts=verdicts)
+        csv,
+        out,
+        records=AttestationRecords(
+            declarations=(), verdicts=verdicts, acknowledgments=()
+        ),
     )
     assert result.nodes["Verdict"] == 1
     assert result.edges["ADJUDICATED"] == 0
@@ -5038,7 +5051,8 @@ def test_a_record_stream_that_is_not_one_chain_is_refused(
             csv,
             tmp_path / "broken.sqlite",
             records=AttestationRecords(
-                declarations=records.declarations, verdicts=broken
+                declarations=records.declarations, verdicts=broken,
+                acknowledgments=(),
             ),
         )
     assert not (tmp_path / "broken.sqlite").exists(), (
@@ -5066,7 +5080,8 @@ def test_a_record_that_was_altered_after_signing_breaks_its_successors_link(
             csv,
             tmp_path / "altered.sqlite",
             records=AttestationRecords(
-                declarations=records.declarations, verdicts=tuple(altered)
+                declarations=records.declarations, verdicts=tuple(altered),
+                acknowledgments=(),
             ),
         )
 
@@ -5076,9 +5091,9 @@ def test_records_must_be_records(tmp_path: Path) -> None:
     that makes it one, and `build` refuses the whole stream rather than storing
     part of it."""
     with pytest.raises(GraphBuildError, match="not a Declaration"):
-        AttestationRecords(declarations=("decl-0",), verdicts=())
+        AttestationRecords(declarations=("decl-0",), verdicts=(), acknowledgments=())
     with pytest.raises(GraphBuildError, match="must be a tuple"):
-        AttestationRecords(declarations=[], verdicts=())
+        AttestationRecords(declarations=[], verdicts=(), acknowledgments=())
     csv = _held_stream(tmp_path / "held.csv", 4)
     with pytest.raises(GraphBuildError, match="AttestationRecords or None"):
         _build(csv, tmp_path / "held.sqlite", records=("not", "records"))
@@ -5116,9 +5131,10 @@ def _chain_across_an_acknowledgment() -> tuple[Verdict, Acknowledgment, Verdict]
     ack = sign_acknowledgment(
         Acknowledgment(
             ack_id="synthetic-ack-00000",
+            verdict_id=passivating.verdict_id,
+            seq=1,
             t=0.02,
             fault="no_declaration",
-            verdict_id=passivating.verdict_id,
             reason="operator inspected the cell and cleared it to resume",
             prev_hash=chain_hash(passivating, passivating.prev_hash),
             mac=UNSIGNED_MAC,
@@ -5127,9 +5143,9 @@ def _chain_across_an_acknowledgment() -> tuple[Verdict, Acknowledgment, Verdict]
     )
     resumed = sign_verdict(
         Verdict(
-            verdict_id="synthetic-verdict-00001",
+            verdict_id="synthetic-verdict-00002",
             declaration_id=None,
-            seq=1,
+            seq=2,
             t=0.04,
             outcome="PERMIT",
             fault=None,
@@ -5143,13 +5159,14 @@ def _chain_across_an_acknowledgment() -> tuple[Verdict, Acknowledgment, Verdict]
 
 
 def test_an_acknowledgment_is_not_a_verdict(tmp_path: Path) -> None:
-    """THE FIRST HALF of a refusal the docs call deliberate (issue #110).
+    """THE REFUSAL THAT SURVIVED ISSUE #247, unchanged and for its own reason.
 
-    The artifact has no row for an `Acknowledgment`, so the only way one could
-    reach `build` is inside the verdict tuple. `AttestationRecords` refuses it
-    there — by type, before anything is written — because storing an
-    acknowledgment's fields in a verdict's columns would record a passivation
-    *clearing* as a passivation.
+    The artifact now has a row for an `Acknowledgment` and a field on
+    `AttestationRecords` to put one in. What it still does not have is a reason
+    to accept one offered as a *verdict*: an acknowledgment's fields stored in a
+    verdict's columns would record a passivation's clearing as a passivation, and
+    an `outcome` column would have to be invented to do it. So the type check
+    stays exactly where it was, and this test with it.
     """
     _, ack, _ = _chain_across_an_acknowledgment()
     assert (
@@ -5157,17 +5174,68 @@ def test_an_acknowledgment_is_not_a_verdict(tmp_path: Path) -> None:
         is MacState.VALID
     ), "the record offered below must be a valid one, or the refusal is about the MAC"
     with pytest.raises(GraphBuildError, match="not a Verdict"):
-        AttestationRecords(declarations=(), verdicts=(ack,))
+        AttestationRecords(declarations=(), verdicts=(ack,), acknowledgments=())
 
 
-def test_a_run_containing_an_acknowledgment_is_refused(tmp_path: Path) -> None:
-    """THE SECOND HALF, and the one that makes the gap a refusal and not a hole.
+def test_a_run_containing_an_acknowledgment_is_stored(tmp_path: Path) -> None:
+    """WHAT ISSUE #247 CHANGED: the same three records now build (issue #110).
 
-    An acknowledgment shares the verdict chain, so the verdict after it links to a
-    record this artifact cannot hold. Dropping the acknowledgment and storing the
-    two verdicts either side of it would write a FOLLOWS edge across a record
-    nobody ever saw — which is the one thing `verify_chain` must never walk
-    cleanly over — so `build` refuses the whole stream.
+    The chain is verdict -> acknowledgment -> verdict, and the middle record used
+    to be the reason the whole stream was refused. Every one of the three reaches
+    a row, the enforcement chain runs over both tables in `seq` order, and the
+    acknowledgment gets one ACKNOWLEDGED edge naming the verdict it cleared.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    passivating, ack, resumed = _chain_across_an_acknowledgment()
+    out = tmp_path / "across.sqlite"
+
+    result = _build(
+        csv,
+        out,
+        records=AttestationRecords(
+            declarations=(),
+            verdicts=(passivating, resumed),
+            acknowledgments=(ack,),
+        ),
+    )
+    assert result.nodes["Acknowledgment"] == 1
+    assert result.nodes["Verdict"] == 2
+    assert result.edges["ACKNOWLEDGED"] == 1
+    # Two verdicts and an acknowledgment are three records of one chain, so two
+    # links: the count is what says the acknowledgment is *in* the chain rather
+    # than beside it.
+    assert result.edges["FOLLOWS"] == 2
+
+    edge = _edges(out, edge_type="ACKNOWLEDGED")[0]
+    assert (edge["src_id"], edge["dst_id"]) == (ack.ack_id, passivating.verdict_id)
+    assert edge["src_kind"] == "Acknowledgment"
+    assert edge["dst_kind"] == "Verdict"
+    assert edge["layer"] == "A", (
+        "an acknowledgment is attestation-shaped, not perception-shaped "
+        "(docs/sufficiency.md §5.10)"
+    )
+
+    conn = _conn(out)
+    try:
+        assert store.get_meta(conn, "acknowledgment_count") == "1"
+        stored = store.read_acknowledgments(conn)
+    finally:
+        conn.close()
+    assert [a.ack_id for a in stored] == [ack.ack_id]
+    assert stored[0] == ack, "the record is stored verbatim or it is not evidence"
+
+
+def test_an_acknowledgment_dropped_from_the_stream_is_still_refused(
+    tmp_path: Path,
+) -> None:
+    """THE NEGATIVE, and it is the old refusal doing its remaining job.
+
+    An acknowledgment shares the enforcement chain, so the verdict after it links
+    to it and not to the verdict before. Hand `build` the two verdicts with the
+    acknowledgment left out — the shape a producer that dropped the record would
+    hand it — and the FOLLOWS edge between them would assert a link that is not
+    there. `_check_link` refuses the whole stream, which is now how an *omitted*
+    acknowledgment is caught rather than how a present one was.
 
     The control is the same chain cut *before* the acknowledgment: it stores. So
     what is refused is the gap, not these records.
@@ -5178,7 +5246,9 @@ def test_a_run_containing_an_acknowledgment_is_refused(tmp_path: Path) -> None:
     _build(
         csv,
         tmp_path / "before.sqlite",
-        records=AttestationRecords(declarations=(), verdicts=(passivating,)),
+        records=AttestationRecords(
+            declarations=(), verdicts=(passivating,), acknowledgments=()
+        ),
     )
     assert (tmp_path / "before.sqlite").exists(), (
         "the control build failed, so the refusal below proves nothing about "
@@ -5190,12 +5260,34 @@ def test_a_run_containing_an_acknowledgment_is_refused(tmp_path: Path) -> None:
             csv,
             tmp_path / "across.sqlite",
             records=AttestationRecords(
-                declarations=(), verdicts=(passivating, resumed)
+                declarations=(), verdicts=(passivating, resumed),
+                acknowledgments=(),
             ),
         )
     assert not (tmp_path / "across.sqlite").exists(), (
         "a refused build must leave no artifact behind"
     )
+
+
+def test_an_acknowledgment_naming_a_verdict_the_artifact_lacks_is_refused(
+    tmp_path: Path,
+) -> None:
+    """THE OTHER NEGATIVE, one level down: `store.insert_acknowledgment` refuses.
+
+    `build` writes the enforcement chain in `seq` order, so the verdict an
+    acknowledgment names is always in the file by the time the acknowledgment is
+    stored — which makes that ordering a property of the producer. This is the
+    check that does not trust it: offered an acknowledgment whose verdict is not
+    in the artifact, the store refuses rather than writing an ACKNOWLEDGED edge
+    nobody could follow.
+    """
+    _, ack, _ = _chain_across_an_acknowledgment()
+    conn = store.create(tmp_path / "records.sqlite", record_tables=True)
+    try:
+        with pytest.raises(store.StoreError, match="Verdict"):
+            store.insert_acknowledgment(conn, ack)
+    finally:
+        conn.close()
 
 
 def _modules_calling(method: str) -> list[str]:
@@ -5207,29 +5299,78 @@ def _modules_calling(method: str) -> list[str]:
     )
 
 
-def test_nothing_in_the_package_produces_an_acknowledgment() -> None:
-    """The other claim `README.md` Claim 4 and `docs/lossiness.md` #7 make: no
-    shipped fixture produces one.
+def test_the_package_produces_an_acknowledgment() -> None:
+    """THE INVERSE OF THE OLD CLAIM, and it is the defect issue #247 closed.
 
-    Asserted against the source, like `tests/test_enforce.py`'s import check,
-    because the alternative is a run that builds today and stops building the day
-    somebody wires `acknowledge` into a scenario — a chain-break failure a long
-    way from its cause. `Enforcer.acknowledge` is exercised only by
-    `tests/test_enforce.py`; nothing that produces a record stream calls it. When
-    that changes, issue #112 has become load-bearing and this is where it says so.
+    Until #247 `README.md` Claim 4 and `docs/lossiness.md` #7 said no shipped
+    fixture produced one, and this test asserted it against the source. The
+    reason it was worth asserting has not changed — a fixture that produced an
+    acknowledgment used to make `build` refuse the run, a chain-break a long way
+    from its cause — so the assertion is inverted rather than deleted: the
+    producer calls `Enforcer.acknowledge`, and a change that quietly stopped it
+    calling it would put the artifact back to answering the passivation question
+    with silence.
 
     `adjudicate` is the control: it is the sibling method the record-stream
-    producer *does* call, so a search that finds nothing anywhere — a renamed
-    method, a moved package — fails here rather than passing quietly.
+    producer has always called, so a search that finds nothing anywhere — a
+    renamed method, a moved package — fails here rather than passing quietly.
     """
     assert "graph.py" in _modules_calling("adjudicate"), (
         "the search found no caller of Enforcer.adjudicate either, so it cannot "
         "be trusted to find a caller of Enforcer.acknowledge"
     )
-    assert _modules_calling("acknowledge") == [], (
-        f"{_modules_calling('acknowledge')} call Enforcer.acknowledge. An "
-        "acknowledgment a fixture produces cannot be stored: graph.build refuses "
-        "the run it appears in (issue #112)."
+    assert "graph.py" in _modules_calling("acknowledge"), (
+        f"{_modules_calling('acknowledge')} call Enforcer.acknowledge, and the "
+        "record-stream producer is not among them. No fixture can then produce "
+        "one, and 'was the passivation acknowledged' goes back to being a "
+        "question this artifact cannot be asked (issue #247)."
+    )
+
+
+def test_a_shipped_fixture_produces_an_acknowledgment(tmp_path: Path) -> None:
+    """THE EXERCISABLE HALF, and the specific defect issue #247 exists to close.
+
+    A node kind nothing produces is a structural claim, not an answer: the query
+    would be exercised only against records a test built by hand. `stale_declaration`
+    is the fixture that acknowledges — its one passivation runs from the expiry
+    to the end of the run, and its operator clears it at t=2.5 — and this walks
+    the whole path the CLI walks: scenario, stream, producer, build, rows.
+
+    The control is a second shipped fixture that acknowledges nothing. Without
+    it, a bug that put an acknowledgment in every run would pass here.
+    """
+    scn = replace(SCENARIOS["stale_declaration"], dt=0.05)
+    csv = _scenario_stream(scn, scn.dt, tmp_path / "stale.csv")
+    records = _records_for(csv, scn, tmp_path)
+    assert len(records.acknowledgments) == 1, (
+        "the shipped fixture produced no acknowledgment, so nothing below "
+        "exercises the query this issue added"
+    )
+    ack = records.acknowledgments[0]
+    passivating = {v.verdict_id for v in records.verdicts if v.outcome == "VETO"}
+    assert ack.verdict_id in passivating, (
+        "the acknowledgment names a verdict that did not passivate the run"
+    )
+
+    out = tmp_path / "stale.sqlite"
+    result = _build(csv, out, records=records)
+    assert result.nodes["Acknowledgment"] == 1
+    assert result.edges["ACKNOWLEDGED"] == 1
+
+    conn = _conn(out)
+    try:
+        assert store.read_acknowledgments(conn) == [ack]
+    finally:
+        conn.close()
+
+    control_scn = replace(SCENARIOS["no_declaration"], dt=0.05)
+    control_csv = _scenario_stream(
+        control_scn, control_scn.dt, tmp_path / "control.csv"
+    )
+    control = _records_for(control_csv, control_scn, tmp_path)
+    assert control.acknowledgments == (), (
+        "a fixture that states no acknowledged_at produced one anyway, so the "
+        "assertion above is not about this fixture"
     )
 
 
@@ -5684,7 +5825,10 @@ def test_the_record_tables_follow_the_record_stream_and_nothing_else(
     csv, records = _held_attested(tmp_path)
     cases = {
         "absent.sqlite": (None, False),
-        "empty.sqlite": (AttestationRecords(declarations=(), verdicts=()), True),
+        "empty.sqlite": (
+            AttestationRecords(declarations=(), verdicts=(), acknowledgments=()),
+            True,
+        ),
         "full.sqlite": (records, True),
     }
     for name, (given, expected) in cases.items():

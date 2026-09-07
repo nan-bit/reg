@@ -127,6 +127,18 @@ three different facts, and a script that treated "could not check" as "checked
 and fine" is the failure mode the whole three-state discipline exists to
 prevent.
 
+THE COLD READ, AND WHY IT IS NOT A QUERY EITHER (ISSUE #231)
+-------------------------------------------------------------
+`cold_read(conn)` asks docs/self-describing.md §2's question — *open an artifact
+with the code that reads artifacts and no document; for every claim the file
+makes, either it can be checked from the file or it cannot* — and answers it as
+a row per claim, in four states. It ships here rather than in `tests/` because
+the audience for it is an assessor holding a file, and a check they cannot run
+tells them nothing. It closes no gap: two of its four rows are
+`READABLE-NOT-CHECKABLE` today, which is the report working. See the section
+above `cold_read` for the states, for why nothing here imports `reg.graph` to
+compute them, and for what is pinned to `schema_version` 11.
+
 LAYER
 -----
 Split, and it says so per query. Every *scene* question names an entity, and
@@ -154,16 +166,27 @@ from reg.tolerances import (
 )
 
 __all__ = [
+    "ABSENT",
     "ANSWERED",
     "ATTESTATION_LAYER",
     "ATTESTATION_PRESENT",
     "CHAIN_VERIFIED",
+    "CHECKABLE",
     "CLAUSES",
     "CLAUSE_DECLARED",
     "CLAUSE_ENFORCEMENT",
     "CLAUSE_INTEGRITY",
     "CLAUSE_SCENE",
     "CLAUSE_VIOLATION",
+    "CLAIM_ENVIRONMENT",
+    "CLAIM_LAYER_BASIS",
+    "CLAIM_REACHED_POINT",
+    "CLAIM_RECOMPUTE",
+    "COLD_READ_CLAIMS",
+    "COLD_READ_QUESTIONS",
+    "COLD_READ_RECOMPUTE_KEYS",
+    "COLD_READ_SCHEMA_VERSION",
+    "COLD_READ_STATES",
     "COULD_NOT_EVALUATE",
     "EDGE_LAYER",
     "EXIT_BROKEN",
@@ -185,9 +208,12 @@ __all__ = [
     "OCCURRENCE_LAYER",
     "PERMITTED_OUTCOME",
     "QUERIES",
+    "READABLE_NOT_CHECKABLE",
     "Adjudication",
     "Answer",
     "Clause",
+    "ColdRead",
+    "ColdReadClaim",
     "DeclarationVerdicts",
     "DeclaredBound",
     "DeclaredBounds",
@@ -206,6 +232,7 @@ __all__ = [
     "Violations",
     "attestation_state",
     "available_layers",
+    "cold_read",
     "declared_bound",
     "declaration_ids",
     "did_contact_occur",
@@ -220,6 +247,7 @@ __all__ = [
     "reachable_entities",
     "render",
     "render_chain_report",
+    "render_cold_read",
     "render_commitment_check",
     "render_incident",
     "run_interval",
@@ -2764,6 +2792,639 @@ def incident_report(
 
 
 # --------------------------------------------------------------------------
+# THE COLD READ (issue #231, docs/self-describing.md §2 and §8 tier 3).
+#
+# "Open an artifact with the code that reads artifacts and **no document**. For
+# every claim the file makes, either it can be checked from the file or it
+# cannot." That sentence is the acceptance criterion for the whole
+# self-describing track, and it ships here rather than in `tests/` because the
+# audience for it is an assessor holding a file, and a check they cannot run
+# tells them nothing.
+#
+# FOUR STATES, AND THE LAST TWO NEVER RESOLVE TO THE FIRST.
+#
+#   CHECKABLE                the file carries what is needed to verify the claim
+#   READABLE-NOT-CHECKABLE   the claim is present and the file does not support
+#                            verifying it
+#   ABSENT                   the claim is not in this file
+#   COULD-NOT-EVALUATE       the file was written against a schema these states
+#                            were not derived against
+#
+# `READABLE-NOT-CHECKABLE` is a distinct state and not a soft pass. It is the
+# honest verdict on a `layer` tag today, and reporting it is the point: it is
+# what lets issues #227 and #228 be judged by something other than a PR body.
+#
+# WHY THIS DOES NOT IMPORT `reg.graph`, AND WHAT HOLDS IT TO IT INSTEAD.
+# `reg.graph.recorded_environment` and `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`
+# are the one implementation of issue #201's comparison, and the module header
+# above forbids reaching them: importing the writer — at module level or inside
+# a function — puts `reg.stream` one attribute away from every scene query, and
+# `tests/test_query.py::test_reg_query_imports_no_stream_or_layer_b_module`
+# walks the whole AST rather than the top level, so a deferred import would not
+# get past it either. The discipline this repository uses instead is already
+# here: `reg.query` **names its own copy** of what it needs from the builder and
+# a test asserts the two spellings are one contract
+# (`test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes`).
+# `COLD_READ_RECOMPUTE_KEYS` is that copy, held equal to
+# `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` by a test, and the report's
+# `recompute_permitted` is held to agree with `reg.graph.envelope_at` on both
+# sides — matching environment and mismatched — by another. A disagreement is a
+# bug in this report and it fails there rather than in an assessor's hands.
+#
+# WHAT IS PINNED TO SCHEMA 11, AND WHY THE WHOLE FILE IS.
+# Every state below is a property of a particular set of columns and `meta`
+# keys. Against another set they would be states about columns this reader
+# cannot place, so an artifact stating any other `schema_version` is a
+# could-not-evaluate — in both directions and for every claim. Older is issue
+# #200's case: the six `env_*` keys arrived at schema 11, so a file older than
+# that carries no environment, and that is a fact about a schema rather than an
+# absence somebody chose. Newer is the deliberate-update case: a newer schema is
+# where a gap gets closed, and a report that went on calling a closed gap
+# "readable, not checkable" would be exactly the trusted-because-nobody-rechecked
+# sentence this whole track exists to remove.
+# `tests/test_query.py::test_the_cold_read_is_pinned_to_this_build_s_schema` is
+# what makes that update deliberate: it fails the moment `store.SCHEMA_VERSION`
+# moves, and closing #227 or #228 moves it.
+# --------------------------------------------------------------------------
+
+#: The file carries what is needed to verify the claim.
+CHECKABLE = "CHECKABLE"
+
+#: The claim is present in the file and the file does not support verifying it.
+#: **Not a soft pass**, and it must never be reported as one: a `layer` tag is
+#: readable and unverifiable today, and an assessor who read that as a pass
+#: would be trusting exactly the assertion docs/self-describing.md gap 1 is
+#: about.
+READABLE_NOT_CHECKABLE = "READABLE-NOT-CHECKABLE"
+
+#: The claim is not in this file. Distinct from the two above and from
+#: `COULD_NOT_EVALUATE`: an artifact that never made a claim has not failed to
+#: support one, and a file that predates the schema carrying it has not chosen
+#: to leave it out.
+ABSENT = "ABSENT"
+
+#: The four states, in decreasing order of what the file supports. Spelled once
+#: here so a caller can check a state it was handed is one this module produces;
+#: `COULD_NOT_EVALUATE` is the module's existing third verdict rather than a
+#: fifth string with the same meaning.
+COLD_READ_STATES = (CHECKABLE, READABLE_NOT_CHECKABLE, ABSENT, COULD_NOT_EVALUATE)
+
+#: The `schema_version` the states above were derived against. See the section
+#: header: an artifact stating anything else is a could-not-evaluate in both
+#: directions, and this constant moving is a decision about every claim below
+#: rather than a version bump.
+COLD_READ_SCHEMA_VERSION = 11
+
+CLAIM_ENVIRONMENT = "recording-environment"
+CLAIM_RECOMPUTE = "recompute-discarded-polygon"
+CLAIM_LAYER_BASIS = "layer-tag-basis"
+CLAIM_REACHED_POINT = "reached-point"
+
+#: The claims an artifact makes about itself, in the order the report lists
+#: them. One row each, and the set is closed: a claim nobody put here is a claim
+#: the cold read is silent about, which is why adding one is how this report
+#: grows rather than widening an existing row's meaning.
+COLD_READ_CLAIMS = (
+    CLAIM_ENVIRONMENT,
+    CLAIM_RECOMPUTE,
+    CLAIM_LAYER_BASIS,
+    CLAIM_REACHED_POINT,
+)
+
+#: What each claim asks, in the words an assessor would ask it in. Carried
+#: beside the state because a claim id is a key and not a question.
+COLD_READ_QUESTIONS: Mapping[str, str] = {
+    CLAIM_ENVIRONMENT: "what environment was this artifact's geometry computed in?",
+    CLAIM_RECOMPUTE: "can a discarded polygon be recomputed and the result trusted?",
+    CLAIM_LAYER_BASIS: "what was this edge's layer tag computed from?",
+    CLAIM_REACHED_POINT: "could the robot have reached (x, y)?",
+}
+
+#: This module's copy of `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — the four keys
+#: of the six recorded that `reg.graph.envelope_at` refuses a recomputation on.
+#: Named from `reg.store`'s constants, so the *spellings* are one definition;
+#: what is copied is the choice of subset, and
+#: `tests/test_query.py::test_the_cold_read_names_the_same_recompute_keys_the_
+#: builder_refuses_on` holds the two lists equal. Copied rather than imported
+#: for the reason in the section header, and the copy is not free: it is paid
+#: for with that test.
+COLD_READ_RECOMPUTE_KEYS = (
+    store.META_ENV_PLATFORM_SYSTEM,
+    store.META_ENV_PLATFORM_MACHINE,
+    store.META_ENV_SHAPELY,
+    store.META_ENV_GEOS,
+)
+
+
+@dataclass(frozen=True)
+class ColdReadClaim:
+    """One claim the artifact makes about itself, and what the file supports.
+
+    `detail` is never empty and never a restatement of `state`: it names what
+    was read — which keys, which columns, how many rows — because a state with
+    no basis under it is the same trusted assertion the cold read exists to
+    find.
+    """
+
+    claim: str
+    question: str
+    state: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.claim not in COLD_READ_CLAIMS:
+            raise QueryError(
+                f"{self.claim!r} is not one of the claims this report covers "
+                f"({', '.join(COLD_READ_CLAIMS)}). A row nobody declared would "
+                "be a claim the report is silent about while appearing to cover."
+            )
+        if self.state not in COLD_READ_STATES:
+            raise QueryError(
+                f"{self.claim} was given state {self.state!r}, which is not one "
+                f"of {', '.join(COLD_READ_STATES)}. A fifth state is a state "
+                "nobody defined the relationship of to a pass."
+            )
+        if not self.detail.strip():
+            raise QueryError(
+                f"{self.claim} was given no detail. A state with nothing under "
+                "it is an assertion, which is the thing being measured."
+            )
+
+    @property
+    def checkable(self) -> bool:
+        """Exactly `CHECKABLE`. The other three are not degrees of it."""
+        return self.state == CHECKABLE
+
+    @property
+    def message(self) -> str:
+        """The claim, the state and why — the line a failure quotes."""
+        return f"{self.claim} [{self.state}] {self.question} — {self.detail}"
+
+
+@dataclass(frozen=True)
+class ColdRead:
+    """What an artifact says about itself, read with no document open.
+
+    `recompute_permitted` is the one field here that is about **the reader** and
+    not about the file, and it is separated deliberately. A `state` says what
+    the artifact carries and does not move when it is read on another machine; a
+    recomputation is refused or allowed by where it is being asked from, and
+    issue #201 made that a property of the running interpreter. Three values,
+    the same three `reg.graph.envelope_at` has:
+
+    * `True` — the compared keys agree, and a discarded polygon recomputes;
+    * `False` — one or more differ, and it is refused with the key named;
+    * `None` — nothing was compared, and it is refused *differently*. An
+      artifact that states no environment is in this state, and so is a reader
+      that cannot say what environment it is running in.
+
+    `None` is not a weaker `False`: the first is a fact about the file, the
+    second about two machines, and collapsing them would report "built somewhere
+    else" for a file that never said where it was built.
+    """
+
+    #: What the artifact states as its `schema_version`, verbatim, or `None`
+    #: where it states none. Raw text rather than an int: a value this reader
+    #: cannot parse is a thing to report, not to normalise away.
+    schema_version: str | None
+    claims: tuple[ColdReadClaim, ...]
+    recompute_permitted: bool | None
+
+    def __post_init__(self) -> None:
+        found = tuple(claim.claim for claim in self.claims)
+        if found != COLD_READ_CLAIMS:
+            raise QueryError(
+                f"a cold read covers {COLD_READ_CLAIMS} in that order and this "
+                f"one carries {found}. A missing row and a row reporting ABSENT "
+                "are different facts, and a report that could omit one would "
+                "make them look the same."
+            )
+
+    def __getitem__(self, claim: str) -> ColdReadClaim:
+        for row in self.claims:
+            if row.claim == claim:
+                return row
+        raise QueryError(
+            f"this report carries no claim {claim!r}. It covers "
+            f"{', '.join(COLD_READ_CLAIMS)}."
+        )
+
+    def state(self, claim: str) -> str:
+        """The state of one claim, by id. Raises rather than returning a
+        default: an unknown claim reported as `ABSENT` would read as a finding
+        about the artifact."""
+        return self[claim].state
+
+    @property
+    def checkable(self) -> tuple[str, ...]:
+        return tuple(row.claim for row in self.claims if row.checkable)
+
+    @property
+    def not_checkable(self) -> tuple[str, ...]:
+        """Every claim the file does not support checking, in report order.
+
+        The three states this collects are not one state. They are kept apart
+        in `claims` and gathered here only for a caller asking the cold read's
+        own question — *is there anything in this file that cannot be checked
+        from it* — whose answer is the empty tuple or a list of names.
+        """
+        return tuple(row.claim for row in self.claims if not row.checkable)
+
+
+def _schema_version_text(conn: sqlite3.Connection) -> str | None:
+    """The artifact's stated `schema_version`, or `None` if it states none.
+
+    Read through `store.get_meta` rather than `_meta`, because a file with no
+    version is something this report says rather than refuses over: the cold
+    read is the one function here whose subject is the file's own claims, and
+    "it does not say which schema it was written against" is one of them.
+    """
+    return store.get_meta(conn, store.META_SCHEMA_VERSION)
+
+
+def _unpinned_claims(stated: str | None) -> tuple[ColdReadClaim, ...]:
+    """Every claim as `COULD-NOT-EVALUATE`, with the direction named.
+
+    Three shapes of file reach this: one stating no version, one stating a
+    version older than the states were derived against, and one stating a newer.
+    All three are could-not-evaluate and none of them resolves to any of the
+    other states — an unreadable schema is not an absence, and a newer schema is
+    where a gap gets closed rather than a file that failed to carry one.
+    """
+    if stated is None:
+        why = (
+            f"this artifact states no meta[{store.META_SCHEMA_VERSION!r}], so it "
+            "does not say which schema it was written against and this reader "
+            "cannot place any column or key in it."
+        )
+    else:
+        try:
+            version = int(stated)
+        except (TypeError, ValueError):
+            version = None
+        if version is None:
+            why = (
+                f"this artifact states schema_version={stated!r}, which is not a "
+                "version number this reader can place against the schema the "
+                "states below were derived against "
+                f"({COLD_READ_SCHEMA_VERSION})."
+            )
+        elif version < COLD_READ_SCHEMA_VERSION:
+            why = (
+                f"this artifact states schema_version={version} and these states "
+                f"were derived against {COLD_READ_SCHEMA_VERSION}. The six env_* "
+                "keys arrived at schema 11 (issue #200), so a file older than "
+                "that carries no environment — which is a fact about a schema "
+                "and not an absence somebody chose, and it must not be reported "
+                "as one."
+            )
+        else:
+            why = (
+                f"this artifact states schema_version={version} and these states "
+                f"were derived against {COLD_READ_SCHEMA_VERSION}. A newer "
+                "schema is where a gap gets closed, so a claim this reader would "
+                "still call readable-not-checkable may have become checkable. "
+                "Re-derive each state against the new columns and move "
+                "reg.query.COLD_READ_SCHEMA_VERSION deliberately."
+            )
+    return tuple(
+        ColdReadClaim(
+            claim=claim,
+            question=COLD_READ_QUESTIONS[claim],
+            state=COULD_NOT_EVALUATE,
+            detail=why,
+        )
+        for claim in COLD_READ_CLAIMS
+    )
+
+
+def _environment_claim(stated: Mapping[str, str]) -> ColdReadClaim:
+    """Does the file state the environment its geometry was computed in?
+
+    The same three conditions `reg.graph.recorded_environment` refuses on —
+    missing keys, a partial block, an empty value — and the same reading of
+    them: an environment is the six keys or it is nothing, because a block with
+    a key missing or blank compares unequal to every recomputing environment and
+    would read as a mismatch, which is a *finding* about a file that never said.
+    All of that is `ABSENT` here; the schema case never reaches this function.
+    """
+    missing = [key for key in store.ENVIRONMENT_KEYS if key not in stated]
+    empty = [
+        key
+        for key in store.ENVIRONMENT_KEYS
+        if key in stated and not stated[key].strip()
+    ]
+    if not missing and not empty:
+        recorded = ", ".join(f"{key}={stated[key]}" for key in store.ENVIRONMENT_KEYS)
+        return ColdReadClaim(
+            claim=CLAIM_ENVIRONMENT,
+            question=COLD_READ_QUESTIONS[CLAIM_ENVIRONMENT],
+            state=CHECKABLE,
+            detail=(
+                f"all {len(store.ENVIRONMENT_KEYS)} env_* keys are stated and "
+                f"non-empty: {recorded}. A reader compares them against its own "
+                "interpreter with no document open. The C library is not among "
+                "them, so two files agreeing on all six may still have been "
+                "linked against different libms — matching is necessary for a "
+                "bit-identical recomputation and is not sufficient."
+            ),
+        )
+    faults = []
+    if missing:
+        faults.append(f"{len(missing)} key(s) not stated at all: {', '.join(missing)}")
+    if empty:
+        faults.append(f"{len(empty)} key(s) stated as empty text: {', '.join(empty)}")
+    return ColdReadClaim(
+        claim=CLAIM_ENVIRONMENT,
+        question=COLD_READ_QUESTIONS[CLAIM_ENVIRONMENT],
+        state=ABSENT,
+        detail=(
+            f"this file does not state an environment — {'; '.join(faults)}. An "
+            "environment is all six keys or it is none: a partial or blank block "
+            "compares unequal to every recomputing interpreter, so reading it as "
+            "an environment would turn a file that never said into a machine "
+            "mismatch. The file states the schema these keys arrived in (issue "
+            "#200) and does not carry them, which is why this is ABSENT and not "
+            "a could-not-evaluate."
+        ),
+    )
+
+
+def _running_environment() -> tuple[Mapping[str, str] | None, str]:
+    """What this interpreter would recompute in, or why it cannot say.
+
+    A reader that cannot state its own environment has not found a mismatch —
+    that is the `None` arm of `recompute_permitted`, and it is why the failure
+    is caught here rather than allowed to surface as a `StoreError` from a
+    function whose subject is the file.
+    """
+    try:
+        return store.build_environment(), ""
+    except store.StoreError as exc:
+        return None, str(exc)
+
+
+def _recompute_claim(
+    stated: Mapping[str, str],
+    environment: ColdReadClaim,
+    discarded: int,
+    total: int,
+) -> tuple[ColdReadClaim, bool | None]:
+    """Can a discarded polygon be recomputed, and would it be permitted here?
+
+    The state is about the file and `recompute_permitted` is about the reader,
+    and the two are computed together because they are read off the same keys.
+    A file with no environment leaves the claim **readable, not checkable**
+    rather than absent: the file does make the claim — it discarded polygons
+    under its own retention rule and says so in the row — and what it does not
+    carry is what would let a reader check the recomputation.
+    """
+    retention = f"{discarded} of {total} envelope row(s) store no geometry"
+    if not environment.checkable:
+        return (
+            ColdReadClaim(
+                claim=CLAIM_RECOMPUTE,
+                question=COLD_READ_QUESTIONS[CLAIM_RECOMPUTE],
+                state=READABLE_NOT_CHECKABLE,
+                detail=(
+                    f"{retention}, so the file claims those polygons are a "
+                    "deterministic function of the row and four numbers in "
+                    "meta — and it states no environment to reproduce them in. "
+                    "Issue #175 measured that the function is the platform's, "
+                    "so a recomputation that disagreed here would be *the "
+                    "geometry moved* and *this is a different machine* at once. "
+                    "reg.graph.envelope_at refuses on every machine, including "
+                    "the one that wrote the file, and the refusal is a "
+                    "could-not-evaluate about the file rather than a mismatch."
+                ),
+            ),
+            None,
+        )
+    running, why_not = _running_environment()
+    if running is None:
+        return (
+            ColdReadClaim(
+                claim=CLAIM_RECOMPUTE,
+                question=COLD_READ_QUESTIONS[CLAIM_RECOMPUTE],
+                state=CHECKABLE,
+                detail=(
+                    f"{retention}, and the file names the environment that "
+                    "would reproduce them, which is what makes the claim "
+                    "checkable. Whether a recomputation is permitted *here* "
+                    "could not be decided: this interpreter cannot say what it "
+                    f"would recompute in — {why_not} That is a "
+                    "could-not-evaluate about the reader and not a finding "
+                    "about the file, so the state above is unchanged."
+                ),
+            ),
+            None,
+        )
+    differences = tuple(
+        (key, stated[key], running[key])
+        for key in COLD_READ_RECOMPUTE_KEYS
+        if stated[key] != running[key]
+    )
+    if differences:
+        named = "; ".join(
+            f"{key}: file {recorded!r}, here {actual!r}"
+            for key, recorded, actual in differences
+        )
+        return (
+            ColdReadClaim(
+                claim=CLAIM_RECOMPUTE,
+                question=COLD_READ_QUESTIONS[CLAIM_RECOMPUTE],
+                state=CHECKABLE,
+                detail=(
+                    f"{retention}, and the file names the environment that "
+                    "would reproduce them, which is what makes the claim "
+                    "checkable and is a property of the file rather than of "
+                    "this machine. Checked here, a recomputation would be "
+                    f"refused: {named}. Naming which key differs is not naming "
+                    "which difference would move the geometry — a version list "
+                    "is not a differ — and no geometry has been compared."
+                ),
+            ),
+            False,
+        )
+    return (
+        ColdReadClaim(
+            claim=CLAIM_RECOMPUTE,
+            question=COLD_READ_QUESTIONS[CLAIM_RECOMPUTE],
+            state=CHECKABLE,
+            detail=(
+                f"{retention}, and the file names the environment that would "
+                "reproduce them. Checked here, all "
+                f"{len(COLD_READ_RECOMPUTE_KEYS)} compared keys agree "
+                f"({', '.join(COLD_READ_RECOMPUTE_KEYS)}), so a recomputation "
+                "is permitted on this interpreter. That is a pass on this check "
+                "and not a guarantee of bit-identity: the C library is not "
+                "among the recorded keys and numpy is not among the compared "
+                "ones, and both place geometry."
+            ),
+        ),
+        True,
+    )
+
+
+def _layer_basis_claim(conn: sqlite3.Connection) -> ColdReadClaim:
+    """Can a `layer` tag be checked against what it was computed from?
+
+    No, and the file is what says so: every tagged edge carries the tag and no
+    column carries its basis. docs/self-describing.md gap 1, issue #227.
+    """
+    counts = conn.execute(
+        "SELECT layer, count(*) AS n FROM edge GROUP BY layer ORDER BY layer"
+    ).fetchall()
+    tagged = sum(int(row["n"]) for row in counts)
+    if not tagged:
+        return ColdReadClaim(
+            claim=CLAIM_LAYER_BASIS,
+            question=COLD_READ_QUESTIONS[CLAIM_LAYER_BASIS],
+            state=ABSENT,
+            detail=(
+                "no edge in this file carries a layer tag, so the file makes no "
+                "claim about one. This is not the same as a file whose tags "
+                "cannot be checked."
+            ),
+        )
+    columns = tuple(
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(edge)").fetchall()
+    )
+    breakdown = ", ".join(f"{row['layer']}={row['n']}" for row in counts)
+    return ColdReadClaim(
+        claim=CLAIM_LAYER_BASIS,
+        question=COLD_READ_QUESTIONS[CLAIM_LAYER_BASIS],
+        state=READABLE_NOT_CHECKABLE,
+        detail=(
+            f"{tagged} edge(s) carry a layer tag ({breakdown}) and every one of "
+            "them is readable. The edge table's columns are "
+            f"{', '.join(columns)} — none of them says what the tag was computed "
+            "from. meta[limits_source] states one input to the HAS_ENVELOPE tag, "
+            "and since issue #163 the outer set also reads the base velocity, "
+            "whose provenance is in the stream and not on the edge. So a tag and "
+            "its basis can disagree with nothing in the file to say so, and a "
+            "reader who trusts the tag is trusting an assertion (issue #227)."
+        ),
+    )
+
+
+def _reached_point_claim(
+    conn: sqlite3.Connection, radial: int, total: int
+) -> ColdReadClaim:
+    """Can the file answer *could the robot have reached (x, y)?*
+
+    Radially only, which is the whole finding: `outer_radius` is a scalar about
+    the base frame and the boundary it projects is not retained, so the file
+    answers *not at that distance* and cannot answer *not at that point*.
+    docs/limitations.md §2 and §3, issue #228.
+    """
+    if not radial:
+        return ColdReadClaim(
+            claim=CLAIM_REACHED_POINT,
+            question=COLD_READ_QUESTIONS[CLAIM_REACHED_POINT],
+            state=ABSENT,
+            detail=(
+                f"none of this file's {total} envelope row(s) carries an "
+                "outer_radius, so the file states no reachable-set bound at all "
+                "— not one that answers the question radially and not one that "
+                "answers it pointwise."
+            ),
+        )
+    frame = store.get_meta(conn, store.META_BASE_FRAME)
+    columns = tuple(
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(envelope)").fetchall()
+    )
+    return ColdReadClaim(
+        claim=CLAIM_REACHED_POINT,
+        question=COLD_READ_QUESTIONS[CLAIM_REACHED_POINT],
+        state=READABLE_NOT_CHECKABLE,
+        detail=(
+            f"{radial} of {total} envelope row(s) carry outer_radius — a scalar "
+            "about "
+            + (
+                f"meta[{store.META_BASE_FRAME}]={frame}"
+                if frame is not None
+                else f"a base frame this file does not state in meta[{store.META_BASE_FRAME}]"
+            )
+            + f" — and the envelope table's columns are {', '.join(columns)}, "
+            "none of which holds the outer boundary. So the question is "
+            "answerable **radially only**: this file says *not at that "
+            "distance* and cannot say *not at that point*. The region that "
+            "would answer it is recomputable, which routes the question "
+            "straight back through the recompute claim above (issue #228)."
+        ),
+    )
+
+
+def cold_read(conn: sqlite3.Connection) -> ColdRead:
+    """What this artifact says about itself, checked against itself alone.
+
+    docs/self-describing.md §2's acceptance criterion, as a thing that runs. It
+    opens nothing but the artifact it is handed — no document, no stream, no
+    second file — and reports one row per claim in `COLD_READ_CLAIMS`, each with
+    one of `COLD_READ_STATES`.
+
+    **It closes no gap.** It makes the gaps legible from the file, which is what
+    lets issues #227 and #228 be judged by something other than a PR body. Two
+    of the four rows are `READABLE-NOT-CHECKABLE` today and that is the report
+    working, not failing.
+
+    **It reports the environment and does not re-verify it.** The comparison is
+    issue #201's, spelled over `COLD_READ_RECOMPUTE_KEYS`, and
+    `recompute_permitted` is held to agree with `reg.graph.envelope_at` by
+    `tests/test_query.py` on both sides. If the two disagree that is a bug here,
+    not a second opinion.
+
+    Args:
+        conn: an open artifact. `reg.store.connect` refuses a `schema_version`
+            this build does not understand, so the older-schema arm below is
+            reachable only through a raw `sqlite3` connection — which is exactly
+            how an assessor with an archived file would meet it, and why it is
+            handled rather than assumed away.
+
+    Returns:
+        A `ColdRead`. Never a partial one: every claim in `COLD_READ_CLAIMS` gets
+        a row, because a row omitted and a row reporting `ABSENT` are different
+        facts and a report that could omit one would make them look the same.
+    """
+    stated_version = _schema_version_text(conn)
+    if stated_version != str(COLD_READ_SCHEMA_VERSION):
+        return ColdRead(
+            schema_version=stated_version,
+            claims=_unpinned_claims(stated_version),
+            recompute_permitted=None,
+        )
+
+    stated = store.all_meta(conn)
+    environment = _environment_claim(stated)
+    envelopes = conn.execute(
+        "SELECT count(*) AS total, "
+        "       count(*) - count(geometry_wkb) AS discarded, "
+        "       count(outer_radius) AS radial "
+        "FROM envelope"
+    ).fetchone()
+    recompute, permitted = _recompute_claim(
+        stated,
+        environment,
+        int(envelopes["discarded"]),
+        int(envelopes["total"]),
+    )
+    return ColdRead(
+        schema_version=stated_version,
+        claims=(
+            environment,
+            recompute,
+            _layer_basis_claim(conn),
+            _reached_point_claim(
+                conn, int(envelopes["radial"]), int(envelopes["total"])
+            ),
+        ),
+        recompute_permitted=permitted,
+    )
+
+
+# --------------------------------------------------------------------------
 # Argument validation. Every refusal names the value it refused.
 # --------------------------------------------------------------------------
 
@@ -2896,6 +3557,44 @@ def render_commitment_check(check: object) -> str:
                 lines.append(f"  {label} head: committed {recorded}")
                 lines.append(f"  {' ' * len(label)}       artifact  {computed}")
     lines.append(f"  reason:    {check.reason}")
+    return "\n".join(lines)
+
+
+def render_cold_read(report: ColdRead) -> str:
+    """A `ColdRead` as text. Reads nothing but the report.
+
+    Every row prints its state *and* its detail, and the detail is not
+    abbreviated. "READABLE-NOT-CHECKABLE" on its own is not usable evidence: an
+    assessor's next question is *what did you read, and what is missing*, and
+    the report already knows.
+    """
+    permitted = {
+        True: "yes — the compared keys agree with this interpreter",
+        False: "no — a compared key differs from this interpreter",
+        None: "could not be decided — nothing was compared",
+    }[report.recompute_permitted]
+    lines = [
+        "cold read: what this artifact says about itself, with no document open",
+        "",
+        f"  schema_version:      "
+        f"{report.schema_version if report.schema_version is not None else 'not stated'}"
+        f" (states derived against {COLD_READ_SCHEMA_VERSION})",
+        f"  recompute permitted: {permitted}",
+        "",
+    ]
+    for row in report.claims:
+        lines.append(f"  {row.claim}: {row.state}")
+        lines.append(f"    question: {row.question}")
+        lines.append(f"    detail:   {row.detail}")
+        lines.append("")
+    lines.append(
+        f"  checkable from the file:     "
+        f"{', '.join(report.checkable) if report.checkable else 'none'}"
+    )
+    lines.append(
+        f"  not checkable from the file: "
+        f"{', '.join(report.not_checkable) if report.not_checkable else 'none'}"
+    )
     return "\n".join(lines)
 
 
@@ -3125,6 +3824,17 @@ def _list_text() -> str:
         "no incident reports that there was none; a t no declaration covers is "
         "a could-not-evaluate and never an empty report."
     )
+    lines.append("")
+    lines.append(
+        "not a query, and not an Answer: --cold-read asks docs/self-describing."
+        "md \u00a72's question of the file itself — for every claim this artifact "
+        "makes about itself, can it be checked from the file or not. One row "
+        "per claim in CHECKABLE, READABLE-NOT-CHECKABLE, ABSENT or "
+        "COULD-NOT-EVALUATE; the last two never resolve to the first, and "
+        "READABLE-NOT-CHECKABLE is a state of its own rather than a soft pass. "
+        "It closes no gap and it opens no document. Exit 0, or 1 if a row could "
+        "not be evaluated."
+    )
     return "\n".join(lines)
 
 
@@ -3227,6 +3937,16 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "walk both record chains and report VERIFIED / BROKEN / "
             "COULD-NOT-EVALUATE per chain (exit 0 / 3 / 1)"
+        ),
+    )
+    group.add_argument(
+        "--cold-read",
+        action="store_true",
+        help=(
+            "what this artifact says about itself, with no document open "
+            "(docs/self-describing.md §2): one row per claim, each CHECKABLE, "
+            "READABLE-NOT-CHECKABLE, ABSENT or COULD-NOT-EVALUATE (exit 0 "
+            "unless a row could not be evaluated, which is exit 1)"
         ),
     )
     parser.add_argument(
@@ -3489,6 +4209,32 @@ def _incident_cli(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cold_read_cli(args: argparse.Namespace) -> int:
+    """`--cold-read`. Exit `0` if every claim got a state, `1` if one could not.
+
+    A `COULD-NOT-EVALUATE` row exits `1` for the reason every other exit code
+    here exists: a script that read "could not check" as "checked and fine" is
+    the failure the three-state discipline exists to prevent.
+    `READABLE-NOT-CHECKABLE` exits `0` — it is not a failure of the run, it is
+    the report saying what it was asked to say, and an exit code that treated it
+    as one would be red on every artifact this project has ever built.
+    """
+    try:
+        conn = store.connect(Path(args.artifact))
+    except store.StoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        report = cold_read(conn)
+    finally:
+        conn.close()
+    print(render_cold_read(report))
+    unevaluated = [
+        row.claim for row in report.claims if row.state == COULD_NOT_EVALUATE
+    ]
+    return EXIT_COULD_NOT_EVALUATE if unevaluated else EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Exit `0` answered, `1` could-not-evaluate, `2` refused, `3` chain broken.
 
@@ -3528,8 +4274,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if stray:
         print(
             f"error: {', '.join(stray)} belong(s) to --verify-chain or "
-            "--incident, neither of which was asked for. No scene query and no "
-            "attestation query reads a key, and --tamper exists to "
+            "--incident, neither of which was asked for. No scene query, no "
+            "attestation query and no cold read reads a key, and --tamper "
+            "exists to "
             "show the chain walk saying no — on its own it would alter a copy "
             "of an artifact and report nothing about the result. Refusing "
             "rather than ignoring them: a flag that is silently dropped reads "
@@ -3537,6 +4284,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_USAGE
+
+    # AFTER the stray-flag check, deliberately. `--cold-read --keyring K` reads
+    # no key, and a flag that is silently dropped reads as one that was applied.
+    if args.cold_read:
+        return _cold_read_cli(args)
 
     try:
         conn = store.connect(Path(args.artifact))

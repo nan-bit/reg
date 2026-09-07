@@ -1,9 +1,10 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
-**Status:** a design document; tiers 0, 1 and 2 of §8 have landed — tier 2 in
-two halves, the environment **recorded** (issue #200) and then **acted on**
-(issue #201, the recompute path refuses off the recording environment) · written
-2026-09-05, tier 1's findings folded in 2026-09-05, tier 2 2026-09-05 · normative
+**Status:** a design document; tiers 0-3 of §8 have landed — tier 2 in two
+halves, the environment **recorded** (issue #200) and then **acted on** (issue
+#201, the recompute path refuses off the recording environment), and tier 3 as
+`reg.query.cold_read` (issue #231) · written 2026-09-05, tier 1's findings folded
+in 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07 · normative
 over nothing yet; where it touches what the project may claim it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
 those files carry the change · the build order in §8 is the authority on what is
@@ -105,17 +106,44 @@ must carry ([`prior-art.md`](prior-art.md) §29). The declaration is not new; it
 being made in passing. The reader it names is §4's, and the test is relative to
 that reader and to no other.
 
-This is the acceptance criterion and it must be a test, not a principle. Its shape,
-per *a check must be able to fail*:
+**Landed as `reg.query.cold_read`, and it is not a test.** It ships in the
+package because the audience is an assessor holding a file, and a check they
+cannot run tells them nothing; `python -m reg.query FILE --cold-read` prints it.
+One row per claim the file makes about itself, in four states, per *a check must
+be able to fail*:
 
 | state | meaning |
 |---|---|
-| **pass** | every layer tag re-derives from a basis in the file; every discarded geometry names the environment that would reproduce it |
-| **fail** | a tag disagrees with its basis, or a basis is absent where the tag exists |
-| **could-not-evaluate** | the artifact predates the schema that carries a basis — reported as such, never as a pass |
+| **checkable** | the file carries what is needed to verify the claim |
+| **readable, not checkable** | the claim is present and the file does not support verifying it |
+| **absent** | the claim is not in this file |
+| **could-not-evaluate** | the file was written against a schema these states were not derived against |
 
-The negative ships with it: an artifact whose tag has been edited to disagree with
-its own basis must be refused, and one whose basis is intact must not be.
+**The third and fourth never resolve to the first**, and the second is not a soft
+pass — it is the honest verdict on a `layer` tag today, and reporting it is the
+point. *The three-state table this replaces had no room for it*: it assumed a
+basis existed to agree or disagree with, so about a file where nothing carries one
+it could only say could-not-evaluate. What it called **pass** is the shipped
+**checkable**.
+
+What it says today, on an artifact built from `main` at `schema_version` 11: the
+recording environment **checkable**; recomputing a discarded polygon
+**checkable**, because `envelope_at` refuses off the recording environment; a
+`layer` tag's basis **readable, not checkable** — §1's gap 1; *could the robot
+have reached (x, y)* **readable, not checkable**, radially only — gap 3.
+`tests/test_query.py` pins those per shipped fixture, so closing a gap fails
+there and has to be updated on purpose.
+
+It reports the environment and does not re-verify it: the report's
+`recompute_permitted` is held to agree with `reg.graph.envelope_at` on both
+sides, matching and mismatched. The negatives ship with it — `env_*` keys
+stripped is *absent* and not *checkable*, a file predating schema 11 is
+*could-not-evaluate* and not *absent*, and an intact `layer` column is *readable,
+not checkable*, because the healthy-looking case is the one that must not read as
+a pass.
+
+**It closes no gap.** It makes them legible from the file, which is what lets
+#227 and #228 be judged by something other than a PR body.
 
 ## 3. What moves into the file
 
@@ -393,16 +421,19 @@ along — writing the data and using it are different work, and only the second
 changes what a query answers. Tier 3 was unblocked by the first half; nothing
 else here was waiting on either.
 
-**Tier 3 — the cold-read test.** §2, against the fixtures, with its negative. It
-can be written the moment tier 2 lands and it is what makes the rest checkable.
+**Tier 3 — the cold read. Landed** (issue #231): `reg.query.cold_read` and
+`--cold-read`, four states per claim, pinned per shipped fixture in
+`tests/test_query.py` with its negatives. It ships in the package rather than in
+`tests/` — §2 says why — and it is what makes tiers 4 and 5 judgeable by
+something other than a PR body.
 
-**Tier 4 — the layer basis.** Depends on §7 question 1 being answered. Ships with
-the `DERIVED` fixture from question 2, because a basis nothing exercises is a
-basis nobody knows the shape of.
+**Tier 4 — the layer basis** (issue #227). Depends on §7 question 1 being
+answered. Ships with the `DERIVED` fixture from question 2, because a basis
+nothing exercises is a basis nobody knows the shape of.
 
-**Tier 5 — the boundary.** A decision first, then bytes, then a re-measurement and
-republish of every figure that moves. Not to be started until tiers 2 and 3 make
-the argument for it concrete.
+**Tier 5 — the boundary** (issue #228). A decision first, then bytes, then a
+re-measurement and republish of every figure that moves. Not to be started until
+tiers 2 and 3 make the argument for it concrete.
 
 ## See also
 

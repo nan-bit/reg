@@ -1,4 +1,4 @@
-"""The eleven named scenario fixtures, three mobile ones and one generated long
+"""The eleven named scenario fixtures, four mobile ones and one generated long
 run. **Layer B** — this is simulator ground truth.
 
 These are the fixtures everything downstream is measured against, so they come
@@ -25,12 +25,15 @@ fixed by the module constants below rather than drawn. It is not in `SCENARIOS`
 `scenario()` resolves its generated names, so a stream that says
 `scenario=long_run_3000` in its provenance block can still be rebuilt.
 
-The **three mobile fixtures** (issue #178, docs/mobile-base.md §7 Tier 4) are
-the first runs here in which the robot drives, and each one exists to make one
-claim of that track exercisable: `mobile_transit` that the room-frame answer is
-Layer B and the base pose reaches the artifact, `mobile_frozen_arm` that driving
-is not reaching, and `mobile_overclaim` that for a robot with no workspace disc
-a VETO rests on the outer reachable set and on nothing else. They are in
+The **four mobile fixtures** (issue #178, docs/mobile-base.md §7 Tier 4) are the
+runs here in which the robot drives, and each one exists to make one claim of
+that track exercisable: `mobile_transit` that the room-frame answer is Layer B
+and the base pose reaches the artifact, `mobile_frozen_arm` that driving is not
+reaching, `mobile_overclaim` that for a robot with no workspace disc a VETO
+rests on the outer reachable set and on nothing else, and
+`mobile_derived_velocity` — the fourth, and the only one whose claim is about a
+*defect* — that a base velocity out of a perceiver reaches the artifact with the
+layer tags unmoved (issue #229, docs/limitations.md §11). They are in
 `MOBILE_SCENARIOS` rather than in `SCENARIOS`, and the block comment above
 `MOBILE_LIMITS` is where that split is argued — in one line, **Claim 1 stays a
 fixed-arm claim** and a mobile run is not priced beside the eleven.
@@ -54,7 +57,7 @@ is a golden value wearing a costume.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -1293,9 +1296,9 @@ if len(SCENARIOS) != len(_ALL):  # pragma: no cover - construction-time invarian
 
 
 # --------------------------------------------------------------------------
-# THE THREE MOBILE FIXTURES (issue #178, docs/mobile-base.md §7 Tier 4)
+# THE FOUR MOBILE FIXTURES (issue #178, issue #229, docs/mobile-base.md §7)
 #
-# The eleven above are bolted to the origin. These three drive, and they are the
+# The eleven above are bolted to the origin. These four drive, and they are the
 # first runs in this repository in which anything does.
 #
 # WHY THEY ARE NOT IN `SCENARIOS`, WHICH IS THE FIRST THING TO EXPLAIN.
@@ -1313,9 +1316,11 @@ if len(SCENARIOS) != len(_ALL):  # pragma: no cover - construction-time invarian
 # WHAT THAT COSTS AND WHERE IT IS PAID. A reader of `reg.sim --list` sees both
 # groups, labelled, because a fixture nothing lists is a fixture nobody runs.
 #
-# THE FIXTURE LIST IS ARGUED, NOT ENUMERATED. Each of the three exists to make
+# THE FIXTURE LIST IS ARGUED, NOT ENUMERATED. Each of the four exists to make
 # one claim of this track exercisable, and the comment above it says which. A
-# fourth motion nobody can name a reason for would not be a fixture.
+# fifth motion nobody can name a reason for would not be a fixture — and the
+# fourth is not a motion at all: it is the third's motion under a provenance
+# nothing reads, which is the only way a gap in the tagging becomes a run.
 #
 # Geometry to keep in your head, as for the eleven: the arm and the room are
 # unchanged — links 0.5 + 0.4, body radius 0.05, human disc 0.25, room
@@ -1364,7 +1369,7 @@ MOBILE_LIMITS = Limits(
 #:
 #: **Built here rather than in `reg.world`** because `DEMO_WORLD` is the world
 #: every published figure is measured in and a second world beside it invites
-#: the two to be compared; this one belongs with the three fixtures that use it
+#: the two to be compared; this one belongs with the four fixtures that use it
 #: and with the comment above saying why they are not priced.
 MOBILE_WORLD = World(
     room=ROOM,
@@ -1627,10 +1632,69 @@ MOBILE_OVERCLAIM = Scenario(
     fault="envelope_overclaim",
 )
 
+# THE CLAIM, AND IT IS THE ONLY ONE IN THIS CATALOGUE THAT IS A DEFECT RATHER
+# THAN A CAPABILITY: a base velocity out of a perceiver reaches the artifact and
+# no layer tag moves (issue #229, docs/limitations.md §11,
+# docs/self-describing.md §7 question 2).
+#
+# The three above all state `VelocitySource.PROPRIOCEPTIVE`, so the gap §11
+# records is real in the code and **unobservable in any run this repository
+# produces**: `reg.envelope.envelope_layer` decides the `HAS_ENVELOPE` tag from
+# `Limits.source` alone, nothing maps a `VelocitySource` member to a `Layer`,
+# and no fixture has ever handed it a member that would disagree. This one does.
+# `reg.envelope.base_motion_bounds` reads `state.base_vel` and integrates it
+# into the displacement term of the outer set — which for a vehicle is the only
+# bound a VETO rests on (issue #164) — so every envelope in this run inherits
+# whatever placed those rates, and `envelope_layer(MOBILE_LIMITS)` still answers
+# `A` for all of it.
+#
+# AND THE TAG IT PRODUCES IS RIGHT ANYWAY, WHICH IS WHY THIS IS WORTH SHIPPING
+# RATHER THAN ARGUING. The `HAS_ENVELOPE` edges of the built artifact come out
+# `B` — because the base drove, and a posed configuration is Layer B whatever
+# the limits say (issue #191, `reg.graph.build`). So a `WHERE layer = 'B'` query
+# returns them, for the pose and not for the velocity, and this run and
+# `mobile_transit` build artifacts carrying the identical tag on every edge
+# while their streams disagree in the `base_vel_source` column. A reader cannot
+# tell from the file which of the two facts the tag followed, and on a robot
+# whose pose was not in the artifact — a body-frame-only build — the coincidence
+# would not be there to save it. Asserted in exactly those terms by
+# `tests/test_graph.py`, so that closing the gap turns the assertion red and
+# somebody has to change it deliberately.
+#
+# WHY IT IS `replace` AND NOT A FOURTH BLOCK OF WAYPOINTS. The comparison in the
+# paragraph above is the whole fixture, and it holds only while the two runs
+# differ in one field. Written out again, the next person to move a knot makes
+# them differ in two, and the artifact-level comparison quietly starts measuring
+# something else. `Scenario` is frozen and `replace` re-runs `__post_init__`, so
+# this is validated as its own fixture and not adopted as one.
+#
+# Nothing here closes the gap. The repair is an envelope layer that is the
+# weakest of its inputs rather than of one of them, decided together with the
+# posed-configuration case §11 holds open beside it, and it is the rest of #227.
+MOBILE_DERIVED_VELOCITY = replace(
+    MOBILE_TRANSIT,
+    name="mobile_derived_velocity",
+    description=(
+        "A base whose body-frame rates came out of visual odometry rather than "
+        "off its wheels. The run is `mobile_transit`'s frame for frame — the "
+        "same drive, the same person, the same geometry — and the one thing "
+        "that differs is the provenance the stream records for the velocity "
+        "block. Nothing in `reg` reads that provenance when it tags a layer, so "
+        "this is the fixture that makes docs/limitations.md §11 observable in "
+        "an artifact rather than only in the code."
+    ),
+    # THE ONE FIELD. Visual odometry: a rate assembled by looking at the room,
+    # arriving in a structure whose field names — `vx`, `vy`, `omega` — name
+    # nothing outside the robot, which is `reg.types.VelocitySource`'s whole
+    # reason for existing and issue #84's hole one type over.
+    base_vel_source=VelocitySource.DERIVED,
+)
+
 _MOBILE: tuple[Scenario, ...] = (
     MOBILE_TRANSIT,
     MOBILE_FROZEN_ARM,
     MOBILE_OVERCLAIM,
+    MOBILE_DERIVED_VELOCITY,
 )
 
 #: The mobile fixtures, name to definition. **Deliberately not merged into

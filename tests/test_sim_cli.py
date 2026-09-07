@@ -361,7 +361,7 @@ def driving_scenario():
     """A scenario whose base drives, constructed here rather than shipped.
 
     Not a registered one, and since issue #178 that is a narrower statement than
-    it was: three fixtures in `reg.scenarios.MOBILE_SCENARIOS` drive, and none of
+    it was: the fixtures in `reg.scenarios.MOBILE_SCENARIOS` drive, and none of
     them is in `SCENARIOS`, because Claim 1 is priced on the eleven bolted arms
     (docs/mobile-base.md §7 Tier 4). This one stays because the tests below are
     about the *producer* deciding nothing — a one-second run with no jitter in
@@ -467,7 +467,7 @@ def test_no_registered_scenario_grows_a_base_column(tmp_path, name: str) -> None
 # --------------------------------------------------------------------------
 # THE MOBILE FIXTURES THROUGH THIS CLI (issue #178, docs/mobile-base.md §7)
 #
-# The probe above is a scenario this file builds; these are the three the
+# The probe above is a scenario this file builds; these are the ones the
 # package ships, and the difference is the whole of Tier 4. The issue's own
 # command is `python -m reg.sim --scenario <mobile> --out ...`, so what is
 # asserted here is that command: it exits zero, it writes a stream with both

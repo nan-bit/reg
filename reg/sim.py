@@ -45,7 +45,7 @@ provenance block above them, whose version already records that a header with no
 base columns is a statement about the *run* (see `PROVENANCE_VERSION`).
 
 Since issue #178 there are runs that take that path: `reg.scenarios` registers
-three mobile fixtures, and `python -m reg.sim --scenario mobile_transit --out
+the mobile fixtures, and `python -m reg.sim --scenario mobile_transit --out
 runs/mobile.csv` writes a stream with both blocks in it. They are resolved
 through `reg.scenarios.scenario` rather than looked up in `SCENARIOS`, because
 they are deliberately not in that mapping — it is what `reg.bench --all` prices

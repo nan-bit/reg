@@ -245,6 +245,18 @@ EXEMPT: dict[str, str] = {
 #         The republication is paid for inside the same file that carries it —
 #         three 2026-09-06 provenance rows merged into one, and four paragraphs
 #         restating the projection cut to what the tables already say
+#   88.8  today, 2026-09-07, after #229 added a fourth mobile fixture.
+#         Unchanged and re-measured: `docs/mobile-base.md` went 8,129 -> 8,129,
+#         25,745 / 290 = 88.78. A fixture is a module-level assignment and
+#         `public_symbols` counts definitions, so this change bought no budget
+#         and the denominator did not move — §7.2's new bullet is paid for
+#         inside the same file, by four passages restating something the reader
+#         is already being pointed at: §5 restating §4 item 8 of this same
+#         document, §7.3 and §6 restating `limitations.md` §2-§3 and
+#         `prior-art.md`'s standing over its own pass, and §5 restating
+#         `retention.md`'s status header while `See also` links it anyway.
+#         88.7 is not available — it would put the ceiling at 25,723, under the
+#         corpus — so this is the tightest tenth and not a banked difference
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact

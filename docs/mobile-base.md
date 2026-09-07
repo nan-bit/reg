@@ -391,7 +391,7 @@ the survey.
    §7.1 states the two halves it moved into.
 8. `reg/bench.py` — **built.** A prefix match over `t`, `q_*` and `qd_*` treats a
    base column as Layer B **silently**, so `proprioceptive_columns` refuses a
-   column carrying no rule in `COLUMN_RULES`, by name. See §5.
+   column carrying no rule in `COLUMN_RULES`, by name.
 9. `reg/graph.py` — **built, by not quantizing.** The distance error budget is
    exactly saturated, so a quantized base pose would be a third error source in
    it. The pose is written at the raw stream's own precision with no quantum of
@@ -407,15 +407,7 @@ the survey.
 
 **Claim 1 stays a fixed-arm claim.** The mobile track is exploratory and
 unbenchmarked. No published figure is re-measured, retired or moved by any of
-this, and [`retention.md`](retention.md) says in its own header that its figures
-are fixed-base figures at 50 Hz.
-
-That is a thing to **enforce, not assume**, and item 8 above is why.
-`proprioceptive_columns` selects columns by prefix, so a base column that fell
-through to a default would be counted as Layer B without anything going red —
-moving the Layer A and Layer B column split that Claim 1's comparison rests on.
-The rule is the house style: a function that classifies a column refuses one it
-has no rule for rather than defaulting it.
+this.
 
 **No perceiver is built.** *Perception / vision / SLAM* is a binding non-goal in
 [`plan.md`](plan.md) and stays one. The simulator supplies the base pose as
@@ -427,9 +419,7 @@ something would have to.
 
 Entered in [`prior-art.md`](prior-art.md) as the **fifth pass, 2026-09-01**,
 §21–§25; summarised here so this document stands on its own. **Where this table
-and the pass differ, the pass is right** — it is normative over `plan.md` and it
-is where the reasons are written down, and this table is a summary that has to
-move.
+and the pass differ, the pass is right.**
 
 | Work | Bearing on this design | Read from |
 |---|---|---|
@@ -509,12 +499,12 @@ The refusal names the instant and the part — which frame, which second, which
 seed, which wall, and whether the *base* crossed it or only the disc its body can
 occupy, which are different fixture faults with different repairs.
 
-### 7.2 The three mobile fixtures
+### 7.2 The four mobile fixtures
 
-`reg.scenarios.MOBILE_SCENARIOS` holds three: `mobile_transit`,
-`mobile_frozen_arm` and `mobile_overclaim`. They are the first runs in this
-repository in which anything has moved a robot, and each exists to make one claim
-of this track exercisable rather than to cover a motion.
+`reg.scenarios.MOBILE_SCENARIOS` holds four: `mobile_transit`,
+`mobile_frozen_arm`, `mobile_overclaim` and `mobile_derived_velocity`. They are
+the runs in this repository in which anything has moved a robot, and each exists
+to make one claim of this track exercisable rather than to cover a motion.
 
 - **`mobile_transit` — the room-frame answer is Layer B, and the pose is in the
   artifact** (§2, [`sufficiency.md`](sufficiency.md) §5.6). A person stands still
@@ -544,6 +534,17 @@ of this track exercisable rather than to cover a motion.
   against nothing else. A mobile fixture set in which nothing ever went wrong
   would exercise the happy path of a mechanism whose entire purpose is the
   unhappy one.
+- **`mobile_derived_velocity` — a base velocity out of a perceiver, and a layer
+  tag that does not follow it** ([`limitations.md`](limitations.md) §11). The
+  fourth, and the only one whose claim is a defect: `mobile_transit`'s run with
+  `base_vel_source` changed to `VelocitySource.DERIVED`, visual odometry rather
+  than wheel encoders. The other three state `PROPRIOCEPTIVE`, so the gap §11
+  records was real in the code and in no run. `envelope_layer` answers `A` for
+  this robot's limits while every frame states a perceiver, and the built
+  artifact's `HAS_ENVELOPE` edges are `B` anyway — from the pose, not the
+  velocity — so the tag is right by coincidence and nothing in the file says
+  which of the two facts it followed. It makes the gap observable; closing it is
+  issue #227 and changes this tag deliberately.
 
 **They are a second catalogue, not an addition to the first, and that is the half
 every published figure depends on.** They live in
@@ -599,9 +600,7 @@ than a decision it took:
   base blocks, so the gzipped baseline every ratio is divided by is a different
   file.
 - **The bound is still radially incomplete** ([`limitations.md`](limitations.md)
-  §2 and §3), and a mobile run does not change that — it detects a declaration
-  reaching further than the robot can get in the window, not one pointing where
-  the robot cannot turn in time.
+  §2 and §3), and a mobile run does not change that.
 
 ## See also
 
@@ -635,7 +634,8 @@ after.
 | §7 Tier 3 | `Enforcer` constructs for and adjudicates a driven base | #189 | 2026-09-04 |
 | §7.1 | `Scenario.base_waypoints`, `PoseSource`, `VelocitySource`, the jitter pair | #177 | 2026-09-04 |
 | §7.1, §4 item 4 | The pose written to `robot_config`; `GEOMETRY_RETENTION` on posed frames | #191 | 2026-09-05 |
-| §7.2 | The three mobile fixtures | #178 | 2026-09-05 |
+| §7.2 | The first three mobile fixtures | #178 | 2026-09-05 |
+| §7.2 | `mobile_derived_velocity`, the fixture §11's gap is observable in | #229 | 2026-09-07 |
 
 Tiers 0 and 2 are absent from the table because this document never recorded the
 issues they arrived on. That is a gap in the record, and a plausible number

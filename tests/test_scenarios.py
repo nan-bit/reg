@@ -84,7 +84,7 @@ EXPECTED_NAMES = [
     "out_of_vocabulary_action",
 ]
 
-#: The three mobile fixtures (issue #178), in `MOBILE_SCENARIOS` and
+#: The four mobile fixtures (issue #178, issue #229), in `MOBILE_SCENARIOS` and
 #: deliberately not in `SCENARIOS` — see `test_the_mobile_fixtures_are_a_second
 #: _catalogue_and_not_an_addition_to_the_first`. They are held to every generic
 #: invariant in this file that is about a *run* rather than about a bolted base:
@@ -95,6 +95,7 @@ MOBILE_NAMES = [
     "mobile_transit",
     "mobile_frozen_arm",
     "mobile_overclaim",
+    "mobile_derived_velocity",
 ]
 
 #: Every fixture in the package, for the invariants that hold of both kinds.
@@ -1023,7 +1024,7 @@ def test_scenarios_are_frozen() -> None:
 
 # `MOBILE_LIMITS` and `MOBILE_WORLD` are imported from `reg.scenarios` rather
 # than built here (issue #178). They were built here while nothing in the
-# package drove; the three mobile fixtures now run on exactly this robot, and a
+# package drove; the mobile fixtures now run on exactly this robot, and a
 # second copy of its four base numbers in the test file would let the probe
 # scenario below and the shipped fixtures drift into two different vehicles
 # without anything going red.
@@ -1582,7 +1583,7 @@ def test_a_driving_fixture_that_stays_in_the_room_runs_to_the_end() -> None:
 
 
 # --------------------------------------------------------------------------
-# THE THREE MOBILE FIXTURES (issue #178, docs/mobile-base.md §7 Tier 4)
+# THE FOUR MOBILE FIXTURES (issue #178, issue #229, docs/mobile-base.md §7)
 #
 # Everything above this point tests a base that *can* drive against a scenario
 # built inside this file. These are the shipped ones, and the difference is the
@@ -1590,7 +1591,7 @@ def test_a_driving_fixture_that_stays_in_the_room_runs_to_the_end() -> None:
 # test is a claim about the test.
 #
 # What is asserted here is what each fixture's own comment says it is for, plus
-# the two halves that hold of all three: the catalogue is a second one rather
+# the two halves that hold of all four: the catalogue is a second one rather
 # than an addition to the first (which is what keeps Claim 1 a fixed-arm claim),
 # and the executed base trajectory obeys the bounds the outer envelope's
 # soundness argument assumes.
@@ -1601,8 +1602,8 @@ def test_a_driving_fixture_that_stays_in_the_room_runs_to_the_end() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_mobile_catalogue_is_exactly_the_three_named_fixtures() -> None:
-    """Three, each named for the claim it exercises, each keyed by its own name."""
+def test_the_mobile_catalogue_is_exactly_the_four_named_fixtures() -> None:
+    """Four, each named for the claim it exercises, each keyed by its own name."""
     assert list(MOBILE_SCENARIOS) == MOBILE_NAMES
     for key, scn in MOBILE_SCENARIOS.items():
         assert scn.name == key
@@ -1971,3 +1972,87 @@ def test_driving_is_not_reaching_over_a_run_that_actually_drove(seed: int) -> No
         "a frozen arm on a driving base is a traverse; `reach` here would mean "
         "the classifier is reading the base's motion as the arm's"
     )
+
+
+# --- mobile_derived_velocity: the tag does not follow the value -------------
+#
+# This fixture's claim is a **defect** rather than a capability, which is why
+# what it is checked for here is only the arrangement: that the run states a
+# perceived base rate on every frame, and that it is otherwise `mobile_transit`
+# to the bit. The defect itself is a statement about the artifact — the layer
+# tag, and what it was computed from — and it is asserted in
+# `tests/test_graph.py`, which is where a built artifact is.
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_the_derived_velocity_fixture_states_a_perceived_rate_on_every_frame(
+    seed: int,
+) -> None:
+    """**The arrangement, and the half that makes the gap observable at all.**
+
+    Both directions. Every frame of this run stamps `VelocitySource.DERIVED` on
+    the rates `reg.envelope.base_motion_bounds` reads — a base whose velocity
+    came out of visual odometry — and every other mobile fixture stamps
+    `PROPRIOCEPTIVE`. The second half is not decoration: while it held of all
+    of them, the gap docs/limitations.md §11 records was real in the code and in
+    no run this repository could build, so nothing could be asserted about it
+    except by constructing a state in a test.
+    """
+    scn = scenario("mobile_derived_velocity")
+    assert scn.base_vel_source is VelocitySource.DERIVED
+    frames = list(scn.states(seed))
+    assert frames
+    assert {f.base_vel.source for f in frames} == {VelocitySource.DERIVED}
+
+    others = [n for n in MOBILE_NAMES if n != "mobile_derived_velocity"]
+    assert others, "this fixture is the whole mobile catalogue; there is no control"
+    for name in others:
+        assert scenario(name).base_vel_source is VelocitySource.PROPRIOCEPTIVE, (
+            f"{name} now states a perceived base rate too, so this fixture is no "
+            "longer the only run that does and the tests in test_graph.py that "
+            "compare it against mobile_transit are comparing two of the same"
+        )
+
+
+@pytest.mark.parametrize("seed", SEEDS)
+def test_the_derived_velocity_fixture_is_mobile_transits_run_to_the_bit(
+    seed: int,
+) -> None:
+    """**The invariant the artifact comparison rests on** (issue #229).
+
+    `tests/test_graph.py` builds both fixtures and asserts that their layer tags
+    are identical while their streams disagree in `base_vel_source` — which says
+    *nothing reads the provenance* only while the provenance is the one thing
+    that differs. So it is asserted here, at the source, frame for frame and
+    number for number: same joints, same rates, same person, same pose, same
+    body-frame velocity, at every seed.
+
+    It holds by construction — the fixture is built with `dataclasses.replace`
+    from `mobile_transit` — and that is the reason to check it rather than not:
+    a later edit that writes the waypoints out again would leave both fixtures
+    working, both catalogues green, and the comparison in the other file
+    quietly measuring a second difference.
+    """
+    transit = list(scenario("mobile_transit").states(seed))
+    derived = list(scenario("mobile_derived_velocity").states(seed))
+    assert len(derived) == len(transit) > 0
+
+    for a, b in zip(transit, derived):
+        assert a.t == b.t
+        assert np.array_equal(a.q, b.q)
+        assert np.array_equal(a.qd, b.qd)
+        assert np.array_equal(a.human_pos, b.human_pos)
+        assert np.array_equal(a.human_vel, b.human_vel)
+        assert (a.base_pose.x, a.base_pose.y, a.base_pose.theta) == (
+            b.base_pose.x,
+            b.base_pose.y,
+            b.base_pose.theta,
+        )
+        assert a.base_pose.source is b.base_pose.source
+        assert (a.base_vel.vx, a.base_vel.vy, a.base_vel.omega) == (
+            b.base_vel.vx,
+            b.base_vel.vy,
+            b.base_vel.omega,
+        )
+        # The one field, and the only one.
+        assert a.base_vel.source is not b.base_vel.source

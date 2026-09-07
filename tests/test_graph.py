@@ -108,7 +108,7 @@ from reg.tolerances import (
     quantize_time,
     simplify_geometry,
 )
-from reg.types import Obstacle, ProprioState, StateFrame
+from reg.types import Obstacle, ProprioState, StateFrame, VelocitySource
 from reg.world import DEMO_WORLD
 
 LIMITS = DEMO_WORLD.limits
@@ -6773,3 +6773,223 @@ def test_two_builds_of_a_mobile_fixture_are_byte_identical(tmp_path: Path) -> No
         **_MOBILE_FAST,
     )
     assert first.read_bytes() == second.read_bytes()
+
+
+# --------------------------------------------------------------------------
+# A PERCEIVED BASE VELOCITY, BUILT (issue #229, docs/limitations.md §11)
+#
+# `mobile_derived_velocity` is `mobile_transit`'s run with one field changed:
+# the body-frame rates are `VelocitySource.DERIVED`, a base localized by looking
+# at the room rather than by counting wheel turns. It is the first fixture in
+# this repository that states one, and it exists so that the gap §11 records —
+# *a base velocity's provenance is recorded, and nothing reads it* — is a
+# property of an artifact somebody can open rather than of a paragraph.
+#
+# WHAT THESE TESTS ARE FOR, SAID PLAINLY: they assert the defect. They are
+# expected to fail when issue #227 makes the tag follow the value, and that is
+# the point of writing them — a fixture whose wrong tag nothing asserts is a
+# fixture that quietly starts passing for the wrong reason, and the next reader
+# has no way to tell whether the tag is right or merely unexamined.
+# --------------------------------------------------------------------------
+
+
+#: The `meta` key `reg.graph.build` writes the producer's comment block into.
+#: `reg.store` exports no constant for it, so it is spelled here rather than
+#: assumed: a typo would make the assertion below pass by finding nothing.
+_META_SOURCE_PROVENANCE = "source_provenance"
+
+
+@pytest.fixture(scope="module")
+def derived_velocity_built(tmp_path_factory) -> tuple[Path, Path]:
+    """One build of `mobile_derived_velocity`: `(csv, sqlite)`.
+
+    Through `_build_mobile` and therefore under `_MOBILE_FAST`, which is what
+    `transit_artifact` is built under too. The comparison below is between two
+    artifacts and is worth nothing if they were built at different resolutions.
+    """
+    work = tmp_path_factory.mktemp("mobile-derived")
+    return _build_mobile("mobile_derived_velocity", work)
+
+
+def test_the_stream_carries_the_perceived_provenance_the_artifact_does_not(
+    derived_velocity_built,
+) -> None:
+    """First half of §11's finding: **the provenance is recorded**.
+
+    The producer writes it and the round trip keeps it, on every frame, so the
+    artifact's *input* states in the file where these rates came from. Whether
+    anything downstream reads it is the next test.
+    """
+    csv, _ = derived_velocity_built
+    frames = list(read_frames(csv))
+    assert frames, "the producer wrote no frames"
+    assert {f.base_vel.source for f in frames} == {VelocitySource.DERIVED}
+
+
+def test_the_envelope_tag_of_a_perceived_base_velocity_is_decided_without_it(
+    derived_velocity_built, transit_artifact: Path
+) -> None:
+    """**THE DEFECT, ASSERTED IN THE WORDS docs/limitations.md §11 USES.**
+
+    *The tag does not follow the value.* `reg.envelope.envelope_layer` decides
+    the `HAS_ENVELOPE` edge's layer from `Limits.source` alone and nothing maps
+    a `VelocitySource` member to a `Layer`, so for this run — whose every base
+    rate came out of a perceiver, and whose rates
+    `reg.envelope.base_motion_bounds` integrates into the displacement term of
+    the outer set — that function answers **`A`**.
+
+    **And the edges in the file come out `B` anyway**, which is why this is a
+    defect worth a fixture rather than one worth a sentence. The base drove, so
+    every configuration states a room-frame pose and a `HAS_ENVELOPE` edge over
+    one is Layer B whatever the limits say (issue #191). The tag is therefore
+    right here by coincidence: `mobile_transit`, whose rates came off wheel
+    encoders, produces exactly the same tag on exactly the same edges. A
+    `WHERE layer = 'B'` query returns both, and nothing in either file says
+    which of the two facts the answer followed.
+
+    **This test is expected to go red when issue #227 lands** and the layer
+    becomes the weakest of its inputs. Updating it then is the deliberate act
+    this file exists to force; a green suite over a changed tag would be the
+    failure.
+    """
+    from reg.envelope import envelope_layer
+
+    _, derived = derived_velocity_built
+    limits = MOBILE_SCENARIOS["mobile_derived_velocity"].world.limits
+
+    assert envelope_layer(limits) == "A", (
+        "envelope_layer no longer answers `A` for a run whose base velocity is "
+        "DERIVED. If that is issue #227 landing, this test and the fixture's "
+        "comment in reg/scenarios.py both have to be rewritten — the gap they "
+        "record has closed, and docs/limitations.md §11 with them"
+    )
+
+    derived_edges = _edges(derived, edge_type="HAS_ENVELOPE")
+    transit_edges = _edges(transit_artifact, edge_type="HAS_ENVELOPE")
+    assert derived_edges and transit_edges
+    assert {row["layer"] for row in derived_edges} == {"B"}
+    assert Counter(row["layer"] for row in derived_edges) == Counter(
+        row["layer"] for row in transit_edges
+    ), (
+        "the two runs' envelope tags now differ. The only thing that differs "
+        "between the runs is `base_vel_source`, so something has started "
+        "reading it — which is issue #227's work and not a passing detail"
+    )
+
+
+def test_nothing_the_artifact_records_distinguishes_a_perceived_base_velocity(
+    derived_velocity_built, transit_artifact: Path
+) -> None:
+    """**The cost §11 states, and the sharpest form it takes** (issue #229).
+
+    Not merely that the tag was decided without the provenance — the provenance
+    is not in the file at all. `robot_config` carries the base's *pose* and no
+    base velocity (`reg.graph._recompute` says so where it passes `base_vel=
+    None`), so the `derived` in the stream reaches the artifact nowhere: every
+    node, every edge, every envelope and every configuration of this build
+    equals `mobile_transit`'s, and the two artifacts part company only in the
+    scenario name inside `meta[source_provenance]`.
+
+    That is [`docs/self-describing.md`](../docs/self-describing.md) §1 gap 1
+    against a real file — *the tag is written; what it was computed from is
+    not* — and it is the measurement §7 question 1 asks for: there is no
+    per-edge basis to make finer or coarser today, because there is no basis.
+
+    **The negative is the last assertion.** The two builds must not be equal
+    everywhere, or this test would pass for a bug in itself — two reads of one
+    file, or a builder that had stopped recording which run it built.
+    """
+    _, derived = derived_velocity_built
+
+    differing = _tables_that_differ(derived, transit_artifact)
+    assert differing == {"meta"}, (
+        f"the two builds differ in {sorted(differing)}. A difference outside "
+        "`meta` means something about the base velocity's provenance now "
+        "reaches the artifact, which is issue #227's work arriving"
+    )
+
+    derived_meta = _meta_rows(derived)
+    transit_meta = _meta_rows(transit_artifact)
+    keys = {k for k in set(derived_meta) | set(transit_meta)
+            if derived_meta.get(k) != transit_meta.get(k)}
+    assert keys == {_META_SOURCE_PROVENANCE}, (
+        f"the two builds' meta differs in {sorted(keys)}; the run name is the "
+        "only thing in this artifact that a reader could resolve the base "
+        "velocity's provenance back through"
+    )
+    assert "mobile_derived_velocity" in derived_meta[_META_SOURCE_PROVENANCE]
+    assert "derived" not in transit_meta[_META_SOURCE_PROVENANCE], (
+        "the control names this fixture too, so the assertion above says "
+        "nothing about which run was built"
+    )
+
+
+def _tables_that_differ(left: Path, right: Path) -> set[str]:
+    """Every table whose full contents differ between two artifacts.
+
+    Read table by table rather than by comparing bytes, because two SQLite
+    files can differ in page layout while holding the same rows and the claim
+    here is about what the artifact *records*.
+    """
+    def contents(path: Path) -> dict[str, list[tuple]]:
+        conn = store.connect(path)
+        try:
+            names = sorted(
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            )
+            return {
+                name: [tuple(row) for row in conn.execute(f"SELECT * FROM {name}")]
+                for name in names
+            }
+        finally:
+            conn.close()
+
+    a, b = contents(left), contents(right)
+    assert set(a) == set(b), "the two builds do not even have the same tables"
+    return {name for name in a if a[name] != b[name]}
+
+
+def _meta_rows(path: Path) -> dict[str, str]:
+    conn = store.connect(path)
+    try:
+        return {str(row[0]): str(row[1]) for row in conn.execute(
+            "SELECT key, value FROM meta"
+        )}
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("separation_timeline", (HUMAN_ENTITY_ID,)),
+        ("min_separation", (HUMAN_ENTITY_ID,)),
+        ("time_of_closest_approach", (HUMAN_ENTITY_ID,)),
+        ("did_contact_occur", (HUMAN_ENTITY_ID,)),
+        ("frames_at_risk", (HUMAN_ENTITY_ID, 0.5)),
+        ("first_envelope_intersection", (HUMAN_ENTITY_ID,)),
+        ("reachable_entities", (0.0, 5.0)),
+    ],
+)
+def test_the_standard_questions_are_answered_over_the_derived_velocity_artifact(
+    derived_velocity_built, name: str, arguments: tuple
+) -> None:
+    """The other acceptance criterion: the fixture is a run, not a curiosity.
+
+    `ANSWERED` and not merely "did not raise". A fixture that built into a file
+    nothing can be asked would demonstrate the tagging gap and nothing else, and
+    a could-not-evaluate here is the honest report of exactly that file.
+    """
+    from reg import query
+
+    _, artifact = derived_velocity_built
+    conn = store.connect(artifact)
+    try:
+        answer = getattr(query, name)(conn, *arguments)
+    finally:
+        conn.close()
+    assert answer.verdict == query.ANSWERED, f"{name}: {answer.reason}"
+    assert answer.value is not None

@@ -11,15 +11,14 @@ wins when two of them disagree.
 
 There is one rule: **where [`plan.md`](plan.md) and
 [`prior-art.md`](prior-art.md) disagree, prior art wins and `plan.md` gets
-edited.** Five of the rows below are marked normative and they do not all bind
-the same way; the Standing column says how each one does.
+edited.**
 
 ## The documents
 
 | Document | What it answers | Standing |
 |---|---|---|
 | [`plan.md`](plan.md) | What is being built and why: the four claims, the ten phases, the non-goals table. The source document. | Binding for scope. Subordinate to `prior-art.md`. |
-| [`prior-art.md`](prior-art.md) | What already exists, what this borrows, and what it must not claim is novel. Four dated passes. | **Normative** where it disagrees with `plan.md`. |
+| [`prior-art.md`](prior-art.md) | What already exists, what this borrows, and what it must not claim is novel. Six dated passes. | **Normative** where it disagrees with `plan.md`. The one document **exempt from the word budget** in `tests/test_doc_shape.py`: a log of outside work does not get shorter when this package does. |
 | [`retention.md`](retention.md) | What the artifact costs to keep, measured — Claim 1's figures, the arithmetic, and how the numbers moved. | Normative for every retention figure published anywhere. |
 | [`sufficiency.md`](sufficiency.md) | Which audit questions the artifact answers on its own authority, and which are only as strong as whatever supplied the entity positions. Claim 3. | **Normative for what this project may claim.** |
 | [`limitations.md`](limitations.md) | Each thing the artifact cannot do, what it costs, and what a claim would need in order not to inherit it. | **Normative for what this project may claim.** |

@@ -12,6 +12,18 @@ because half of what this file records is *when* something was found: a citation
 that was there before the claim was written reads differently from one added
 after the claim was published.
 
+That is also why this file is **exempt from the documentation word budget** in
+`tests/test_doc_shape.py`, and the only document that is. The budget's premise is
+that a document should get shorter when the thing it describes gets simpler; what
+this file describes lives outside this repository and does not move when the
+package moves, so neither term of that budget measures it.
+
+The exemption reaches the budget alone: `tests/test_prior_art.py` still requires
+an entry per named body of work, both directions per entry, a verdict, and
+reading status recorded as a source boundary. It also cost what it saved — the
+argument group's ceiling fell by the 26,768 words that left with this file, so
+the five documents remaining there gained no room.
+
 Later passes correct earlier entries in place, marked and dated — §1's
 mandate-versus-proposal amendment is the pattern, and the correction runs in that
 direction only, because an entry that is quietly rewritten stops being evidence

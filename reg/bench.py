@@ -2673,8 +2673,16 @@ ROSBAG2_PROVENANCE = (
     "/joint_states (sensor_msgs/JointState) and /tf (tf2_msgs/TFMessage). "
     "Whole-file byte counts. There is NO ROS 2 on the host that writes this "
     "repository's unattended changes, so this measurement cannot be regenerated "
-    "here and is recorded as given data; the procedure that produced it is "
-    "published in docs/sensor-baseline.md so a third party can."
+    "here and is recorded as given data; the script that produced it is "
+    "scripts/record_rosbag2.py and the procedure is published in "
+    "docs/sensor-baseline.md so a third party can. REPRODUCING THESE BYTES "
+    "EXACTLY NEEDS THE BAG DIRECTORY NAMES b_dv_<profile> AND b_lr_<profile>: "
+    "rosbag2 embeds metadata.yaml in the .mcap and the bag name occurs four "
+    "times in it, so the file grows by four bytes per character of the name "
+    "(measured: 9 characters 1,637,967 B, 6 characters 1,637,955 B, 15 "
+    "characters 1,637,991 B). Under 0.002% at 1.6 MB and it moves no published "
+    "ratio, but a run under a different name is right about the encoding and "
+    "wrong in the last two digits."
 )
 
 #: How far the uncompressed projection may sit from the 3,000-frame bag and

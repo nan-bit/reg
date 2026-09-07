@@ -512,7 +512,8 @@ number it never computed.
 
 ### The rosbag2 run
 
-`ros2 bag record` itself, on both fixtures, by the procedure above.
+`ros2 bag record` itself, on both fixtures, by
+[`scripts/record_rosbag2.py`](../scripts/record_rosbag2.py).
 **2026-09-06, `ros:jazzy` under Docker 29.4.0 on an arm64 Darwin host, via
 `rosbag2_py`**, `/joint_states` + `/tf`, whole files as the filesystem reports
 them (`reg.bench.ROSBAG2_PROVENANCE`). No ROS 2 is installed on the host that

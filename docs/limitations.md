@@ -50,26 +50,27 @@ rule 2 carries the same qualifier, because *same seed, same bytes* is checked by
 two CI runs on one platform.
 
 **What the artifact records.** `meta` carries a buildinfo read off the running
-interpreter at build time — `reg.store.ENVIRONMENT_KEYS`: the interpreter,
-numpy, shapely, GEOS, and the platform's system and machine. It is a
-**buildinfo** in the Reproducible Builds sense, adopted rather than invented
-([`prior-art.md`](prior-art.md) §27), and putting it inside `meta` rather than
-beside the artifact is a stated deviation from that practice with Claim 2 as its
-reason.
+interpreter at build time — `reg.store.ENVIRONMENT_KEYS`, which names the six
+keys and why each is one. Putting it inside `meta` rather than beside the
+artifact is a stated deviation from the Reproducible Builds practice
+([`prior-art.md`](prior-art.md) §27) with Claim 2 as its reason.
 
 **What the code does with it.** `reg.graph.envelope_at` refuses to recompute a
-discarded polygon off the recording environment. It compares four of the six
+discarded polygon off the recording environment. It compares five of the six
 keys — `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`: the platform's system and
-machine, shapely and GEOS — and where any of them differs it raises, naming the
+machine, shapely, GEOS and numpy — and where any differs it raises, naming the
 key and both values. **It refuses rather than warning**, because a recomputed
 polygon that reaches a caller under a warning is a polygon that reaches a query
-result, and nothing downstream carries the qualifier. **The interpreter and
-numpy are recorded and do not trigger it**: a Python patch release would make
-every artifact unrecomputable on any machine that has been updated, which
-teaches whoever meets the refusal to switch it off. numpy is the weaker call and
-is stated rather than left to be found — `numpy.cos` and `numpy.sin` place every
-link endpoint, so a numpy difference *can* move the geometry and this guard does
-not act on it, and the file states both versions either way.
+result, and nothing downstream carries the qualifier.
+
+**Compared and recorded-only are two stated lists, not a list and a remainder.**
+The second, `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS`, holds the interpreter
+alone: a Python patch release arrives from a distribution, on machines nobody
+chose to upgrade, so triggering on it would make every artifact unrecomputable
+there and teach whoever met the refusal to switch the check off. numpy is
+compared, at its full version: it places every link endpoint, a reader installs
+it deliberately, and a coarser comparison would assert a bit-identity across
+patch releases that numpy does not promise.
 
 **What the refusal does not buy, and the wording is held to it.** It says the
 environments differ and names the key. It does not say which difference moved
@@ -77,12 +78,13 @@ the geometry — nothing in that path has compared any geometry, and attribution
 needs a differ, which `diffoscope` is and this project has no analogue of
 ([`prior-art.md`](prior-art.md) §27). So this is the **weaker half of
 attribution**: an unresolvable disagreement becomes a stated could-not-evaluate,
-and not an answer about which library is responsible. Equal environments are
-**necessary and not sufficient**: the C library is not among the keys, because
-`platform.libc_ver()` reports nothing on macOS and under musl and a key that is
-empty on some platforms would mean both *could not tell* and *nothing to tell*,
-so two artifacts can agree on all six keys and have been linked against
-different libms.
+and not an answer about which library is responsible. Agreement on the
+*compared* keys is **necessary and not sufficient**, on two counts. The C
+library is recorded nowhere, because `platform.libc_ver()` reports nothing on
+macOS and under musl and a key empty on some platforms would mean both *could
+not tell* and *nothing to tell*, so two artifacts can agree on all six and have
+been linked against different libms. The interpreter is the other: recorded, not
+compared, and the price of not crying wolf.
 
 **What remains on a stored frame.** Only recomputation is conditional. A
 retained polygon was computed at build time, is evidence in its own right, and
@@ -998,17 +1000,20 @@ least once nobody remembers it was a choice.**
 ### §1 — the environment record, and what it replaced
 
 Before issues #200 and #201 an artifact recorded `reg_version` and the envelope
-parameters and nothing about the machine, so an assessor recomputing a discarded
-envelope on another architecture got a polygon that differed from the one built
-at the time, for a reason the artifact could not state. #200 put the buildinfo in
-`meta` and #201 made `envelope_at` act on it. What used to be a number is now a
-refusal: a worse answer and a true one, and per *a check must be able to fail*
-the third state never resolves to the first.
+parameters and nothing about the machine, so an assessor recomputing on another
+architecture got a polygon that differed for a reason the artifact could not
+state. #200 put the buildinfo in `meta` and #201 made `envelope_at` act on it.
+What used to be a number is now a refusal: a worse answer and a true one, and
+per *a check must be able to fail* the third state never resolves to the first.
 
-The platform axis is measured rather than argued because issue #175 measured it —
-hex-float tables captured on x86_64 Linux differed in their last bits on arm64
-Darwin, and the fix was to record the capture platform per table rather than to
-loosen the comparison.
+The trigger set was #201's, and the keys it left out were a remainder rather
+than a list until issue #241: `env_numpy_version` was recorded by #200, absent
+from #201's named triggers, and compared by nothing for two milestones — in the
+library that places every link endpoint. The cold read (#231) found it on its
+first run against a real artifact — what that report is for. #241 made numpy a
+trigger and made the rest a written-down tuple a test holds to a partition of
+`reg.store.ENVIRONMENT_KEYS`, so the next key added cannot land in neither list
+unnoticed.
 
 ### §3 — what the horizon-limited bound closed
 

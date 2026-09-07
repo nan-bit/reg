@@ -3163,20 +3163,33 @@ def test_the_radius_answers_radially_and_says_so(artifact: Path) -> None:
 def test_the_cold_read_names_the_recompute_keys_the_builder_refuses_on() -> None:
     """The copy, checked. `reg.query` cannot import `reg.graph` — the boundary
     test at the top of this file walks the whole AST, so a deferred import would
-    not get past it either — so the four keys `envelope_at` refuses on are
-    spelled a second time in `reg.query`. This is what pays for that.
+    not get past it either — so the keys `envelope_at` refuses on are spelled a
+    second time in `reg.query`. This is what pays for that.
 
     The same discipline as
     `test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes`: a
     rename on either side would otherwise turn the report into a quiet
     disagreement with the reader it is describing.
+
+    **Both halves of the split, since issue #241.** The report names the keys it
+    compared *and* the recorded ones it did not, so an assessor is not left to
+    subtract one list from another; a copy of only the first would let the
+    second go stale silently, which is the shape of the defect #241 fixed.
     """
     assert query.COLD_READ_RECOMPUTE_KEYS == graph.RECOMPUTE_ENVIRONMENT_KEYS, (
         "reg.query's copy of the recompute keys has drifted from "
         "reg.graph.RECOMPUTE_ENVIRONMENT_KEYS. The cold read would then report "
         "a recomputation as permitted that envelope_at refuses, or the reverse."
     )
+    assert (
+        query.COLD_READ_RECORDED_ONLY_KEYS == graph.RECORDED_ONLY_ENVIRONMENT_KEYS
+    ), (
+        "reg.query's copy of the recorded-but-not-compared keys has drifted "
+        "from reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS. The cold read would "
+        "then name the wrong keys as the reach of its own pass."
+    )
     assert set(query.COLD_READ_RECOMPUTE_KEYS) <= set(store.ENVIRONMENT_KEYS)
+    assert set(query.COLD_READ_RECORDED_ONLY_KEYS) <= set(store.ENVIRONMENT_KEYS)
 
 
 def test_the_cold_read_reports_the_environment_the_builder_reads_back(

@@ -333,7 +333,23 @@ RATE = 88.6
 #           reads. An exemption that pays for itself this way is one the next
 #           tier can be trusted with; one that does not would make `EXEMPT` the
 #           group with room — measured, no headroom
-ARGUMENT_MAX = 47194
+#   47,187  today, 2026-09-07, after #241 made numpy a compared key and gave the
+#           recorded-but-not-compared set a name. `limitations.md` §1 gained the
+#           split and its argument and `lossiness.md` *Discarded* #9 gained the
+#           second list: +67 between them, paid for and seven words over. What
+#           went was restatement of a document each already links to —
+#           `lossiness.md`'s second telling of the buildinfo deviation and its
+#           cost, which `self-describing.md` §3 holds, and its second telling of
+#           the attribution limit, which is §1's; and `limitations.md`'s repeat
+#           of the #175 platform measurement below its `## Why` line, four
+#           paragraphs under the normative statement of the same thing. One
+#           cut was tried and reverted — the Layer B column count in *What a
+#           claim would need instead*, which
+#           `tests/test_baseline_stream_description.py` requires every document
+#           naming the baseline to carry, and which is therefore restatement on
+#           purpose. Seven words lower than the last ceiling rather than level
+#           with it, for the reason the #233 row gives — measured, no headroom
+ARGUMENT_MAX = 47187
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -360,7 +376,15 @@ PARAGRAPH_MAX_WORDS = 120
 #        went by cutting rather than splitting, because each was restating a
 #        document it links to; docs/prior-art.md's dated correction was written
 #        as two paragraphs rather than one for the same ceiling
-LONG_PARAGRAPHS_MAX = 94
+#    92  today, 2026-09-07, after #241: docs/limitations.md and docs/lossiness.md
+#        went 7 -> 5 between them, and neither change was made for this ceiling.
+#        §1's *What the code does with it* became two paragraphs because what is
+#        compared and what is only recorded are two decisions, and lossiness.md's
+#        buildinfo paragraph fell below the threshold when its restatement of
+#        self-describing.md §3 came out. A ceiling that falls out of work done
+#        for another reason is still a ceiling that has fallen; leaving it at 94
+#        would bank two paragraphs of headroom no diff would show
+LONG_PARAGRAPHS_MAX = 92
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

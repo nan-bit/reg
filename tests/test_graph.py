@@ -2433,22 +2433,19 @@ def test_a_recompute_on_the_recording_environment_answers_as_it_always_did(
     assert polygon.area > 0.0
 
 
-@pytest.mark.parametrize(
-    "key",
-    [
-        store.META_ENV_PLATFORM_SYSTEM,
-        store.META_ENV_PLATFORM_MACHINE,
-        store.META_ENV_SHAPELY,
-        store.META_ENV_GEOS,
-    ],
-)
+@pytest.mark.parametrize("key", graph.RECOMPUTE_ENVIRONMENT_KEYS)
 def test_a_recompute_off_the_recording_environment_is_refused(
     tmp_path: Path, key: str
 ) -> None:
     """**THE NEGATIVE.** Each triggering key, one at a time.
 
-    Parametrized rather than written once for the platform, because the four are
-    a decision (`graph.RECOMPUTE_ENVIRONMENT_KEYS`) and a test that only edited
+    Parametrized over the tuple itself rather than over a copy of it, because a
+    copy is what let `env_numpy_version` be recorded and not compared for two
+    milestones (issue #241): a list written out here would have gone on testing
+    four keys while the guard compared five, and the new one would have arrived
+    untested. Parametrized at all rather than written once for the platform,
+    because the set is a decision (`graph.RECOMPUTE_ENVIRONMENT_KEYS`) and a
+    test that only edited
     `env_platform_machine` would go green for a guard that compared the machine
     and nothing else — which is the guard somebody refactoring this would leave
     behind. The refusal must name the key and *both* values: a reader told only
@@ -2523,37 +2520,162 @@ def test_the_refusal_does_not_say_which_difference_moved_the_geometry(
         )
 
 
-def test_a_python_or_numpy_difference_alone_still_recomputes(tmp_path: Path) -> None:
-    """The decision, pinned in the direction that is easy to widen by accident.
+@pytest.mark.parametrize("key", graph.RECORDED_ONLY_ENVIRONMENT_KEYS)
+def test_a_difference_in_a_recorded_only_key_alone_still_recomputes(
+    tmp_path: Path, key: str
+) -> None:
+    """The other side of the decision, pinned in the direction easy to widen.
 
-    Both keys are recorded and neither triggers. For the interpreter that is the
-    cry-wolf argument in its sharpest form: a patch release would make every
-    artifact unrecomputable on any machine that has been updated. For numpy it
-    is the *weaker* half and it is pinned here so it is stated rather than
-    discovered — `numpy.cos` and `numpy.sin` place every link endpoint in
-    `reg.kinematics`, so a numpy difference can move the geometry and this guard
-    does not act on it. Whoever changes that changes this test deliberately,
-    which is the point of it existing.
+    A key in `graph.RECORDED_ONLY_ENVIRONMENT_KEYS` is recorded and does not
+    trigger, and the guard must not refuse on it. For the interpreter — which is
+    the whole of that tuple today — the argument is cry-wolf in its sharpest
+    form: making it a trigger would make every artifact unrecomputable on any
+    machine the distribution had security-patched, and a check that gets
+    switched off buys nothing.
+
+    **This test read `env_numpy_version` as well until issue #241**, which is
+    what the omission looked like from inside: a green test asserting the guard
+    ignored the library that places every link endpoint. It reads the tuple now,
+    so the assertion follows the decision rather than outliving it.
     """
     out = _sliding_artifact(tmp_path)
     t, _ = _discarded_envelope(out)
-    _restate_meta(
-        out,
-        **{
-            store.META_ENV_PYTHON: "3.11.0",
-            store.META_ENV_NUMPY: "0.0.1",
-        },
-    )
+    _restate_meta(out, **{key: "0.0.1-not-this-one"})
 
     conn = store.connect(out)
     try:
         assert graph.recompute_environment_differences(conn) == ()
         assert graph.envelope_at(conn, t).area > 0.0
-        # And the file still states them, which is what a reader who *does* care
-        # about numpy has instead of a refusal.
-        assert graph.recorded_environment(conn)[store.META_ENV_NUMPY] == "0.0.1"
+        # And the file still states it, which is what a reader who *does* care
+        # about this key has instead of a refusal.
+        assert graph.recorded_environment(conn)[key] == "0.0.1-not-this-one"
     finally:
         conn.close()
+
+
+def test_numpy_is_compared_and_at_its_full_version(tmp_path: Path) -> None:
+    """Issue #241's decision, named rather than left to a parametrization.
+
+    `numpy.cos` and `numpy.sin` in `reg.kinematics.forward_kinematics` place
+    every link endpoint the envelope polygons are built around, so a numpy
+    difference can move the geometry the artifact recorded — which is why it is
+    compared, and compared at the **full version string**. A coarsening to the
+    minor series would assert that numpy's patch releases are bit-identical in
+    `cos` and `sin` over the arguments this package passes them: numpy does not
+    promise that, nothing here measures it, and the granularity that made the
+    assertion would be a threshold nobody supplied.
+
+    So both halves are pinned, and the second is the one a later coarsening
+    would quietly undo: the edited value differs from this interpreter's only
+    below the minor series, so a guard comparing `1.26` would let it through.
+    """
+    assert store.META_ENV_NUMPY in graph.RECOMPUTE_ENVIRONMENT_KEYS
+
+    out = _sliding_artifact(tmp_path)
+    t, envelope_id = _discarded_envelope(out)
+    running = store.build_environment()[store.META_ENV_NUMPY]
+    patched = f"{running}.99"  # a patch away, and no further
+    assert patched.startswith(running) and patched != running
+    _restate_meta(out, **{store.META_ENV_NUMPY: patched})
+
+    conn = store.connect(out)
+    try:
+        differences = graph.recompute_environment_differences(conn)
+        assert [name for name, _, _ in differences] == [store.META_ENV_NUMPY]
+        with pytest.raises(graph.GraphQueryError) as excinfo:
+            graph.envelope_at(conn, t)
+    finally:
+        conn.close()
+
+    message = str(excinfo.value)
+    assert store.META_ENV_NUMPY in message  # named like the others
+    assert patched in message  # what the file says
+    assert running in message  # what this reader is
+    assert envelope_id in message
+
+
+def _partition_verdict(
+    recorded: tuple[str, ...],
+    compared: tuple[str, ...],
+    recorded_only: tuple[str, ...],
+) -> tuple[str, list[str]]:
+    """Do the two stated lists partition the recorded keys, exactly?
+
+    A predicate that returns what it would say, so the negative below can feed
+    it the condition it guards against. Three ways it can go wrong and they are
+    different findings: a key in neither list is recorded and silently not
+    compared — issue #241's actual defect; a key in both is a contradiction
+    about whether the guard acts on it; a classified key that is not recorded is
+    a refusal nobody can satisfy, because it compares an absent value against a
+    present one on the recording machine itself.
+    """
+    problems: list[str] = []
+    unclassified = [key for key in recorded if key not in compared + recorded_only]
+    if unclassified:
+        problems.append(
+            f"recorded and in neither list: {unclassified}. A key here is "
+            "recorded and not compared without anybody having decided that — "
+            "the state issue #241 found env_numpy_version in. Put it in "
+            "graph.RECOMPUTE_ENVIRONMENT_KEYS or in "
+            "graph.RECORDED_ONLY_ENVIRONMENT_KEYS, with the reason."
+        )
+    both = [key for key in compared if key in recorded_only]
+    if both:
+        problems.append(f"in both lists at once: {both}")
+    unrecorded = [key for key in compared + recorded_only if key not in recorded]
+    if unrecorded:
+        problems.append(
+            f"classified and not recorded: {unrecorded}. Nothing writes it, so "
+            "a comparison against it can never be satisfied."
+        )
+    return ("DISAGREE", problems) if problems else ("AGREE", [])
+
+
+def test_the_recorded_keys_are_partitioned_into_compared_and_recorded_only() -> None:
+    """**The recorded-but-not-compared set is stated, not derived** (issue #241).
+
+    `graph.RECOMPUTE_ENVIRONMENT_KEYS` and
+    `graph.RECORDED_ONLY_ENVIRONMENT_KEYS` are two literal tuples, and between
+    them they must account for every key in `store.ENVIRONMENT_KEYS` exactly
+    once. That is what makes *recorded and not compared* a decision somebody
+    took rather than a residue: a seventh key added to the buildinfo and to
+    neither list fails here, on the commit that adds it, instead of being found
+    by a cold read against a real artifact two milestones later.
+    """
+    verdict, problems = _partition_verdict(
+        store.ENVIRONMENT_KEYS,
+        graph.RECOMPUTE_ENVIRONMENT_KEYS,
+        graph.RECORDED_ONLY_ENVIRONMENT_KEYS,
+    )
+    assert verdict == "AGREE", problems
+    # And neither part is empty. A partition with one side empty satisfies the
+    # predicate above while meaning the split itself had been abandoned.
+    assert graph.RECOMPUTE_ENVIRONMENT_KEYS
+    assert graph.RECORDED_ONLY_ENVIRONMENT_KEYS
+
+
+@pytest.mark.parametrize(
+    ("compared", "recorded_only", "expected"),
+    [
+        (("a", "b"), (), "in neither list"),
+        (("a",), ("a", "b", "c"), "in both lists at once"),
+        (("a", "b", "c", "d"), (), "classified and not recorded"),
+    ],
+    ids=["unclassified", "in-both", "not-recorded"],
+)
+def test_the_partition_check_can_fail(
+    compared: tuple[str, ...], recorded_only: tuple[str, ...], expected: str
+) -> None:
+    """**THE NEGATIVE**, one per way the split can go wrong.
+
+    The first case is what this issue is about, and it is the one a check that
+    compared lengths, or only asserted a subset, would pass: two of three
+    recorded keys classified and the third compared by nothing. The predicate
+    has to say so and name the key.
+    """
+    verdict, problems = _partition_verdict(("a", "b", "c"), compared, recorded_only)
+    assert verdict == "DISAGREE"
+    assert any(expected in problem for problem in problems)
 
 
 def test_an_artifact_recording_no_environment_is_a_distinct_third_state(
@@ -2692,7 +2814,13 @@ def test_the_triggering_keys_are_a_subset_of_the_recorded_ones(
     """A key that triggers a refusal and is not written is a refusal nobody can
     satisfy: it would compare an absent value against a present one on the
     recording machine itself. Held against `store.ENVIRONMENT_KEYS` rather than
-    against a second list, for the reason that list exists."""
+    against a second list, for the reason that list exists.
+
+    The inequality is the other half and is not decoration: the two sets being
+    equal would mean `graph.RECORDED_ONLY_ENVIRONMENT_KEYS` had emptied, and
+    every argument written beside it — the interpreter's cry-wolf case, and that
+    agreement on the compared keys is necessary and not sufficient — would be
+    describing a split that no longer exists."""
     assert set(graph.RECOMPUTE_ENVIRONMENT_KEYS) <= set(store.ENVIRONMENT_KEYS)
     assert set(graph.RECOMPUTE_ENVIRONMENT_KEYS) != set(store.ENVIRONMENT_KEYS)
 

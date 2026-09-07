@@ -286,6 +286,17 @@ EXEMPT: dict[str, str] = {
 #         rounded up to the next tenth. The prose is a table and three
 #         paragraphs about it, and it sits below that file's rationale line
 #         where §8 already lives
+#   85.5  today, 2026-09-07, after #249 priced the two layer-basis
+#         granularities. `reg.bench` gained seven public symbols again — the
+#         study, the per-level costing, the two basis derivations, and their
+#         three result types — against 551 words in `docs/self-describing.md`
+#         §8, which is where the measurement is published and where the
+#         decision will be taken. 27,083 / 317 = 85.44, rounded up to the next
+#         tenth. It is the same shape as #230 one tier up and it is paid for
+#         the same way, in the same file, below the same rationale line; what
+#         it did *not* need is a second statement of the finding, because the
+#         report `reg.bench` writes carries the argument and §8 carries the
+#         numbers a decision is taken from
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -296,7 +307,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 85.6
+RATE = 85.5
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #

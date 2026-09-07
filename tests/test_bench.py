@@ -3701,6 +3701,7 @@ BYTES_PER_HOUR_SHAPES = frozenset(
         "_resolution_section",
         "_control_rate_section",
         "_outer_boundary_section",
+        "_layer_basis_section",
         "main",
     }
 )
@@ -4434,3 +4435,724 @@ def test_the_cli_prices_the_options_and_reports_the_curve_they_moved(
     assert "## Resolution" in report or "resolution" in report.lower()
     err = capsys.readouterr().err
     assert "nothing was adopted and no figure was republished" in err
+
+
+# --------------------------------------------------------------------------
+# The layer-basis granularity study (issue #249, tier 2 of #227)
+#
+# WHAT THESE TESTS ARE FOR. The study prices two granularities for the layer
+# basis and adopts neither, so the property under test is not a number. It is
+# that each option's rows are the rows of the rule it names, that `today` is the
+# artifact the curve already measured, that the study leaves every file it was
+# given exactly as it found it — and, the one this issue turns on, that the
+# **answers** column can be wrong: an option that misstates an edge's basis is
+# counted apart from one that is silent about it, and there is a negative below
+# that feeds the study exactly that condition and asserts it says so.
+#
+# The live numbers are deliberately not pinned, on this file's opening argument:
+# they move with the schema, the envelope parameters and SQLite's page size, and
+# the published run is `--layer-basis` at the resolution fixture's own
+# parameters, not this 60-frame one.
+# --------------------------------------------------------------------------
+
+_LAYER_BASIS_FRAMES = 60
+
+
+def _layer_basis_study(work: Path) -> bench.LayerBasisStudy:
+    return bench.run_layer_basis_study(
+        _LAYER_BASIS_FRAMES, work, seed=0, timing_repeats=1, **_FAST
+    )
+
+
+@pytest.fixture(scope="module")
+def basis_study(tmp_path_factory) -> tuple[bench.LayerBasisStudy, Path]:
+    """One study, shared. It builds an artifact and nine variants of it."""
+    work = tmp_path_factory.mktemp("layer-basis")
+    return _layer_basis_study(work), work
+
+
+def _basis_transition_view(work: Path) -> Path:
+    return work / "views" / f"{bench.TRANSITION_LEVEL}.sqlite"
+
+
+def _table_names(path: Path) -> set[str]:
+    conn = sqlite3.connect(path)
+    try:
+        return {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        conn.close()
+
+
+def test_the_basis_study_prices_every_level_under_every_option(basis_study) -> None:
+    """Nine measurements, level-major, in the order the options are stated in."""
+    study, _ = basis_study
+    assert [(c.level, c.option) for c in study.costs] == [
+        (level, option)
+        for level in bench.RESOLUTION_LEVELS
+        for option in bench.LAYER_BASIS_OPTIONS
+    ]
+
+
+def test_today_is_the_artifact_the_curve_already_measured(basis_study) -> None:
+    """The baseline is not a re-measurement. It is the same file.
+
+    If `today`'s bytes were anything but the curve's own, every movement below
+    would be measured against an artifact no document publishes.
+    """
+    study, _ = basis_study
+    for point in study.curve.points:
+        cost = study.cost(point.level, bench.LAYER_BASIS_TODAY)
+        assert cost.size_bytes == point.size_bytes, point.level
+        assert cost.bytes_per_hour == pytest.approx(point.bytes_per_hour)
+        assert study.factor(point.level, bench.LAYER_BASIS_TODAY) == 1.0
+
+
+def test_today_answers_no_edge_at_all(basis_study) -> None:
+    """A tag with no basis under it answers nothing, which is gap 1.
+
+    The benefit column's zero, asserted rather than read off a table — it is
+    what both options are bought against. Every tagged edge is *silent* under
+    it, and none is misstated: today's artifact makes no claim to be wrong.
+    """
+    study, _ = basis_study
+    for level in bench.RESOLUTION_LEVELS:
+        cost = study.cost(level, bench.LAYER_BASIS_TODAY)
+        assert cost.basis_rows == 0
+        assert cost.edges_answered == 0
+        assert cost.edges_misstated == 0
+        assert cost.edges_unreachable == cost.tagged_edges
+        assert cost.sharing is None
+
+
+def test_option_a_answers_every_tagged_edge_and_option_b_does_not(
+    basis_study,
+) -> None:
+    """The finding, as an invariant rather than as a percentage.
+
+    Per edge means a row per edge, so A answers all of them; per envelope means
+    the basis hangs somewhere most tagged edges do not reach, so B answers a
+    strict subset. A build where B answered as many as A would mean every tagged
+    edge in it names an envelope, which no fixture here produces.
+    """
+    study, _ = basis_study
+    for level in bench.RESOLUTION_LEVELS:
+        today = study.cost(level, bench.LAYER_BASIS_TODAY)
+        a = study.cost(level, bench.LAYER_BASIS_PER_EDGE)
+        b = study.cost(level, bench.LAYER_BASIS_PER_ENVELOPE)
+        assert a.edges_answered == today.tagged_edges, level
+        assert a.edges_unreachable == 0, level
+        assert b.edges_answered <= a.edges_answered, level
+        assert b.basis_rows <= a.basis_rows, level
+        assert b.size_bytes <= a.size_bytes, level
+    # And on a build that has edges at all, B is strictly smaller in both.
+    a = study.cost(bench.TRANSITION_LEVEL, bench.LAYER_BASIS_PER_EDGE)
+    b = study.cost(bench.TRANSITION_LEVEL, bench.LAYER_BASIS_PER_ENVELOPE)
+    assert a.edges_answered > 0
+    assert b.edges_answered < a.edges_answered
+
+
+def test_option_b_writes_one_basis_per_computed_envelope(basis_study) -> None:
+    """B's rule, checked against the rows rather than against its description.
+
+    A row per input per **computed** envelope: a declared region and a clamped
+    one are not reachable sets, so no envelope-level basis hangs on them.
+    """
+    study, work = basis_study
+    for level in bench.RESOLUTION_LEVELS:
+        b = study.cost(level, bench.LAYER_BASIS_PER_ENVELOPE)
+        assert b.computed_envelopes <= b.envelope_rows, level
+        if b.computed_envelopes:
+            assert b.basis_rows % b.computed_envelopes == 0, level
+            assert b.basis_rows >= b.computed_envelopes, level
+    variant = (
+        work
+        / "layer-basis"
+        / f"{bench.TRANSITION_LEVEL}-{bench.LAYER_BASIS_PER_ENVELOPE}.sqlite"
+    )
+    conn = store.connect(variant)
+    try:
+        keys = {
+            int(row[0])
+            for row in conn.execute(
+                f"SELECT DISTINCT envelope_key FROM {bench.LAYER_BASIS_ENVELOPE_TABLE}"
+            )
+        }
+        declared = {
+            int(row[0])
+            for row in conn.execute(
+                "SELECT envelope_key FROM envelope WHERE source != 'computed'"
+            )
+        }
+        assert keys, "option B wrote no basis at all, so this asserts nothing"
+        assert not (keys & declared)
+    finally:
+        conn.close()
+
+
+def test_the_occurrence_level_has_no_edge_for_either_option_to_reach(
+    basis_study,
+) -> None:
+    """The finding the headline figure depends on, asserted as a property.
+
+    The occurrence view drops every edge and every envelope
+    (`materialize_level`), so neither granularity writes a basis row there. What
+    it does *not* say is that the level is free: both options still create the
+    table, and the two options cost the same because an empty table is an empty
+    table.
+    """
+    study, _ = basis_study
+    sizes = set()
+    for option in bench.LAYER_BASIS_OPTIONS:
+        cost = study.cost(bench.OCCURRENCE_LEVEL, option)
+        assert cost.tagged_edges == 0
+        assert cost.envelope_rows == 0
+        assert cost.basis_rows == 0
+        assert cost.edges_answered == 0
+        if option != bench.LAYER_BASIS_TODAY:
+            sizes.add(cost.size_bytes)
+    assert len(sizes) == 1, sizes
+
+
+def test_the_basis_study_writes_nothing_into_the_artifact_it_priced(basis_study) -> None:
+    """**No behaviour change.** The build and its views keep today's schema.
+
+    Either table reaching the artifact would be the schema change issue #227 has
+    not taken yet, arriving under a measurement's name.
+    """
+    study, work = basis_study
+    priced = [
+        work / f"long_run_{_LAYER_BASIS_FRAMES}.sqlite",
+        *(work / "views" / f"{level}.sqlite" for level in bench.RESOLUTION_LEVELS),
+    ]
+    for path in priced:
+        names = _table_names(path)
+        assert bench.LAYER_BASIS_EDGE_TABLE not in names, path
+        assert bench.LAYER_BASIS_ENVELOPE_TABLE not in names, path
+    variant = (
+        work
+        / "layer-basis"
+        / f"{bench.TRANSITION_LEVEL}-{bench.LAYER_BASIS_PER_EDGE}.sqlite"
+    )
+    assert bench.LAYER_BASIS_EDGE_TABLE in _table_names(variant), (
+        "the variant has no basis table either, so this test would pass against "
+        "a study that priced nothing at all"
+    )
+
+
+def test_nothing_here_moves_what_the_cold_read_reports(basis_study) -> None:
+    """The acceptance criterion stated as a check: `layer-tag-basis` is where it
+    was, on the artifact this study priced, after the study priced it."""
+    _, work = basis_study
+    conn = store.connect(work / f"long_run_{_LAYER_BASIS_FRAMES}.sqlite")
+    try:
+        report = query.cold_read(conn)
+    finally:
+        conn.close()
+    assert report.state(query.CLAIM_LAYER_BASIS) == query.READABLE_NOT_CHECKABLE
+
+
+def test_the_basis_study_is_deterministic(tmp_path: Path) -> None:
+    """Same seed and parameters, same bytes in all nine variants (rule 2)."""
+    a = _layer_basis_study(tmp_path / "a")
+    b = _layer_basis_study(tmp_path / "b")
+    assert [
+        (c.level, c.option, c.size_bytes, c.basis_rows, c.edges_answered)
+        for c in a.costs
+    ] == [
+        (c.level, c.option, c.size_bytes, c.basis_rows, c.edges_answered)
+        for c in b.costs
+    ]
+
+
+# --- what a basis is ------------------------------------------------------
+
+
+def _one_edge(conn, edge_type: str):
+    row = conn.execute(
+        "SELECT edge_id, type, layer, src_kind, src_key, dst_kind, dst_key "
+        "FROM edge WHERE type = ? ORDER BY edge_id LIMIT 1",
+        (edge_type,),
+    ).fetchone()
+    assert row is not None, f"this fixture holds no {edge_type} edge"
+    return row
+
+
+def test_a_has_envelope_basis_names_the_limit_source_and_not_the_type(
+    basis_study,
+) -> None:
+    """`HAS_ENVELOPE` is the one type whose layer is not a property of its type.
+
+    So its basis carries `limits_source` and carries no `edge_type` row: a row
+    naming the type would price an input that decided nothing (issue #84).
+    """
+    _, work = basis_study
+    conn = store.connect(_basis_transition_view(work))
+    try:
+        basis = bench.edge_basis(conn, _one_edge(conn, "HAS_ENVELOPE"))
+        names = [item.name for item in basis]
+        assert bench.BASIS_LIMITS_SOURCE in names
+        assert bench.BASIS_BASE_VEL_SOURCE in names
+        assert bench.BASIS_EDGE_TYPE not in names
+        stated = store.get_meta(conn, graph.META_LIMITS_SOURCE)
+        assert [i.value for i in basis if i.name == bench.BASIS_LIMITS_SOURCE] == [
+            stated
+        ]
+    finally:
+        conn.close()
+
+
+def test_a_typed_edge_s_basis_is_its_type(basis_study) -> None:
+    """Eight of the nine edge types take their layer from `EDGE_SPECS`.
+
+    For those the type *is* the basis, and no `limits_source` row belongs on
+    them because nothing consulted one.
+    """
+    _, work = basis_study
+    conn = store.connect(_basis_transition_view(work))
+    try:
+        for edge_type in ("SEPARATION", "ADJUDICATED", "FOLLOWS"):
+            basis = bench.edge_basis(conn, _one_edge(conn, edge_type))
+            names = [item.name for item in basis]
+            assert bench.BASIS_EDGE_TYPE in names, edge_type
+            assert bench.BASIS_LIMITS_SOURCE not in names, edge_type
+            assert [
+                i.value for i in basis if i.name == bench.BASIS_EDGE_TYPE
+            ] == [edge_type]
+    finally:
+        conn.close()
+
+
+def test_a_layer_b_edge_consults_no_pose_and_says_so(basis_study) -> None:
+    """`open_edge` reads the pose only for a tag that could be `A`.
+
+    A `B` edge is already tagged with the dependency, so a `base_pose_source`
+    row on it would price a lookup that never happened.
+    """
+    _, work = basis_study
+    conn = store.connect(_basis_transition_view(work))
+    try:
+        edge = _one_edge(conn, "SEPARATION")
+        assert str(edge["layer"]) == "B"
+        assert [i.name for i in bench.edge_basis(conn, edge)] == [
+            bench.BASIS_EDGE_TYPE
+        ]
+    finally:
+        conn.close()
+
+
+def test_the_unretained_input_is_recorded_as_unretained(basis_study) -> None:
+    """**Never invent a default.** `base_vel_source` is in no table.
+
+    A basis that wrote `proprioceptive` for it would give a perceived run and a
+    measured one identical rows and identical bytes, which is the exact defect
+    issue #227 was regroomed around.
+    """
+    _, work = basis_study
+    conn = store.connect(_basis_transition_view(work))
+    try:
+        basis = bench.edge_basis(conn, _one_edge(conn, "HAS_ENVELOPE"))
+        stated = [i for i in basis if i.name == bench.BASIS_BASE_VEL_SOURCE]
+        assert len(stated) == 1
+        assert stated[0].value == bench.BASIS_NOT_RETAINED
+    finally:
+        conn.close()
+
+
+def test_a_view_that_does_not_state_its_limit_source_is_refused(
+    basis_study, tmp_path: Path
+) -> None:
+    """Never invent a default, in the direction that matters.
+
+    An artifact with no `meta[limits_source]` does not know whether its bounds
+    were a datasheet limit or an ISO/TS 15066 speed cap, and a basis priced on a
+    substituted `proprioceptive` would read as a clean Layer A one.
+    """
+    _, work = basis_study
+    stripped = tmp_path / "stripped.sqlite"
+    shutil.copyfile(_basis_transition_view(work), stripped)
+    conn = store.connect(stripped)
+    try:
+        edge = _one_edge(conn, "HAS_ENVELOPE")
+        conn.execute("DELETE FROM meta WHERE key = ?", (graph.META_LIMITS_SOURCE,))
+        conn.commit()
+        with pytest.raises(BenchError, match=graph.META_LIMITS_SOURCE):
+            bench.edge_basis(conn, edge)
+    finally:
+        conn.close()
+
+
+def test_an_input_nobody_declared_is_refused() -> None:
+    """A basis row for an input that decides no tag is priced and means nothing."""
+    with pytest.raises(BenchError, match="not one of the inputs"):
+        bench.BasisInput(name="weather", value="fine", provenance="the window")
+
+
+def test_a_basis_row_with_no_value_is_refused() -> None:
+    """An empty value is the assertion this whole track exists to remove."""
+    with pytest.raises(BenchError, match="no value"):
+        bench.BasisInput(
+            name=bench.BASIS_EDGE_TYPE,
+            value="  ",
+            provenance=bench.BASIS_PROVENANCE[bench.BASIS_EDGE_TYPE],
+        )
+
+
+def test_an_edge_type_with_no_basis_rule_is_refused(basis_study) -> None:
+    """A basis nobody derived is not an empty basis.
+
+    An empty one would price as the cheapest option there is, which is exactly
+    the direction a granularity gets adopted on.
+    """
+    _, work = basis_study
+    conn = store.connect(_basis_transition_view(work))
+    try:
+        edge = dict(_one_edge(conn, "SEPARATION"))
+        edge["type"] = "GOSSIPS"
+        with pytest.raises(BenchError, match="not an edge type"):
+            bench.edge_basis(conn, edge)
+    finally:
+        conn.close()
+
+
+def test_an_envelope_the_view_does_not_hold_has_no_basis(basis_study) -> None:
+    _, work = basis_study
+    conn = store.connect(_basis_transition_view(work))
+    try:
+        with pytest.raises(BenchError, match="holds no envelope row"):
+            bench.envelope_basis(conn, 10_000_000)
+    finally:
+        conn.close()
+
+
+def test_an_envelope_naming_no_configuration_is_refused(basis_study) -> None:
+    """No configuration reaches it, so no pose source does, so there is no basis.
+
+    A declared region is the policy's claim: nothing about the robot's own
+    provenance hangs on it, and hanging one there would price a row about
+    nothing.
+    """
+    _, work = basis_study
+    conn = store.connect(_basis_transition_view(work))
+    try:
+        row = conn.execute(
+            "SELECT envelope_key FROM envelope WHERE config_key IS NULL LIMIT 1"
+        ).fetchone()
+        assert row is not None, (
+            "this fixture holds no envelope without a configuration, so it "
+            "cannot exercise the refusal"
+        )
+        with pytest.raises(BenchError, match="names no configuration"):
+            bench.envelope_basis(conn, int(row["envelope_key"]))
+    finally:
+        conn.close()
+
+
+# --- the answers-not-bytes question, and its negative ----------------------
+
+
+def test_option_b_misstates_two_edges_over_one_envelope_that_disagree(
+    basis_study, tmp_path: Path
+) -> None:
+    """**The negative this issue turns on.** B has one basis for two edges.
+
+    Feed the study the condition it is being asked about — two `HAS_ENVELOPE`
+    edges pointing at one envelope row whose bases differ — and it must report
+    the second as *misstated* rather than as answered or as silent. Without
+    this the `misstated` column is a column that has never been anything but
+    zero, which proves nothing about whether it can fail.
+
+    The disagreement is built the way the schema permits it: envelope rows are
+    deduplicated on `(envelope_hash, source, horizon)`, so a second
+    configuration can reach the same row, and the pose taint `open_edge` reads
+    lives on the **edge's own endpoint**.
+    """
+    _, work = basis_study
+    view = tmp_path / "disagreeing.sqlite"
+    shutil.copyfile(_basis_transition_view(work), view)
+    conn = store.connect(view)
+    try:
+        edge = _one_edge(conn, "HAS_ENVELOPE")
+        envelope_key = int(edge["dst_key"])
+        posed_config = int(edge["src_key"])
+        # A second, unposed configuration reaching the same envelope row.
+        node_key = int(
+            conn.execute("SELECT max(node_key) + 1 FROM node").fetchone()[0]
+        )
+        conn.execute(
+            "INSERT INTO node (node_key, node_id) VALUES (?, ?)",
+            (node_key, "cfg-second-over-one-envelope"),
+        )
+        conn.execute(
+            "INSERT INTO robot_config (config_key, q, qd, base_pose, "
+            "base_pose_source) VALUES (?, '0.0,0.0', '0.0,0.0', NULL, NULL)",
+            (node_key,),
+        )
+        conn.execute(
+            "INSERT INTO edge (type, layer, src_kind, src_key, dst_kind, "
+            "dst_key, t_start, t_end) VALUES ('HAS_ENVELOPE', 'B', "
+            "'RobotConfig', ?, 'Envelope', ?, 0.0, 0.0)",
+            (node_key, envelope_key),
+        )
+        # ...and the envelope's own configuration states a room-frame pose, so
+        # the basis stored on the envelope is not the new edge's basis.
+        conn.execute(
+            "UPDATE robot_config SET base_pose = ?, base_pose_source = ? "
+            "WHERE config_key = ?",
+            ("1.0,2.0,0.0", store.POSE_SOURCES[0], posed_config),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    per_envelope = bench.cost_layer_basis(
+        view,
+        tmp_path / "b.sqlite",
+        level=bench.TRANSITION_LEVEL,
+        option=bench.LAYER_BASIS_PER_ENVELOPE,
+    )
+    assert per_envelope.edges_misstated >= 1, (
+        "option B stored one basis for two edges whose bases differ and "
+        "reported none of them misstated"
+    )
+    # And per edge there is no such thing: every edge carries its own row.
+    per_edge = bench.cost_layer_basis(
+        view,
+        tmp_path / "a.sqlite",
+        level=bench.TRANSITION_LEVEL,
+        option=bench.LAYER_BASIS_PER_EDGE,
+    )
+    assert per_edge.edges_misstated == 0
+    assert per_edge.edges_answered == per_edge.tagged_edges
+
+
+def test_the_sharing_factor_is_measured_and_is_not_a_constant(
+    basis_study, tmp_path: Path
+) -> None:
+    """B's cost argument, as a number that can move.
+
+    `sharing` is `HAS_ENVELOPE` edges per computed envelope carrying a basis. On
+    this build it is 1.00 — `ENVELOPE_RETENTION` has already deduplicated the
+    rows down to the ones an edge anchors — and a second edge over one envelope
+    moves it, which is what makes it a measurement rather than a restatement of
+    the row count.
+    """
+    study, work = basis_study
+    baseline = study.cost(bench.TRANSITION_LEVEL, bench.LAYER_BASIS_PER_ENVELOPE)
+    assert baseline.sharing == pytest.approx(1.0)
+
+    view = tmp_path / "shared.sqlite"
+    shutil.copyfile(_basis_transition_view(work), view)
+    conn = store.connect(view)
+    try:
+        edge = _one_edge(conn, "HAS_ENVELOPE")
+        conn.execute(
+            "INSERT INTO edge (type, layer, src_kind, src_key, dst_kind, "
+            "dst_key, t_start, t_end) VALUES ('HAS_ENVELOPE', ?, "
+            "'RobotConfig', ?, 'Envelope', ?, 0.0, 0.0)",
+            (str(edge["layer"]), int(edge["src_key"]), int(edge["dst_key"])),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    moved = bench.cost_layer_basis(
+        view,
+        tmp_path / "shared-b.sqlite",
+        level=bench.TRANSITION_LEVEL,
+        option=bench.LAYER_BASIS_PER_ENVELOPE,
+    )
+    assert moved.sharing > baseline.sharing
+
+
+# --- the refusals ---------------------------------------------------------
+
+
+def test_a_basis_option_nobody_defined_is_refused(basis_study, tmp_path: Path) -> None:
+    """An option with no granularity rule has a byte count about nothing."""
+    _, work = basis_study
+    with pytest.raises(BenchError, match="not a layer-basis option"):
+        bench.cost_layer_basis(
+            _basis_transition_view(work),
+            tmp_path / "c.sqlite",
+            level=bench.TRANSITION_LEVEL,
+            option="C",
+        )
+
+
+def test_a_level_nobody_defined_is_refused_by_the_basis_costing(
+    basis_study, tmp_path: Path
+) -> None:
+    _, work = basis_study
+    with pytest.raises(BenchError, match="not a resolution level"):
+        bench.cost_layer_basis(
+            _basis_transition_view(work),
+            tmp_path / "c.sqlite",
+            level="half-second",
+            option=bench.LAYER_BASIS_TODAY,
+        )
+
+
+def test_a_basis_pair_the_study_did_not_measure_is_a_refusal_and_not_a_zero(
+    basis_study,
+) -> None:
+    """A missing row read as no cost is the direction an option gets adopted on."""
+    study, _ = basis_study
+    trimmed = dataclasses.replace(
+        study,
+        costs=tuple(
+            c for c in study.costs if c.option != bench.LAYER_BASIS_PER_ENVELOPE
+        ),
+    )
+    with pytest.raises(BenchError, match="holds no measurement"):
+        trimmed.cost(bench.TRANSITION_LEVEL, bench.LAYER_BASIS_PER_ENVELOPE)
+
+
+def test_a_basis_rate_over_a_run_of_no_duration_is_refused(basis_study) -> None:
+    """A per-hour rate over a run of no duration is a division by zero."""
+    study, _ = basis_study
+    empty = dataclasses.replace(
+        study.cost(bench.TRANSITION_LEVEL, bench.LAYER_BASIS_TODAY), run_seconds=0.0
+    )
+    with pytest.raises(BenchError, match="robot time"):
+        empty.bytes_per_hour
+
+
+def test_a_basis_baseline_of_no_bytes_is_refused(basis_study) -> None:
+    """There is nothing for the other options to have moved."""
+    study, _ = basis_study
+    broken = dataclasses.replace(
+        study,
+        costs=tuple(
+            dataclasses.replace(c, size_bytes=0)
+            if c.level == bench.TRANSITION_LEVEL
+            and c.option == bench.LAYER_BASIS_TODAY
+            else c
+            for c in study.costs
+        ),
+    )
+    with pytest.raises(BenchError, match="nothing for the other"):
+        broken.factor(bench.TRANSITION_LEVEL, bench.LAYER_BASIS_PER_EDGE)
+
+
+# --- the report -----------------------------------------------------------
+
+
+def _basis_section(study: bench.LayerBasisStudy) -> str:
+    report = render(
+        [],
+        sensor_multiplier=None,
+        resolution=study.curve,
+        layer_basis=study,
+        **_RENDER_ARGS,
+    )
+    return report.split("## The layer basis", 1)[1].split("\n## ", 1)[0]
+
+
+def test_the_basis_report_states_that_nothing_was_adopted(basis_study) -> None:
+    """The section a person takes a decision from says what it is not."""
+    study, _ = basis_study
+    section = _basis_section(study)
+    assert "Nothing here is adopted, and nothing here is retained." in section
+    assert "still reports `layer-tag-basis` exactly as it did" in section
+    for option in bench.LAYER_BASIS_OPTIONS:
+        assert f"| **{option}** |" in section
+
+
+def test_the_basis_report_answers_the_answers_not_bytes_question(
+    basis_study,
+) -> None:
+    """A cost with no answer column beside it is half an argument.
+
+    And this issue's own question — *can B still say what an edge's tag was
+    computed from* — has to be answered in the section, not left to be inferred
+    from a percentage.
+    """
+    study, _ = basis_study
+    section = _basis_section(study)
+    assert "### What each option can answer" in section
+    assert "misstated" in section
+    assert "B cannot express it" in section
+    assert "Per edge answered" in section
+    assert "vs sensor (PROJECTION)" in section
+    assert "READABLE-NOT-CHECKABLE" in section
+
+
+def test_the_basis_report_says_the_headline_level_is_not_free(basis_study) -> None:
+    """The difference from issue #230, stated where a reader will meet it.
+
+    The outer boundary left the occurrence level untouched; a basis table does
+    not, because a table with its key costs pages even with no rows in it. A
+    section that did not say so would let `265 GB` be read as unmoved.
+    """
+    study, _ = basis_study
+    section = _basis_section(study)
+    assert "Both options move a level that stores no basis row at all." in section
+    occurrence = study.cost(bench.OCCURRENCE_LEVEL, bench.LAYER_BASIS_PER_EDGE)
+    baseline = study.cost(bench.OCCURRENCE_LEVEL, bench.LAYER_BASIS_TODAY)
+    assert occurrence.size_bytes > baseline.size_bytes
+
+
+def test_a_report_with_no_basis_study_carries_no_such_section(basis_study) -> None:
+    """Absent rather than empty, on `--resolution`'s terms."""
+    study, _ = basis_study
+    report = render(
+        [], sensor_multiplier=None, resolution=study.curve, **_RENDER_ARGS
+    )
+    assert "## The layer basis" not in report
+
+
+def test_a_sharing_factor_that_was_not_measured_is_not_printed_as_one(
+    basis_study,
+) -> None:
+    """`n/a` and `1.00` are different facts and the report keeps them apart.
+
+    An option that stores no envelope basis has no sharing factor; printing
+    `1.00` for it would read as *measured, and it shared nothing*.
+    """
+    assert bench._sharing_text(None) == "n/a"
+    assert bench._sharing_text(1.0) == "1.00"
+
+
+def test_the_cost_per_answer_is_refused_rather_than_divided_by_zero(
+    basis_study,
+) -> None:
+    """An option that answers nothing has no cost per answer to state.
+
+    The number a division by zero would produce is exactly the one that makes an
+    option look free, so the sentence says so instead.
+    """
+    study, _ = basis_study
+    today = study.cost(bench.TRANSITION_LEVEL, bench.LAYER_BASIS_TODAY)
+    text = bench._cost_per_answer_text(bench.TRANSITION_LEVEL, today, today, today)
+    assert "no cost per answer to state" in text
+    assert "B per edge" not in text
+
+
+def test_the_basis_cli_prices_the_options_and_reports_the_curve_they_moved(
+    tmp_path: Path, capsys
+) -> None:
+    """`--layer-basis` implies `--resolution`: one build, both sections."""
+    out = tmp_path / "report.md"
+    code = bench.main(
+        [
+            "--layer-basis",
+            "--resolution-frames",
+            str(_LAYER_BASIS_FRAMES),
+            "--resolution-n-samples",
+            str(_FAST["n_samples"]),
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+            "--no-timings",
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == bench.EXIT_OK
+    report = out.read_text(encoding="utf-8")
+    assert "## The layer basis" in report
+    err = capsys.readouterr().err
+    assert "issue #227 takes the decision" in err

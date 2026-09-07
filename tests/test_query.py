@@ -2083,6 +2083,7 @@ def _every_query(conn, *, declaration_id: str = "any-declaration-id") -> tuple:
         "declared_bound": (1.0,),
         "violations": ((0.0, 5.0),),
         "verdicts": (declaration_id,),
+        "acknowledgments": (),
     }
     return tuple(
         getattr(query, name)(conn, *arguments[name]) for name in query.QUERIES
@@ -2220,7 +2221,9 @@ def empty_record_stream(built, tmp_path_factory) -> Path:
         scenario(SCENARIO).world.limits,
         identity=TEST_IDENTITY,
         human_radius=scenario(SCENARIO).world.human_radius,
-        records=graph.AttestationRecords(declarations=(), verdicts=()),
+        records=graph.AttestationRecords(
+            declarations=(), verdicts=(), acknowledgments=()
+        ),
         horizon=_FAST["horizon"],
         n_samples=_FAST["n_samples"],
         seed=_FAST["envelope_seed"],

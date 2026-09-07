@@ -1894,9 +1894,9 @@ def _select(records: list, spec: ChainSpec, selector: str):
         if _record_id(record, spec) == selector:
             return record
     raise TamperError(
-        f"this artifact holds no record of the {spec.role!r} chain with the id "
-        f"{selector!r}. The first few are: "
-        f"{[_record_id(r, spec) for r in records[:5]]}."
+        f"this artifact holds no {' or '.join(spec.kinds)} with "
+        f"{'/'.join(r.id_field for r in spec.records)}={selector!r}. "
+        f"The first few are: {[_record_id(r, spec) for r in records[:5]]}."
     )
 
 
@@ -1997,9 +1997,9 @@ def tamper(
         records = read_chain_records(conn, chain_spec)
         if not records:
             raise TamperError(
-                f"{source} holds no {chain_spec.role!r} record to tamper "
-                "with. A "
-                "demonstration on an empty chain would demonstrate nothing."
+                f"{source} holds no {' or '.join(chain_spec.kinds)} to tamper "
+                "with. A demonstration on an empty chain would demonstrate "
+                "nothing."
             )
         record = _select(records, chain_spec, spec.selector)
         # The record's own table, not the chain's primary one (issue #247). A

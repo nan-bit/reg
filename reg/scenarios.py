@@ -1257,6 +1257,25 @@ STALE_DECLARATION = Scenario(
     # contains an expiry and nothing after it.
     silent_windows=((2.0, 3.0),),
     fault="stale_declaration",
+    # The one shipped fixture whose operator acknowledges (issue #247), and this
+    # is the run to put it in: the passivation it clears is the only one here,
+    # it is open from t=2.0 to the end, and t=2.5 is a frame instant at every dt
+    # this repository builds a fixture at.
+    #
+    # **The run does not resume, and that is the fixture being honest.**
+    # Reintegration takes both halves — the acknowledgment *and* a fresh
+    # declaration that passes every check — and this policy has stopped
+    # declaring for good, so what the artifact holds is a passivation that was
+    # acknowledged and never lifted. A fixture that resumed would need the
+    # policy to start speaking again, which is a different run from the one this
+    # scenario is about.
+    acknowledged_at=(
+        AckPoint(
+            2.5,
+            "operator inspected the cell, confirmed the arm was stopped inside "
+            "the last declared box, and cleared the run to resume",
+        ),
+    ),
 )
 
 ESCALATION_FAILURE = Scenario(

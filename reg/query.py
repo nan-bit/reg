@@ -3149,7 +3149,7 @@ def incident_report(
 # sides — matching environment and mismatched — by another. A disagreement is a
 # bug in this report and it fails there rather than in an assessor's hands.
 #
-# WHAT IS PINNED TO SCHEMA 11, AND WHY THE WHOLE FILE IS.
+# WHAT IS PINNED TO SCHEMA 12, AND WHY THE WHOLE FILE IS.
 # Every state below is a property of a particular set of columns and `meta`
 # keys. Against another set they would be states about columns this reader
 # cannot place, so an artifact stating any other `schema_version` is a
@@ -3163,6 +3163,14 @@ def incident_report(
 # `tests/test_query.py::test_the_cold_read_is_pinned_to_this_build_s_schema` is
 # what makes that update deliberate: it fails the moment `store.SCHEMA_VERSION`
 # moves, and closing #227 or #228 moves it.
+#
+# Schema 12 is the worked example of a bump that moves the constant and **no
+# state** (issue #247). It added the `acknowledgment` table, the `ACKNOWLEDGED`
+# edge and `meta[acknowledgment_count]`; none of the four claims below is a
+# property of any of them, so each was re-derived against the new columns and
+# each came back where it was. Re-deriving and finding nothing moved is the
+# work this gate asks for — the failure it exists to prevent is the constant
+# moving *without* that pass, not the constant moving.
 # --------------------------------------------------------------------------
 
 #: The file carries what is needed to verify the claim.
@@ -3191,7 +3199,7 @@ COLD_READ_STATES = (CHECKABLE, READABLE_NOT_CHECKABLE, ABSENT, COULD_NOT_EVALUAT
 #: header: an artifact stating anything else is a could-not-evaluate in both
 #: directions, and this constant moving is a decision about every claim below
 #: rather than a version bump.
-COLD_READ_SCHEMA_VERSION = 11
+COLD_READ_SCHEMA_VERSION = 12
 
 CLAIM_ENVIRONMENT = "recording-environment"
 CLAIM_RECOMPUTE = "recompute-discarded-polygon"

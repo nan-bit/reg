@@ -784,7 +784,7 @@ def attested_empty(tmp_path_factory) -> Path:
     return _build(
         tmp_path_factory.mktemp("empty"),
         "empty.sqlite",
-        AttestationRecords(declarations=(), verdicts=()),
+        AttestationRecords(declarations=(), verdicts=(), acknowledgments=()),
     )
 
 

@@ -257,6 +257,16 @@ EXEMPT: dict[str, str] = {
 #         `retention.md`'s status header while `See also` links it anyway.
 #         88.7 is not available — it would put the ceiling at 25,723, under the
 #         corpus — so this is the tightest tenth and not a banked difference
+#   88.6  today, 2026-09-07, after #231 shipped the cold read. This is the #220
+#         case again and the second time it has happened: `reg/query.py` gained
+#         four public symbols — `cold_read`, `render_cold_read`, `ColdRead` and
+#         `ColdReadClaim` — and `docs/self-describing.md` went 4,228 -> 4,513
+#         describing them, so the denominator moved with the prose. 26,028 / 294
+#         = 88.53, rounded up to the next tenth. The §2 table it replaced was
+#         three states wide and the shipped report is four, which is most of the
+#         difference; what did *not* grow is the archaeology, because the two
+#         issue references the new prose needed live in §8's build order, below
+#         that file's rationale line, which is where #213 and #214 put theirs
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -267,7 +277,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 88.8
+RATE = 88.6
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #

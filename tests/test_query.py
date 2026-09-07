@@ -2731,3 +2731,640 @@ def test_the_separation_a_mobile_artifact_reports_is_measured_from_where_it_drov
         f"{len(disagreements)} of {len(at_the_origin)} frames, which is what a "
         "builder that dropped the base pose would produce"
     )
+
+
+# --------------------------------------------------------------------------
+# THE COLD READ (issue #231, docs/self-describing.md §2 and §8 tier 3).
+#
+# `cold_read` reports what an artifact says about itself with no document open.
+# The tests below do three things and nothing else is support:
+#
+# 1. **They pin what it must say today**, per claim and per shipped fixture. A
+#    gap closing elsewhere makes one of these expectations wrong, and it has to
+#    be changed on purpose rather than drift.
+# 2. **They feed it the conditions it reports on.** An environment stripped out,
+#    an environment blanked, a schema older than the states were derived
+#    against, and a `layer` column left intact. Three of those must come back
+#    something other than CHECKABLE, and the fourth must come back
+#    READABLE-NOT-CHECKABLE rather than CHECKABLE — a report whose only
+#    exercised path is the healthy one has not been shown able to say no.
+# 3. **They hold it to `reg.graph`.** `reg.query` cannot import the builder, so
+#    the recompute keys are a copy, and a copy that nothing compares is a second
+#    definition waiting to drift. Two tests compare it: one on the key list, one
+#    on the behaviour, in both directions.
+# --------------------------------------------------------------------------
+
+#: What the cold read must say today, per claim, on an artifact built from
+#: `main` at `schema_version` 11 — the table in issue #231. Pinned here so that
+#: closing #227 or #228 **fails this file** and has to be updated deliberately.
+COLD_READ_TODAY = {
+    query.CLAIM_ENVIRONMENT: query.CHECKABLE,
+    query.CLAIM_RECOMPUTE: query.CHECKABLE,
+    query.CLAIM_LAYER_BASIS: query.READABLE_NOT_CHECKABLE,
+    query.CLAIM_REACHED_POINT: query.READABLE_NOT_CHECKABLE,
+}
+
+#: The same, for a view with no edge layer and no envelopes. `materialize_level`
+#: at the occurrence resolution keeps the environment and drops the rows the
+#: other two claims are about, so those two are **ABSENT** — the file makes no
+#: claim rather than making one it cannot support. Listed because a report that
+#: could only produce one shape of answer would not be reporting anything.
+COLD_READ_OCCURRENCE_VIEW = {
+    query.CLAIM_ENVIRONMENT: query.CHECKABLE,
+    query.CLAIM_RECOMPUTE: query.CHECKABLE,
+    query.CLAIM_LAYER_BASIS: query.ABSENT,
+    query.CLAIM_REACHED_POINT: query.ABSENT,
+}
+
+#: Names of the cold read's implementation, for the structural check that it
+#: opens nothing. `cold_read`'s promise is *no document*, and the cheapest thing
+#: that can fail is the source: a function that never names a filesystem call
+#: cannot make one.
+COLD_READ_FUNCTIONS = (
+    "cold_read",
+    "render_cold_read",
+    "_schema_version_text",
+    "_unpinned_claims",
+    "_environment_claim",
+    "_running_environment",
+    "_recompute_claim",
+    "_layer_basis_claim",
+    "_reached_point_claim",
+)
+
+#: Names that would mean the cold read read something other than the artifact it
+#: was handed. `Path` is here with the others: the artifact arrives as an open
+#: connection, so a path constructed inside these functions is a second file.
+FILESYSTEM_NAMES = ("open", "read_text", "read_bytes", "Path", "glob", "listdir")
+
+
+def _cold_read(path: Path) -> query.ColdRead:
+    """Open `path`, cold-read it, close. The same shape as `_ask`."""
+    conn = store.connect(path)
+    try:
+        return query.cold_read(conn)
+    finally:
+        conn.close()
+
+
+def _raw_cold_read(path: Path) -> query.ColdRead:
+    """Cold-read a file `store.connect` would refuse.
+
+    `store.connect` rejects any `schema_version` this build does not understand,
+    so the older-schema arm is unreachable through it. An assessor holding an
+    archived artifact meets that arm through whatever sqlite3 they have, which
+    is what this is.
+    """
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(path)
+    conn.row_factory = _sqlite3.Row
+    try:
+        return query.cold_read(conn)
+    finally:
+        conn.close()
+
+
+def _named_calls(source: str, function_names: tuple[str, ...]) -> set[str]:
+    """Every name called or attribute reached inside the named functions.
+
+    Factored out so the check below can be fed the condition it guards against.
+    A checker only ever run against a clean file has not been shown able to say
+    no at all.
+    """
+    tree = ast.parse(source)
+    wanted = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name in function_names
+    }
+    found: set[str] = set()
+    for node in wanted.values():
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Name):
+                found.add(inner.id)
+            elif isinstance(inner, ast.Attribute):
+                found.add(inner.attr)
+    return found
+
+
+# --------------------------------------------------------------------------
+# What it must say today. One row per claim, per shipped fixture.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fixture, index, expected",
+    [
+        ("built", 1, COLD_READ_TODAY),
+        ("attested", 0, COLD_READ_TODAY),
+        ("clean_attested", 0, COLD_READ_TODAY),
+        ("mobile_built", 1, COLD_READ_TODAY),
+        ("occurrence_view", None, COLD_READ_OCCURRENCE_VIEW),
+    ],
+)
+def test_the_cold_read_says_the_same_four_things_about_every_shipped_fixture(
+    request, fixture: str, index: int | None, expected: dict[str, str]
+) -> None:
+    """THE PINNED TABLE. Issue #231's four rows, per artifact this file builds.
+
+    Every fixture here is a different run — one fixed-arm scenario with no
+    records, two with both record chains, one whose base drives, and one view at
+    the occurrence resolution. The states do not depend on the run, and that is
+    the finding: the gaps are properties of the schema, so an assessor meets the
+    same two `READABLE-NOT-CHECKABLE` rows whatever they were handed.
+
+    **Closing a gap breaks this test**, which is the point of pinning it. When
+    #227 puts a basis in the file, `layer-tag-basis` stops being
+    READABLE-NOT-CHECKABLE and this expectation has to be edited by whoever
+    closed it.
+    """
+    value = request.getfixturevalue(fixture)
+    artifact = value if index is None else value[index]
+    report = _cold_read(artifact)
+
+    assert report.schema_version == str(store.SCHEMA_VERSION)
+    got = {row.claim: row.state for row in report.claims}
+    assert got == expected, (
+        f"{fixture} cold-reads as {got} and the pinned table says {expected}. "
+        "If a gap closed, edit the table; if it did not, this is a regression "
+        "in what the file supports."
+    )
+    for row in report.claims:
+        assert row.claim in row.message and row.state in row.message, (
+            f"{row.claim}'s message does not name both the claim and the state: "
+            f"{row.message!r}"
+        )
+        assert row.detail.strip(), f"{row.claim} carries no detail"
+
+
+def test_the_third_and_fourth_states_are_not_a_pass(artifact: Path) -> None:
+    """`READABLE-NOT-CHECKABLE` and `ABSENT` never resolve to `CHECKABLE`.
+
+    The states are strings and `checkable` is the only predicate over them, so
+    this is the test that keeps the vocabulary from collapsing into a boolean
+    somewhere downstream.
+    """
+    report = _cold_read(artifact)
+    assert set(query.COLD_READ_STATES) == {
+        query.CHECKABLE,
+        query.READABLE_NOT_CHECKABLE,
+        query.ABSENT,
+        COULD_NOT_EVALUATE,
+    }
+    for row in report.claims:
+        assert row.checkable == (row.state == query.CHECKABLE), (
+            f"{row.claim} is {row.state} and reports checkable={row.checkable}"
+        )
+    assert set(report.checkable) | set(report.not_checkable) == set(
+        query.COLD_READ_CLAIMS
+    )
+    assert not set(report.checkable) & set(report.not_checkable)
+    assert query.CLAIM_LAYER_BASIS in report.not_checkable
+    assert query.CLAIM_REACHED_POINT in report.not_checkable
+
+
+def test_the_cold_read_is_pinned_to_this_build_s_schema() -> None:
+    """The deliberate-update gate, and the whole reason the pin is a constant.
+
+    Every state above is a property of a particular set of columns and `meta`
+    keys. #227 puts a basis column in the file and #228 puts a boundary in it;
+    either one bumps `store.SCHEMA_VERSION`, and this fails the moment it moves
+    — before an assessor is handed a report still calling a closed gap
+    *readable, not checkable*.
+    """
+    assert query.COLD_READ_SCHEMA_VERSION == store.SCHEMA_VERSION, (
+        f"reg.query.COLD_READ_SCHEMA_VERSION is "
+        f"{query.COLD_READ_SCHEMA_VERSION} and the schema is now "
+        f"{store.SCHEMA_VERSION}. Re-derive every state in COLD_READ_TODAY "
+        "against the new columns, update the table and then move the constant. "
+        "Moving the constant alone is how a closed gap goes on being reported "
+        "as an open one."
+    )
+
+
+def test_the_cold_read_opens_nothing() -> None:
+    """*No document*, enforced against the source rather than promised.
+
+    `cold_read`'s claim is that it reads the artifact it was handed and nothing
+    else. Its argument is an open connection, so anything that opened a second
+    file would have to name one of `FILESYSTEM_NAMES` to do it.
+    """
+    reached = _named_calls(Path(query.__file__).read_text(), COLD_READ_FUNCTIONS)
+    offenders = sorted(reached & set(FILESYSTEM_NAMES))
+    assert not offenders, (
+        f"the cold read's implementation names {offenders}. It answers from the "
+        "artifact it was handed; a second file is a document, and 'no document' "
+        "is the acceptance criterion it exists to meet."
+    )
+
+
+def test_the_no_document_check_can_say_no() -> None:
+    """THE NEGATIVE for the check above. Feed it a function that opens a file."""
+    offending = "def cold_read(conn):\n    return open('docs/plan.md').read()\n"
+    assert "open" in _named_calls(offending, ("cold_read",))
+    clean = "def cold_read(conn):\n    return conn.execute('SELECT 1')\n"
+    assert not _named_calls(clean, ("cold_read",)) & set(FILESYSTEM_NAMES)
+
+
+# --------------------------------------------------------------------------
+# The negatives. Each feeds the report the condition it reports on.
+# --------------------------------------------------------------------------
+
+
+def test_a_stripped_environment_is_absent_and_not_checkable(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """THE FIRST NEGATIVE (issue #231). No `env_*` keys — **ABSENT**.
+
+    Not CHECKABLE, obviously; and not COULD-NOT-EVALUATE either, which is the
+    part worth a test. The file states the schema those keys arrived in, so it
+    had somewhere to put them and did not — an absence somebody's build chose,
+    which is a different fact from an archive written before the keys existed.
+    """
+    stripped = _copy(
+        artifact,
+        tmp_path / "no-environment.sqlite",
+        "DELETE FROM meta WHERE key LIKE 'env\\_%' ESCAPE '\\'",
+    )
+    report = _cold_read(stripped)
+    assert report.state(query.CLAIM_ENVIRONMENT) == query.ABSENT
+    assert report.state(query.CLAIM_RECOMPUTE) == query.READABLE_NOT_CHECKABLE
+    assert report.recompute_permitted is None, (
+        "nothing was compared, so 'permitted' is neither True nor False — a "
+        "False here would report a machine mismatch for a file that never said "
+        "which machine it was built on"
+    )
+    detail = report[query.CLAIM_ENVIRONMENT].detail
+    for key in store.ENVIRONMENT_KEYS:
+        assert key in detail, f"the refusal does not name {key}"
+
+
+def test_a_blank_environment_key_is_absent_and_not_a_mismatch(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """An environment is six keys or it is none.
+
+    A file carrying `env_platform_machine=''` compares unequal to every
+    recomputing interpreter, so a report that took the block at face value would
+    say *built on another machine* about a file that said nothing. It is ABSENT,
+    the same as no block at all, and the detail names the key.
+    """
+    blanked = _copy(
+        artifact,
+        tmp_path / "blank-machine.sqlite",
+        f"UPDATE meta SET value = '' WHERE key = '{store.META_ENV_PLATFORM_MACHINE}'",
+    )
+    report = _cold_read(blanked)
+    assert report.state(query.CLAIM_ENVIRONMENT) == query.ABSENT
+    assert store.META_ENV_PLATFORM_MACHINE in report[query.CLAIM_ENVIRONMENT].detail
+    assert report.recompute_permitted is None
+
+
+def test_a_schema_older_than_the_states_is_could_not_evaluate_and_not_absent(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """THE SECOND NEGATIVE (issue #231). `schema_version` 10 — **all four
+    COULD-NOT-EVALUATE**, and not one of them ABSENT.
+
+    An artifact written before issue #200 has no environment, and reporting that
+    as an absence would be a finding about a file that was written against a
+    schema with nowhere to put one. The other three rows go the same way for the
+    same reason and it is stated rather than assumed: every state this report
+    gives is about a particular set of columns, and against another set they are
+    states about columns this reader cannot place.
+    """
+    older = _copy(
+        artifact,
+        tmp_path / "schema-10.sqlite",
+        "DELETE FROM meta WHERE key LIKE 'env\\_%' ESCAPE '\\'",
+        f"UPDATE meta SET value = '10' WHERE key = '{store.META_SCHEMA_VERSION}'",
+    )
+    with pytest.raises(store.StoreError):
+        store.connect(older)  # the reason `_raw_cold_read` exists
+
+    report = _raw_cold_read(older)
+    assert report.schema_version == "10"
+    assert report.recompute_permitted is None
+    for row in report.claims:
+        assert row.state == COULD_NOT_EVALUATE, (
+            f"{row.claim} is {row.state} on a schema-10 file. An artifact that "
+            "predates the schema carrying a claim has not left the claim out."
+        )
+        assert query.ABSENT not in row.state
+        assert "11" in row.detail and "10" in row.detail
+
+
+def test_a_file_that_states_no_schema_at_all_is_could_not_evaluate(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """And it says so — a version nobody stated is not version 11."""
+    unversioned = _copy(
+        artifact,
+        tmp_path / "no-schema.sqlite",
+        f"DELETE FROM meta WHERE key = '{store.META_SCHEMA_VERSION}'",
+    )
+    report = _raw_cold_read(unversioned)
+    assert report.schema_version is None
+    assert {row.state for row in report.claims} == {COULD_NOT_EVALUATE}
+    assert store.META_SCHEMA_VERSION in report[query.CLAIM_ENVIRONMENT].detail
+
+
+def test_a_newer_schema_is_could_not_evaluate_rather_than_a_stale_pass(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """The other direction, and the one that protects an assessor.
+
+    A newer schema is where a gap gets closed. A report that went on calling a
+    closed gap *readable, not checkable* would be the trusted-because-nobody-
+    rechecked sentence this whole track exists to remove, so a version this
+    reader was not derived against is a could-not-evaluate whichever side of 11
+    it falls on.
+    """
+    newer = _copy(
+        artifact,
+        tmp_path / "schema-99.sqlite",
+        f"UPDATE meta SET value = '99' WHERE key = '{store.META_SCHEMA_VERSION}'",
+    )
+    report = _raw_cold_read(newer)
+    assert {row.state for row in report.claims} == {COULD_NOT_EVALUATE}
+    assert "COLD_READ_SCHEMA_VERSION" in report[query.CLAIM_LAYER_BASIS].detail
+
+
+def test_an_intact_layer_column_is_readable_not_checkable(artifact: Path) -> None:
+    """THE THIRD NEGATIVE (issue #231), and the least obvious of the three.
+
+    Nothing is broken in this file: every edge carries a well-formed `layer`
+    tag, and the healthy-looking case is exactly the one that must not come back
+    CHECKABLE. What is missing is the basis, and no column in the edge table
+    carries one — so the tag is an assertion, and *readable, not checkable* is
+    the honest verdict on it (docs/self-describing.md gap 1, issue #227).
+    """
+    conn = store.connect(artifact)
+    try:
+        tags = {
+            str(row["layer"])
+            for row in conn.execute("SELECT DISTINCT layer FROM edge").fetchall()
+        }
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(edge)").fetchall()
+        }
+    finally:
+        conn.close()
+    assert tags == {query.LAYER_A, query.LAYER_B}, (
+        f"this fixture carries {tags}; the point of the test is that the column "
+        "is intact"
+    )
+
+    row = _cold_read(artifact)[query.CLAIM_LAYER_BASIS]
+    assert row.state == query.READABLE_NOT_CHECKABLE
+    assert not row.checkable
+    assert all(column in row.detail for column in columns), (
+        "the report does not name the columns it looked at, so a reader cannot "
+        "tell what it concluded the basis was missing from"
+    )
+
+
+def test_the_radius_answers_radially_and_says_so(artifact: Path) -> None:
+    """THE FOURTH ROW. `outer_radius` is a scalar and no boundary is stored, so
+    *could the robot have reached (x, y)* is answerable radially only.
+
+    Asserted against the schema rather than against the prose: the envelope
+    table's columns are read out of the file, and none of them is a boundary
+    (docs/limitations.md §2 and §3, issue #228).
+    """
+    conn = store.connect(artifact)
+    try:
+        columns = {
+            str(r["name"])
+            for r in conn.execute("PRAGMA table_info(envelope)").fetchall()
+        }
+        radial = int(
+            conn.execute(
+                "SELECT count(outer_radius) AS n FROM envelope"
+            ).fetchone()["n"]
+        )
+    finally:
+        conn.close()
+    assert radial > 0 and "outer_radius" in columns
+
+    row = _cold_read(artifact)[query.CLAIM_REACHED_POINT]
+    assert row.state == query.READABLE_NOT_CHECKABLE
+    assert "radially" in row.detail
+    assert str(radial) in row.detail
+
+
+# --------------------------------------------------------------------------
+# Held to `reg.graph`. The copy, and the behaviour behind it.
+# --------------------------------------------------------------------------
+
+
+def test_the_cold_read_names_the_recompute_keys_the_builder_refuses_on() -> None:
+    """The copy, checked. `reg.query` cannot import `reg.graph` — the boundary
+    test at the top of this file walks the whole AST, so a deferred import would
+    not get past it either — so the four keys `envelope_at` refuses on are
+    spelled a second time in `reg.query`. This is what pays for that.
+
+    The same discipline as
+    `test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes`: a
+    rename on either side would otherwise turn the report into a quiet
+    disagreement with the reader it is describing.
+    """
+    assert query.COLD_READ_RECOMPUTE_KEYS == graph.RECOMPUTE_ENVIRONMENT_KEYS, (
+        "reg.query's copy of the recompute keys has drifted from "
+        "reg.graph.RECOMPUTE_ENVIRONMENT_KEYS. The cold read would then report "
+        "a recomputation as permitted that envelope_at refuses, or the reverse."
+    )
+    assert set(query.COLD_READ_RECOMPUTE_KEYS) <= set(store.ENVIRONMENT_KEYS)
+
+
+def test_the_cold_read_reports_the_environment_the_builder_reads_back(
+    artifact: Path,
+) -> None:
+    """One environment, two readers, and they must agree on every key.
+
+    `reg.graph.recorded_environment` is the builder-side reader. The cold read
+    does not call it and must still quote the same six values, or the report
+    describes a file nobody else sees.
+    """
+    conn = store.connect(artifact)
+    try:
+        recorded = graph.recorded_environment(conn)
+    finally:
+        conn.close()
+    detail = _cold_read(artifact)[query.CLAIM_ENVIRONMENT].detail
+    for key, value in recorded.items():
+        assert f"{key}={value}" in detail, (
+            f"the cold read does not report {key}={value}, which "
+            "reg.graph.recorded_environment reads out of the same file"
+        )
+
+
+@pytest.mark.parametrize("matching", [True, False])
+def test_the_cold_read_agrees_with_envelope_at_about_a_recompute(
+    artifact: Path, tmp_path: Path, matching: bool
+) -> None:
+    """**BOTH SIDES.** `recompute_permitted` is `True` exactly when
+    `reg.graph.envelope_at` will recompute a discarded polygon.
+
+    The matching case is this machine, which wrote the file. The mismatched case
+    edits one recorded key to a machine this is not — the same edit issue #201's
+    own tests make — and both readers have to change their answer together. A
+    report that said *permitted* where `envelope_at` refuses would be worse than
+    no report: an assessor would go looking for a geometry disagreement that the
+    reader was never going to let them see.
+    """
+    target = artifact
+    if not matching:
+        target = _copy(
+            artifact,
+            tmp_path / "elsewhere.sqlite",
+            f"UPDATE meta SET value = 'not-{store.build_environment()[store.META_ENV_PLATFORM_MACHINE]}' "
+            f"WHERE key = '{store.META_ENV_PLATFORM_MACHINE}'",
+        )
+
+    report = _cold_read(target)
+    assert report.state(query.CLAIM_RECOMPUTE) == query.CHECKABLE, (
+        "the state is about the file, which carries the environment either way; "
+        "only 'permitted' is about the machine reading it"
+    )
+    assert report.recompute_permitted is matching
+
+    conn = store.connect(target)
+    try:
+        discarded = conn.execute(
+            "SELECT e.t_start AS t FROM edge e "
+            "JOIN envelope v ON v.envelope_key = e.dst_key "
+            "WHERE e.type = 'HAS_ENVELOPE' AND v.geometry_wkb IS NULL "
+            "ORDER BY e.t_start LIMIT 1"
+        ).fetchone()
+        assert discarded is not None, (
+            "this fixture retains every polygon, so it cannot exercise the "
+            "recompute path at all"
+        )
+        t = float(discarded["t"])
+        if matching:
+            assert graph.envelope_at(conn, t) is not None
+        else:
+            with pytest.raises(graph.GraphQueryError) as caught:
+                graph.envelope_at(conn, t)
+            assert store.META_ENV_PLATFORM_MACHINE in str(caught.value)
+    finally:
+        conn.close()
+
+
+def test_a_file_with_no_environment_refuses_a_recompute_on_both_readers(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """The third arm, where `permitted` is `None` and `envelope_at` still says
+    no — and says no *differently*, because nothing was compared.
+
+    Without this, `None` and `False` could be collapsed into one falsey value
+    and every test above would still pass.
+    """
+    stripped = _copy(
+        artifact,
+        tmp_path / "unattributable.sqlite",
+        "DELETE FROM meta WHERE key LIKE 'env\\_%' ESCAPE '\\'",
+    )
+    report = _cold_read(stripped)
+    assert report.recompute_permitted is None
+    assert report.recompute_permitted is not False
+
+    conn = store.connect(stripped)
+    try:
+        row = conn.execute(
+            "SELECT e.t_start AS t FROM edge e "
+            "JOIN envelope v ON v.envelope_key = e.dst_key "
+            "WHERE e.type = 'HAS_ENVELOPE' AND v.geometry_wkb IS NULL "
+            "ORDER BY e.t_start LIMIT 1"
+        ).fetchone()
+        with pytest.raises(graph.GraphQueryError) as caught:
+            graph.envelope_at(conn, float(row["t"]))
+    finally:
+        conn.close()
+    assert "states no" in str(caught.value)
+
+
+# --------------------------------------------------------------------------
+# The report's own refusals, and the CLI.
+# --------------------------------------------------------------------------
+
+
+def test_a_fifth_state_is_refused(artifact: Path) -> None:
+    """A row may only carry one of the four. A fifth is a state nobody defined
+    the relationship of to a pass, and a caller reading it would have to guess."""
+    with pytest.raises(QueryError) as caught:
+        query.ColdReadClaim(
+            claim=query.CLAIM_ENVIRONMENT,
+            question="?",
+            state="MOSTLY-FINE",
+            detail="d",
+        )
+    assert "MOSTLY-FINE" in str(caught.value)
+
+    with pytest.raises(QueryError):
+        query.ColdReadClaim(
+            claim="something-else", question="?", state=query.ABSENT, detail="d"
+        )
+    with pytest.raises(QueryError):
+        query.ColdReadClaim(
+            claim=query.CLAIM_ENVIRONMENT,
+            question="?",
+            state=query.ABSENT,
+            detail="   ",
+        )
+
+
+def test_a_partial_report_is_refused(artifact: Path) -> None:
+    """Every claim gets a row. A row omitted and a row reporting ABSENT are
+    different facts, and a report that could omit one would make them look the
+    same to a reader counting rows."""
+    full = _cold_read(artifact)
+    with pytest.raises(QueryError) as caught:
+        query.ColdRead(
+            schema_version=full.schema_version,
+            claims=full.claims[:-1],
+            recompute_permitted=full.recompute_permitted,
+        )
+    assert query.CLAIM_REACHED_POINT in str(caught.value)
+    with pytest.raises(QueryError):
+        full[query.CLAIM_ENVIRONMENT + "-nope"]
+
+
+def test_the_cli_prints_the_cold_read(artifact: Path, capsys) -> None:
+    """`--cold-read` on an artifact from `main`: exit 0 and four rows, each with
+    its state and its detail. `READABLE-NOT-CHECKABLE` is not a failure of the
+    run — an exit code that treated it as one would be red on every artifact
+    this project has ever built."""
+    code = query.main([str(artifact), "--cold-read"])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_OK
+    for claim, state in COLD_READ_TODAY.items():
+        assert f"{claim}: {state}" in out
+    assert query.READABLE_NOT_CHECKABLE in out
+    assert "recompute permitted: yes" in out
+
+
+def test_the_cli_refuses_a_key_it_would_otherwise_drop_on_a_cold_read(
+    artifact: Path, tmp_path: Path, capsys
+) -> None:
+    """`--cold-read --keyring K` reads no key, so it is refused rather than
+    ignored. Same rule as every other flag pairing here: a flag that is silently
+    dropped reads as one that was applied."""
+    code = query.main(
+        [str(artifact), "--cold-read", "--keyring", str(tmp_path / "absent.json")]
+    )
+    assert code == query.EXIT_USAGE
+    assert "--keyring" in capsys.readouterr().err
+
+
+def test_the_cold_read_is_in_the_list_output(capsys) -> None:
+    """`--list` names it. A reader who does not know the flag exists cannot run
+    the one check this track ships, and a name missing from the list reads as a
+    milestone that has not landed."""
+    query.main(["--list"])
+    out = capsys.readouterr().out
+    assert "--cold-read" in out
+    assert query.READABLE_NOT_CHECKABLE in out

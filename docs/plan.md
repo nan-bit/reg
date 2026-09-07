@@ -322,7 +322,13 @@ Quote the agreement, mention the speed once, and never lead with it.
 
 **The claim.** Which answers the proprioception-only layer supports on its own
 authority, and which are a conjunction with *the entity was where the artifact
-says it was* — recorded per answer, in the artifact, and queryable afterwards.
+says it was* — recorded per answer, in the artifact, and queryable afterwards,
+**with the tag recorded and not the basis it was computed from**, until issue
+#227's layer basis lands. So the file answers *was this answer conditional* and
+not *conditional on what*: `reg.query.cold_read` reports the layer tag
+`READABLE-NOT-CHECKABLE`, and `WHERE layer = 'B'` returns an envelope over a
+perceived base velocity and one over an encoder-measured one alike
+([`docs/limitations.md`](limitations.md) §11 and §12).
 
 **Stated narrowly, because the broad version is taken.** ConSerts (Schneider &
 Trapp) formalised guarantees that hold conditional on runtime evidence supplied
@@ -381,19 +387,12 @@ horizon-limited **outer** reachable set — the joint box pushed through the
 forward kinematics as an interval — which reads all three. Both over-cover, so
 nothing inside is ever falsely accused.
 
-It is **still incomplete, and in a way that is now sayable in one line**: the bound
-is a radius, so it detects an overclaim that reaches *further than the robot can*
-and not one that points *where the robot cannot turn in time*. Until issue #82 the
-first was undetected too, and the fault a Simplex / ASTM F3269 runtime monitor
-exists to catch — the policy declared more than it could occupy within the horizon
-— could not fire at all unless the declaration left the entire workspace. The
-polygon that would close the angular half is computed and its area and radius are
-retained beside every envelope in the artifact; wiring it to the *containment* test
-re-labels three of the five fault fixtures as overclaims, which changes what a
-fault in the §5 taxonomy means, so it is left as a decision rather than taken as a
-step ([`docs/limitations.md`](limitations.md) §3). The independence is real; the
-capability is bounded and the bound is stated. Those are different sentences and
-this document has previously run them together.
+It is **incomplete, and in a way that is sayable in one line**: the bound is a
+radius, so it detects an overclaim that reaches *further than the robot can* and
+not one that points *where the robot cannot turn in time*. The independence is
+real; the capability is bounded and the bound is stated, and those are different
+sentences. Phase 4 below has the angular half and the held decision;
+[`docs/limitations.md`](limitations.md) §3 is normative on both.
 
 **What the chain proves, and what it does not.** It proves the records are
 internally consistent under the keys that signed them. It does not prove no
@@ -922,9 +921,9 @@ Then the taxonomy:
 | Did the robot contact the human? | | ✅ | Only as strong as perception |
 
 **The finding:** a volume derived from perception inherits perception's failure
-modes. You cannot ground a certifiable envelope in an uncertifiable perceiver. The
-layered structure makes explicit which audit claims survive and which are
-conditional on the perception stack's own assurance case.
+modes. You cannot ground a certifiable envelope in an uncertifiable perceiver.
+[`docs/sufficiency.md`](sufficiency.md) §1 is normative on what the layered
+structure makes explicit and what it does not.
 
 **Note the asymmetry, because it's the interesting result:** every *attestation*
 query is Layer A. Whether the policy honored its own declaration is answerable with

@@ -1593,3 +1593,237 @@ def test_a_qualified_claim_passes() -> None:
 
 def test_a_document_that_never_cites_the_module_is_not_a_pass() -> None:
     assert coverage_claim_is_qualified("Nothing here.")[0] == COULD_NOT_EVALUATE
+
+
+# ==========================================================================
+# THE CONDITION ON CLAIM 3 (issue #243).
+#
+# The same defect as the `13x` above, one level up: not a figure a reader can
+# take away without its condition, but a **claim**. `docs/plan.md` Claim 3 said
+# which answers rest on a conjunction with *the entity was where the artifact
+# says it was* are "recorded per answer, in the artifact, and queryable
+# afterwards" — and the artifact delivers the first two words of that and not
+# the third's object. `reg.query.cold_read` answers `READABLE-NOT-CHECKABLE`
+# for the layer tag (issue #231), because the `mobile_derived_velocity` and
+# `mobile_transit` fixtures (issue #229) — every base rate from a perceiver,
+# and every base rate off wheel encoders — produce identical tags on identical
+# edges. An assessor can ask *was this answer conditional* and get a tag. They
+# cannot ask *conditional on what* and get anything from the file.
+#
+# So every unit of text that states Claim 3 has to state the condition in that
+# same unit, and has to name what would retire it — the layer basis, epic
+# #227 — so a reader knows this is a gap being closed and not a permanent
+# limitation. The claim's substance is unchanged; what is checked here is that
+# its reach travels with it.
+#
+# This module is about figures and Claim 3 is not a figure. The check lives
+# here because the machinery is the one the `13x` already needs —
+# `_quotation_units`, a pinned roster, and the negatives that make a
+# could-not-evaluate visible — and a second copy of it in another file is the
+# copy that would drift.
+# ==========================================================================
+
+#: The two halves of Claim 3, in the forms the documents state it in. A unit
+#: states the claim only when it carries **both**: what the proprioception-only
+#: layer supports alone, and what rests on a conjunction with the entity's
+#: position. One half alone is not the claim, and requiring both is what keeps
+#: this off `docs/mobile-base.md`, which says a driving base "shrinks the set of
+#: questions this artifact can answer on its own authority" — a statement about
+#: that track, not a statement of Claim 3.
+CLAIM_3_LAYER_A_HALF = re.compile(
+    r"on its own authority|proprioception-only evidence supports", re.IGNORECASE
+)
+CLAIM_3_LAYER_B_HALF = re.compile(
+    r"conjunction with|uncertifiable perceiver|"
+    r"only as (?:strong|well) as whatever supplied",
+    re.IGNORECASE,
+)
+
+#: The condition, in either direction it can be written. Both name an
+#: *absence*, which is the thing the reader has to be told: the tag is in the
+#: file and the input it was computed from is not.
+CLAIM_3_CONDITION = re.compile(
+    r"not the basis it was computed from|the basis it was computed from is not",
+    re.IGNORECASE,
+)
+
+#: What would retire the condition. A condition with no end named reads as a
+#: permanent limitation, which is a different claim from the one being made, so
+#: a unit stating the condition and naming nothing that would close it fails
+#: here too. `#227` is the epic; `layer basis` is what it lands, and a document
+#: that names the thing rather than the issue number satisfies this.
+CLAIM_3_RETIREMENT = re.compile(r"#227|layer basis", re.IGNORECASE)
+
+#: The documents stating Claim 3 today. Pinned for the reason the `13x` roster
+#: is: deleting the statement is the one way a check of this shape goes green
+#: without the condition being written anywhere.
+DOCS_STATING_CLAIM_3: frozenset[str] = frozenset(
+    {"README.md", "README.md (docs/)", "plan.md", "sufficiency.md"}
+)
+
+
+def condition_travels_with_claim_3(text: str) -> tuple[str, list[str]]:
+    """Verdict on whether every statement of Claim 3 in `text` carries its condition.
+
+    Three-valued, and the third does not resolve to the first: a document that
+    states the claim nowhere is `COULD-NOT-EVALUATE`, because deleting the
+    statement is otherwise a way to pass. Returns the verdict and the offending
+    spans.
+
+    What it cannot do is recognise the claim restated in words none of these
+    patterns hold — the same limit the `13x` check has, and the reason the
+    roster below pins the sites rather than trusting the search.
+    """
+    checked = 0
+    missing: list[str] = []
+    for unit in _quotation_units(text):
+        if not (CLAIM_3_LAYER_A_HALF.search(unit) and CLAIM_3_LAYER_B_HALF.search(unit)):
+            continue
+        checked += 1
+        if not (CLAIM_3_CONDITION.search(unit) and CLAIM_3_RETIREMENT.search(unit)):
+            missing.append(unit)
+    if not checked:
+        return COULD_NOT_EVALUATE, []
+    return (DISAGREE if missing else AGREE), missing
+
+
+@pytest.mark.parametrize("doc,path", CORPUS_QUOTING_FIGURES)
+def test_claim_3_is_never_stated_without_its_condition(doc: str, path: Path) -> None:
+    """**THE DOCUMENT CHECK ISSUE #243 EXISTS FOR.**
+
+    Claim 3 promised the conditionality of an answer is retained *with the
+    answer* and can be asked about afterwards. What the file retains is the tag
+    and not its basis, so the promise has to be stated with its reach until
+    #227 lands.
+    """
+    verdict, missing = condition_travels_with_claim_3(
+        path.read_text(encoding="utf-8")
+    )
+    assert verdict != DISAGREE, (
+        f"{doc} states Claim 3 in {len(missing)} place(s) that never say the "
+        "artifact records the layer tag and not the basis it was computed "
+        "from, or never name what would retire that:\n"
+        + "\n".join(f"  - {unit[:160]}" for unit in missing)
+        + "\nState the condition in the same paragraph or table row as the "
+        "claim, and name the layer basis (#227) as what closes it."
+    )
+
+
+def test_the_documents_that_state_claim_3_are_the_ones_expected() -> None:
+    """**SILENCE IS NOT A PASS.** The check above passes on a document with the
+    claim removed, so this names where it is stated. A loss is worth a look: a
+    claim that stops being made in one of these four places is either a claim
+    being narrowed or a restatement that got reworded past the patterns."""
+    stating = {
+        doc
+        for doc, path in CORPUS_QUOTING_FIGURES
+        if condition_travels_with_claim_3(path.read_text(encoding="utf-8"))[0]
+        != COULD_NOT_EVALUATE
+    }
+    assert stating == set(DOCS_STATING_CLAIM_3), (
+        "the set of documents stating Claim 3 has moved: gained "
+        f"{sorted(stating - DOCS_STATING_CLAIM_3)}, lost "
+        f"{sorted(DOCS_STATING_CLAIM_3 - stating)}. A gain needs adding here — "
+        "it is a new place a conditional claim is published; a loss means the "
+        "claim stopped being stated where this check was guarding it."
+    )
+
+
+# --- the negatives for the check above ---
+
+
+def test_claim_3_stated_bare_is_caught() -> None:
+    """**The negative this check exists for**, and it is `plan.md`'s own sentence
+    as it stood before this change."""
+    verdict, missing = condition_travels_with_claim_3(
+        "**The claim.** Which answers the proprioception-only layer supports on\n"
+        "its own authority, and which are a conjunction with *the entity was\n"
+        "where the artifact says it was* — recorded per answer, in the artifact,\n"
+        "and queryable afterwards.\n"
+    )
+    assert verdict == DISAGREE
+    assert len(missing) == 1
+
+
+def test_the_condition_two_paragraphs_away_does_not_cover_the_claim() -> None:
+    """The defect the `13x` taught: correct elsewhere in the document, absent
+    where a reader takes the claim away from."""
+    verdict, missing = condition_travels_with_claim_3(
+        "The tag is recorded and not the basis it was computed from, until the\n"
+        "layer basis lands.\n"
+        "\n"
+        "Some other paragraph entirely.\n"
+        "\n"
+        "Which audit questions this artifact answers on its own authority, and\n"
+        "which it answers only as well as whatever supplied the entity positions.\n"
+    )
+    assert verdict == DISAGREE
+    assert len(missing) == 1
+
+
+def test_the_condition_in_the_same_paragraph_passes() -> None:
+    """The positive control, across a line break, since the documents wrap."""
+    verdict, missing = condition_travels_with_claim_3(
+        "Which audit questions this artifact answers on its own authority, and\n"
+        "which it answers only as well as whatever supplied the entity positions\n"
+        "— with the tag recorded and not the basis it was computed from, until\n"
+        "the layer basis lands.\n"
+    )
+    assert (verdict, missing) == (AGREE, [])
+
+
+def test_a_condition_that_names_no_end_is_caught() -> None:
+    """A condition with nothing that would retire it reads as a permanent
+    limitation. Claim 3's is a gap being closed, and #227 is the thing closing
+    it, so the unit has to name one or the other."""
+    verdict, missing = condition_travels_with_claim_3(
+        "Which audit questions this artifact answers on its own authority, and\n"
+        "which it answers only as well as whatever supplied the entity positions\n"
+        "— with the tag recorded and not the basis it was computed from.\n"
+    )
+    assert verdict == DISAGREE
+    assert len(missing) == 1
+
+
+def test_a_claim_3_table_row_is_its_own_unit() -> None:
+    """`README.md`'s claim table is four rows and only one of them is Claim 3.
+    A condition in a neighbouring row is not one a reader of this row sees."""
+    verdict, missing = condition_travels_with_claim_3(
+        "| | claim | status |\n"
+        "|---|---|---|\n"
+        "| **4** | the tag is recorded and not the basis it was computed from |\n"
+        "| **3** | which claims proprioception-only evidence supports, and which "
+        "depend on an uncertifiable perceiver |\n"
+    )
+    assert verdict == DISAGREE
+    assert missing == [
+        "| **3** | which claims proprioception-only evidence supports, and which "
+        "depend on an uncertifiable perceiver |"
+    ]
+
+
+def test_a_document_that_never_states_the_claim_is_not_a_pass() -> None:
+    """**THE NEGATIVE THE ACCEPTANCE CRITERIA ASK FOR BY NAME.** A document that
+    does not state Claim 3 must not be required to carry its condition — that is
+    every file in the corpus but four — and it must not read as agreement
+    either. Three-valued, with the roster above as what stops the third value
+    from becoming a hiding place."""
+    verdict, missing = condition_travels_with_claim_3(
+        "This document is about the retention curve and says nothing about "
+        "layers at all.\n"
+    )
+    assert (verdict, missing) == (COULD_NOT_EVALUATE, [])
+
+
+def test_one_half_of_the_claim_is_not_the_claim() -> None:
+    """`docs/mobile-base.md` says a driving base shrinks the set of questions the
+    artifact answers on its own authority. That is a finding about the mobile
+    track; demanding Claim 3's condition beside it would be noise, and noise is
+    how a check of this shape gets switched off."""
+    verdict, _ = condition_travels_with_claim_3(
+        "The second is that the envelope stops being answerable in room\n"
+        "coordinates without perception — which shrinks the set of questions\n"
+        "this artifact can answer on its own authority, and is the finding worth\n"
+        "publishing.\n"
+    )
+    assert verdict == COULD_NOT_EVALUATE

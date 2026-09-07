@@ -19,7 +19,9 @@ reaches an edge naming no `Entity` at all.
 
 What this file adds to that column is the argument that turns it into a claim:
 **which audit questions this artifact answers on its own authority, and which it
-answers only as well as whatever supplied the entity positions.**
+answers only as well as whatever supplied the entity positions — with the tag
+recorded and not the basis it was computed from, until the layer basis lands**
+([`limitations.md`](limitations.md) §12).
 
 The obstacle-independent envelope itself is not the contribution and this document
 does not present it as one — computing a reachable set from the robot and only
@@ -938,6 +940,7 @@ least once nobody remembers which side of it something used to be on.
 | §5.8, the pose in the artifact | #166 | 2026-09-02 |
 | §5.9, the provenance on the velocity | #156 | 2026-09-03 |
 | §5.8's second half, the pose written by `reg.graph.build` | #191 | 2026-09-05 |
+| The condition on the claim above, until the layer basis lands | #243, #227 | 2026-09-07 |
 
 ### §3's curve was wrong in every column until 2026-08-20
 

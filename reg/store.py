@@ -498,6 +498,23 @@ META_ENV_PLATFORM_MACHINE = "env_platform_machine"
 #: consults this rather than a second list of its own: an environment block that
 #: is missing one key is a could-not-evaluate, and it can only be seen to be
 #: missing against a list somebody keeps.
+#:
+#: **Recording a key and acting on it are different decisions, and the second is
+#: stated too.** All six are written; not all six make `reg.graph.envelope_at`
+#: refuse a recomputation. Which do is `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`
+#: and which do not is `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS` — two literal
+#: tuples that partition this one, checked by
+#: `tests/test_graph.py::test_the_recorded_keys_are_partitioned_into_compared_and_recorded_only`,
+#: with the argument for the split written beside each. They live there and not
+#: here because the module that acts is where a decision to act belongs, and
+#: because this module must not import the one that reads it.
+#:
+#: **Adding a key here is therefore two lines of work, and the second is the
+#: one that matters.** A key added to this tuple and to neither of those is
+#: recorded and silently not compared — the state issue #241 found numpy had
+#: been left in for two milestones, in the library that places every link
+#: endpoint. The partition test is what makes the omission fail at the time
+#: rather than be noticed by a reader of the artifact.
 ENVIRONMENT_KEYS = (
     META_ENV_PYTHON,
     META_ENV_NUMPY,
@@ -1669,8 +1686,9 @@ def build_environment() -> dict[str, str]:
     This function does not decide anything. It records. Deciding is
     `reg.graph.envelope_at`'s, which since issue #201 refuses to recompute a
     discarded polygon where the running environment differs from the one written
-    here on `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — four of the six below, and
-    that function is where the difference between the two lists is argued.
+    here on `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — five of the six below, the
+    sixth being `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS`, and those two are
+    where the difference between recording a key and acting on one is argued.
 
     Returns:
         `ENVIRONMENT_KEYS` to their values, in that order, every key present.

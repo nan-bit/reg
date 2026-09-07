@@ -62,9 +62,11 @@ the six keys §3's first row asks for — `reg.store.ENVIRONMENT_KEYS`, read off
 running interpreter and read back by `reg.graph.recorded_environment` — with
 `SCHEMA_VERSION` at 11 and its note beside the others. **And the reader now acts
 on them.** `reg.graph.envelope_at` refuses to recompute a discarded polygon off
-the recording environment, comparing four of the six —
+the recording environment, comparing five of the six —
 `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`: the platform's system and machine,
-shapely and GEOS — and naming the key that differs and both values. It **refuses
+shapely, GEOS and numpy, the sixth being
+`reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS` — and naming the key that differs and
+both values. It **refuses
 rather than warning**, because a recomputed polygon that reaches a caller under a
 warning is a polygon that reaches a query result. Three states and the third
 never resolves to the first: the keys agree and the recomputation happens exactly
@@ -413,8 +415,9 @@ interpreter, read by `reg.graph.recorded_environment`, `SCHEMA_VERSION` at 11 wi
 its note, and no published figure moved. The acting (issue #201):
 `reg.graph.envelope_at` refuses to recompute a discarded polygon off the
 recording environment, comparing `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — the
-platform's system and machine, shapely and GEOS — and reporting a
-could-not-evaluate rather than a pass or a failure, on the pattern issue #175
+platform's system and machine, shapely and GEOS, and numpy since #241 — and
+reporting a could-not-evaluate rather than a pass or a failure, on the pattern
+issue #175
 established for the bit-identity tables. An artifact stating no environment is a
 third state distinct from both. The split was on the seam this build order is cut
 along — writing the data and using it are different work, and only the second

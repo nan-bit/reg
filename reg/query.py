@@ -185,6 +185,7 @@ __all__ = [
     "COLD_READ_CLAIMS",
     "COLD_READ_QUESTIONS",
     "COLD_READ_RECOMPUTE_KEYS",
+    "COLD_READ_RECORDED_ONLY_KEYS",
     "COLD_READ_SCHEMA_VERSION",
     "COLD_READ_STATES",
     "COULD_NOT_EVALUATE",
@@ -2825,8 +2826,11 @@ def incident_report(
 # here: `reg.query` **names its own copy** of what it needs from the builder and
 # a test asserts the two spellings are one contract
 # (`test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes`).
-# `COLD_READ_RECOMPUTE_KEYS` is that copy, held equal to
-# `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` by a test, and the report's
+# `COLD_READ_RECOMPUTE_KEYS` and `COLD_READ_RECORDED_ONLY_KEYS` are that copy —
+# both halves of the split, because a report that named only the compared keys
+# would leave an assessor to work out the rest by subtraction — held equal to
+# `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` and
+# `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS` by a test, and the report's
 # `recompute_permitted` is held to agree with `reg.graph.envelope_at` on both
 # sides — matching environment and mismatched — by another. A disagreement is a
 # bug in this report and it fails there rather than in an assessor's hands.
@@ -2900,7 +2904,7 @@ COLD_READ_QUESTIONS: Mapping[str, str] = {
     CLAIM_REACHED_POINT: "could the robot have reached (x, y)?",
 }
 
-#: This module's copy of `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — the four keys
+#: This module's copy of `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — the five keys
 #: of the six recorded that `reg.graph.envelope_at` refuses a recomputation on.
 #: Named from `reg.store`'s constants, so the *spellings* are one definition;
 #: what is copied is the choice of subset, and
@@ -2913,7 +2917,18 @@ COLD_READ_RECOMPUTE_KEYS = (
     store.META_ENV_PLATFORM_MACHINE,
     store.META_ENV_SHAPELY,
     store.META_ENV_GEOS,
+    store.META_ENV_NUMPY,
 )
+
+#: This module's copy of `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS` — the
+#: recorded keys that do *not* make `reg.graph.envelope_at` refuse. Copied for
+#: the same reason and paid for by the same test as the tuple above, and it is
+#: here rather than spelled into a sentence because the report has to name this
+#: set: "the compared keys agree" is a pass whose reach an assessor cannot see
+#: without being told which recorded keys were left out of it. A prose word
+#: would go stale the next time the split moves, which is exactly what issue
+#: #241 found had happened.
+COLD_READ_RECORDED_ONLY_KEYS = (store.META_ENV_PYTHON,)
 
 
 @dataclass(frozen=True)
@@ -3258,8 +3273,9 @@ def _recompute_claim(
                 f"({', '.join(COLD_READ_RECOMPUTE_KEYS)}), so a recomputation "
                 "is permitted on this interpreter. That is a pass on this check "
                 "and not a guarantee of bit-identity: the C library is not "
-                "among the recorded keys and numpy is not among the compared "
-                "ones, and both place geometry."
+                "among the recorded keys, and of the recorded ones "
+                f"{', '.join(COLD_READ_RECORDED_ONLY_KEYS)} is recorded and not "
+                "compared."
             ),
         ),
         True,

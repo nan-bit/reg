@@ -310,30 +310,27 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    here, because it is a limitation of the project and not a clause of the contract.
 
    **The precondition is *in the file*, which changes what a disagreement means
-   and not whether one can happen.** `meta` carries six keys — the interpreter,
-   numpy, shapely, GEOS, and the platform's system and machine — written by
-   `reg.store.build_environment` and read back by `reg.graph.recorded_environment`.
-   This is a **buildinfo**, and the content list is adopted from the Reproducible
-   Builds project's practice rather than reasoned out again
+   and not whether one can happen.** `meta` carries six keys —
+   `reg.store.ENVIRONMENT_KEYS`, written by `reg.store.build_environment` and read
+   back by `reg.graph.recorded_environment`. This is a **buildinfo**, adopted from
+   the Reproducible Builds project's practice rather than reasoned out again
    ([`prior-art.md`](prior-art.md) §27; C2PA carries the same idea inside a
-   hash-bound manifest, §28). **The deviation from that practice is deliberate**: a
-   buildinfo is a separate product *beside* the artifact, and these keys go
-   **inside** `meta` because Claim 2 says this file answers with no access to
-   anything else. What that costs is that the environment cannot be distributed
-   without the artifact, and that it is descriptive `meta` rather than anything the
-   chain signs.
+   hash-bound manifest, §28) and placed **inside** `meta` as a deliberate
+   deviation from it, which [`self-describing.md`](self-describing.md) §3 states
+   with its cost.
 
    **And it acts.** `reg.graph.envelope_at` will not recompute a discarded polygon
    off the recording environment: it compares the platform's system and machine,
-   shapely's version and GEOS's (`reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`, four of
-   the six recorded keys) and refuses where any of them differs, naming the key
-   and both values. So this clause has a reader that enforces its precondition
-   rather than one that assumes it — **a discarded polygon is recoverable on the
-   environment the file names, and is a stated could-not-evaluate anywhere else.**
-   That is weaker than portability, and it still does not say *which* library moved
-   the geometry: `diffoscope` exists because a version list does not give that, and
-   nothing here proposes building one. The retained polygons are unaffected and
-   are returned on any machine; they are evidence in their own right, and the
+   shapely's version, GEOS's and numpy's — `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`,
+   five of the six, the sixth being `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS`,
+   which is stated as a list rather than left as a remainder — and refuses where
+   any of them differs, naming the key and both values. So this clause has a reader
+   that enforces its precondition rather than one that assumes it — **a discarded
+   polygon is recoverable on the environment the file names, and is a stated
+   could-not-evaluate anywhere else.** That is weaker than portability, and it does
+   not say *which* library moved the geometry
+   ([`limitations.md`](limitations.md) §1). The retained polygons are unaffected
+   and are returned on any machine; they are evidence in their own right, and the
    precondition is not about them.
 
    One hole is stated rather than papered over — the C library is not recorded,

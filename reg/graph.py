@@ -328,6 +328,7 @@ __all__ = [
     "OCCURRENCE_TIME_RESOLUTION_S",
     "OCCURRENCE_VERDICT_EVENTS",
     "RECOMPUTE_ENVIRONMENT_KEYS",
+    "RECORDED_ONLY_ENVIRONMENT_KEYS",
     "TIME_BASE_COLLAPSED",
     "TIME_BASE_DOMAIN",
     "TIME_BASE_RESOLVED",
@@ -812,34 +813,80 @@ META_LIMITS_SOURCE = "limits_source"
 #: The environment keys a recomputation must agree with the artifact on before
 #: `envelope_at` will recompute a discarded polygon (issue #201). **A subset of
 #: `reg.store.ENVIRONMENT_KEYS`, and the difference between the two lists is a
-#: decision rather than an oversight.**
+#: decision rather than an oversight** — the complement is written out below as
+#: `RECORDED_ONLY_ENVIRONMENT_KEYS` rather than left to be found by subtracting
+#: one tuple from another, because a set nobody states is a set nobody reviews —
+#: and this one went two milestones without being read.
 #:
-#: The file records six keys; four of them trigger the refusal — the platform's
-#: system and machine, shapely's version and GEOS's. Those are what issue #175
-#: measured a divergence across and what runs the polygon arithmetic:
-#: `reg.envelope.compute_envelope` unions link polygons and
+#: The file records six keys and five of them trigger the refusal: the
+#: platform's system and machine, shapely's version, GEOS's and numpy's. Those
+#: are what issue #175 measured a divergence across and what places the
+#: geometry — `reg.envelope.compute_envelope` unions link polygons and
 #: `reg.tolerances.simplify_geometry` runs Douglas-Peucker, both in GEOS through
-#: shapely, and libm is the platform's.
+#: shapely; `numpy.cos` and `numpy.sin` in `reg.kinematics.forward_kinematics`
+#: place every link endpoint those polygons are built around; and libm is the
+#: platform's.
 #:
-#: **The interpreter and numpy are recorded and are not triggers.** A different
-#: Python patch release is in the file for a reader who needs it, and making it
-#: a trigger would make every artifact unrecomputable on any machine that has
-#: been patched — which teaches whoever meets the refusal to switch it off, and
-#: a check that gets switched off buys nothing. numpy is the same call and it is
-#: the weaker one, stated rather than left to be discovered: `numpy.cos` and
-#: `numpy.sin` place every link endpoint in `reg.kinematics`, so a numpy
-#: difference *can* move the geometry, and this guard does not act on it. The
-#: file states the version either way, so a reader who has a reason to care can
-#: compare it themselves; what they cannot do is have this reader refuse for
-#: them. That is the same shape as the C library hole
-#: (`reg.store.ENVIRONMENT_KEYS`): matching on this list is necessary for a
-#: bit-identical recomputation and is not sufficient.
+#: **numpy joined at issue #241, at its full version and not a coarsening of
+#: one.** It was recorded by #200 and left out of #201's trigger set, which
+#: named the platform, shapely and GEOS; that omission was in the specification
+#: rather than the implementation, and what it meant is that this guard let
+#: through a difference in the library that places every link endpoint. Three
+#: answers were open — compare the full version, compare some coarser part of
+#: it, or state the exclusion beside the interpreter's — and the full version is
+#: chosen for two reasons.
+#:
+#: *The two mistakes are not the same size.* Refusing where the two numpys would
+#: in fact have agreed costs a could-not-evaluate, and the file's retained
+#: polygons are handed over regardless; accepting where they would not costs a
+#: recomputed polygon returned as the region in force. Only the second is a
+#: wrong answer, and it is the one issue #201 exists to prevent.
+#:
+#: *A coarsening would be a claim this repository cannot check.* Comparing
+#: `1.26` and discarding the rest asserts that numpy's patch releases are
+#: bit-identical in `cos` and `sin` over the arguments `reg.kinematics` passes
+#: them. numpy does not promise that, nothing here measures it, and the
+#: granularity that made the assertion would be a threshold nobody supplied —
+#: `CLAUDE.md`, *never invent a default*. Comparing the whole string asserts
+#: only that two strings differ, which is all this reader can see.
+#:
+#: The interpreter is recorded and is still not a trigger;
+#: `RECORDED_ONLY_ENVIRONMENT_KEYS` is where that exclusion is argued, and it is
+#: the only key of the six in it.
 RECOMPUTE_ENVIRONMENT_KEYS = (
     store.META_ENV_PLATFORM_SYSTEM,
     store.META_ENV_PLATFORM_MACHINE,
     store.META_ENV_SHAPELY,
     store.META_ENV_GEOS,
+    store.META_ENV_NUMPY,
 )
+
+#: The recorded keys that do **not** trigger the refusal — the complement of
+#: `RECOMPUTE_ENVIRONMENT_KEYS` in `reg.store.ENVIRONMENT_KEYS`, stated rather
+#: than derived. The two tuples partition the recorded set, and
+#: `tests/test_graph.py::test_the_recorded_keys_are_partitioned_into_compared_and_recorded_only`
+#: is what holds them to it: a seventh key added to `reg.store.ENVIRONMENT_KEYS`
+#: lands in neither list and fails there. So *recorded and not compared* is a
+#: state somebody chose, once per key, and not one a diff can arrive at without
+#: saying so — which is what issue #241 found had happened to numpy.
+#:
+#: `env_python_version` is the whole of it, and the reason is cry-wolf rather
+#: than irrelevance. CPython's `math.sin`, `math.cos` and `math.hypot` place
+#: every arc vertex in `reg.envelope`, so a patch release *can* move the
+#: geometry. What separates it from numpy is who installs it: an interpreter is
+#: patched by the distribution, on machines nobody chose to upgrade, so making
+#: it a trigger would make every existing artifact unrecomputable on a machine
+#: that took a security update — which teaches whoever meets the refusal to
+#: switch it off, and a check that gets switched off buys nothing. numpy is a
+#: pinned dependency of this package, installed deliberately.
+#:
+#: The file states the interpreter either way, so a reader with a reason to care
+#: can compare it themselves; what they cannot do is have this reader refuse for
+#: them. That is the same shape as the C library hole
+#: (`reg.store.ENVIRONMENT_KEYS`): agreement on the compared list is necessary
+#: for a bit-identical recomputation and is not sufficient, and this tuple is
+#: the second unchecked term said out loud.
+RECORDED_ONLY_ENVIRONMENT_KEYS = (store.META_ENV_PYTHON,)
 
 
 class GraphBuildError(Exception):
@@ -3260,8 +3307,9 @@ def recompute_environment_differences(conn) -> tuple[tuple[str, str, str], ...]:
 
     The comparison `envelope_at` refuses on (issue #201), exposed on its own so
     a reader can ask the question without asking for a polygon. It compares
-    `RECOMPUTE_ENVIRONMENT_KEYS` — see there for why that is four keys and not
-    the six the file records.
+    `RECOMPUTE_ENVIRONMENT_KEYS` — see there for why that is five keys and not
+    the six the file records, and `RECORDED_ONLY_ENVIRONMENT_KEYS` for the sixth
+    stated as the set it is rather than as what is left over.
 
     **It reports a difference and never a cause.** A key that differs says the
     two environments are not the same one; it does not say that this is what
@@ -3276,8 +3324,9 @@ def recompute_environment_differences(conn) -> tuple[tuple[str, str, str], ...]:
         One `(key, recorded, running)` triple per differing key, in
         `RECOMPUTE_ENVIRONMENT_KEYS` order. Empty means every compared key
         agrees — which is a pass on this check and not a guarantee of
-        bit-identity, because the C library is not among the keys and numpy is
-        not among the triggers.
+        bit-identity, because the C library is not among the recorded keys and
+        the interpreter (`RECORDED_ONLY_ENVIRONMENT_KEYS`) is recorded and not
+        compared.
 
     Raises:
         GraphQueryError: the artifact states no environment, or only part of

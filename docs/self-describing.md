@@ -3,10 +3,9 @@
 **Status:** a design document; tiers 0-3 of §8 have landed — tier 2 in two
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
 #201, the recompute path refuses off the recording environment), and tier 3 as
-`reg.query.cold_read` (issue #231); tier 5's own costing has landed too (issue
-#230), and the decision it is for has not been taken · written 2026-09-05, tier
-1's findings folded in 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07 ·
-normative
+`reg.query.cold_read` (issue #231); tiers 4 and 5 have had their costings land
+(issues #249, #230) and neither decision taken · written 2026-09-05, tier 1's
+findings folded in 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07 · normative
 over nothing yet; where it touches what the project may claim it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
 those files carry the change · the build order in §8 is the authority on what is
@@ -435,6 +434,54 @@ something other than a PR body.
 **Tier 4 — the layer basis** (issue #227). Depends on §7 question 1 being
 answered. Ships with the `DERIVED` fixture from question 2, because a basis
 nothing exercises is a basis nobody knows the shape of.
+
+*Its own tier 2, the costing, has landed* (issue #249): `reg.bench
+--layer-basis` prices both granularities and adopts neither. Measured with
+`python -m reg.bench --layer-basis --seed 0` on the fixture Claim 1 is priced
+on, `long_run` at 3,000 frames. Nothing was retained and no figure republished.
+
+| level | option | artifact | vs today | basis rows | answers | 6 months | vs sensor |
+|---|---|---|---|---|---|---|---|
+| `occurrence` | today | 1,008,640 B | — | 0 | 0 of 0 | 265 GB | ~689x |
+| `occurrence` | A and B alike | 1,011,712 B | +0.30% | 0 | 0 of 0 | 266 GB | ~687x |
+| `transition` | today | 2,503,680 B | — | 0 | 0 of 9,724 | 658 GB | ~277x |
+| `transition` | A | 3,158,016 B | +26.13% | 9,892 | 9,724 of 9,724 | 830 GB | ~220x |
+| `transition` | B | 2,525,184 B | +0.86% | 252 | 84 of 9,724 | 664 GB | ~275x |
+| `per-frame` | today | 3,634,176 B | — | 0 | 0 of 18,428 | 955 GB | ~191x |
+| `per-frame` | A | 4,857,856 B | +33.67% | 18,596 | 18,428 of 18,428 | 1,277 GB | ~143x |
+| `per-frame` | B | 3,655,680 B | +0.59% | 252 | 84 of 18,428 | 961 GB | ~190x |
+
+**The headline figures move here; under tier 5's options they did not.** A
+granularity adds a table rather than a column, and an empty table with its key
+costs SQLite pages at every level — so `265 GB` becomes 266 GB and `~689x`
+becomes ~687x even where no basis row is written. The totals and multiples are
+the published figures scaled by the measured ratio; the sensor side of the last
+column is a projection wherever it is quoted
+([`sensor-baseline.md`](sensor-baseline.md)).
+
+**B is cheaper by covering less, not by sharing.** It answers 84 of the
+transition level's 9,724 tagged edges — 0.86% — because the basis hangs on an
+envelope and most tagged edges name none: a `SEPARATION`, an `ADJUDICATED` or a
+`FOLLOWS` edge has no envelope endpoint, and an `INTERSECTS` or
+`DECLARED` edge has one whose basis did not decide its tag. The sharing B is
+cheaper *by* measures **1.00**: `ENVELOPE_RETENTION` has already reduced the
+envelope rows to the ones an edge anchors, so there is no set of edges to
+amortise a reference over. Per edge answered, B costs 256 B against A's 67 —
+3.8x, the opposite direction from its byte column.
+
+**Question 1's second half: B cannot express it.** Two `HAS_ENVELOPE` edges
+over one envelope row whose bases differ get one
+basis between them, because envelope rows are deduplicated on `(envelope_hash,
+source, horizon)` while the pose taint is read off the *edge's own endpoint*.
+`tests/test_bench.py` feeds the study that case and asserts it reports the
+second edge misstated.
+
+**Neither option closes gap 1 on its own.** `base_vel_source` is an input no
+table retains, so both write it as *not retained*: the builder has to record the
+value too, which is a change to what is retained rather than to where. That is a
+third decision and this tier does not take it. Neither moves
+`reg.query.cold_read`'s `layer-tag-basis`, which stays
+`READABLE-NOT-CHECKABLE` while nothing is adopted.
 
 **Tier 5 — the boundary** (issue #228). A decision first, then bytes, then a
 re-measurement and republish of every figure that moves. Not to be started until

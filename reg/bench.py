@@ -202,7 +202,7 @@ from reg.tolerances import (
     quantize_distance,
     quantize_time,
 )
-from reg.types import Limits, ProprioState
+from reg.types import Limits, LimitSource, ProprioState
 from reg.world import World
 
 __all__ = [
@@ -218,6 +218,14 @@ __all__ = [
     "MET",
     "NOT_MET",
     "OCCURRENCE_LEVEL",
+    "LAYER_BASIS_EDGE_TABLE",
+    "LAYER_BASIS_ENVELOPE_TABLE",
+    "LAYER_BASIS_INPUTS",
+    "LAYER_BASIS_OPTIONS",
+    "LAYER_BASIS_PER_EDGE",
+    "LAYER_BASIS_PER_ENVELOPE",
+    "LAYER_BASIS_RETAINS",
+    "LAYER_BASIS_TODAY",
     "OUTER_BOUNDARY_COLUMN",
     "OUTER_BOUNDARY_EVERYWHERE",
     "OUTER_BOUNDARY_NONE",
@@ -244,10 +252,13 @@ __all__ = [
     "WALL_CLOCK_COLUMNS",
     "AttestationAnswers",
     "AttestationTruth",
+    "BasisInput",
     "BenchError",
     "ControlRatePoint",
     "Crossover",
     "GroundTruth",
+    "LayerBasisCost",
+    "LayerBasisStudy",
     "LevelAnswers",
     "LevelCheck",
     "OuterBoundaryCost",
@@ -271,8 +282,11 @@ __all__ = [
     "claim_verdict",
     "compression_ratio",
     "control_rate_run_seconds",
+    "cost_layer_basis",
     "cost_outer_boundary",
     "crossover",
+    "edge_basis",
+    "envelope_basis",
     "frames_at_rate",
     "ground_truth_from_csv",
     "gzip_bytes",
@@ -284,6 +298,7 @@ __all__ = [
     "outer_boundary_wkb",
     "render",
     "run_control_rate_study",
+    "run_layer_basis_study",
     "run_outer_boundary_study",
     "run_resolution_curve",
     "run_scaling_point",
@@ -6206,6 +6221,650 @@ def run_outer_boundary_study(
 
 
 # --------------------------------------------------------------------------
+# The layer-basis granularity study (issue #249, tier 2 of #227).
+#
+# WHAT A `layer` TAG SAYS TODAY. `edge.layer` is `A` or `B` and no column says
+# what that tag was computed from, so it can be read and not checked
+# (docs/self-describing.md gap 1). Issue #227 has to put the basis in the file
+# and §7 question 1 asks at what granularity: **per edge**, or **per computed
+# envelope** with every edge over one inheriting by reference. Per edge is
+# precise and multiplies rows; per envelope is cheaper and coarser — and on a
+# project whose headline claim is a row count, neither description settles it.
+#
+# THIS RETAINS NOTHING. The schema is unchanged, nothing in `reg.store`
+# declares either table below, no build in this repository writes a basis row,
+# and `reg.query.cold_read` still reports `layer-tag-basis` exactly as it did.
+# The variant files are written under the work directory, measured, and left
+# there. Adopting a granularity is #227's to do, on these numbers.
+#
+# MEASURED, NOT PROJECTED, on #230's terms and for its reason: each option is
+# priced by copying a level's view, creating the table that option would create,
+# writing the rows that option would write, `VACUUM`ing, and reading the bytes
+# off the file. SQLite page alignment is inside the measurement rather than
+# argued around it.
+#
+# THE BASIS IS DERIVED FROM WHAT ACTUALLY DECIDES A TAG, AND NOT INVENTED.
+# Three things decide `edge.layer` in this repository today and `edge_basis`
+# reads all three off the file:
+#
+#   `edge_type`         `reg.store.EDGE_SPECS` fixes the layer for eight of the
+#                       nine edge types. For those the type *is* the basis.
+#   `limits_source`     `reg.envelope.envelope_layer(limits)` decides
+#                       `HAS_ENVELOPE`, the one type whose layer is not a
+#                       property of its type (issue #84).
+#   `base_pose_source`  `reg.store.open_edge` refuses a Layer A tag on an edge
+#                       resting on a posed configuration (issue #166), reading
+#                       the pose off *each endpoint* — so an endpoint that
+#                       reaches a `robot_config` contributes one input.
+#
+# A fourth is an input to the envelope and **not** to the tag, which is the
+# whole of gap 1: `reg.envelope.outer_envelope` reads `state.base_vel`, a
+# `BaseVelocity` may be `DERIVED` (issue #156), and nothing maps that to a
+# layer. It is `base_vel_source` below, and its value is what the artifact
+# states — which today is nothing, because the column lives in `reg.stream` and
+# no table retains it. That row is recorded as *not retained* and never as
+# `proprioceptive`: an invented value would make a perceived run and a measured
+# one produce identical basis rows, which is the exact failure #227 was
+# regroomed around.
+# --------------------------------------------------------------------------
+
+#: The artifact as it is built today: a `layer` on every edge and no basis for
+#: any of them. The baseline the other two options' movement is measured
+#: against, and the row the report's benefit column is read against.
+LAYER_BASIS_TODAY = "today"
+
+#: Option A — per edge. Every tagged edge records what its tag was computed
+#: from, one row per input. Precise: an edge's basis is that edge's.
+LAYER_BASIS_PER_EDGE = "A"
+
+#: Option B — per computed envelope. The basis sits on the envelope row and
+#: every edge over it inherits by reference. Cheaper where many edges share one
+#: envelope, and silent about every edge that names no envelope at all.
+LAYER_BASIS_PER_ENVELOPE = "B"
+
+#: The three builds this study compares, in the order the report states them.
+LAYER_BASIS_OPTIONS: tuple[str, ...] = (
+    LAYER_BASIS_TODAY,
+    LAYER_BASIS_PER_EDGE,
+    LAYER_BASIS_PER_ENVELOPE,
+)
+
+#: What each option retains, for the report's own column. Prose rather than a
+#: code reference, on `OUTER_BOUNDARY_RETAINS`'s reason: the table goes into a
+#: document a person takes a decision from.
+LAYER_BASIS_RETAINS: dict[str, str] = {
+    LAYER_BASIS_TODAY: "nothing — today's schema, a tag with no basis under it",
+    LAYER_BASIS_PER_EDGE: "one row per input per tagged edge",
+    LAYER_BASIS_PER_ENVELOPE: (
+        "one row per input per computed envelope; edges inherit by reference"
+    ),
+}
+
+#: Where a per-edge basis would land. Both tables exist only inside the variant
+#: files this study writes: nothing in `reg.store` declares either.
+LAYER_BASIS_EDGE_TABLE = "edge_layer_basis"
+
+#: Where a per-envelope basis would land. Same status as the table above.
+LAYER_BASIS_ENVELOPE_TABLE = "envelope_layer_basis"
+
+#: The edge type, which fixes the layer for every type but `HAS_ENVELOPE`.
+BASIS_EDGE_TYPE = "edge_type"
+
+#: `Limits.source`, which `reg.envelope.envelope_layer` decides `HAS_ENVELOPE`
+#: from. One value for a whole build, recorded in `meta`.
+BASIS_LIMITS_SOURCE = "limits_source"
+
+#: `BaseVelocity.source` — an input to the outer set and not to the tag, which
+#: is gap 1 itself. No table retains it, so its value here is what the file
+#: states about it and never a substituted `proprioceptive`.
+BASIS_BASE_VEL_SOURCE = "base_vel_source"
+
+#: `robot_config.base_pose_source` at one endpoint, which is what makes
+#: `open_edge` refuse a Layer A tag (issue #166).
+BASIS_BASE_POSE_SOURCE = "base_pose_source"
+
+#: The four inputs, spelled once so a caller can check a name it was handed is
+#: one this module produces. A fifth is a decision about what computes a tag,
+#: not a string to add here.
+LAYER_BASIS_INPUTS: tuple[str, ...] = (
+    BASIS_EDGE_TYPE,
+    BASIS_LIMITS_SOURCE,
+    BASIS_BASE_VEL_SOURCE,
+    BASIS_BASE_POSE_SOURCE,
+)
+
+#: What a `base_pose_source` row says for a configuration that states no pose.
+#: A stated absence, because it is what makes the Layer A tag *legitimate* —
+#: an omitted row would leave a reader unable to tell "this endpoint states no
+#: pose" from "nobody looked".
+BASIS_NO_POSE = "none stated"
+
+#: What a `base_vel_source` row says. The artifact carries no column for it, so
+#: this is a could-not-evaluate written down rather than a value invented.
+BASIS_NOT_RETAINED = "not retained"
+
+#: Where each input is read from. A closed vocabulary of four short tokens, so
+#: what this study prices is the **row count** — which is what granularity
+#: decides — and not the length of a sentence somebody wrote into a column.
+BASIS_PROVENANCE: dict[str, str] = {
+    BASIS_EDGE_TYPE: "reg.store.EDGE_SPECS",
+    BASIS_LIMITS_SOURCE: f"meta[{graph.META_LIMITS_SOURCE}]",
+    BASIS_BASE_VEL_SOURCE: "reg.stream",
+    BASIS_BASE_POSE_SOURCE: "robot_config.base_pose_source",
+}
+
+
+@dataclass(frozen=True)
+class BasisInput:
+    """One input a `layer` tag was computed from, with where it was read.
+
+    Three short fields and no free prose: `name` is one of `LAYER_BASIS_INPUTS`,
+    `value` is what that input said in this file, and `provenance` is the
+    `BASIS_PROVENANCE` token for where it was read from. A basis is a set of
+    these, and both options below store exactly that — what differs is the row
+    they hang off.
+    """
+
+    name: str
+    value: str
+    provenance: str
+
+    def __post_init__(self) -> None:
+        if self.name not in LAYER_BASIS_INPUTS:
+            raise BenchError(
+                f"{self.name!r} is not one of the inputs a layer tag is computed "
+                f"from ({', '.join(LAYER_BASIS_INPUTS)}). An input nobody "
+                "declared would be priced as part of the basis while deciding "
+                "no tag."
+            )
+        if not str(self.value).strip():
+            raise BenchError(
+                f"the {self.name} input was given no value. A basis row with an "
+                "empty value is the assertion this whole track exists to "
+                f"remove; state {BASIS_NOT_RETAINED!r} where the file carries "
+                "nothing."
+            )
+
+
+def _pose_source_input(
+    conn: sqlite3.Connection, kind: str, node_key: int
+) -> BasisInput | None:
+    """The `base_pose_source` one edge endpoint rests on, or `None`.
+
+    `reg.store._room_frame_endpoint`'s reach, read for its provenance rather
+    than for its refusal: a `RobotConfig` endpoint, or an `Envelope` endpoint
+    through the configuration it was computed from. Every other kind reaches no
+    configuration and contributes no row — which is a fact about the endpoint
+    and not a missing input.
+    """
+    if kind == "RobotConfig":
+        row = conn.execute(
+            "SELECT base_pose_source FROM robot_config WHERE config_key = ?",
+            (int(node_key),),
+        ).fetchone()
+    elif kind == "Envelope":
+        row = conn.execute(
+            "SELECT c.base_pose_source AS base_pose_source FROM envelope e "
+            "JOIN robot_config c ON c.config_key = e.config_key "
+            "WHERE e.envelope_key = ?",
+            (int(node_key),),
+        ).fetchone()
+    else:
+        return None
+    if row is None:
+        return None
+    stated = row["base_pose_source"]
+    return BasisInput(
+        name=BASIS_BASE_POSE_SOURCE,
+        value=BASIS_NO_POSE if stated is None else str(stated),
+        provenance=BASIS_PROVENANCE[BASIS_BASE_POSE_SOURCE],
+    )
+
+
+def _limits_source_text(conn: sqlite3.Connection) -> str:
+    """`meta[limits_source]`, or a refusal naming it. **No default.**
+
+    `reg.graph.recorded_limit_source`'s rule, and its reason: an artifact that
+    does not say where its bounds came from must not price a basis that reads
+    as a clean Layer A one. A study that substituted `proprioceptive` here would
+    give the two cases identical rows and identical bytes.
+    """
+    stated = store.get_meta(conn, graph.META_LIMITS_SOURCE)
+    if stated is None:
+        raise BenchError(
+            f"this view states no meta[{graph.META_LIMITS_SOURCE!r}], so it does "
+            "not say where the limits its HAS_ENVELOPE tags were computed from "
+            "came from. That is a could-not-evaluate and it does not resolve to "
+            f"{LimitSource.PROPRIOCEPTIVE.value!r}: a basis priced on a "
+            "substituted value would be identical rows for a perceived run and "
+            "a measured one, which is the defect issue #227 was regroomed "
+            "around."
+        )
+    return str(stated)
+
+
+def edge_basis(conn: sqlite3.Connection, edge: sqlite3.Row) -> tuple[BasisInput, ...]:
+    """What one edge's `layer` tag was computed from, read off the file.
+
+    The three deciders named in the section header, in a fixed order so two
+    edges with the same basis produce the same tuple and can be compared. The
+    `HAS_ENVELOPE` case does not carry `edge_type`, because its type is exactly
+    the one that does *not* fix a layer; every other type carries it and carries
+    no `limits_source`, because nothing consulted one.
+
+    Args:
+        conn: an open view (`reg.store.connect`).
+        edge: a row with `type`, `src_kind`, `src_key`, `dst_kind`, `dst_key`.
+
+    Returns:
+        The inputs, deduplicated: an edge whose two endpoints reach the same
+        configuration consulted it once, and a second identical row would price
+        a lookup rather than an input.
+
+    Raises:
+        BenchError: an edge type this module has no basis rule for, or a
+            `HAS_ENVELOPE` edge in a view stating no `meta[limits_source]`.
+            Both are could-not-evaluate: a basis nobody derived is not an empty
+            basis, and an empty one would price as the cheapest option there is.
+    """
+    edge_type = str(edge["type"])
+    spec = store.EDGE_SPECS.get(edge_type)
+    if spec is None:
+        raise BenchError(
+            f"{edge_type!r} is not an edge type this repository writes "
+            f"({', '.join(sorted(store.EDGE_SPECS))}), so nothing here says what "
+            "its layer tag would be computed from. An empty basis for it would "
+            "price as a row nobody has to store."
+        )
+    inputs: list[BasisInput] = []
+    if isinstance(spec.layer, str):
+        inputs.append(
+            BasisInput(
+                name=BASIS_EDGE_TYPE,
+                value=edge_type,
+                provenance=BASIS_PROVENANCE[BASIS_EDGE_TYPE],
+            )
+        )
+    else:
+        inputs.append(
+            BasisInput(
+                name=BASIS_LIMITS_SOURCE,
+                value=_limits_source_text(conn),
+                provenance=BASIS_PROVENANCE[BASIS_LIMITS_SOURCE],
+            )
+        )
+        inputs.append(
+            BasisInput(
+                name=BASIS_BASE_VEL_SOURCE,
+                value=BASIS_NOT_RETAINED,
+                provenance=BASIS_PROVENANCE[BASIS_BASE_VEL_SOURCE],
+            )
+        )
+    # Both endpoints, because `open_edge` reads both. Only for a tag that could
+    # be `A`: a `B` edge is already tagged with the dependency, so the pose
+    # decides nothing about it and a row saying so would be a row about a
+    # lookup that never happened.
+    if str(edge["layer"]) == "A":
+        for kind, key in (
+            (str(edge["src_kind"]), int(edge["src_key"])),
+            (str(edge["dst_kind"]), int(edge["dst_key"])),
+        ):
+            found = _pose_source_input(conn, kind, key)
+            if found is not None and found not in inputs:
+                inputs.append(found)
+    return tuple(inputs)
+
+
+def envelope_basis(
+    conn: sqlite3.Connection, envelope_key: int
+) -> tuple[BasisInput, ...]:
+    """What option B would store on one computed envelope row.
+
+    The same three inputs a `HAS_ENVELOPE` edge over it consults — the limit
+    source, the unretained base-velocity source, and the pose source of the
+    configuration *this row* names. That last one is where B and A can part
+    company: the edge's own `src_kind`/`src_key` may name a different
+    configuration, because envelope rows are deduplicated on
+    `(envelope_hash, source, horizon)` and two configurations reaching the same
+    region share one.
+
+    Raises:
+        BenchError: no such row, a row with no configuration, or a view stating
+            no `meta[limits_source]`.
+    """
+    row = conn.execute(
+        "SELECT source, config_key FROM envelope WHERE envelope_key = ?",
+        (int(envelope_key),),
+    ).fetchone()
+    if row is None:
+        raise BenchError(
+            f"this view holds no envelope row with key {envelope_key!r}, so "
+            "there is no basis of it to price."
+        )
+    if row["config_key"] is None:
+        raise BenchError(
+            f"envelope row {envelope_key!r} has source={str(row['source'])!r} and "
+            "names no configuration, so no pose source reaches it and there is "
+            "no basis to hang on it."
+        )
+    inputs = [
+        BasisInput(
+            name=BASIS_LIMITS_SOURCE,
+            value=_limits_source_text(conn),
+            provenance=BASIS_PROVENANCE[BASIS_LIMITS_SOURCE],
+        ),
+        BasisInput(
+            name=BASIS_BASE_VEL_SOURCE,
+            value=BASIS_NOT_RETAINED,
+            provenance=BASIS_PROVENANCE[BASIS_BASE_VEL_SOURCE],
+        ),
+    ]
+    found = _pose_source_input(conn, "Envelope", int(envelope_key))
+    if found is not None:
+        inputs.append(found)
+    return tuple(inputs)
+
+
+@dataclass(frozen=True)
+class LayerBasisCost:
+    """One level under one option: what it costs and what it can answer."""
+
+    level: str
+    option: str
+    size_bytes: int
+    #: Every edge in this level's view. All of them carry a `layer`, which is
+    #: what makes the denominator below the whole edge count and not a subset.
+    tagged_edges: int
+    #: Envelope rows in this view, and how many of them are `computed` — B's
+    #: rule. Zero at the occurrence level, which retains neither, and that is a
+    #: measurement rather than a gap.
+    envelope_rows: int
+    computed_envelopes: int
+    #: Basis rows this option writes.
+    basis_rows: int
+    #: Edges whose **own** basis this option can state exactly. The benefit
+    #: column: `today` answers none, A answers every tagged edge, and B answers
+    #: a `HAS_ENVELOPE` edge only where the envelope's basis is that edge's.
+    edges_answered: int
+    #: Edges over an envelope whose stored basis is **not** this edge's — B
+    #: would answer them, and answer wrongly. Worse than silence, and counted
+    #: separately for exactly that reason.
+    edges_misstated: int
+    #: `HAS_ENVELOPE` edges per computed envelope carrying a basis, which is the
+    #: sharing factor B's whole cost argument rests on. `None` where the option
+    #: stores no envelope basis at all.
+    sharing: float | None
+    run_seconds: float
+
+    @property
+    def edges_unreachable(self) -> int:
+        """Edges this option has nowhere to put a basis for. Silence, not error."""
+        return self.tagged_edges - self.edges_answered - self.edges_misstated
+
+    @property
+    def bytes_per_hour(self) -> float:
+        """The retention rate, on `ResolutionPoint.bytes_per_hour`'s terms.
+
+        Same definition and the same overstatement of the fixed
+        schema-and-index term, because the two are compared directly.
+        """
+        if self.run_seconds <= 0.0:
+            raise BenchError(
+                f"{self.level}/{self.option}: the run is {self.run_seconds} s of "
+                "robot time, so a per-hour rate over it is a division by zero."
+            )
+        return self.size_bytes * SECONDS_PER_HOUR / self.run_seconds
+
+
+@dataclass(frozen=True)
+class LayerBasisStudy:
+    """One build, three views, three options: nine measurements of one artifact."""
+
+    curve: ResolutionCurve
+    costs: tuple[LayerBasisCost, ...]
+
+    def cost(self, level: str, option: str) -> LayerBasisCost:
+        """The measurement for one `(level, option)`.
+
+        Raises:
+            BenchError: the pair was not measured. An absent measurement is a
+                could-not-evaluate and never a zero, on
+                `OuterBoundaryStudy.cost`'s reason.
+        """
+        for cost in self.costs:
+            if cost.level == level and cost.option == option:
+                return cost
+        raise BenchError(
+            f"this study holds no measurement for level={level!r} "
+            f"option={option!r}. It measured "
+            f"{sorted({(c.level, c.option) for c in self.costs})}."
+        )
+
+    def factor(self, level: str, option: str) -> float:
+        """An option's bytes over today's, at one level. The movement."""
+        baseline = self.cost(level, LAYER_BASIS_TODAY)
+        if baseline.size_bytes <= 0:
+            raise BenchError(
+                f"{level}: option {LAYER_BASIS_TODAY} measured "
+                f"{baseline.size_bytes} bytes, so there is nothing for the other "
+                "options to have moved. An empty baseline is a build that did "
+                "not happen."
+            )
+        return self.cost(level, option).size_bytes / baseline.size_bytes
+
+
+_LAYER_BASIS_ROW_COLUMNS = "seq INTEGER NOT NULL, input TEXT NOT NULL, value TEXT NOT NULL, provenance TEXT NOT NULL"
+
+
+def cost_layer_basis(
+    view_path: str | Path, out_path: str | Path, *, level: str, option: str
+) -> LayerBasisCost:
+    """Price one option on one level's view. Reads bytes; changes no artifact.
+
+    The view is copied first and never modified, so a study can price all three
+    options against the same file and the resolution curve's own measurement is
+    still the file it measured.
+
+    Args:
+        view_path: a view from `materialize_level`, left alone.
+        out_path: where the variant goes. Replaced if it exists.
+        level: which level this view is, for the row that comes back.
+        option: one of `LAYER_BASIS_OPTIONS`.
+
+    Returns:
+        A `LayerBasisCost` whose `size_bytes` is the variant file on disk.
+
+    Raises:
+        BenchError: an unknown level or option, or any refusal `edge_basis`
+            raises. An option nobody defined has no granularity rule, so its
+            byte count would describe nothing.
+    """
+    if level not in RESOLUTION_LEVELS:
+        raise BenchError(
+            f"{level!r} is not a resolution level. Known levels: "
+            f"{list(RESOLUTION_LEVELS)}."
+        )
+    if option not in LAYER_BASIS_OPTIONS:
+        raise BenchError(
+            f"{option!r} is not a layer-basis option. Known: "
+            f"{list(LAYER_BASIS_OPTIONS)}. An option nobody defined stores the "
+            "basis nowhere in particular, so its byte count would describe no "
+            "granularity."
+        )
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.unlink(missing_ok=True)
+    shutil.copyfile(Path(view_path), out_path)
+
+    conn = store.connect(out_path)
+    try:
+        edges = conn.execute(
+            "SELECT edge_id, type, layer, src_kind, src_key, dst_kind, dst_key "
+            "FROM edge ORDER BY edge_id"
+        ).fetchall()
+        envelopes = conn.execute(
+            "SELECT envelope_key, source FROM envelope ORDER BY envelope_key"
+        ).fetchall()
+        computed = tuple(
+            row for row in envelopes if str(row["source"]) == "computed"
+        )
+        # Every edge's own basis, once, whatever the option. The options differ
+        # in where a basis is stored and not in what an edge's basis *is*, so
+        # deriving it per option would let the comparison drift.
+        bases = {int(e["edge_id"]): edge_basis(conn, e) for e in edges}
+        envelope_bases = {
+            int(row["envelope_key"]): envelope_basis(conn, int(row["envelope_key"]))
+            for row in computed
+        }
+
+        basis_rows = 0
+        answered = 0
+        misstated = 0
+        sharing: float | None = None
+        if option == LAYER_BASIS_PER_EDGE:
+            conn.execute(
+                f"CREATE TABLE {LAYER_BASIS_EDGE_TABLE} ("  # noqa: S608
+                "edge_id INTEGER NOT NULL REFERENCES edge (edge_id), "
+                f"{_LAYER_BASIS_ROW_COLUMNS}, PRIMARY KEY (edge_id, seq))"
+            )
+            conn.executemany(
+                f"INSERT INTO {LAYER_BASIS_EDGE_TABLE} "  # noqa: S608
+                "(edge_id, seq, input, value, provenance) VALUES (?, ?, ?, ?, ?)",
+                [
+                    (edge_id, seq, item.name, item.value, item.provenance)
+                    for edge_id, items in bases.items()
+                    for seq, item in enumerate(items)
+                ],
+            )
+            basis_rows = sum(len(items) for items in bases.values())
+            # Every tagged edge, by construction: the row is the edge's own.
+            answered = len(edges)
+        elif option == LAYER_BASIS_PER_ENVELOPE:
+            conn.execute(
+                f"CREATE TABLE {LAYER_BASIS_ENVELOPE_TABLE} ("  # noqa: S608
+                "envelope_key INTEGER NOT NULL REFERENCES envelope (envelope_key), "
+                f"{_LAYER_BASIS_ROW_COLUMNS}, PRIMARY KEY (envelope_key, seq))"
+            )
+            conn.executemany(
+                f"INSERT INTO {LAYER_BASIS_ENVELOPE_TABLE} "  # noqa: S608
+                "(envelope_key, seq, input, value, provenance) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (key, seq, item.name, item.value, item.provenance)
+                    for key, items in envelope_bases.items()
+                    for seq, item in enumerate(items)
+                ],
+            )
+            basis_rows = sum(len(items) for items in envelope_bases.values())
+            inheriting = 0
+            for edge in edges:
+                if str(edge["type"]) != "HAS_ENVELOPE":
+                    continue
+                stored = envelope_bases.get(int(edge["dst_key"]))
+                if stored is None:
+                    continue
+                inheriting += 1
+                if stored == bases[int(edge["edge_id"])]:
+                    answered += 1
+                else:
+                    misstated += 1
+            sharing = (
+                inheriting / len(envelope_bases) if envelope_bases else None
+            )
+        if option != LAYER_BASIS_TODAY:
+            conn.commit()
+            # Outside the transaction, for `materialize_level`'s reason.
+            conn.execute("VACUUM")
+            conn.commit()
+
+        times = frame_times(conn)
+        run_seconds = (len(times) - 1) * frame_period(conn)
+    finally:
+        conn.close()
+
+    return LayerBasisCost(
+        level=level,
+        option=option,
+        size_bytes=out_path.stat().st_size,
+        tagged_edges=len(edges),
+        envelope_rows=len(envelopes),
+        computed_envelopes=len(computed),
+        basis_rows=basis_rows,
+        edges_answered=answered,
+        edges_misstated=misstated,
+        sharing=sharing,
+        run_seconds=run_seconds,
+    )
+
+
+def run_layer_basis_study(
+    frames: int,
+    work_dir: str | Path,
+    *,
+    seed: int,
+    horizon: float,
+    n_samples: int,
+    envelope_seed: int,
+    substep_dt: float,
+    occurrence_resolution_s: float,
+    timing_repeats: int = TIMING_REPEATS,
+    replan_interval_s: float = RESOLUTION_REPLAN_INTERVAL_S,
+    declaration_horizon_s: float = RESOLUTION_DECLARATION_HORIZON_S,
+    watchdog_period_s: float = RESOLUTION_WATCHDOG_PERIOD_S,
+    dt: float = DEFAULT_DT,
+    progress: Callable[[str], None] | None = None,
+) -> LayerBasisStudy:
+    """Price both granularities on the fixture Claim 1 is priced on.
+
+    **One build**, on `run_outer_boundary_study`'s terms and for its reason: the
+    three views are projections of one artifact and the nine variants are copies
+    of those, so what differs between two rows is the granularity rule and
+    nothing else.
+
+    Args:
+        frames: the run length. `RESOLUTION_FRAME_COUNT` is what the CLI passes,
+            which is the length the published curve is measured at.
+        work_dir: where the stream, the artifact, the views and the variants go.
+        progress: called with one line per variant, or `None` for silence.
+
+    Returns:
+        A `LayerBasisStudy` holding the curve and nine `LayerBasisCost` rows,
+        level-major and in `LAYER_BASIS_OPTIONS` order.
+    """
+    work_dir = Path(work_dir)
+    curve = run_resolution_curve(
+        frames,
+        work_dir,
+        seed=seed,
+        horizon=horizon,
+        n_samples=n_samples,
+        envelope_seed=envelope_seed,
+        substep_dt=substep_dt,
+        occurrence_resolution_s=occurrence_resolution_s,
+        timing_repeats=timing_repeats,
+        replan_interval_s=replan_interval_s,
+        declaration_horizon_s=declaration_horizon_s,
+        watchdog_period_s=watchdog_period_s,
+        dt=dt,
+    )
+    costs: list[LayerBasisCost] = []
+    for level in RESOLUTION_LEVELS:
+        for option in LAYER_BASIS_OPTIONS:
+            if progress is not None:
+                progress(f"layer basis: {level} under option {option}")
+            costs.append(
+                cost_layer_basis(
+                    _view_path(work_dir, level),
+                    work_dir / "layer-basis" / f"{level}-{option}.sqlite",
+                    level=level,
+                    option=option,
+                )
+            )
+    return LayerBasisStudy(curve=curve, costs=tuple(costs))
+
+
+# --------------------------------------------------------------------------
 # The report. `render` is pure: results in, markdown out. Nothing that varies
 # between two runs of the same command may be added to it -- no path, no clock,
 # no hostname (`reg.sim`, rule 2). The wall-clock table is the one exception and
@@ -7476,6 +8135,308 @@ def _outer_boundary_section(study: OuterBoundaryStudy) -> list[str]:
     return lines
 
 
+def _sharing_text(value: float | None) -> str:
+    """The sharing factor, or why there is none. Never a `1.00` for an absence."""
+    return "n/a" if value is None else f"{value:.2f}"
+
+
+def _layer_basis_section(study: LayerBasisStudy) -> list[str]:
+    """The two granularities, priced. Issue #249, tier 2 of #227.
+
+    Four tables, on `_outer_boundary_section`'s reason: what each option
+    stores, how many rows it writes, what the file costs and how every published
+    figure moves, and — the one this study exists for — **what each option can
+    answer**, because the cheaper of the two is cheaper by covering less and a
+    byte table alone would hide that.
+    """
+    curve = study.curve
+    lines = [
+        "",
+        "## The layer basis — per edge against per computed envelope, priced",
+        "",
+        "**Nothing here is adopted, and nothing here is retained.** The schema is",
+        "unchanged, no build in this repository writes a basis row, and",
+        "`reg.query.cold_read` still reports `layer-tag-basis` exactly as it did.",
+        "Issue #227 is where the decision is taken; this is the measurement it",
+        "needs.",
+        "",
+        "An edge carries `layer='A'` or `'B'` and no column says what that tag was",
+        "computed from, so it can be read and not checked",
+        "(`docs/self-describing.md` gap 1). The two options are the two",
+        "granularities §7 question 1 asks between.",
+        "",
+    ]
+    lines += _table(
+        ("option", "what it stores"),
+        [
+            (f"**{option}**", LAYER_BASIS_RETAINS[option])
+            for option in LAYER_BASIS_OPTIONS
+        ],
+    )
+    lines += [
+        "",
+        "The basis rows are the inputs that actually decide a tag in this build:",
+        "the edge type (`reg.store.EDGE_SPECS`, which fixes the layer for eight",
+        "of the nine types), `meta[limits_source]` (which decides `HAS_ENVELOPE`),",
+        "and `robot_config.base_pose_source` at each endpoint that reaches a",
+        "configuration (which is what makes `reg.store.open_edge` refuse a Layer A",
+        "tag). A fourth is recorded as **not retained**: `base_vel_source` is an",
+        "input to the outer set and not to the tag, no table carries it, and",
+        "writing a value for it here would make a perceived run and a measured one",
+        "produce identical rows.",
+        "",
+        "### Rows each option writes",
+        "",
+        "`tagged edges` is every edge in the view — all of them carry a `layer`.",
+        "`sharing` is `HAS_ENVELOPE` edges per computed envelope carrying a basis:",
+        "**it is the whole of option B's cost argument**, and a value of `1.00`",
+        "means the sharing bought nothing.",
+        "",
+    ]
+    lines += _table(
+        ("level", "tagged edges", "computed envelopes", "A rows", "B rows", "sharing"),
+        [
+            (
+                f"`{level}`",
+                _int_text(study.cost(level, LAYER_BASIS_TODAY).tagged_edges),
+                _int_text(study.cost(level, LAYER_BASIS_TODAY).computed_envelopes),
+                _int_text(study.cost(level, LAYER_BASIS_PER_EDGE).basis_rows),
+                _int_text(study.cost(level, LAYER_BASIS_PER_ENVELOPE).basis_rows),
+                _sharing_text(study.cost(level, LAYER_BASIS_PER_ENVELOPE).sharing),
+            )
+            for level in RESOLUTION_LEVELS
+        ],
+    )
+    lines += [
+        "",
+        "### Bytes, and every published figure that moves",
+        "",
+        "`file` is the variant on disk after `VACUUM`, which is the measurement.",
+        "The six-month total and the multiple against the assumed sensor log are",
+        "the published figures moved by the measured ratio and are not re-derived",
+        "here — `docs/retention.md` and `docs/sensor-baseline.md` own them, and",
+        "the sensor side of the last column is a **projection** wherever it is",
+        "quoted.",
+    ]
+    lines += _bytes_per_hour_disclosure(curve.run_seconds)
+    rows = []
+    for level in RESOLUTION_LEVELS:
+        for option in LAYER_BASIS_OPTIONS:
+            cost = study.cost(level, option)
+            factor = study.factor(level, option)
+            six_month_gb, sensor_multiple = moved_retention(level, factor)
+            rows.append(
+                (
+                    f"`{level}`",
+                    f"**{option}**",
+                    _int_text(cost.size_bytes),
+                    _percent_text(factor),
+                    _int_text(cost.basis_rows),
+                    _bytes_per_hour_text(cost.bytes_per_hour),
+                    f"{six_month_gb:,.0f} GB",
+                    _ratio_text(sensor_multiple),
+                )
+            )
+    lines += _table(
+        (
+            "level",
+            "option",
+            "file B",
+            "vs today",
+            "basis rows",
+            "bytes/hour",
+            "6 months",
+            "vs sensor (PROJECTION)",
+        ),
+        rows,
+    )
+    lines += [
+        "",
+        "The rates the movement is applied to are "
+        + ", ".join(
+            f"`{PUBLISHED_RETENTION[level].bytes_per_hour_text}`"
+            for level in RESOLUTION_LEVELS
+        )
+        + " (`docs/retention.md`), in that order. A `today` row whose",
+        "`bytes/hour` is not one of them is a run at some other",
+        "parameterization, and the two columns after it are then a movement",
+        "applied to figures this run did not reproduce.",
+        "",
+        "**Both options move a level that stores no basis row at all.** The table",
+        "a granularity adds exists at every level, because adopting one changes",
+        "the schema everywhere, and an empty table with its key still costs",
+        "SQLite pages. That is the opposite of what issue #230 measured for the",
+        "outer boundary, where the occurrence level was free — and it means the",
+        "headline `265 GB` and `~689x` do move here, by whatever the empty table",
+        "costs and by nothing else.",
+        "",
+        "### What each option can answer",
+        "",
+        "*What was this edge's tag computed from?* An option **answers** an edge",
+        "when the basis it stores is that edge's own; it is **silent** where it",
+        "has nowhere to put one; and it **misstates** an edge when it stores a",
+        "basis for it that is not that edge's. The third column is not a smaller",
+        "version of the second — a wrong basis is worse than no basis, because a",
+        "reader who consults it gets an answer.",
+        "",
+    ]
+    lines += _table(
+        ("level", "option", "tagged edges", "answered", "silent", "misstated"),
+        [
+            (
+                f"`{level}`",
+                f"**{option}**",
+                _int_text(study.cost(level, option).tagged_edges),
+                _int_text(study.cost(level, option).edges_answered),
+                _int_text(study.cost(level, option).edges_unreachable),
+                _int_text(study.cost(level, option).edges_misstated),
+            )
+            for level in RESOLUTION_LEVELS
+            for option in LAYER_BASIS_OPTIONS
+        ],
+    )
+    lines += _layer_basis_finding(study)
+    return lines
+
+
+def _cost_per_answer_text(
+    level: str,
+    today: LayerBasisCost,
+    per_edge: LayerBasisCost,
+    per_envelope: LayerBasisCost,
+) -> str:
+    """Each option's bytes over today's, divided by the edges it answers.
+
+    The comparison a bytes column and an answers column do not make on their
+    own, and the one the word *cheaper* in §7 question 1 is actually about. An
+    option that answers nothing has no cost per answer — that is a
+    could-not-evaluate and it is stated rather than divided by zero, because the
+    number it would produce is exactly the one that makes an option look free.
+    """
+    parts = []
+    rates: dict[str, float] = {}
+    for name, cost in (
+        (LAYER_BASIS_PER_EDGE, per_edge),
+        (LAYER_BASIS_PER_ENVELOPE, per_envelope),
+    ):
+        extra = cost.size_bytes - today.size_bytes
+        if cost.edges_answered <= 0:
+            parts.append(
+                f"{name} answers no edge, so it has no cost per answer to state"
+            )
+        else:
+            rates[name] = extra / cost.edges_answered
+            parts.append(
+                f"{name} costs {_int_text(extra)} B over today for "
+                f"{_int_text(cost.edges_answered)} edges answered, which is "
+                f"{rates[name]:,.0f} B per edge"
+            )
+    if len(rates) < len(LAYER_BASIS_OPTIONS) - 1:
+        lead = (
+            "**Per edge answered, one of the two cannot be priced at all.** "
+        )
+    elif rates[LAYER_BASIS_PER_ENVELOPE] > rates[LAYER_BASIS_PER_EDGE]:
+        lead = (
+            "**Per edge answered, B is the more expensive of the two — "
+            f"{rates[LAYER_BASIS_PER_ENVELOPE] / rates[LAYER_BASIS_PER_EDGE]:.1f}x "
+            "A's rate.** "
+        )
+    else:
+        lead = "**Per edge answered, B is the cheaper of the two.** "
+    return (
+        lead + f"At the `{level}` level, " + "; ".join(parts) + ". A granularity "
+        "that answers less does not thereby cost less per answer, and that is "
+        "the comparison the word *cheaper* in §7 question 1 has to survive."
+    )
+
+
+def _layer_basis_finding(study: LayerBasisStudy) -> list[str]:
+    """The answer to #249's own question, stated in the numbers just measured.
+
+    Read off the study rather than written down beside it: the finding is that
+    B is cheaper by covering less, and a paragraph that asserted it while the
+    table said otherwise is the drift this repository's report sections are
+    written to avoid.
+    """
+    level = TRANSITION_LEVEL
+    today = study.cost(level, LAYER_BASIS_TODAY)
+    per_edge = study.cost(level, LAYER_BASIS_PER_EDGE)
+    per_envelope = study.cost(level, LAYER_BASIS_PER_ENVELOPE)
+    share = per_envelope.sharing
+    covered = (
+        0.0
+        if not today.tagged_edges
+        else 100.0 * per_envelope.edges_answered / today.tagged_edges
+    )
+    return [
+        "",
+        f"**Option B is not a cheaper way of answering the question. At the "
+        f"`{level}` level it answers "
+        f"{_int_text(per_envelope.edges_answered)} of "
+        f"{_int_text(today.tagged_edges)} tagged edges ({covered:.2f}%) and is "
+        "silent about the rest**, because the basis hangs on an envelope and "
+        "most tagged edges name no envelope: a `SEPARATION`, an `ADJUDICATED` or "
+        "a `FOLLOWS` edge has no envelope endpoint to inherit from, and an "
+        "`INTERSECTS` or `DECLARED` edge has one whose basis did not decide its "
+        "tag. Option A answers every tagged edge, which is what per-edge means.",
+        "",
+        "**And the sharing B is cheaper *by* is "
+        + ("absent from this build" if share is None else f"{share:.2f} here**")
+        + ". "
+        + (
+            ""
+            if share is None
+            else (
+                "`ENVELOPE_RETENTION` has already deduplicated the envelope rows "
+                "down to the ones an edge anchors, so there is close to no set "
+                "of edges sharing one envelope for the reference to amortise "
+                "over. B is smaller because it stores "
+                f"{_int_text(per_envelope.basis_rows)} rows against A's "
+                f"{_int_text(per_edge.basis_rows)}, and it stores fewer rows "
+                "because it covers fewer edges — not because a row is shared."
+            )
+        ),
+        "",
+        _cost_per_answer_text(level, today, per_edge, per_envelope),
+        "",
+        "**What B cannot express, asked directly.** When two `HAS_ENVELOPE` edges "
+        "point at one envelope row and their bases differ, B has one basis to "
+        "give both, so one of the two is misstated. That is not hypothetical "
+        "arithmetic: envelope rows are deduplicated on "
+        "`(envelope_hash, source, horizon)`, the pose taint is read off the "
+        "**edge's own endpoint** by `reg.store.open_edge`, and a configuration "
+        "that states a pose and one that does not can reach the same region. The "
+        "`misstated` column above is the count on this build; it is zero here "
+        f"({_int_text(today.tagged_edges)} edges, no posed configuration in the "
+        "fixture), and `tests/test_bench.py` feeds the study a view where two "
+        "edges over one envelope disagree and asserts it reports them. **So the "
+        "answer to #227 §7 question 1's second half is that B cannot express it** "
+        "— it can only be right where every edge over an envelope shares a basis, "
+        "and nothing in the schema makes that true.",
+        "",
+        "**Neither option changes what `reg.query.cold_read` reports today**, "
+        "because neither is adopted: `layer-tag-basis` stays "
+        "`READABLE-NOT-CHECKABLE`. Adopting either would bump "
+        "`reg.store.SCHEMA_VERSION`, which makes every cold-read state a "
+        "`COULD-NOT-EVALUATE` until `reg.query.COLD_READ_SCHEMA_VERSION` is moved "
+        "deliberately and each claim re-derived. Under A the claim could then "
+        "become `CHECKABLE`; under B it could not, because the report's four "
+        "states are one state per claim and a basis covering "
+        f"{covered:.2f}% of tagged edges does not make the claim checkable — it "
+        "would need the claim itself narrowed to `HAS_ENVELOPE` edges, which is a "
+        "second decision #227 would be taking without saying so.",
+        "",
+        "**One input neither option can state from the file.** "
+        "`base_vel_source` is an input to the outer set that no table retains, so "
+        "both options write it as *not retained*. Recording the basis at either "
+        "granularity therefore does not by itself close gap 1: the builder has to "
+        "write that value too, which is a change to what is retained and not to "
+        "where it is retained. That is a third thing #227 must decide and it is "
+        "orthogonal to this one.",
+        "",
+    ]
+
+
 def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
     """How the three retention figures move with the control rate (issue #68).
 
@@ -7792,6 +8753,7 @@ def render(
     resolution: ResolutionCurve | None = None,
     control_rates: Sequence[ControlRatePoint] = (),
     outer_boundary: OuterBoundaryStudy | None = None,
+    layer_basis: LayerBasisStudy | None = None,
     timings: bool = True,
 ) -> str:
     """The whole report as markdown. Pure — same results in, same string out.
@@ -7805,7 +8767,8 @@ def render(
     ladder of control rates (issue #68) and is absent on the same terms.
     `outer_boundary` is the three-option costing of issue #230 and is absent
     rather than empty when it was not run; it changes no other section, because
-    it changes no artifact.
+    it changes no artifact. `layer_basis` is the granularity costing of issue
+    #249 and is absent on exactly the same terms and for the same reason.
 
     `timings` is the only thing here that is not a function of the measurement:
     with it false the `WALL_CLOCK_COLUMNS` are omitted and the report becomes a
@@ -7820,6 +8783,7 @@ def render(
         and resolution is None
         and not control_rates
         and outer_boundary is None
+        and layer_basis is None
     ):
         raise BenchError(
             "no scenarios were benchmarked, so there is no table to write. An "
@@ -7907,6 +8871,9 @@ def render(
 
     if outer_boundary is not None:
         lines += _outer_boundary_section(outer_boundary)
+
+    if layer_basis is not None:
+        lines += _layer_basis_section(layer_basis)
 
     if control_rates:
         lines += _control_rate_section(control_rates)
@@ -8313,6 +9280,22 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--layer-basis",
+        action="store_true",
+        help=(
+            "also price the two layer-basis granularities issue #227 must "
+            "choose between — one basis row per input per tagged edge, against "
+            "one per input per computed envelope with edges inheriting by "
+            "reference — on the fixture Claim 1 is priced on (issue #249). "
+            "Measured, not projected: each option is built and its bytes are "
+            "read, beside what it can and cannot answer. **It retains "
+            "nothing**: the schema does not change, no build writes a basis row "
+            "and no published figure is republished by it. Implies "
+            "--resolution, because the movement is measured against that curve "
+            "and one build serves both."
+        ),
+    )
+    parser.add_argument(
         "--control-rate-hz",
         type=_rates,
         default=None,
@@ -8550,12 +9533,13 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list
             or args.resolution
             or args.control_rate_hz
             or args.outer_boundary
+            or args.layer_basis
         ):
             return []
         parser.error(
             "nothing to benchmark: pass --all, --scenario NAME (repeatable), "
-            "--scaling, --resolution, --control-rate-hz or --outer-boundary. "
-            "Known scenarios: "
+            "--scaling, --resolution, --control-rate-hz, --outer-boundary or "
+            "--layer-basis. Known scenarios: "
             f"{', '.join(SCENARIOS)}."
         )
     unknown = [name for name in args.scenario if name not in SCENARIOS]
@@ -8580,8 +9564,8 @@ def _jobs(
     if not names:
         parser.error(
             "--jobs applies to the per-scenario table and no scenario was "
-            "selected. --scaling, --resolution, --control-rate-hz and "
-            "--outer-boundary run serially by design (their longest rung is most of their work, so "
+            "selected. --scaling, --resolution, --control-rate-hz, "
+            "--outer-boundary and --layer-basis run serially by design (their longest rung is most of their work, so "
             "concurrency buys ~1.4x there), so this run would be unaffected by "
             "the flag. Add --all or --scenario NAME, or drop --jobs."
         )
@@ -8617,6 +9601,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     control: ScalingPoint | None = None
     resolution: ResolutionCurve | None = None
     outer_boundary: OuterBoundaryStudy | None = None
+    layer_basis: LayerBasisStudy | None = None
     control_rates: tuple[ControlRatePoint, ...] = ()
     try:
         results = run_scenarios(
@@ -8659,7 +9644,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 progress=lambda line: print(line + "...", file=sys.stderr, flush=True),
             )
             resolution = outer_boundary.curve
-        elif args.resolution:
+        if args.layer_basis:
+            # Its own build when `--outer-boundary` also ran, and the only build
+            # when it did not. Two studies cannot share one curve without one of
+            # them measuring against a file the other mutated the work directory
+            # around, and determinism (rule 2) is what makes the two builds the
+            # same artifact rather than a comparison across two of them.
+            print(
+                f"pricing the two layer-basis granularities on long_run at "
+                f"{args.resolution_frames} frames "
+                f"(n_samples={args.resolution_n_samples}, occurrence "
+                f"resolution={args.occurrence_resolution} s)...",
+                file=sys.stderr,
+                flush=True,
+            )
+            layer_basis = run_layer_basis_study(
+                args.resolution_frames,
+                work_dir / "layer-basis",
+                seed=args.seed,
+                horizon=args.horizon,
+                n_samples=args.resolution_n_samples,
+                envelope_seed=args.envelope_seed,
+                substep_dt=args.substep_dt,
+                occurrence_resolution_s=args.occurrence_resolution,
+                replan_interval_s=args.resolution_replan_interval,
+                declaration_horizon_s=args.resolution_declaration_horizon,
+                watchdog_period_s=args.resolution_watchdog_period,
+                progress=lambda line: print(line + "...", file=sys.stderr, flush=True),
+            )
+            if resolution is None:
+                resolution = layer_basis.curve
+        elif args.resolution and resolution is None:
             print(
                 f"measuring the resolution curve on long_run at "
                 f"{args.resolution_frames} frames "
@@ -8763,6 +9778,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             resolution=resolution,
             control_rates=control_rates,
             outer_boundary=outer_boundary,
+            layer_basis=layer_basis,
             timings=not args.no_timings,
         )
     except (BenchError, graph.GraphBuildError, store.StoreError) as exc:
@@ -8842,6 +9858,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             "issue #228 takes the decision",
             file=sys.stderr,
         )
+    if layer_basis is not None:
+        for cost in layer_basis.costs:
+            print(
+                f"layer basis: {cost.level}: option {cost.option}: "
+                f"{cost.size_bytes} B "
+                f"({_percent_text(layer_basis.factor(cost.level, cost.option))} "
+                f"vs {LAYER_BASIS_TODAY}), {cost.basis_rows} basis rows, "
+                f"{cost.edges_answered}/{cost.tagged_edges} tagged edges "
+                f"answered, {cost.edges_misstated} misstated, "
+                f"sharing={_sharing_text(cost.sharing)}",
+                file=sys.stderr,
+            )
+        print(
+            "layer basis: nothing was adopted and no figure was republished; "
+            "issue #227 takes the decision",
+            file=sys.stderr,
+        )
     if control_rates:
         print(
             "control rate: "
@@ -8876,6 +9909,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"resolution_levels={0 if resolution is None else len(resolution.points)} "
         f"control_rates={len(control_rates)} "
         f"outer_boundary_costs={0 if outer_boundary is None else len(outer_boundary.costs)} "
+        f"layer_basis_costs={0 if layer_basis is None else len(layer_basis.costs)} "
         f"seed={args.seed}"
     )
     return EXIT_CHECK_FAILED if failed else EXIT_OK

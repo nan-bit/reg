@@ -19,10 +19,10 @@ WHY THE BUDGET HAS TWO TERMS
 A single word ceiling is the wrong instrument. This repository is under active
 development, so documentation that *describes the code* must be free to grow
 with it — a flat ceiling either blocks that or gets raised until it means
-nothing. But most of the corpus does not describe the code. `prior-art.md` is
-26,463 words and would not shrink if half the package were deleted; tying it to
-code size would hand it a larger allowance every time a feature ships, which is
-backwards.
+nothing. But most of the corpus does not describe the code. `sufficiency.md` is
+11,164 words of boundary argument and would not shrink if half the package were
+deleted; tying it to code size would hand it a larger allowance every time a
+feature ships, which is backwards.
 
 So each half is governed by what actually drives it: code-coupled prose by
 `RATE * public_symbols`, argument and reference prose by a flat `ARGUMENT_MAX`.
@@ -30,13 +30,21 @@ So each half is governed by what actually drives it: code-coupled prose by
 **Adding code buys documentation budget. Having more ideas does not.** That is
 the whole design.
 
-WHAT COUNTS AS A DOCUMENT, AND WHY BOTH LISTS ARE EXPLICIT
-----------------------------------------------------------
-`CODE_COUPLED` and `ARGUMENT` between them must name every file in the corpus.
-A file in neither fails, because a budget escaped by adding a file is a budget
-that dies quietly — this is the pattern `tests/test_layout.py` already uses for
-modules with no mirrored test, including the part where each entry says *why* it
-is where it is.
+WHAT COUNTS AS A DOCUMENT, AND WHY ALL THREE LISTS ARE EXPLICIT
+---------------------------------------------------------------
+`CODE_COUPLED`, `ARGUMENT` and `EXEMPT` between them must name every file in the
+corpus, and no file may be in two of them. A file in none of the three fails,
+because a budget escaped by adding a file is a budget that dies quietly — this
+is the pattern `tests/test_layout.py` already uses for modules with no mirrored
+test, including the part where each entry says *why* it is where it is.
+
+`EXEMPT` is the case where neither term is the right instrument, and #170 tier 6
+made it expensive to use rather than rare by convention: a document that leaves a
+group takes its words out of that group's ceiling with it, so exempting one buys
+the documents left behind nothing. Removing `prior-art.md` — 36% of the argument
+group — while leaving `ARGUMENT_MAX` where it stood would have granted the other
+five a third of the budget as free headroom, which ends a ratchet more
+effectively than raising a constant does, because it does not look like a raise.
 
 THE RATCHET
 -----------
@@ -139,11 +147,6 @@ ARGUMENT: dict[str, str] = {
         "The claims, the phases and the non-goals. It is the argument for the "
         "project; the code is what the argument is about."
     ),
-    "docs/prior-art.md": (
-        "Twenty-nine entries across six dated passes. Its value is partly that "
-        "it is a log, and #170 tier 6 makes what to do about it a human "
-        "decision rather than a cut."
-    ),
     "docs/sufficiency.md": (
         "Which audit claims survive an uncertifiable perceiver. A boundary "
         "argument, normative over what the project may claim."
@@ -159,6 +162,35 @@ ARGUMENT: dict[str, str] = {
     "docs/retention.md": (
         "Claim 1's measurement record — the figures, the arithmetic behind "
         "them and how they moved. An argument about cost."
+    ),
+}
+
+# Documents the budget does not reach at all: not counted against either
+# ceiling, and not licensed to grow by it either. Each entry says why the
+# budget's *premise* does not apply, in the form `tests/test_layout.py`'s
+# `VERIFIED_ELSEWHERE` entries take — a reason, not a restatement of the fact
+# that the file is long. An entry with no reason is COULD-NOT-EVALUATE and a
+# file listed here as well as in a group is a DISAGREE, because an exemption
+# that can be held alongside a classification is a discount on a ceiling.
+#
+# Adding to this list is not free: #170 tier 6 settled that the ceiling a
+# document leaves is re-measured without it, so an exemption gives the
+# documents left behind no room. See ARGUMENT_MAX below.
+EXEMPT: dict[str, str] = {
+    "docs/prior-art.md": (
+        "A dated log of work done outside this repository — twenty-nine "
+        "entries across six passes, each kept whole because half of what the "
+        "file records is *when* something was found. The budget's premise is "
+        "that a document should shrink when the thing it describes simplifies; "
+        "what this one describes is not in this package and does not simplify "
+        "when the package does, so neither term measures it. `RATE * "
+        "public_symbols` would hand it a larger allowance every time a feature "
+        "ships, and a flat ceiling would price a citation found tomorrow "
+        "against prose written here today. It is exempt from the *budget* "
+        "only: `tests/test_prior_art.py` still requires an entry per named "
+        "body of work, both directions per entry, a verdict and a reading "
+        "status, and this module's paragraph and narration ceilings still "
+        "count its paragraphs."
     ),
 }
 
@@ -229,7 +261,7 @@ RATE = 88.8
 #
 # MAY BE LOWERED, NEVER RAISED, for the same reason and by the same tiers. Flat
 # rather than per-symbol because nothing in this group would shrink if the
-# package did: shipping a feature must not buy `prior-art.md` a larger
+# package did: shipping a feature must not buy `sufficiency.md` a larger
 # allowance.
 #
 #   60,635  #171 as filed
@@ -269,7 +301,17 @@ RATE = 88.8
 #           screen. Six words lower than the last ceiling rather than level with
 #           it, because a ceiling set above the measurement banks the difference
 #           as headroom — measured, no headroom
-ARGUMENT_MAX = 73962
+#   47,194  today, 2026-09-07, #170 tier 6: `docs/prior-art.md` moved to
+#           `EXEMPT` above and the ceiling was re-measured over the five
+#           documents that remain. Nothing was cut and nothing was written — the
+#           ceiling fell by exactly the 26,768 words that left, which is the
+#           whole content of this row. Leaving it at 73,962 would have handed
+#           those five 36% of the budget as headroom nobody asked for and no
+#           diff would show, which is a raise in every respect except how it
+#           reads. An exemption that pays for itself this way is one the next
+#           tier can be trusted with; one that does not would make `EXEMPT` the
+#           group with room — measured, no headroom
+ARGUMENT_MAX = 47194
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -501,36 +543,47 @@ def classification_verdict(
     files: tuple[str, ...],
     code_coupled: dict[str, str],
     argument: dict[str, str],
+    exempt: dict[str, str],
 ) -> tuple[str, list[str]]:
-    """Is every corpus file in exactly one list, with a reason?
+    """Is every corpus file in exactly one of the three lists, with a reason?
 
-    DISAGREE names a file in neither list, a file in both, and a listed file
-    that is not in the corpus. An entry whose reason is blank is
-    COULD-NOT-EVALUATE: a classification that says nothing is the same silence
-    as no classification, dressed as an answer. So is an empty corpus.
+    DISAGREE names a file in none of them, a file in more than one, and a
+    listed file that is not in the corpus. `EXEMPT` is checked exactly as the
+    two groups are: it is a third home, not an escape hatch that may be held
+    alongside a classification, because a file that is exempt *and* in a group
+    is a document whose words are excused from the ceiling they are counted
+    against. An entry whose reason is blank is COULD-NOT-EVALUATE: a
+    classification that says nothing is the same silence as no classification,
+    dressed as an answer, and an exemption that says nothing is worse, since
+    nothing else in this module will ever look at that file again. So is an
+    empty corpus.
     """
     if not files:
         return COULD_NOT_EVALUATE, ["no documents found — the corpus is empty"]
 
     unevaluable = [
         f"{name}: classified with no reason given"
-        for name, why in sorted({**code_coupled, **argument}.items())
+        for name, why in sorted({**code_coupled, **argument, **exempt}.items())
         if not why.strip()
     ]
     if unevaluable:
         return COULD_NOT_EVALUATE, unevaluable
 
+    lists = (("CODE_COUPLED", code_coupled), ("ARGUMENT", argument), ("EXEMPT", exempt))
     problems: list[str] = []
     for name in files:
-        in_code, in_argument = name in code_coupled, name in argument
-        if not in_code and not in_argument:
+        homes = [label for label, table in lists if name in table]
+        if not homes:
             problems.append(
-                f"{name} is in the corpus and in neither CODE_COUPLED nor "
-                f"ARGUMENT — classify it, and say why it belongs there"
+                f"{name} is in the corpus and in none of CODE_COUPLED, "
+                f"ARGUMENT or EXEMPT — classify it, and say why it belongs there"
             )
-        elif in_code and in_argument:
-            problems.append(f"{name} is in both lists; it is governed by one ceiling")
-    for name in sorted(set(code_coupled) | set(argument)):
+        elif len(homes) > 1:
+            problems.append(
+                f"{name} is in {' and '.join(homes)}; a document has exactly "
+                f"one home, and being exempt is not a discount on a ceiling"
+            )
+    for name in sorted(set(code_coupled) | set(argument) | set(exempt)):
         if name not in files:
             problems.append(f"{name} is classified but is not in the corpus — drop it")
 
@@ -699,7 +752,9 @@ def ratchet_comment_verdict(source: str, names: tuple[str, ...]) -> tuple[str, l
 
 
 def test_every_document_is_classified_into_exactly_one_group() -> None:
-    verdict, problems = classification_verdict(corpus_paths(), CODE_COUPLED, ARGUMENT)
+    verdict, problems = classification_verdict(
+        corpus_paths(), CODE_COUPLED, ARGUMENT, EXEMPT
+    )
     assert verdict == AGREE, "\n".join(problems)
 
 
@@ -783,33 +838,86 @@ def test_the_narration_ceiling_has_no_headroom() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_document_in_neither_list_fails() -> None:
-    """The way this kind of budget dies: escape it by adding a file."""
+def test_a_document_in_none_of_the_three_lists_fails() -> None:
+    """The way this kind of budget dies: escape it by adding a file.
+
+    Adding `EXEMPT` is what could have broken this, so it is asserted after the
+    third list exists and not only before it: a corpus file still has to be
+    named somewhere, and *nowhere* is not one of the three answers.
+    """
     files = corpus_paths() + ("docs/appendix.md",)
-    verdict, problems = classification_verdict(files, CODE_COUPLED, ARGUMENT)
+    verdict, problems = classification_verdict(files, CODE_COUPLED, ARGUMENT, EXEMPT)
     assert verdict == DISAGREE
-    assert any("docs/appendix.md" in p and "neither" in p for p in problems)
+    assert any("docs/appendix.md" in p and "none of" in p for p in problems)
 
 
-def test_a_document_in_both_lists_fails() -> None:
+def test_a_document_in_both_budget_groups_fails() -> None:
     both = {**ARGUMENT, "README.md": "claimed twice"}
-    verdict, problems = classification_verdict(corpus_paths(), CODE_COUPLED, both)
+    verdict, problems = classification_verdict(corpus_paths(), CODE_COUPLED, both, EXEMPT)
     assert verdict == DISAGREE
-    assert any("README.md" in p and "both" in p for p in problems)
+    assert any(
+        "README.md" in p and "CODE_COUPLED and ARGUMENT" in p for p in problems
+    )
+
+
+def test_a_document_that_is_exempt_and_also_in_a_budget_group_fails() -> None:
+    """The shape an exemption would take if it were a discount.
+
+    A file counted against `ARGUMENT_MAX` and simultaneously excused from it
+    reads as classified to anyone scanning the group, while its words are the
+    ones the ceiling was set above. Two homes is one too many in either
+    direction.
+    """
+    excused = {**EXEMPT, "docs/plan.md": "exempt as well as counted"}
+    verdict, problems = classification_verdict(
+        corpus_paths(), CODE_COUPLED, ARGUMENT, excused
+    )
+    assert verdict == DISAGREE
+    assert any("docs/plan.md" in p and "ARGUMENT and EXEMPT" in p for p in problems)
 
 
 def test_a_classified_document_that_does_not_exist_fails() -> None:
     stale = {**CODE_COUPLED, "docs/deleted.md": "a document that was removed"}
-    verdict, problems = classification_verdict(corpus_paths(), stale, ARGUMENT)
+    verdict, problems = classification_verdict(
+        corpus_paths(), stale, ARGUMENT, EXEMPT
+    )
+    assert verdict == DISAGREE
+    assert any("docs/deleted.md" in p and "not in the corpus" in p for p in problems)
+
+
+def test_an_exemption_for_a_document_that_does_not_exist_fails() -> None:
+    """A stale exemption is how the list stops describing anything."""
+    stale = {**EXEMPT, "docs/deleted.md": "exempt, and also gone"}
+    verdict, problems = classification_verdict(
+        corpus_paths(), CODE_COUPLED, ARGUMENT, stale
+    )
     assert verdict == DISAGREE
     assert any("docs/deleted.md" in p and "not in the corpus" in p for p in problems)
 
 
 def test_a_classification_with_no_reason_is_could_not_evaluate() -> None:
     silent = {**CODE_COUPLED, "README.md": "   "}
-    verdict, problems = classification_verdict(corpus_paths(), silent, ARGUMENT)
+    verdict, problems = classification_verdict(
+        corpus_paths(), silent, ARGUMENT, EXEMPT
+    )
     assert verdict == COULD_NOT_EVALUATE
     assert any("no reason" in p for p in problems)
+
+
+def test_a_second_exemption_with_no_reason_is_could_not_evaluate() -> None:
+    """A second document exempted in silence, which is how a list grows.
+
+    COULD-NOT-EVALUATE and not a pass: `CLAUDE.md`'s rule is that the third
+    verdict never resolves to the first, and a wordless exemption is exactly
+    the silence that rule names.
+    """
+    silent = {**EXEMPT, "docs/plan.md": "   "}
+    verdict, problems = classification_verdict(
+        corpus_paths(), CODE_COUPLED, ARGUMENT, silent
+    )
+    assert verdict != AGREE
+    assert verdict == COULD_NOT_EVALUATE
+    assert any("docs/plan.md" in p and "no reason" in p for p in problems)
 
 
 def test_prose_added_without_surface_fails_the_budget() -> None:
@@ -835,12 +943,29 @@ def test_removing_public_symbols_can_put_the_corpus_over() -> None:
 
 def test_an_argument_document_growing_fails_the_flat_ceiling() -> None:
     docs = dict(read_corpus())
-    docs["docs/prior-art.md"] = docs["docs/prior-art.md"] + "\n\n" + ("filler " * 500)
+    docs["docs/sufficiency.md"] = docs["docs/sufficiency.md"] + "\n\n" + ("filler " * 500)
     verdict, problems = budget_verdict(
         docs, public_symbols(PACKAGE), CODE_COUPLED, ARGUMENT, RATE, ARGUMENT_MAX
     )
     assert verdict == DISAGREE
     assert any("argument/reference" in p and "500" in p for p in problems)
+
+
+def test_an_exempt_document_growing_moves_neither_ceiling() -> None:
+    """What the exemption buys, stated as a check rather than as a comment.
+
+    The counterpart of the test above, and the reason `ARGUMENT_MAX` had to
+    fall by 26,768: the exempt words are not in the argument group's total, so
+    if the ceiling had stayed where it was the five documents that remain would
+    have been free to grow into the room this document vacated.
+    """
+    docs = dict(read_corpus())
+    for name in EXEMPT:
+        docs[name] = docs[name] + "\n\n" + ("filler " * 5000)
+    verdict, problems = budget_verdict(
+        docs, public_symbols(PACKAGE), CODE_COUPLED, ARGUMENT, RATE, ARGUMENT_MAX
+    )
+    assert verdict == AGREE, "\n".join(problems)
 
 
 def test_adding_code_does_not_buy_the_argument_group_anything() -> None:
@@ -966,7 +1091,7 @@ def test_a_document_with_no_prose_at_all_is_could_not_evaluate() -> None:
 @pytest.mark.parametrize(
     "check",
     [
-        lambda docs: classification_verdict((), CODE_COUPLED, ARGUMENT),
+        lambda docs: classification_verdict((), CODE_COUPLED, ARGUMENT, EXEMPT),
         lambda docs: budget_verdict(docs, 260, CODE_COUPLED, ARGUMENT, RATE, ARGUMENT_MAX),
         lambda docs: long_paragraph_verdict(docs, PARAGRAPH_MAX_WORDS, 0),
         lambda docs: narration_verdict(docs, 0),

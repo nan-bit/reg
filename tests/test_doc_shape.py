@@ -349,7 +349,19 @@ RATE = 88.6
 #           naming the baseline to carry, and which is therefore restatement on
 #           purpose. Seven words lower than the last ceiling rather than level
 #           with it, for the reason the #233 row gives — measured, no headroom
-ARGUMENT_MAX = 47187
+#   47,181  today, 2026-09-07, after #243 stated Claim 3's condition in the
+#           sentence that makes the claim. `plan.md`'s Claim 3 gained the clause
+#           and the evidence for it (+61), `sufficiency.md`'s normative
+#           restatement gained the clause (+20) and a provenance row under its
+#           `## Why` line (+18). `plan.md` paid for all 99 and six words over,
+#           by cutting 105 of restatement: its second telling of the angular
+#           half and the held decision, which its own Phase 4 carries four
+#           screens below and `limitations.md` §3 is normative on, and its Phase
+#           9 telling of `sufficiency.md` §1, the file that section names as its
+#           own deliverable. Six words lower than the last ceiling rather than
+#           level with it, for the reason the #233 row gives — measured, no
+#           headroom
+ARGUMENT_MAX = 47181
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -384,7 +396,13 @@ PARAGRAPH_MAX_WORDS = 120
 #        self-describing.md §3 came out. A ceiling that falls out of work done
 #        for another reason is still a ceiling that has fallen; leaving it at 94
 #        would bank two paragraphs of headroom no diff would show
-LONG_PARAGRAPHS_MAX = 92
+#    91  today, 2026-09-07, after #243: `docs/plan.md` went 8 -> 7. The
+#        paragraph that fell below the threshold is the one Claim 4 used to
+#        spend 179 words restating Phase 4 and `limitations.md` §3 in, and it
+#        was cut for the word budget rather than for this ceiling. Lowered for
+#        the reason the #241 row gives: a ceiling that falls out of work done
+#        for another reason is still a ceiling that has fallen
+LONG_PARAGRAPHS_MAX = 91
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

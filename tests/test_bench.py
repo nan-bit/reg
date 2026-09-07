@@ -44,6 +44,7 @@ import dataclasses
 import functools
 import re
 import shutil
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -81,7 +82,7 @@ from reg.envelope import compute_envelope
 from reg.kinematics import ORIGIN_FRAME, link_polygons
 from reg.scenarios import SCENARIOS, long_run, scenario
 from reg.stream import expected_header
-from reg.tolerances import DISTANCE_TOL_M, simplify_geometry
+from reg.tolerances import DISTANCE_TOL_M, quantize_area, simplify_geometry
 
 #: Coarse but legal: 4 samples is exactly the corner count for the two-link demo
 #: arm, so `compute_envelope` accepts it.
@@ -3696,7 +3697,12 @@ def bytes_per_hour_disclosure_verdict(source: str) -> tuple[str, list[str]]:
 #: if the figure stopped being published at all. A gain is fine and belongs
 #: here once it discloses; a loss means a publication site disappeared.
 BYTES_PER_HOUR_SHAPES = frozenset(
-    {"_resolution_section", "_control_rate_section", "main"}
+    {
+        "_resolution_section",
+        "_control_rate_section",
+        "_outer_boundary_section",
+        "main",
+    }
 )
 
 
@@ -3914,3 +3920,517 @@ def test_an_artifact_that_outgrew_the_rate_reports_no_shortfall(rate_ladder) -> 
     section = report.split("#### Where the `occurrence` bytes are", 1)[1]
     assert "There is no shortfall to attribute" in section
     assert "share of the shortfall" not in section
+
+
+# --------------------------------------------------------------------------
+# The outer-boundary retention study (issue #230, tier 1 of #228)
+#
+# WHAT THESE TESTS ARE FOR. The study prices three retention rules for the outer
+# boundary and adopts none of them, so the property under test is not a number:
+# it is that each option's bytes are the bytes of the rule it names, that
+# option A is the artifact the curve already measured, and that the study leaves
+# every file it was given exactly as it found it. A costing that quietly wrote
+# into the artifact would be a behaviour change wearing a measurement's clothes.
+#
+# The live numbers are deliberately not pinned, on this file's opening
+# argument: they move with the schema, the envelope parameters and SQLite's page
+# size, and the published run is `--outer-boundary` at the resolution fixture's
+# own parameters, not this 60-frame one.
+# --------------------------------------------------------------------------
+
+_OUTER_BOUNDARY_FRAMES = 60
+
+
+def _outer_boundary_study(work: Path) -> bench.OuterBoundaryStudy:
+    return bench.run_outer_boundary_study(
+        _OUTER_BOUNDARY_FRAMES,
+        work,
+        seed=0,
+        timing_repeats=1,
+        **_FAST,
+    )
+
+
+@pytest.fixture(scope="module")
+def outer_study(tmp_path_factory) -> tuple[bench.OuterBoundaryStudy, Path]:
+    """One study, shared. It builds an artifact and nine variants of it."""
+    work = tmp_path_factory.mktemp("outer-boundary")
+    return _outer_boundary_study(work), work
+
+
+def _limits():
+    return scenarios.long_run(_OUTER_BOUNDARY_FRAMES).world.limits
+
+
+def _transition_view(work: Path) -> Path:
+    return work / "views" / f"{bench.TRANSITION_LEVEL}.sqlite"
+
+
+def test_the_study_prices_every_level_under_every_option(outer_study) -> None:
+    """Nine measurements, level-major, in the order the options are stated in."""
+    study, _ = outer_study
+    assert [(c.level, c.option) for c in study.costs] == [
+        (level, option)
+        for level in bench.RESOLUTION_LEVELS
+        for option in bench.OUTER_BOUNDARY_OPTIONS
+    ]
+
+
+def test_option_a_is_the_artifact_the_curve_already_measured(outer_study) -> None:
+    """The baseline is not a re-measurement. It is the same file.
+
+    If option A's bytes were anything but the curve's own, every movement below
+    would be measured against an artifact no document publishes, and the
+    percentages would be percentages of the wrong thing.
+    """
+    study, _ = outer_study
+    for point in study.curve.points:
+        cost = study.cost(point.level, bench.OUTER_BOUNDARY_NONE)
+        assert cost.size_bytes == point.size_bytes, point.level
+        assert cost.bytes_per_hour == pytest.approx(point.bytes_per_hour)
+        assert study.factor(point.level, bench.OUTER_BOUNDARY_NONE) == 1.0
+
+
+def test_option_a_answers_no_frame_pointwise(outer_study) -> None:
+    """Today's artifact retains no boundary, so it answers at no frame at all.
+
+    The benefit column's zero, asserted rather than left to be read off a table
+    — it is what the other two options are bought against.
+    """
+    study, _ = outer_study
+    for level in bench.RESOLUTION_LEVELS:
+        cost = study.cost(level, bench.OUTER_BOUNDARY_NONE)
+        assert cost.rows_with_boundary == 0
+        assert cost.boundary_bytes == 0
+        assert cost.frames_answerable == 0
+
+
+def test_option_c_is_inside_option_b_everywhere(outer_study) -> None:
+    """C retains a subset of B's rows, so it cannot cost or buy more.
+
+    The invariant, not the ratio: C's rule is B's rule intersected with
+    `GEOMETRY_RETENTION`'s, and a build where C came out larger would mean one
+    of the two rules is not being applied the way the report says it is.
+    """
+    study, _ = outer_study
+    for level in bench.RESOLUTION_LEVELS:
+        b = study.cost(level, bench.OUTER_BOUNDARY_EVERYWHERE)
+        c = study.cost(level, bench.OUTER_BOUNDARY_WITH_GEOMETRY)
+        assert c.rows_with_boundary <= b.rows_with_boundary, level
+        assert c.boundary_bytes <= b.boundary_bytes, level
+        assert c.size_bytes <= b.size_bytes, level
+        assert c.frames_answerable <= b.frames_answerable, level
+        assert b.rows_with_boundary <= b.envelope_rows, level
+        assert c.rows_with_boundary <= c.rows_with_inner_geometry, level
+
+
+def test_the_occurrence_level_retains_no_envelope_for_any_option_to_reach(
+    outer_study,
+) -> None:
+    """The finding the headline figure depends on, asserted as a property.
+
+    The occurrence view drops every envelope row (`materialize_level`), so no
+    retention rule for the outer boundary can put one there and no option moves
+    that level's bytes. `265 GB` and `~689x` are figures at this level.
+    """
+    study, _ = outer_study
+    sizes = set()
+    for option in bench.OUTER_BOUNDARY_OPTIONS:
+        cost = study.cost(bench.OCCURRENCE_LEVEL, option)
+        assert cost.envelope_rows == 0
+        assert cost.rows_with_boundary == 0
+        assert cost.frames_answerable == 0
+        sizes.add(cost.size_bytes)
+    assert len(sizes) == 1, sizes
+
+
+def test_the_study_writes_nothing_into_the_artifact_it_priced(outer_study) -> None:
+    """**No behaviour change.** The build and its views keep today's schema.
+
+    The column exists only in the variants. An `ALTER TABLE` that reached the
+    artifact would be the schema change issue #228 has not taken yet, arriving
+    under a measurement's name.
+    """
+    study, work = outer_study
+    priced = [
+        work / f"long_run_{_OUTER_BOUNDARY_FRAMES}.sqlite",
+        *(work / "views" / f"{level}.sqlite" for level in bench.RESOLUTION_LEVELS),
+    ]
+    for path in priced:
+        assert bench.OUTER_BOUNDARY_COLUMN not in _envelope_columns(path), path
+    variant = (
+        work
+        / "outer-boundary"
+        / f"{bench.TRANSITION_LEVEL}-{bench.OUTER_BOUNDARY_EVERYWHERE}.sqlite"
+    )
+    assert bench.OUTER_BOUNDARY_COLUMN in _envelope_columns(variant), (
+        "the variant has no boundary column either, so this test would pass "
+        "against a study that priced nothing at all"
+    )
+
+
+def _envelope_columns(path: Path) -> set[str]:
+    conn = sqlite3.connect(path)
+    try:
+        return {row[1] for row in conn.execute("PRAGMA table_info(envelope)")}
+    finally:
+        conn.close()
+
+
+def test_the_boundary_priced_is_the_row_s_own_outer_set(outer_study) -> None:
+    """The bytes are this envelope's boundary and not some other region's.
+
+    `outer_area` is the area of the polygon the build computed and threw away,
+    quantized. Recompute the boundary, quantize its area the same way, and the
+    two agree — which is what makes the byte count a price for the thing the
+    row is about. Without this the study could be pricing any polygon of
+    plausible size.
+    """
+    _, work = outer_study
+    conn = store.connect(_transition_view(work))
+    try:
+        rows = conn.execute(
+            "SELECT n.node_id AS envelope_id FROM envelope e "
+            "JOIN node n ON n.node_key = e.envelope_key "
+            "WHERE e.outer_area IS NOT NULL ORDER BY e.envelope_key"
+        ).fetchall()
+        assert rows, "this view holds no computed envelope, so nothing was priced"
+        for row in rows:
+            envelope_id = str(row["envelope_id"])
+            blob = bench.outer_boundary_wkb(conn, envelope_id, limits=_limits())
+            recomputed = store.from_wkb(blob)
+            stored = store.envelope_row(conn, envelope_id)
+            assert quantize_area(recomputed.area) == pytest.approx(
+                float(stored["outer_area"])
+            ), envelope_id
+            assert recomputed.contains(store.from_wkb(stored["geometry_wkb"]))
+    finally:
+        conn.close()
+
+
+def test_the_study_is_deterministic(tmp_path: Path) -> None:
+    """Same seed and parameters, same bytes in all nine variants (rule 2)."""
+    a = _outer_boundary_study(tmp_path / "a")
+    b = _outer_boundary_study(tmp_path / "b")
+    assert [(c.level, c.option, c.size_bytes, c.boundary_bytes) for c in a.costs] == [
+        (c.level, c.option, c.size_bytes, c.boundary_bytes) for c in b.costs
+    ]
+
+
+# --- the arithmetic over the published figures -----------------------------
+
+
+def test_the_movement_is_applied_to_the_published_figures_the_stated_way() -> None:
+    """Hand-worked. An option that doubles the bytes doubles the total and
+    halves the multiple against the sensor log, and nothing else moves."""
+    published = bench.PUBLISHED_RETENTION[bench.OCCURRENCE_LEVEL]
+    six_month_gb, sensor_multiple = bench.moved_retention(bench.OCCURRENCE_LEVEL, 2.0)
+    assert six_month_gb == pytest.approx(published.six_month_gb * 2.0)
+    assert sensor_multiple == pytest.approx(published.sensor_multiple / 2.0)
+
+
+def test_a_factor_of_one_moves_no_published_figure() -> None:
+    """Option A's own row: the published figures, unchanged."""
+    for level, published in bench.PUBLISHED_RETENTION.items():
+        assert bench.moved_retention(level, 1.0) == (
+            published.six_month_gb,
+            published.sensor_multiple,
+        )
+
+
+def test_a_level_this_repository_publishes_nothing_for_is_refused() -> None:
+    """There is no figure for it to move, so there is nothing to state."""
+    with pytest.raises(BenchError, match="not a level this repository publishes"):
+        bench.moved_retention("half-second", 1.0)
+
+
+def test_a_movement_factor_that_is_not_a_ratio_is_refused() -> None:
+    """Zero is not an option that costs nothing; it is a measurement that did
+    not happen, and the multiple it would produce is a division by zero."""
+    for bad in (0.0, -1.0):
+        with pytest.raises(BenchError, match="movement factor"):
+            bench.moved_retention(bench.OCCURRENCE_LEVEL, bad)
+
+
+def test_the_published_figures_held_here_are_the_ones_the_documents_publish() -> None:
+    """The drift check. These three rows are inputs read out of a document, and
+    a figure republished there without this table moving is caught here."""
+    text = (Path(__file__).resolve().parent.parent / "docs" / "retention.md").read_text(
+        encoding="utf-8"
+    )
+    for level, published in bench.PUBLISHED_RETENTION.items():
+        assert published.bytes_per_hour_text in text, level
+        assert f"{published.six_month_gb:,.0f} GB" in text, level
+        assert f"{published.sensor_multiple:,.0f}x" in text, level
+
+
+# --- the refusals ----------------------------------------------------------
+
+
+def test_an_option_nobody_defined_is_refused(outer_study, tmp_path: Path) -> None:
+    """An option with no retention rule has a byte count about nothing."""
+    _, work = outer_study
+    with pytest.raises(BenchError, match="not an outer-boundary option"):
+        bench.cost_outer_boundary(
+            _transition_view(work),
+            tmp_path / "d.sqlite",
+            level=bench.TRANSITION_LEVEL,
+            option="D",
+            limits=_limits(),
+        )
+
+
+def test_a_level_nobody_defined_is_refused(outer_study, tmp_path: Path) -> None:
+    _, work = outer_study
+    with pytest.raises(BenchError, match="not a resolution level"):
+        bench.cost_outer_boundary(
+            _transition_view(work),
+            tmp_path / "d.sqlite",
+            level="half-second",
+            option=bench.OUTER_BOUNDARY_NONE,
+            limits=_limits(),
+        )
+
+
+def test_an_envelope_the_view_does_not_hold_is_refused(outer_study) -> None:
+    _, work = outer_study
+    conn = store.connect(_transition_view(work))
+    try:
+        with pytest.raises(BenchError, match="holds no envelope"):
+            bench.outer_boundary_wkb(conn, "env-nobody-wrote", limits=_limits())
+    finally:
+        conn.close()
+
+
+def test_an_envelope_with_no_outer_set_is_refused(outer_study) -> None:
+    """A declared or clamped envelope is not a reachable set.
+
+    It has no outer approximation, so there is no boundary of it to price, and
+    inventing one would put bytes in the table for a region nothing computed.
+    """
+    _, work = outer_study
+    conn = store.connect(_transition_view(work))
+    try:
+        row = conn.execute(
+            "SELECT n.node_id AS envelope_id FROM envelope e "
+            "JOIN node n ON n.node_key = e.envelope_key "
+            "WHERE e.outer_area IS NULL LIMIT 1"
+        ).fetchone()
+        assert row is not None, (
+            "this fixture holds no declared or clamped envelope, so it cannot "
+            "exercise the refusal"
+        )
+        with pytest.raises(BenchError, match="retains no outer_area"):
+            bench.outer_boundary_wkb(
+                conn, str(row["envelope_id"]), limits=_limits()
+            )
+    finally:
+        conn.close()
+
+
+def test_a_posed_configuration_is_refused(outer_study, tmp_path: Path) -> None:
+    """The recomputation is body-frame, so a base that drove is unanswerable.
+
+    `reg.graph.envelope_at` refuses the same recomputation for the same reason:
+    the region that came back would be the one a robot at the origin could
+    reach, and its bytes are not this row's bytes.
+    """
+    _, work = outer_study
+    posed = tmp_path / "posed.sqlite"
+    shutil.copyfile(_transition_view(work), posed)
+    conn = store.connect(posed)
+    try:
+        row = conn.execute(
+            "SELECT n.node_id AS envelope_id, e.config_key AS config_key "
+            "FROM envelope e JOIN node n ON n.node_key = e.envelope_key "
+            "WHERE e.outer_area IS NOT NULL LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        conn.execute(
+            "UPDATE robot_config SET base_pose = ?, base_pose_source = ? "
+            "WHERE config_key = ?",
+            ("1.0,2.0,0.0", store.POSE_SOURCES[0], row["config_key"]),
+        )
+        conn.commit()
+        with pytest.raises(BenchError, match="base_pose"):
+            bench.outer_boundary_wkb(
+                conn, str(row["envelope_id"]), limits=_limits()
+            )
+    finally:
+        conn.close()
+
+
+def test_a_view_that_does_not_state_its_integration_grid_is_refused(
+    outer_study, tmp_path: Path
+) -> None:
+    """Never invent a default. A substituted `substep_dt` produces a boundary of
+    a different vertex count and prices it as this artifact's."""
+    _, work = outer_study
+    stripped = tmp_path / "stripped.sqlite"
+    shutil.copyfile(_transition_view(work), stripped)
+    conn = store.connect(stripped)
+    try:
+        row = conn.execute(
+            "SELECT n.node_id AS envelope_id FROM envelope e "
+            "JOIN node n ON n.node_key = e.envelope_key "
+            "WHERE e.outer_area IS NOT NULL LIMIT 1"
+        ).fetchone()
+        conn.execute("DELETE FROM meta WHERE key = ?", (graph.META_SUBSTEP_DT,))
+        conn.commit()
+        with pytest.raises(BenchError, match=graph.META_SUBSTEP_DT):
+            bench.outer_boundary_wkb(
+                conn, str(row["envelope_id"]), limits=_limits()
+            )
+    finally:
+        conn.close()
+
+
+def test_a_pair_the_study_did_not_measure_is_a_refusal_and_not_a_zero(
+    outer_study,
+) -> None:
+    """A missing row read as no cost is the direction an option gets adopted on."""
+    study, _ = outer_study
+    trimmed = dataclasses.replace(
+        study,
+        costs=tuple(c for c in study.costs if c.option != bench.OUTER_BOUNDARY_EVERYWHERE),
+    )
+    with pytest.raises(BenchError, match="holds no measurement"):
+        trimmed.cost(bench.TRANSITION_LEVEL, bench.OUTER_BOUNDARY_EVERYWHERE)
+
+
+def test_a_rate_over_a_run_of_no_duration_is_refused(outer_study) -> None:
+    """A per-hour rate over a run of no duration is a division by zero."""
+    study, _ = outer_study
+    empty = dataclasses.replace(
+        study.cost(bench.TRANSITION_LEVEL, bench.OUTER_BOUNDARY_NONE),
+        run_seconds=0.0,
+    )
+    with pytest.raises(BenchError, match="robot time"):
+        empty.bytes_per_hour
+
+
+def test_a_baseline_of_no_bytes_is_refused(outer_study) -> None:
+    """There is nothing for the other options to have moved."""
+    study, _ = outer_study
+    broken = dataclasses.replace(
+        study,
+        costs=tuple(
+            dataclasses.replace(c, size_bytes=0)
+            if c.level == bench.TRANSITION_LEVEL
+            and c.option == bench.OUTER_BOUNDARY_NONE
+            else c
+            for c in study.costs
+        ),
+    )
+    with pytest.raises(BenchError, match="nothing for the other"):
+        broken.factor(bench.TRANSITION_LEVEL, bench.OUTER_BOUNDARY_EVERYWHERE)
+
+
+def test_the_benefit_column_counts_frames_and_can_be_zero(outer_study) -> None:
+    """The negative beside the count: an envelope set nothing points at buys no
+    frame, and the set the study retained buys some. A counter that returned the
+    frame count whatever it was handed would pass only the first of these."""
+    _, work = outer_study
+    conn = store.connect(_transition_view(work))
+    try:
+        assert bench._frames_answerable(conn, set()) == 0
+        assert bench._frames_answerable(conn, {"env-nobody-wrote"}) == 0
+        rows = conn.execute(
+            "SELECT n.node_id AS envelope_id FROM envelope e "
+            "JOIN node n ON n.node_key = e.envelope_key "
+            "WHERE e.outer_area IS NOT NULL"
+        ).fetchall()
+        every = {str(r["envelope_id"]) for r in rows}
+        assert 0 < bench._frames_answerable(conn, every) <= len(
+            query.frame_times(conn)
+        )
+    finally:
+        conn.close()
+
+
+# --- the report ------------------------------------------------------------
+
+
+def test_the_report_states_that_nothing_was_adopted(outer_study) -> None:
+    """The section a person takes a decision from says what it is not.
+
+    Issue #230 measures and publishes; the schema does not change and no figure
+    is republished. A table of byte counts with that sentence missing reads as a
+    change that was made.
+    """
+    study, _ = outer_study
+    report = render(
+        [],
+        sensor_multiplier=None,
+        resolution=study.curve,
+        outer_boundary=study,
+        **_RENDER_ARGS,
+    )
+    section = report.split("## The outer boundary", 1)[1].split("\n## ", 1)[0]
+    assert "Nothing here is adopted, and nothing here is retained." in section
+    assert "GEOMETRY_RETENTION` keeps its text" in section
+    for option in bench.OUTER_BOUNDARY_OPTIONS:
+        assert f"| **{option}** |" in section
+    for level in bench.RESOLUTION_LEVELS:
+        assert f"`{level}`" in section
+
+
+def test_the_report_carries_the_benefit_beside_the_cost(outer_study) -> None:
+    """A cost with no benefit column is half an argument (issue #230)."""
+    study, _ = outer_study
+    report = render(
+        [],
+        sensor_multiplier=None,
+        resolution=study.curve,
+        outer_boundary=study,
+        **_RENDER_ARGS,
+    )
+    section = report.split("## The outer boundary", 1)[1].split("\n## ", 1)[0]
+    assert "What each option buys, in questions" in section
+    assert "answerable pointwise" in section
+    assert "vs sensor (PROJECTION)" in section
+
+
+def test_a_report_with_no_study_carries_no_such_section(outer_study) -> None:
+    """Absent rather than empty, on `--resolution`'s terms."""
+    study, _ = outer_study
+    report = render(
+        [], sensor_multiplier=None, resolution=study.curve, **_RENDER_ARGS
+    )
+    assert "## The outer boundary" not in report
+
+
+def test_the_percentage_is_signed_and_zero_is_printed(outer_study) -> None:
+    """A measured no-change is a finding, not an absence."""
+    assert bench._percent_text(1.0) == "+0.00%"
+    assert bench._percent_text(1.045) == "+4.50%"
+    assert bench._percent_text(0.9) == "-10.00%"
+
+
+def test_the_cli_prices_the_options_and_reports_the_curve_they_moved(
+    tmp_path: Path, capsys
+) -> None:
+    """`--outer-boundary` implies `--resolution`: one build, both sections."""
+    out = tmp_path / "report.md"
+    code = bench.main(
+        [
+            "--outer-boundary",
+            "--resolution-frames",
+            str(_OUTER_BOUNDARY_FRAMES),
+            "--resolution-n-samples",
+            str(_FAST["n_samples"]),
+            "--horizon",
+            str(_FAST["horizon"]),
+            "--substep-dt",
+            str(_FAST["substep_dt"]),
+            "--no-timings",
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == bench.EXIT_OK
+    report = out.read_text(encoding="utf-8")
+    assert "## The outer boundary" in report
+    assert "## Resolution" in report or "resolution" in report.lower()
+    err = capsys.readouterr().err
+    assert "nothing was adopted and no figure was republished" in err

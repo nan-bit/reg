@@ -154,11 +154,12 @@ from functools import partial
 from pathlib import Path
 from typing import Literal, TypeVar
 
+import numpy as np
 from shapely.ops import unary_union
 
 from reg import __version__, graph, store
 from reg.chain import KEY_BYTES, ROLES, Keyring, write_keyring
-from reg.envelope import SUBSTEP_DT
+from reg.envelope import SUBSTEP_DT, outer_envelope
 from reg.identity import RunIdentity
 from reg.kinematics import ORIGIN_FRAME, link_polygons
 
@@ -201,6 +202,7 @@ from reg.tolerances import (
     quantize_distance,
     quantize_time,
 )
+from reg.types import Limits, ProprioState
 from reg.world import World
 
 __all__ = [
@@ -216,7 +218,14 @@ __all__ = [
     "MET",
     "NOT_MET",
     "OCCURRENCE_LEVEL",
+    "OUTER_BOUNDARY_COLUMN",
+    "OUTER_BOUNDARY_EVERYWHERE",
+    "OUTER_BOUNDARY_NONE",
+    "OUTER_BOUNDARY_OPTIONS",
+    "OUTER_BOUNDARY_RETAINS",
+    "OUTER_BOUNDARY_WITH_GEOMETRY",
     "PER_FRAME_LEVEL",
+    "PUBLISHED_RETENTION",
     "QUESTION",
     "EXCLUDED",
     "PRICED",
@@ -241,6 +250,9 @@ __all__ = [
     "GroundTruth",
     "LevelAnswers",
     "LevelCheck",
+    "OuterBoundaryCost",
+    "OuterBoundaryStudy",
+    "PublishedRetention",
     "ResolutionCurve",
     "ResolutionPoint",
     "ResolutionQuery",
@@ -259,6 +271,7 @@ __all__ = [
     "claim_verdict",
     "compression_ratio",
     "control_rate_run_seconds",
+    "cost_outer_boundary",
     "crossover",
     "frames_at_rate",
     "ground_truth_from_csv",
@@ -267,8 +280,11 @@ __all__ = [
     "materialize_level",
     "min_separation_from_csv",
     "min_separation_from_graph",
+    "moved_retention",
+    "outer_boundary_wkb",
     "render",
     "run_control_rate_study",
+    "run_outer_boundary_study",
     "run_resolution_curve",
     "run_scaling_point",
     "run_scenario",
@@ -4077,6 +4093,17 @@ class ResolutionCurve:
         )
 
 
+def _view_path(work_dir: str | Path, level: str) -> Path:
+    """Where one level's view lives under `work_dir`.
+
+    `_work_paths`'s reason one level down: the outer-boundary study prices the
+    views `run_resolution_curve` just wrote and must not rebuild them, so both
+    name the file the same way rather than each holding a copy of the
+    convention.
+    """
+    return Path(work_dir) / "views" / f"{level}.sqlite"
+
+
 def _work_paths(scn: Scenario, work_dir: str | Path) -> tuple[Path, Path]:
     """Where one scenario's stream and artifact live under `work_dir`.
 
@@ -5343,9 +5370,7 @@ def run_resolution_curve(
 
     points: list[ResolutionPoint] = []
     for level in RESOLUTION_LEVELS:
-        view = materialize_level(
-            sqlite_path, level, work_dir / "views" / f"{level}.sqlite"
-        )
+        view = materialize_level(sqlite_path, level, _view_path(work_dir, level))
         nodes, edges, occurrences, record_rows = _level_counts(view)
         answers = answers_at_level(
             view, level, attestation=truth.attestation, keyring=keyring
@@ -5634,6 +5659,550 @@ def run_control_rate_study(
             )
         )
     return tuple(points)
+
+
+# --------------------------------------------------------------------------
+# The outer-boundary retention study (issue #230, tier 1 of #228).
+#
+# WHAT AN ENVELOPE ROW ANSWERS TODAY. It retains `outer_area` and
+# `outer_radius` and not the outer boundary, so from a stored row the artifact
+# answers *not at that distance* and cannot answer *not at that point*. Issue
+# #228 has to choose a retention rule for that boundary and three are on the
+# table. A retention decision taken with no bytes under it, on a project whose
+# headline claim is a retention figure, is a decision taken on nothing.
+#
+# THIS RETAINS NOTHING. The schema is unchanged, `reg.graph.GEOMETRY_RETENTION`
+# keeps its text, no build in this repository writes a boundary column, and the
+# variant files below are written under the work directory, measured, and left
+# there. Adopting an option is #228's to do, on these numbers.
+#
+# MEASURED, NOT PROJECTED. Each option is priced by copying a level's view,
+# adding the column that option would add, writing the boundaries that option
+# would retain, `VACUUM`ing, and reading the bytes off the file. The encoder
+# being priced is this repository's own, so there is nothing here to estimate,
+# and SQLite page alignment — the term that carried both preceding schema
+# changes into the published figures — is inside the measurement rather than
+# argued around it.
+#
+# THE ONE PIECE OF ARITHMETIC, AND WHY IT IS NOT A SECOND DEFINITION. The
+# six-month total and the multiple against the assumed sensor log are not
+# re-derived here. Both are linear in `bytes_per_hour` and in nothing else, so
+# each moves by the measured ratio between an option's bytes and option A's:
+# the total scales with that ratio and the multiple scales with its inverse.
+# docs/retention.md owns the retention floor and docs/sensor-baseline.md owns
+# the sensor assumption, and neither is restated as a number this module
+# computes from.
+# --------------------------------------------------------------------------
+
+#: Option A — the artifact as it is built today: two scalars per envelope and no
+#: boundary. The baseline every other option's movement is measured against.
+OUTER_BOUNDARY_NONE = "A"
+
+#: Option B — a boundary on every retained envelope row that has an outer set at
+#: all, which is every `computed` envelope. The schema's CHECK is what makes
+#: those the same set: `outer_area` is present exactly for that source, because
+#: a declared region is the policy's claim and a clamped one is the bound a
+#: verdict applied, and neither is a reachable set with an outer approximation.
+OUTER_BOUNDARY_EVERYWHERE = "B"
+
+#: Option C — a boundary only where the inner geometry is already retained,
+#: which is `reg.graph.GEOMETRY_RETENTION`'s existing rule: the first and last
+#: frame of the run, every relationship transition, and every posed frame. It
+#: answers the pointwise question exactly where an `INTERSECTS` edge already
+#: anchors something, and nowhere else.
+OUTER_BOUNDARY_WITH_GEOMETRY = "C"
+
+#: The three options, in the order #228 states them.
+OUTER_BOUNDARY_OPTIONS: tuple[str, ...] = (
+    OUTER_BOUNDARY_NONE,
+    OUTER_BOUNDARY_EVERYWHERE,
+    OUTER_BOUNDARY_WITH_GEOMETRY,
+)
+
+#: What each option retains, for the report's own column. Prose rather than a
+#: code reference: the table goes into a document a person takes a decision
+#: from, and `OUTER_BOUNDARY_WITH_GEOMETRY` says nothing to them.
+OUTER_BOUNDARY_RETAINS: dict[str, str] = {
+    OUTER_BOUNDARY_NONE: "nothing — today's schema, two scalars per envelope",
+    OUTER_BOUNDARY_EVERYWHERE: "a WKB boundary on every computed envelope row",
+    OUTER_BOUNDARY_WITH_GEOMETRY: (
+        "a WKB boundary where GEOMETRY_RETENTION already keeps the inner polygon"
+    ),
+}
+
+#: Where a retained boundary would land. The column exists only inside the
+#: variant files this study writes: nothing in `reg.store` declares it, and a
+#: file this module leaves behind is a measurement and not an artifact.
+OUTER_BOUNDARY_COLUMN = "outer_geometry_wkb"
+
+
+@dataclass(frozen=True)
+class PublishedRetention:
+    """One level's published retention figures, as `docs/retention.md` states them.
+
+    Held here so the report can put an option's movement beside the figure it
+    would move, and so option A's own row can be read against the number this
+    repository publishes. **These are inputs, not results.** Nothing in this
+    module derives them; the measurement is `bytes_per_hour`, and these three
+    fields are what a reader is holding when they read it.
+    """
+
+    #: The rate exactly as the document prints it, so the two can be compared
+    #: by eye and by `tests/test_bench.py` without a rounding rule in between.
+    bytes_per_hour_text: str
+    #: Per robot for the six-month retention floor, in GB.
+    six_month_gb: float
+    #: How many times smaller than the *assumed* 1 TB/day sensor log. A
+    #: projection on the sensor side (docs/sensor-baseline.md) and measured on
+    #: the artifact side; the asymmetry travels with the figure.
+    sensor_multiple: float
+
+
+#: The published curve, by level (`docs/retention.md`, *The control rate*, the
+#: 50 Hz row). `tests/test_bench.py` holds each rate against that document, so
+#: a figure republished there without this table moving is caught.
+PUBLISHED_RETENTION: dict[str, PublishedRetention] = {
+    OCCURRENCE_LEVEL: PublishedRetention("60.54 MB/h", 265.0, 689.0),
+    TRANSITION_LEVEL: PublishedRetention("150.27 MB/h", 658.0, 277.0),
+    PER_FRAME_LEVEL: PublishedRetention("218.12 MB/h", 955.0, 191.0),
+}
+
+
+def moved_retention(level: str, factor: float) -> tuple[float, float]:
+    """The published six-month total and sensor multiple, moved by `factor`.
+
+    Args:
+        level: one of `RESOLUTION_LEVELS`.
+        factor: an option's measured `bytes_per_hour` over option A's. That
+            ratio is the only thing an option changes about either figure.
+
+    Returns:
+        `(six_month_gb, sensor_multiple)`. The total is the published one times
+        the factor — it is a rate times a retention floor, and the floor does
+        not move. The multiple is the published one divided by it — it is a
+        quotient with that total underneath.
+
+    Raises:
+        BenchError: a level this repository publishes no figures for, or a
+            factor that is not strictly positive. A factor of zero is not an
+            option that costs nothing; it is a measurement that did not happen,
+            and the multiple it would produce is a division by zero.
+    """
+    published = PUBLISHED_RETENTION.get(level)
+    if published is None:
+        raise BenchError(
+            f"{level!r} is not a level this repository publishes retention "
+            f"figures for. Known: {list(PUBLISHED_RETENTION)}. There is no "
+            "published figure for it to move, so there is nothing to state."
+        )
+    if not factor > 0.0:
+        raise BenchError(
+            f"the movement factor for {level!r} is {factor!r}. A ratio between "
+            "two byte counts is strictly positive, so this is a measurement "
+            "that did not happen rather than an option that costs nothing."
+        )
+    return (published.six_month_gb * factor, published.sensor_multiple / factor)
+
+
+@dataclass(frozen=True)
+class OuterBoundaryCost:
+    """One level under one option: what it costs and what it can answer."""
+
+    level: str
+    option: str
+    size_bytes: int
+    #: Envelope rows in this level's view. Zero at the occurrence level, which
+    #: retains none of them, and that is a measurement rather than a gap.
+    envelope_rows: int
+    #: Of those, how many still carry an inner polygon
+    #: (`reg.graph.GEOMETRY_RETENTION`). The denominator for option C.
+    rows_with_inner_geometry: int
+    #: How many rows this option writes a boundary onto.
+    rows_with_boundary: int
+    #: The WKB actually written, before SQLite stores it. Below the file's own
+    #: delta by whatever page alignment adds, which is exactly why the file is
+    #: measured too rather than this number being reported as the cost.
+    boundary_bytes: int
+    frames: int
+    #: Frames at which *could the robot have reached (x, y)* is answerable
+    #: pointwise from a stored row — one whose covering `HAS_ENVELOPE` interval
+    #: points at an envelope this option gave a boundary. The benefit column: a
+    #: cost with no benefit beside it is half an argument.
+    frames_answerable: int
+    run_seconds: float
+
+    @property
+    def bytes_per_hour(self) -> float:
+        """The retention rate, on `ResolutionPoint.bytes_per_hour`'s terms.
+
+        Same definition and the same overstatement of the fixed schema-and-index
+        term, because the two are compared directly and a second definition of
+        the rate would make the comparison a comparison of definitions.
+        """
+        if self.run_seconds <= 0.0:
+            raise BenchError(
+                f"{self.level}/{self.option}: the run is {self.run_seconds} s of "
+                "robot time, so a per-hour rate over it is a division by zero."
+            )
+        return self.size_bytes * SECONDS_PER_HOUR / self.run_seconds
+
+
+@dataclass(frozen=True)
+class OuterBoundaryStudy:
+    """One build, three views, three options: nine measurements of one artifact."""
+
+    curve: ResolutionCurve
+    costs: tuple[OuterBoundaryCost, ...]
+
+    def cost(self, level: str, option: str) -> OuterBoundaryCost:
+        """The measurement for one `(level, option)`.
+
+        Raises:
+            BenchError: the pair was not measured. An absent measurement is a
+                could-not-evaluate and never a zero: a missing row read as no
+                cost is exactly the direction an option gets adopted on.
+        """
+        for cost in self.costs:
+            if cost.level == level and cost.option == option:
+                return cost
+        raise BenchError(
+            f"this study holds no measurement for level={level!r} "
+            f"option={option!r}. It measured "
+            f"{sorted({(c.level, c.option) for c in self.costs})}."
+        )
+
+    def factor(self, level: str, option: str) -> float:
+        """An option's bytes over option A's, at one level. The movement."""
+        baseline = self.cost(level, OUTER_BOUNDARY_NONE)
+        if baseline.size_bytes <= 0:
+            raise BenchError(
+                f"{level}: option {OUTER_BOUNDARY_NONE} measured "
+                f"{baseline.size_bytes} bytes, so there is nothing for the other "
+                "options to have moved. An empty baseline is a build that did "
+                "not happen."
+            )
+        return self.cost(level, option).size_bytes / baseline.size_bytes
+
+
+def _config_floats(text: str, what: str) -> np.ndarray:
+    """A comma-separated list of numbers, or a refusal naming the column."""
+    try:
+        return np.array([float(part) for part in str(text).split(",")], dtype=float)
+    except ValueError as exc:
+        raise BenchError(
+            f"{what} is {text!r}, not a comma-separated list of numbers."
+        ) from exc
+
+
+def outer_boundary_wkb(
+    conn: sqlite3.Connection, envelope_id: str, *, limits: Limits
+) -> bytes:
+    """The WKB of one envelope row's outer boundary, recomputed. No defaults.
+
+    The region `reg.envelope.outer_envelope` produced at build time and whose
+    area and radius the row kept. It is recomputed here rather than read,
+    because nothing stores it — which is the whole subject of #228 — and it is
+    recomputed on the row's own inputs: the `robot_config` it names, the horizon
+    it stores, and `meta[envelope_substep_dt_s]`. Not simplified, on
+    `reg.graph`'s reason: simplification may move a boundary either way, and an
+    outer bound that moved inward would stop being one.
+
+    Args:
+        conn: an open artifact or view (`reg.store.connect`).
+        envelope_id: the readable id of an envelope row in it.
+        limits: the `reg.types.Limits` the artifact was built with. **Required
+            and no default.** The bounds decide the region, so a plausible set
+            substituted here would price a boundary belonging to a different
+            robot, and every byte count downstream would inherit it silently.
+
+    Raises:
+        BenchError: no such row; a row with no outer set, which is every
+            envelope that is not `computed`; a row naming no configuration or a
+            configuration this view no longer holds; a configuration stating a
+            `base_pose`, on `reg.graph.envelope_at`'s argument — every term of
+            this recomputation is body-frame, so for a posed base it would
+            return the region a robot at the origin could reach and price that;
+            or an artifact that does not state the integration grid. All of them
+            are could-not-evaluate, and none resolves to a boundary of some
+            other size.
+    """
+    row = store.envelope_row(conn, envelope_id)
+    if row is None:
+        raise BenchError(
+            f"this view holds no envelope {envelope_id!r}, so there is no outer "
+            "boundary of it to price."
+        )
+    if row["outer_area"] is None:
+        raise BenchError(
+            f"envelope {envelope_id!r} has source={str(row['source'])!r} and "
+            "retains no outer_area, so it has no outer reachable set. A "
+            "declared region is the policy's claim and a clamped one is the "
+            "bound a verdict applied; neither has an outer approximation, and "
+            "inventing one would price a boundary nothing computed."
+        )
+    if row["config_key"] is None:  # pragma: no cover - the schema CHECK forbids it
+        raise BenchError(
+            f"envelope {envelope_id!r} retains an outer_area and names no "
+            "configuration, so there is nothing to recompute the boundary from."
+        )
+    config = conn.execute(
+        "SELECT q, qd, base_pose FROM robot_config WHERE config_key = ?",
+        (row["config_key"],),
+    ).fetchone()
+    if config is None:
+        raise BenchError(
+            f"envelope {envelope_id!r} names config {str(row['config_id'])!r}, "
+            "which is not in this view."
+        )
+    if config["base_pose"] is not None:
+        raise BenchError(
+            f"envelope {envelope_id!r} names a configuration stating "
+            f"base_pose={str(config['base_pose'])!r}. Every term of this "
+            "recomputation is body-frame, so it would return the region a robot "
+            "at the origin could reach — a boundary about somewhere else, whose "
+            "bytes are not this row's bytes. reg.graph.envelope_at refuses the "
+            "same recomputation for the same reason."
+        )
+    substep = store.get_meta(conn, graph.META_SUBSTEP_DT)
+    if substep is None:
+        raise BenchError(
+            f"this view has no meta[{graph.META_SUBSTEP_DT!r}], so it does not "
+            "say what grid its outer sets were integrated on. A plausible one "
+            "invented here would produce a boundary of a different vertex count "
+            "and price it as this artifact's."
+        )
+    state = ProprioState(
+        t=0.0,
+        q=_config_floats(config["q"], f"robot_config[{str(row['config_id'])!r}].q"),
+        qd=_config_floats(config["qd"], f"robot_config[{str(row['config_id'])!r}].qd"),
+        # No row here states one, and the refusal above is what keeps that
+        # honest: a configuration that states a pose never reaches this line, so
+        # `None` is a bolted base's absence rather than a velocity nobody wrote.
+        base_vel=None,
+    )
+    return store.to_wkb(
+        outer_envelope(
+            state, limits, float(row["horizon"]), ORIGIN_FRAME, float(substep)
+        )
+    )
+
+
+def _frames_answerable(conn: sqlite3.Connection, envelope_ids: set[str]) -> int:
+    """Frames covered by a `HAS_ENVELOPE` interval pointing at one of `envelope_ids`.
+
+    The pointwise question is answerable at a frame exactly when the envelope in
+    force there carries a boundary, so this counts frames and not rows: one
+    interval may span many frames and one envelope may be in force twice. Frames
+    come from `frame_times`, which reads the run's length out of `meta` rather
+    than off the rows — the rows deliberately do not mark every frame.
+    """
+    times = frame_times(conn)
+    if not envelope_ids:
+        return 0
+    covered: set[int] = set()
+    for edge in store.read_edges(conn, edge_type="HAS_ENVELOPE"):
+        if str(edge["dst_id"]) not in envelope_ids:
+            continue
+        lo = bisect.bisect_left(times, float(edge["t_start"]))
+        hi = bisect.bisect_right(times, float(edge["t_end"]))
+        covered.update(range(lo, hi))
+    return len(covered)
+
+
+def cost_outer_boundary(
+    view_path: str | Path,
+    out_path: str | Path,
+    *,
+    level: str,
+    option: str,
+    limits: Limits,
+    cache: dict[str, bytes] | None = None,
+) -> OuterBoundaryCost:
+    """Price one option on one level's view. Reads bytes; changes no artifact.
+
+    The view is copied first and never modified, so a study can price all three
+    options against the same file and the resolution curve's own measurement is
+    still the file it measured.
+
+    Args:
+        view_path: a view from `materialize_level`, left alone.
+        out_path: where the variant goes. Replaced if it exists.
+        level: which level this view is, for the row that comes back.
+        option: one of `OUTER_BOUNDARY_OPTIONS`.
+        limits: the `reg.types.Limits` the artifact was built with, passed
+            through to `outer_boundary_wkb`. Required, and no default.
+        cache: recomputed boundaries by envelope id, shared across levels. The
+            transition and per-frame views hold the same envelope rows, so
+            without it every boundary is computed twice for the same bytes.
+
+    Returns:
+        An `OuterBoundaryCost` whose `size_bytes` is the variant file on disk.
+
+    Raises:
+        BenchError: an unknown level or option, or any refusal
+            `outer_boundary_wkb` raises. Both unknowns are could-not-evaluate:
+            an option nobody defined has no retention rule, so its byte count
+            would be a number about nothing.
+    """
+    if level not in RESOLUTION_LEVELS:
+        raise BenchError(
+            f"{level!r} is not a resolution level. Known levels: "
+            f"{list(RESOLUTION_LEVELS)}."
+        )
+    if option not in OUTER_BOUNDARY_OPTIONS:
+        raise BenchError(
+            f"{option!r} is not an outer-boundary option. Known: "
+            f"{list(OUTER_BOUNDARY_OPTIONS)}. An option nobody defined retains "
+            "nothing in particular, so its byte count would describe no rule."
+        )
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.unlink(missing_ok=True)
+    shutil.copyfile(Path(view_path), out_path)
+
+    conn = store.connect(out_path)
+    try:
+        rows = conn.execute(
+            "SELECT n.node_id AS envelope_id, e.envelope_key AS envelope_key, "
+            "e.outer_area IS NOT NULL AS has_outer, "
+            "e.geometry_wkb IS NOT NULL AS has_geometry "
+            "FROM envelope e JOIN node n ON n.node_key = e.envelope_key "
+            "ORDER BY e.envelope_key"
+        ).fetchall()
+        envelope_rows = len(rows)
+        with_geometry = sum(1 for row in rows if row["has_geometry"])
+        if option == OUTER_BOUNDARY_NONE:
+            retained: tuple[sqlite3.Row, ...] = ()
+        elif option == OUTER_BOUNDARY_EVERYWHERE:
+            retained = tuple(row for row in rows if row["has_outer"])
+        else:
+            retained = tuple(
+                row for row in rows if row["has_outer"] and row["has_geometry"]
+            )
+
+        boundary_bytes = 0
+        if option != OUTER_BOUNDARY_NONE:
+            # The column lands even where no row takes one, because adopting an
+            # option changes the schema everywhere. The occurrence view holds no
+            # envelope rows at all, and what that costs is a real answer to
+            # "what does this option do to the headline figure".
+            conn.execute(
+                f"ALTER TABLE envelope ADD COLUMN {OUTER_BOUNDARY_COLUMN} BLOB"  # noqa: S608
+            )
+            for row in retained:
+                envelope_id = str(row["envelope_id"])
+                blob = None if cache is None else cache.get(envelope_id)
+                if blob is None:
+                    blob = outer_boundary_wkb(conn, envelope_id, limits=limits)
+                    if cache is not None:
+                        cache[envelope_id] = blob
+                boundary_bytes += len(blob)
+                conn.execute(
+                    f"UPDATE envelope SET {OUTER_BOUNDARY_COLUMN} = ? "  # noqa: S608
+                    "WHERE envelope_key = ?",
+                    (blob, row["envelope_key"]),
+                )
+            conn.commit()
+            # Outside the transaction, for `materialize_level`'s reason: without
+            # it the file keeps the pages the rewrite freed and the option
+            # measures as larger than the option is.
+            conn.execute("VACUUM")
+            conn.commit()
+
+        times = frame_times(conn)
+        answerable = _frames_answerable(
+            conn, {str(row["envelope_id"]) for row in retained}
+        )
+        run_seconds = (len(times) - 1) * frame_period(conn)
+    finally:
+        conn.close()
+
+    return OuterBoundaryCost(
+        level=level,
+        option=option,
+        size_bytes=out_path.stat().st_size,
+        envelope_rows=envelope_rows,
+        rows_with_inner_geometry=with_geometry,
+        rows_with_boundary=len(retained),
+        boundary_bytes=boundary_bytes,
+        frames=len(times),
+        frames_answerable=answerable,
+        run_seconds=run_seconds,
+    )
+
+
+def run_outer_boundary_study(
+    frames: int,
+    work_dir: str | Path,
+    *,
+    seed: int,
+    horizon: float,
+    n_samples: int,
+    envelope_seed: int,
+    substep_dt: float,
+    occurrence_resolution_s: float,
+    timing_repeats: int = TIMING_REPEATS,
+    replan_interval_s: float = RESOLUTION_REPLAN_INTERVAL_S,
+    declaration_horizon_s: float = RESOLUTION_DECLARATION_HORIZON_S,
+    watchdog_period_s: float = RESOLUTION_WATCHDOG_PERIOD_S,
+    dt: float = DEFAULT_DT,
+    progress: Callable[[str], None] | None = None,
+) -> OuterBoundaryStudy:
+    """Price all three options on the fixture Claim 1 is priced on.
+
+    **One build**, on `run_resolution_curve`'s terms and for its reason: the
+    three views are projections of one artifact, and the nine variants are
+    copies of those. Two builds would differ in more than the retention rule and
+    the study would not be about the retention rule.
+
+    Args:
+        frames: the run length. `RESOLUTION_FRAME_COUNT` is what the CLI passes,
+            which is the length the published curve is measured at.
+        work_dir: where the stream, the artifact, the views and the variants go.
+        progress: called with one line per variant, or `None` for silence.
+
+    Returns:
+        An `OuterBoundaryStudy` holding the curve and nine `OuterBoundaryCost`
+        rows, level-major and in `OUTER_BOUNDARY_OPTIONS` order.
+    """
+    work_dir = Path(work_dir)
+    curve = run_resolution_curve(
+        frames,
+        work_dir,
+        seed=seed,
+        horizon=horizon,
+        n_samples=n_samples,
+        envelope_seed=envelope_seed,
+        substep_dt=substep_dt,
+        occurrence_resolution_s=occurrence_resolution_s,
+        timing_repeats=timing_repeats,
+        replan_interval_s=replan_interval_s,
+        declaration_horizon_s=declaration_horizon_s,
+        watchdog_period_s=watchdog_period_s,
+        dt=dt,
+    )
+    # The limits the build was handed, from the same call that produced the
+    # fixture rather than from a second construction of it.
+    limits = long_run(frames, dt=dt).world.limits
+
+    cache: dict[str, bytes] = {}
+    costs: list[OuterBoundaryCost] = []
+    for level in RESOLUTION_LEVELS:
+        for option in OUTER_BOUNDARY_OPTIONS:
+            if progress is not None:
+                progress(f"outer boundary: {level} under option {option}")
+            costs.append(
+                cost_outer_boundary(
+                    _view_path(work_dir, level),
+                    work_dir / "outer-boundary" / f"{level}-{option}.sqlite",
+                    level=level,
+                    option=option,
+                    limits=limits,
+                    cache=cache,
+                )
+            )
+    return OuterBoundaryStudy(curve=curve, costs=tuple(costs))
 
 
 # --------------------------------------------------------------------------
@@ -6742,6 +7311,171 @@ def _sublinearity_attribution(
     ]
 
 
+def _percent_text(factor: float) -> str:
+    """A movement factor as a signed percentage. `1.0` is `+0.00%`, not `n/a`.
+
+    A measured no-change is a finding here — both preceding schema changes
+    survived on SQLite page slack — so it is printed as a zero rather than
+    rendered as an absence a reader would read as "not measured".
+    """
+    return f"{(factor - 1.0) * 100.0:+.2f}%"
+
+
+def _outer_boundary_section(study: OuterBoundaryStudy) -> list[str]:
+    """The three options, priced. Issue #230, tier 1 of #228.
+
+    Four tables, because the decision needs four things and a reader who is
+    handed only the first takes it on bytes alone: what each option retains, how
+    many rows it reaches, what the file costs and how every published figure
+    moves, and what the option buys in questions rather than in bytes.
+    """
+    curve = study.curve
+    lines = [
+        "",
+        "## The outer boundary — three retention options, priced",
+        "",
+        "**Nothing here is adopted, and nothing here is retained.** The schema is",
+        "unchanged, `reg.graph.GEOMETRY_RETENTION` keeps its text, and no figure",
+        "in this repository is republished on the strength of this table. Issue",
+        "#228 is where the decision is taken; this is the measurement it needs.",
+        "",
+        "An envelope row keeps `outer_area` and `outer_radius` and not the outer",
+        "boundary, so from a stored row the artifact answers *not at that",
+        "distance* and cannot answer *not at that point*. The three options are",
+        "the three retention rules #228 must choose between.",
+        "",
+    ]
+    lines += _table(
+        ("option", "what it retains"),
+        [(f"**{option}**", OUTER_BOUNDARY_RETAINS[option])
+         for option in OUTER_BOUNDARY_OPTIONS],
+    )
+    lines += [
+        "",
+        "### Rows each option reaches",
+        "",
+        "`with inner geometry` is what `GEOMETRY_RETENTION` already keeps, and it",
+        "is option C's rule. A row with no outer set is a `declared` or `clamped`",
+        "envelope: neither is a reachable set, so neither has an outer boundary to",
+        "retain and option B does not reach it either.",
+        "",
+    ]
+    lines += _table(
+        ("level", "envelope rows", "with inner geometry", "B writes", "C writes"),
+        [
+            (
+                f"`{level}`",
+                _int_text(study.cost(level, OUTER_BOUNDARY_NONE).envelope_rows),
+                _int_text(
+                    study.cost(level, OUTER_BOUNDARY_NONE).rows_with_inner_geometry
+                ),
+                _int_text(
+                    study.cost(level, OUTER_BOUNDARY_EVERYWHERE).rows_with_boundary
+                ),
+                _int_text(
+                    study.cost(level, OUTER_BOUNDARY_WITH_GEOMETRY).rows_with_boundary
+                ),
+            )
+            for level in RESOLUTION_LEVELS
+        ],
+    )
+    lines += [
+        "",
+        "### Bytes, and every published figure that moves",
+        "",
+        "`file` is the variant on disk after `VACUUM`, which is the measurement;",
+        "`WKB written` is the boundary bytes before SQLite stored them, and the",
+        "gap between the two is page alignment. The six-month total and the",
+        "multiple against the assumed sensor log are the published figures moved",
+        "by the measured ratio and are not re-derived here — `docs/retention.md`",
+        "and `docs/sensor-baseline.md` own them, and the sensor side of the last",
+        "column is a **projection** wherever it is quoted.",
+    ]
+    lines += _bytes_per_hour_disclosure(curve.run_seconds)
+    rows = []
+    for level in RESOLUTION_LEVELS:
+        published = PUBLISHED_RETENTION[level]
+        for option in OUTER_BOUNDARY_OPTIONS:
+            cost = study.cost(level, option)
+            factor = study.factor(level, option)
+            six_month_gb, sensor_multiple = moved_retention(level, factor)
+            rows.append(
+                (
+                    f"`{level}`",
+                    f"**{option}**",
+                    _int_text(cost.size_bytes),
+                    _percent_text(factor),
+                    _int_text(cost.boundary_bytes),
+                    _bytes_per_hour_text(cost.bytes_per_hour),
+                    f"{six_month_gb:,.0f} GB",
+                    _ratio_text(sensor_multiple),
+                )
+            )
+    lines += _table(
+        (
+            "level",
+            "option",
+            "file B",
+            "vs A",
+            "WKB written B",
+            "bytes/hour",
+            "6 months",
+            "vs sensor (PROJECTION)",
+        ),
+        rows,
+    )
+    lines += [
+        "",
+        "The rates the movement is applied to are "
+        + ", ".join(
+            f"`{PUBLISHED_RETENTION[level].bytes_per_hour_text}`"
+            for level in RESOLUTION_LEVELS
+        )
+        + " (`docs/retention.md`), in that order. An option A row whose",
+        "`bytes/hour` is not one of them is a run at some other",
+        "parameterization, and the two columns after it are then a movement",
+        "applied to figures this run did not reproduce.",
+        "",
+        "Option A's `6 months` and `vs sensor` are the published figures by",
+        "construction — its factor is 1, so the movement applied to them is",
+        "none. Its `bytes/hour` is measured, and is the published rate only when",
+        "this run is the published parameterization; the resolution table above",
+        "states which one it was. What this table says is where B and C put",
+        "each figure.",
+        "",
+        "### What each option buys, in questions",
+        "",
+        "*Could the robot have reached (x, y)?* is answerable pointwise at a frame",
+        "when the envelope in force there carries a boundary. Under option A that",
+        "is no frame at any level — the radius answers *not at that distance* and",
+        "nothing answers *not at that point*.",
+        "",
+    ]
+    lines += _table(
+        ("level", "frames", "A", "B", "C"),
+        [
+            (
+                f"`{level}`",
+                _int_text(study.cost(level, OUTER_BOUNDARY_NONE).frames),
+                *(
+                    _int_text(study.cost(level, option).frames_answerable)
+                    for option in OUTER_BOUNDARY_OPTIONS
+                ),
+            )
+            for level in RESOLUTION_LEVELS
+        ],
+    )
+    lines += [
+        "",
+        "The occurrence level retains no envelope rows at all, so no option puts a",
+        "boundary in it and none of them can answer the pointwise question there.",
+        "That is a measurement and not a gap in this study: it is what decides",
+        "whether the headline retention figure moves.",
+        "",
+    ]
+    return lines
+
+
 def _control_rate_section(points: Sequence[ControlRatePoint]) -> list[str]:
     """How the three retention figures move with the control rate (issue #68).
 
@@ -7057,6 +7791,7 @@ def render(
     scaling_control: ScalingPoint | None = None,
     resolution: ResolutionCurve | None = None,
     control_rates: Sequence[ControlRatePoint] = (),
+    outer_boundary: OuterBoundaryStudy | None = None,
     timings: bool = True,
 ) -> str:
     """The whole report as markdown. Pure — same results in, same string out.
@@ -7068,6 +7803,9 @@ def render(
     it. `resolution` is the curve over resolution levels (issue #35) and is
     likewise absent rather than empty when it was not run. `control_rates` is the
     ladder of control rates (issue #68) and is absent on the same terms.
+    `outer_boundary` is the three-option costing of issue #230 and is absent
+    rather than empty when it was not run; it changes no other section, because
+    it changes no artifact.
 
     `timings` is the only thing here that is not a function of the measurement:
     with it false the `WALL_CLOCK_COLUMNS` are omitted and the report becomes a
@@ -7076,7 +7814,13 @@ def render(
     flag is the opt-out — a report that silently dropped its timings would be a
     report whose missing columns nobody asked for.
     """
-    if not results and not scaling and resolution is None and not control_rates:
+    if (
+        not results
+        and not scaling
+        and resolution is None
+        and not control_rates
+        and outer_boundary is None
+    ):
         raise BenchError(
             "no scenarios were benchmarked, so there is no table to write. An "
             "empty report reads as 'the graph compresses nothing measured', "
@@ -7160,6 +7904,9 @@ def render(
 
     if resolution is not None:
         lines += _resolution_section(resolution)
+
+    if outer_boundary is not None:
+        lines += _outer_boundary_section(outer_boundary)
 
     if control_rates:
         lines += _control_rate_section(control_rates)
@@ -7551,6 +8298,21 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--outer-boundary",
+        action="store_true",
+        help=(
+            "also price the three outer-boundary retention options issue #228 "
+            "must choose between — no boundary (today), a boundary on every "
+            "computed envelope, and a boundary only where GEOMETRY_RETENTION "
+            "already keeps the inner polygon — on the fixture Claim 1 is priced "
+            "on (issue #230). Measured, not projected: each option is built and "
+            "its bytes are read. **It retains nothing**: the schema does not "
+            "change and no published figure is republished by it. Implies "
+            "--resolution, because the movement is measured against that curve "
+            "and one build serves both."
+        ),
+    )
+    parser.add_argument(
         "--control-rate-hz",
         type=_rates,
         default=None,
@@ -7783,11 +8545,17 @@ def _selected(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list
     if args.all:
         return list(SCENARIOS)
     if not args.scenario:
-        if args.scaling or args.resolution or args.control_rate_hz:
+        if (
+            args.scaling
+            or args.resolution
+            or args.control_rate_hz
+            or args.outer_boundary
+        ):
             return []
         parser.error(
             "nothing to benchmark: pass --all, --scenario NAME (repeatable), "
-            "--scaling, --resolution or --control-rate-hz. Known scenarios: "
+            "--scaling, --resolution, --control-rate-hz or --outer-boundary. "
+            "Known scenarios: "
             f"{', '.join(SCENARIOS)}."
         )
     unknown = [name for name in args.scenario if name not in SCENARIOS]
@@ -7812,8 +8580,8 @@ def _jobs(
     if not names:
         parser.error(
             "--jobs applies to the per-scenario table and no scenario was "
-            "selected. --scaling, --resolution and --control-rate-hz run "
-            "serially by design (their longest rung is most of their work, so "
+            "selected. --scaling, --resolution, --control-rate-hz and "
+            "--outer-boundary run serially by design (their longest rung is most of their work, so "
             "concurrency buys ~1.4x there), so this run would be unaffected by "
             "the flag. Add --all or --scenario NAME, or drop --jobs."
         )
@@ -7848,6 +8616,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     scaling: list[ScalingPoint] = []
     control: ScalingPoint | None = None
     resolution: ResolutionCurve | None = None
+    outer_boundary: OuterBoundaryStudy | None = None
     control_rates: tuple[ControlRatePoint, ...] = ()
     try:
         results = run_scenarios(
@@ -7862,7 +8631,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             occurrence_resolution_s=args.occurrence_resolution,
             progress=lambda line: print(line + "...", file=sys.stderr, flush=True),
         )
-        if args.resolution:
+        if args.outer_boundary:
+            # One build serves both, and it has to: the movement each option
+            # produces is measured against this curve's own bytes, so a second
+            # build would be a comparison between two artifacts rather than
+            # between two retention rules.
+            print(
+                f"pricing the three outer-boundary options on long_run at "
+                f"{args.resolution_frames} frames "
+                f"(n_samples={args.resolution_n_samples}, occurrence "
+                f"resolution={args.occurrence_resolution} s)...",
+                file=sys.stderr,
+                flush=True,
+            )
+            outer_boundary = run_outer_boundary_study(
+                args.resolution_frames,
+                work_dir / "resolution",
+                seed=args.seed,
+                horizon=args.horizon,
+                n_samples=args.resolution_n_samples,
+                envelope_seed=args.envelope_seed,
+                substep_dt=args.substep_dt,
+                occurrence_resolution_s=args.occurrence_resolution,
+                replan_interval_s=args.resolution_replan_interval,
+                declaration_horizon_s=args.resolution_declaration_horizon,
+                watchdog_period_s=args.resolution_watchdog_period,
+                progress=lambda line: print(line + "...", file=sys.stderr, flush=True),
+            )
+            resolution = outer_boundary.curve
+        elif args.resolution:
             print(
                 f"measuring the resolution curve on long_run at "
                 f"{args.resolution_frames} frames "
@@ -7965,6 +8762,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scaling_control=control,
             resolution=resolution,
             control_rates=control_rates,
+            outer_boundary=outer_boundary,
             timings=not args.no_timings,
         )
     except (BenchError, graph.GraphBuildError, store.StoreError) as exc:
@@ -8027,6 +8825,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{point.verdict}; loses {_lost_text(point)}",
                 file=sys.stderr,
             )
+    if outer_boundary is not None:
+        for cost in outer_boundary.costs:
+            print(
+                f"outer boundary: {cost.level}: option {cost.option}: "
+                f"{cost.size_bytes} B "
+                f"({_percent_text(outer_boundary.factor(cost.level, cost.option))} "
+                f"vs option {OUTER_BOUNDARY_NONE}), "
+                f"{cost.rows_with_boundary}/{cost.envelope_rows} envelope rows, "
+                f"{cost.frames_answerable}/{cost.frames} frames answerable "
+                "pointwise",
+                file=sys.stderr,
+            )
+        print(
+            "outer boundary: nothing was adopted and no figure was republished; "
+            "issue #228 takes the decision",
+            file=sys.stderr,
+        )
     if control_rates:
         print(
             "control rate: "
@@ -8060,6 +8875,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"wrote {out}: scenarios={len(results)} scaling_points={len(scaling)} "
         f"resolution_levels={0 if resolution is None else len(resolution.points)} "
         f"control_rates={len(control_rates)} "
+        f"outer_boundary_costs={0 if outer_boundary is None else len(outer_boundary.costs)} "
         f"seed={args.seed}"
     )
     return EXIT_CHECK_FAILED if failed else EXIT_OK

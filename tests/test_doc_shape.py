@@ -277,6 +277,15 @@ EXEMPT: dict[str, str] = {
 #         answerable. 26,089 / 303 = 86.10, rounded up to the next tenth. A
 #         ceiling left at 88.6 would have banked 726 words of headroom bought by
 #         shipping a feature, which is the raise this ratchet exists to refuse
+#   85.6  today, 2026-09-07, after #230 priced the three outer-boundary
+#         retention options. `reg.bench` gained seven public symbols — the
+#         study, the per-level costing, the boundary recomputation, the
+#         movement arithmetic and their three result types — against 443 words
+#         in `docs/self-describing.md` §8, which is where the measurement is
+#         published and where the decision will be taken. 26,532 / 310 = 85.59,
+#         rounded up to the next tenth. The prose is a table and three
+#         paragraphs about it, and it sits below that file's rationale line
+#         where §8 already lives
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -287,7 +296,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 86.2
+RATE = 85.6
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #

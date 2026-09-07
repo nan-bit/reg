@@ -3,8 +3,10 @@
 **Status:** a design document; tiers 0-3 of §8 have landed — tier 2 in two
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
 #201, the recompute path refuses off the recording environment), and tier 3 as
-`reg.query.cold_read` (issue #231) · written 2026-09-05, tier 1's findings folded
-in 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07 · normative
+`reg.query.cold_read` (issue #231); tier 5's own costing has landed too (issue
+#230), and the decision it is for has not been taken · written 2026-09-05, tier
+1's findings folded in 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07 ·
+normative
 over nothing yet; where it touches what the project may claim it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
 those files carry the change · the build order in §8 is the authority on what is
@@ -437,6 +439,41 @@ nothing exercises is a basis nobody knows the shape of.
 **Tier 5 — the boundary** (issue #228). A decision first, then bytes, then a
 re-measurement and republish of every figure that moves. Not to be started until
 tiers 2 and 3 make the argument for it concrete.
+
+*Its own tier 1, the costing, has landed* (issue #230): `reg.bench
+--outer-boundary` prices all three options and adopts none. Measured with
+`python -m reg.bench --outer-boundary --seed 0` on the fixture Claim 1 is priced
+on, `long_run` at 3,000 frames. Nothing was retained and no figure republished.
+
+| level | option | artifact | vs A | 6 months | vs sensor |
+|---|---|---|---|---|---|
+| `occurrence` | A, B and C alike | 1,008,640 B | +0.00% | 265 GB | ~689x |
+| `transition` | A | 2,503,680 B | — | 658 GB | ~277x |
+| `transition` | B | 2,616,320 B | +4.50% | 688 GB | ~265x |
+| `transition` | C | 2,519,040 B | +0.61% | 662 GB | ~275x |
+| `per-frame` | A | 3,634,176 B | — | 955 GB | ~191x |
+| `per-frame` | B | 3,746,816 B | +3.10% | 985 GB | ~185x |
+| `per-frame` | C | 3,649,536 B | +0.42% | 959 GB | ~190x |
+
+**The headline figures do not move at all.** `265 GB` and `~689x` are figures at
+occurrence resolution, and that level retains no envelope row, so no rule for the
+outer boundary reaches it. The totals and multiples above are the published
+figures scaled by the measured ratio; the sensor side of the last column is a
+projection wherever it is quoted ([`sensor-baseline.md`](sensor-baseline.md)).
+
+The build retains 86 envelope rows and 14 of them keep an inner polygon. Option B
+writes 84 boundaries — every `computed` envelope; the other two rows are a
+declared and a clamped region, which are not reachable sets and have no outer set
+to retain. Option C writes 12. So C is 14% of B's rows for 14% of its bytes:
+15,360 B against 112,640 B at the transition level.
+
+**What either option buys is capped by a rule this decision does not touch.**
+Under B the pointwise question is answerable at 84 of the run's 3,000 frames,
+under C at 12, under A at none. `ENVELOPE_RETENTION` decides which frames get an
+envelope row at all, and it has already put that ceiling at 2.8% — so retaining a
+boundary *everywhere* does not make the artifact answer *everywhere*. It makes it
+answer at 84 frames rather than 12, for 7.3x the bytes. Whether that is worth
+4.50% of the transition figure is #228's to decide, and this tier does not.
 
 ## See also
 

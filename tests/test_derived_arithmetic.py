@@ -146,13 +146,13 @@ def test_a_row_left_behind_by_a_republish_is_caught(monkeypatch: pytest.MonkeyPa
 
     The cell replaced is the live table's 21.3 TB/day occurrence ratio, re-quoted
     whenever the sizes are republished — `14,724x` under 264 GB, `14,669x` under
-    the 265 GB issue #166 left. What it is replaced with is the stale value the
-    original defect left behind.
+    the 265 GB issue #166 left, `14,614x` under the 266 GB issue #252 left. What
+    it is replaced with is the stale value the original defect left behind.
     """
     published = BASELINE.read_text()
-    text = published.replace("| 14,669x |", "| 14,780x |")
+    text = published.replace("| 14,614x |", "| 14,780x |")
     assert text != published, (
-        "`| 14,669x |` is no longer a cell of the sensitivity table, so this "
+        "`| 14,614x |` is no longer a cell of the sensitivity table, so this "
         "negative mutated nothing and would pass against any document at all. "
         "Re-quote it from the table the republish left."
     )
@@ -166,9 +166,9 @@ def test_a_moved_column_size_with_stale_rows_is_caught(
 ) -> None:
     """The other direction: republish the header and leave every row alone."""
     published = BASELINE.read_text()
-    text = published.replace("vs occurrence (265 GB)", "vs occurrence (300 GB)")
+    text = published.replace("vs occurrence (266 GB)", "vs occurrence (300 GB)")
     assert text != published, (
-        "the sensitivity table no longer publishes `vs occurrence (265 GB)`, so "
+        "the sensitivity table no longer publishes `vs occurrence (266 GB)`, so "
         "this negative mutated nothing. Re-quote the header the republish left."
     )
     monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: text)

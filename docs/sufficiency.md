@@ -153,7 +153,7 @@ with `python -m reg.bench --resolution`:
 The rate is in the column heading because the column **moves with it**:
 enforcement emits one verdict and one chain record per commanded action and no
 resolution level coarsens them. The *record layer* is linear in the rate; the
-*file* is not, and a real 1 kHz manipulator pays **15.8x** these figures at the
+*file* is not, and a real 1 kHz manipulator pays **17.7x** these figures at the
 occurrence level rather than the twenty times a linear reading gives — measured,
 with the bytes attributed table by table, in [`plan.md`](plan.md), *The control
 rate*, which is also where the curve at four control rates is.

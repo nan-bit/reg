@@ -166,7 +166,7 @@ which is why the occurrence level is 3,120 of 3,166 node rows at 50 Hz. The
 policy's declarations do *not* scale, since it replans on a wall-clock interval,
 so the verdict layer is the growth.
 
-**Measured**, from one execution of
+**Measured** 2026-08-21 and re-measured 2026-09-08, from one execution of
 `python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0`: the resolution
 curve at four control rates over **one fixed run duration**, 59.98 s of robot
 time, at one seed and the parameter block [Sensitivity](#sensitivity) states. The
@@ -178,10 +178,10 @@ which is what makes the other three comparable to it.
 | control rate | frames | records retained | occurrence | transition | per-frame |
 |---|---|---|---|---|---|
 | **50 Hz (published above)** | 3,000 | 3,120 | **60.72 MB/h** | 190.34 MB/h | 294.09 MB/h |
-| 100 Hz | 5,999 | 6,119 | 106.57 MB/h | 247.19 MB/h | 410.37 MB/h |
-| 250 Hz | 14,996 | 15,116 | 247.32 MB/h | 529.79 MB/h | 1.04 GB/h |
-| **1 kHz (a real manipulator)** | 59,981 | 60,101 | **1.08 GB/h** | 2.08 GB/h | 4.52 GB/h |
-| *x, 50 Hz → 1 kHz* | *20.0x* | *19.3x* | *17.8x* | *13.9x* | *20.7x* |
+| 100 Hz | 5,999 | 6,119 | 106.88 MB/h | 313.69 MB/h | 562.18 MB/h |
+| 250 Hz | 14,996 | 15,116 | 247.62 MB/h | 674.90 MB/h | 1.46 GB/h |
+| **1 kHz (a real manipulator)** | 59,981 | 60,101 | **1.08 GB/h** | 2.64 GB/h | 6.51 GB/h |
+| *x, 50 Hz → 1 kHz* | *20.0x* | *19.3x* | *17.7x* | *13.9x* | *22.1x* |
 
 Those are measured points. **Nothing between them is interpolated and nothing
 beyond them is extrapolated** — a rate nobody ran is not in the table, however
@@ -193,12 +193,12 @@ rather than extending it to the ladder is recorded in
 above `reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, so their artifacts cannot
 address every frame they price ([`limitations.md`](limitations.md) §5).
 
-The growth is **sublinear**: 15.8x at the occurrence level for a 20x rate
+The growth is **sublinear**: 17.7x at the occurrence level for a 20x rate
 increase, because the scene rows and the fixed schema-and-index cost do not scale
 with the rate. Only the record layer does, and by 1 kHz it is 60,101 of that
-level's 60,572 node rows — 99.2%, against 98.5% at 50 Hz. That level is almost
-entirely a per-action attestation stream, which is what the rate buys and what a
-cadence change would cut.
+level's 61,826 node rows — 97.2%, against 98.5% at 50 Hz. That level is almost
+entirely a per-action attestation stream at either rate, which is what the rate
+buys and what a cadence change would cut.
 
 ### What it does to the claim
 
@@ -208,15 +208,15 @@ in the retention floor, against the **unchanged** 182.5 TB assumption:
 | control rate | occurrence, 6 months | vs 182.5 TB | transition | vs | per-frame | vs |
 |---|---|---|---|---|---|---|
 | **50 Hz** | **266 GB** | **~686x** | 834 GB | ~219x | 1,288 GB | ~142x |
-| 100 Hz | 467 GB | ~391x | 1.08 TB | ~169x | 1.80 TB | ~101x |
-| 250 Hz | 1.08 TB | ~169x | 2.32 TB | ~79x | 4.56 TB | ~40x |
-| **1 kHz** | **4.73 TB** | **~39x** | 9.11 TB | ~20x | 19.80 TB | ~9x |
+| 100 Hz | 468 GB | ~390x | 1.37 TB | ~133x | 2.46 TB | ~74x |
+| 250 Hz | 1.08 TB | ~169x | 2.96 TB | ~62x | 6.39 TB | ~29x |
+| **1 kHz** | **4.73 TB** | **~39x** | 11.56 TB | ~16x | 28.51 TB | ~6x |
 
 **At 1 kHz the claim is below two orders of magnitude, and this document says so
 rather than repairing it.** ~39x at occurrence resolution is **one** order, not
 two. The two-order band is still occupied at 250 Hz (~169x) and is gone by 1 kHz;
 where between those two it goes is unmeasured and is not quoted. Every finer
-level is worse: transition ~21x and per-frame ~10x at 1 kHz. Both rows also sit
+level is worse: transition ~16x and per-frame ~6x at 1 kHz. Both rows also sit
 above the 100 Hz the artifact's time base is declared valid at, so what they buy
 is bounded by [`limitations.md`](limitations.md) §5 as well as by the price.
 

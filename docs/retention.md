@@ -190,7 +190,8 @@ both stated rather than left to be discovered:
 
 ## The control rate — and it is not two orders at 1 kHz
 
-> **Measured 2026-08-21 (issue #68).** `python -m reg.bench --control-rate-hz
+> **Measured 2026-08-21 (issue #68), re-measured 2026-09-08 (issue #252).**
+> `python -m reg.bench --control-rate-hz
 > 50,100,250,1000 --seed 0`: the resolution curve at four control rates over one
 > fixed run duration (59.98 s of robot time), same seed, same envelope
 > parameters, same record parameterization. The 50 Hz row is the published curve
@@ -210,9 +211,9 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
 | **50 Hz (this simulator, published above)** | **60.72 MB/h → 266 GB → ~686x** | 190.34 MB/h → 834 GB → ~219x | 294.09 MB/h → 1,288 GB → ~142x |
-| 100 Hz | 106.57 MB/h → 467 GB → ~391x | 247.19 MB/h → 1.08 TB → ~169x | 410.37 MB/h → 1.80 TB → ~101x |
-| 250 Hz | 247.32 MB/h → 1.08 TB → ~169x | 529.79 MB/h → 2.32 TB → ~79x | 1.04 GB/h → 4.56 TB → ~40x |
-| **1 kHz (a real manipulator)** | **1.08 GB/h → 4.73 TB → ~39x** | 2.08 GB/h → 9.11 TB → ~20x | 4.52 GB/h → 19.80 TB → ~9x |
+| 100 Hz | 106.88 MB/h → 468 GB → ~390x | 313.69 MB/h → 1.37 TB → ~133x | 562.18 MB/h → 2.46 TB → ~74x |
+| 250 Hz | 247.62 MB/h → 1.08 TB → ~169x | 674.90 MB/h → 2.96 TB → ~62x | 1.46 GB/h → 6.39 TB → ~29x |
+| **1 kHz (a real manipulator)** | **1.08 GB/h → 4.73 TB → ~39x** | 2.64 GB/h → 11.56 TB → ~16x | 6.51 GB/h → 28.51 TB → ~6x |
 
 The `MB/h` column is measured. The six-month size is that figure times the 4,380
 hours in the retention floor, and the ratio is against the **assumed** 182.5 TB
@@ -263,8 +264,8 @@ at a 50 Hz control rate and one at 1 kHz — the first pinned, the second a manu
 measurement at a rate above the artifact's time base
 ([`limitations.md`](limitations.md) §5).* Both are measured; which one applies
 is a property of the robot, not of this argument. The growth is **sublinear** —
-15.8x for a 20x rate increase — and the record layer is what does scale: at
-1 kHz it is 60,101 of the occurrence level's 60,572 node rows, against 3,120 of
+17.7x for a 20x rate increase — and the record layer is what does scale: at
+1 kHz it is 60,101 of the occurrence level's 61,826 node rows, against 3,120 of
 3,166 at 50 Hz. *Why* the bytes grow more slowly than the rows is measured in
 *Why the growth is sublinear* below, and was stated wrongly here until
 issue #116.
@@ -279,9 +280,9 @@ does not take it.
 
 **What this record said for three milestones:** *the scene rows and the fixed
 schema-and-index cost do not scale with the rate.* Both clauses are true. Neither
-term is anywhere near large enough to turn a 20x rate increase into 15.8x, and
-the term that is large enough was not named at all (issue #116). The 15.8x is a
-measurement and it has not moved; what follows replaces the account of it.
+term is anywhere near large enough to turn a 20x rate increase into 17.7x, and
+the term that is large enough was not named at all (issue #116). That ratio is a
+measurement; what follows replaces the account of it.
 
 Bytes per table, from SQLite's own `dbstat`, on the **50 Hz** rung of the ladder
 above — which is the published curve, so this attributes the very artifact
@@ -324,7 +325,7 @@ page.*
    ~184 B, because it carries the declared region as a polygon. Twenty times the
    control rate buys twenty times the verdicts and **no** further declarations.
    An 18.3% share at 50 Hz is a share of about 1% at 1 kHz, and that dilution is
-   where the difference between 20x and 15.8x goes.
+   where the difference between 20x and 17.7x goes.
 
 **The two terms it named come to 35,840 B, 3.5% of the level; the
 term it did not name is 185,344 B, 18.3%.** The stated cause is smaller than the

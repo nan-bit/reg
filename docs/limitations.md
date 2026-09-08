@@ -815,26 +815,27 @@ contains a great deal that a differential-drive base could not.**
 
 ---
 
-## 11. A base velocity's provenance is recorded, and nothing reads it — and `qd` has none at all
+## 11. `qd` carries no provenance at all, and the tag now follows the base velocity's
 
-[`sufficiency.md`](sufficiency.md) §5.9 is the decision: a `BaseVelocity` filled
-from a perceiver is **not** Layer A, so `reg.types.VelocitySource` is required on
-the type with no default and no inference. This entry is the half of that
-decision which is not yet enforcement, and the older hole beside it.
+> **Amended 2026-09-08 (issue #252). Half of this entry closed.**
+> `reg.envelope.envelope_layer` is now the **weakest of its inputs** —
+> `Limits.source`, the provenance of the base velocity the outer set was
+> integrated from, and whether the configuration states a room-frame pose — so an
+> outer set whose base term came out of visual odometry is tagged `B` however its
+> bounds were sourced. Every tagged edge also records what its tag was computed
+> from, one row per input, in `edge_layer_basis`. That is the first of the three
+> things this entry's last paragraph asked for, taken together with the
+> posed-configuration case [`sufficiency.md`](sufficiency.md) §5.8 held open,
+> because the two had to be answered in one place or answer differently. **Every
+> published retention figure moved** — [`retention.md`](retention.md) is the
+> re-measurement.
 
-**What.** Two gaps, and they are different in kind.
+[`sufficiency.md`](sufficiency.md) §5.9 is the decision the closed half rested
+on: a `BaseVelocity` filled from a perceiver is **not** Layer A, so
+`reg.types.VelocitySource` is required on the type with no default and no
+inference.
 
-*The tag does not follow the value.* `reg.envelope.envelope_layer` decides the
-`HAS_ENVELOPE` edge's layer from `Limits.source` alone, and nothing maps a
-`VelocitySource` member to a `Layer`. Meanwhile
-`reg.envelope.base_motion_bounds` reads `state.base_vel` and integrates it into
-the displacement term of `outer_envelope` (§10) — which for a mobile robot is the
-*only* bound a VETO rests on. So an outer set whose base term came out of visual
-odometry is tagged `A` on the strength of its bounds having come off a
-datasheet. The same holds one level down in the raw stream:
-`reg.bench.COLUMN_RULES` classifies `base_vel_source` as Layer A beside the three
-rates it describes, because that classifier is **per column and static** and the
-thing that decides the question is the *value in the cell*.
+**What.** Two gaps remain, and they are different in kind.
 
 *`qd` carries no provenance at all.* `ProprioState.q` and `ProprioState.qd` are
 Layer A by their kind, and nothing records where a particular run's numbers came
@@ -846,93 +847,75 @@ estimator is that thing. The asymmetry that made the base velocity worth tagging
 first is one of *likelihood*, not of structure: visual odometry is ordinary and
 visual joint-state estimation is not.
 
+*The stream's column rule still does not follow the value.* One level down from
+the edge, `reg.bench.COLUMN_RULES` classifies `base_vel_source` as Layer A beside
+the three rates it describes, because that classifier is **per column and
+static** while the thing that decides the question is the *value in the cell*.
+The edge tag stopped being wrong about this; the column rule has not.
+
 **The cost.** An artifact can be internally honest and still read stronger than
-it is. A `DERIVED` base velocity is recorded as derived, survives the stream
-round trip, and cannot be confused with an encoder-measured one — but a
-`WHERE layer = 'B'` query, which is what Claim 3 *is*, will not return the
-envelope over it. A reader who trusts the tag rather than reading the
-`base_vel_source` column beside the rates gets the untagged answer. For `qd`
-there is not even a column to read: an arm whose joint state came from somewhere
-unusual produces an artifact indistinguishable from one whose did not, and no
-query can be written that would find it.
+it is. A `WHERE layer = 'B'` query, which is what Claim 3 *is*, returns the
+envelope over a perceived base velocity now and will never return the one over a
+perceived joint rate. For `qd` there is not even a column to read: an arm whose
+joint state came from somewhere unusual produces an artifact indistinguishable
+from one whose did not, and no query can be written that would find it.
 
-**What it does not cost, today.** Nothing in this repository. No fixture is
-mobile — `reg.world.LIMITS` states four base bounds of zero and every fixture
-frame records `base_vel=None` — so no artifact this repository builds carries a
-base velocity of either provenance, and every layer tag on every edge in every
-fixture is the tag it was. That reason is a property of the *fixtures* and not
-of the enforcer, which constructs for a driven base and adjudicates it, resting
-on `horizon_bound` alone and reporting `Enforcer.bound` as `None` because there
-is no workspace disc. So the first mobile fixture
-([`mobile-base.md`](mobile-base.md) §7 Tier 4) will produce artifacts this entry
-is about, and the gap stops being hypothetical the moment one lands. No
-published figure moves: the stream's velocity block is optional,
+**What it does not cost, today.** For `qd`, nothing this repository can show you,
+and that is the entry rather than a mitigation: every fixture's joint state comes
+from the simulator, so an artifact built from a visual estimator would look
+identical to one built from encoders. The column rule's cost is bounded —
 `expected_header(2, 3)` is the 24 columns Claim 1 is priced on, and
-`base_vel_source` appears only in a header no fixture writes.
+`base_vel_source` appears in a header only a mobile fixture writes.
 
-**What a claim would need in order not to inherit this.** Three things, in
-order. (1) An envelope layer that is the weakest of its inputs rather than of one
-of them — `Limits.source` **and** the provenance of every state value the bound
-was computed from — decided once for the posed-configuration case and this one
-together. (2) A provenance on `qd` on the same pattern, or a written argument
-that a joint rate is structurally proprioceptive in a way a base rate is not;
-this entry asserts only that the argument currently offered is the weaker kind,
-not that no stronger one exists. (3) The graded integrity attribute
-[`sufficiency.md`](sufficiency.md) §7 rejects for scope, if the claim needs to
-distinguish a PLd-rated perceiver from an unrated one — which is what a real
-assurance case does, and which the binary cannot express in either direction.
-Until then the supportable claim is exactly: **this artifact records whether a
-base velocity came from a perceiver, and its layer tags do not yet depend on the
-answer.**
+**What a claim would need in order not to inherit this.** Two things, the first
+of the original three having landed. (1) A provenance on `qd` on the pattern
+`BaseVelocity` set, or a written argument that a joint rate is structurally
+proprioceptive in a way a base rate is not; this entry asserts only that the
+argument currently offered is the weaker kind, not that no stronger one exists.
+(2) The graded integrity attribute [`sufficiency.md`](sufficiency.md) §7 rejects
+for scope, if the claim needs to distinguish a PLd-rated perceiver from an
+unrated one — which is what a real assurance case does, and which the binary
+cannot express in either direction. Until then the supportable claim is exactly:
+**this artifact's layer tags follow the provenance of a base velocity, and there
+is no provenance on a joint rate for them to follow.**
 
 ---
 
-## 12. The artifact is not self-describing: three questions need this document to answer
+## 12. The artifact is not self-describing: one question still needs this document
 
 Added 2026-09-05 (issue #198). [`self-describing.md`](self-describing.md) §1 is
-the design document; this entry is its tier 0, which is the part that is true
-today. The three gaps it names are each already priced somewhere in this file —
-§1 for the platform, §2 and §3 for the radius, §11 for the tag that does not
-follow its value — and **that is the finding**: a reader who wants to know what
-an auditor can do with the file alone has to assemble it from three entries
-written about other things. Nothing below is a new defect. It is the same three
-defects stated once, in the vocabulary of the file rather than of the mechanisms.
+the design document; this entry is its tier 0. The three gaps it named were each
+already priced somewhere in this file — §1 for the platform, §2 and §3 for the
+radius, §11 for the tag — and **that was the finding**: a reader who wants to know
+what an auditor can do with the file alone had to assemble it from three entries
+written about other things. Two are closed. They are struck rather than deleted,
+because how a gap closed is worth as much here as that it did.
 
-**What.** Three questions an auditor holding only an artifact and the code that
-reads artifacts cannot answer, and must come here for.
+**What.** Questions an auditor holding only an artifact and the code that reads
+artifacts cannot answer, and must come here for.
 
 | # | the question the file cannot answer | where the mechanism is priced |
 |---|---|---|
-| 1 | *What was this `layer` tag computed from?* | §11 |
-| 2 | *Whose recomputation is wrong, mine or the file's?* | §1 |
+| ~~1~~ | *What was this `layer` tag computed from?* — **closed** | §11 |
+| ~~2~~ | *Whose recomputation is wrong, mine or the file's?* — **closed, weaker form** | §1 |
 | 3 | *Could the robot have reached (x, y)?* | §2, §3 |
 
-*1 — the tag requires a document.* The `HAS_ENVELOPE` edge carries `A` or `B`;
-the file does not carry the basis it was computed from, so the tag can be read
-and cannot be checked. A reader who wants to know what it depends on — today
-`Limits.source` alone, and not `state.base_vel`'s provenance beside it — has to
-read §11.
+*1 — closed 2026-09-08 (issue #252).* The edge carried `A` or `B` and the file
+carried nothing it was computed from. It carries it now, per edge, in
+`edge_layer_basis`, and `reg.query.cold_read` reports `layer-tag-basis` as
+CHECKABLE: the tag is the weakest of its own recorded inputs, and a reader
+recomputes it from the file with no document open.
 
-*2 — attribution requires the recording machine.* Most `envelope` rows have
-`geometry_wkb = NULL` and are recomputed on demand. The artifact recorded
-`reg_version` and the envelope parameters, and not the shapely and GEOS versions
-or the platform, so a recomputation that disagreed could not be attributed. §1 has
-the measurement and what a claim would need; the point here was that the fact
-lived in prose and not in the file, which is why the disagreement was unresolvable
-rather than merely unresolved.
-
-**This one is closed in the weaker form, 2026-09-05 (issues #200 and #201).**
-The environment is *in the file* — shapely, GEOS, numpy, the interpreter and the
-platform, `reg.store.ENVIRONMENT_KEYS`, `SCHEMA_VERSION` 11 — and since #201 the
-code that reads artifacts **acts on it**: `envelope_at` refuses to recompute a
-discarded polygon off the recording environment, naming the key that differs and
-both values (§1). So the question in the table is answered in the only direction
-a version comparison can answer it: an auditor is told *this is not that machine*
-and is not told *which library moved the geometry*, because a version list is not
-a differ. What remains, and is why this row does not leave the table, is that the
-refusal is a could-not-evaluate rather than an attribution, and that matching
+*2 — closed in the weaker form, 2026-09-05 (issues #200 and #201).* Most
+`envelope` rows have `geometry_wkb = NULL` and are recomputed on demand, and the
+artifact recorded neither the shapely and GEOS versions nor the platform, so a
+recomputation that disagreed could not be attributed. The environment is *in the
+file* now (`reg.store.ENVIRONMENT_KEYS`) and `envelope_at` **acts on it**,
+refusing to recompute off the recording environment and naming the key that
+differs. §1 is normative and has the measurement. What remains is that a refusal
+is a could-not-evaluate rather than an attribution, and that matching
 environments are necessary and not sufficient — the C library is not among the
-keys. The other two rows are untouched.
+keys.
 
 *3 — the pointwise question requires a recomputation, which routes back through
 2.* A stored `envelope` row retains `outer_area` and `outer_radius`, not a
@@ -942,38 +925,30 @@ direction it is asked — §2's three bullets are the exact statement, and §3 i
 that costs the overclaim check. The region is recomputable, and a recomputation is
 gap 2.
 
-**The cost.** Every one of the three is a fact a reader must take from a markdown
-file that no test holds against the artifact. That is the cost this project has
-already refused to accept one level down — `reg.enforce` recomputes its own bound
-rather than reading the declared one, precisely because a value supplied by the
-party being checked is not evidence — and the artifact does not yet meet it about
-itself. Concretely: an assessor with the file, no documents and no access to the
-recording machine can report *the tag says A*, and cannot report *the tag is
-right*; and the two findings are what an assurance case is for.
+**The cost.** What is left is a fact a reader must take from a markdown file that
+no test holds against the artifact. That is the cost this project has already
+refused to accept one level down — `reg.enforce` recomputes its own bound rather
+than reading the declared one, precisely because a value supplied by the party
+being checked is not evidence.
 
-**What it does not cost.** No claim moves, no figure moves, and no code changes.
-This entry adds no mechanism and removes none: §1's recomputation rule,
-[`lossiness.md`](lossiness.md) *Discarded* #9, §2's bracket and §11's tagging are
-exactly as they were, and every artifact this repository builds is as sound as it
-was yesterday. It is also **not** a resolution of the two open decisions it
-touches: the envelope-layer minimum (§11's *what a claim would need*, item 1) and
-polygon containment (issue #82, §3) both stay open, and each still changes what a
-published claim means. Nor is it a limitation of Claim 1: the stream, the chain
-and the verdicts are untouched.
+**What closing two cost.** Gap 2 cost a schema bump and a refusal; gap 1 cost a
+schema bump, a retained row per input per tagged edge, and **every published
+retention figure** — [`retention.md`](retention.md) is the re-measurement. Neither
+resolved gap 3: polygon containment (issue #82, §3) stays open and still changes
+what a published claim means.
 
 **What a claim would need in order not to inherit this.** That the file carry
 what the prose carries, which is [`self-describing.md`](self-describing.md) §3 and
-its build order in §8: the recording environment in `meta` and the guard that
-acts on it (tier 2, landed with issues #200 and #201), a cold-read
-test that fails when a tag disagrees with its own basis (tier 3), the layer basis
-per tagged edge (tier 4), and the outer boundary retained rather than projected
-(tier 5, a decision and not a task, because it moves published figures). Tier 1 —
-the [`prior-art.md`](prior-art.md) pass on build provenance, in-toto and SLSA — comes
-before all of them, because recording the toolchain that produced an artifact is
-ordinary practice with names on it and this project does not get to discover it.
-Until then the supportable claim is exactly: **this artifact answers audit
-questions from the graph alone; it does not yet let a reader check the answers
-from the graph alone.**
+its build order in §8. Tiers 2, 3 and 4 have landed — the recording environment
+and the guard that acts on it (issues #200 and #201), the cold-read report, and
+the layer basis per tagged edge (issue #252). What is left is the outer boundary
+retained rather than projected (tier 5, a decision and not a task, because it
+moves published figures), and tier 1's [`prior-art.md`](prior-art.md) pass on
+build provenance, in-toto and SLSA, because recording the toolchain that produced
+an artifact is ordinary practice with names on it and this project does not get to
+discover it. Until then the supportable claim is exactly: **this artifact lets a
+reader check a layer tag and an environment from the graph alone; the reachable
+region behind an edge is still radial.**
 
 ---
 

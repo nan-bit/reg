@@ -73,11 +73,11 @@ representation you can retain, export, and hand to an assessor or insurer.
 > because the benchmark showed the graph is ~13x *larger* per frame than a
 > gzipped copy of the simulator's raw state stream, 24 columns and 19 of them
 > Layer B — **measured on an artifact holding no Layer A**;
-> the artifact this project ships carries the record stream and is ~40x larger,
+> the artifact this project ships carries the record stream and is ~51x larger,
 > which is the figure Claim 1 publishes. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
-> answers no audit question. Against a *sensor* log the artifact is **~689x**
-> smaller over a six-month retention period at occurrence resolution (265 GB vs
+> answers no audit question. Against a *sensor* log the artifact is **~686x**
+> smaller over a six-month retention period at occurrence resolution (266 GB vs
 > 182.5 TB per robot). That is two orders of magnitude and not three: the
 > earlier ~9,900x was measured before the artifact carried any Layer A record
 > (issue #59). The artifact side is measured; the sensor side is sourced and must
@@ -200,7 +200,7 @@ absolute cost against a legal retention floor is a fact about a budget.
 
 **Success, as originally stated:** 2–4 orders of magnitude, one number, one
 chart. **As it should be stated now:** at occurrence resolution the artifact
-costs **265 GB** per robot for the six-month window, which is **~689x** below an
+costs **266 GB** per robot for the six-month window, which is **~686x** below an
 assumed **182.5 TB** raw sensor log over the same period. Two orders, not three,
 and never four — the ratio is linear in the assumed sensor rate, and
 [`sensor-baseline.md`](sensor-baseline.md) is blunt about what that buys. That
@@ -211,7 +211,7 @@ published under it — three live, and a fourth kept for the record — are
 **That coarsest level is 98.5% attestation records, and the figure means nothing
 without it** (issue #116). 3,120 of its 3,166 node rows are declarations and
 verdicts, against 42 occurrences: no resolution level coarsens a per-action
-record, so 265 GB is the price of retaining **attestation**, not the price of a
+record, so 266 GB is the price of retaining **attestation**, not the price of a
 DSSAD-equivalent event log. The level was labelled *DSSAD-shaped* until #116,
 which was true of 1.3% of the rows and of 100% of the reader's impression.
 Quoting "at occurrence resolution" without the composition reinstates exactly
@@ -219,7 +219,7 @@ that reading. The label, the two rejected alternatives and what the choice
 commits this project to are in [`retention.md`](retention.md), *What the coarsest
 level actually holds*.
 
-**And 265 GB is derived, not measured.** It is the measured **60.54 MB/h** — at
+**And 266 GB is derived, not measured.** It is the measured **60.72 MB/h** — at
 the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs at, and linear in it —
 times the 4,380 hours in the 182.5-day retention floor. `bytes/hour` is itself
 `size × 3600 / run seconds` over a 59.98-second run, so the artifact's fixed
@@ -255,7 +255,7 @@ condition that is part of the number:
 
 - A **13x** figure appears in that comparison measured on a build holding **no
   declaration, verdict, fault or chain record at all** — no Layer A. The current
-  build carries all of it and the figure is **~40x**. Quoting 13x without the
+  build carries all of it and the figure is **~51x**. Quoting 13x without the
   condition quotes a different artifact.
 - The gzipped state CSV is **not what practitioners retain**. Against
   **rosbag2/MCAP**, the incumbent, the same proprioceptive content costs
@@ -264,14 +264,14 @@ condition that is part of the number:
   **hand-built encoding comparison and not a real bag**, which
   [`sensor-baseline.md`](sensor-baseline.md) requires be said wherever a
   projected figure from it is quoted until a measurement retires it.
-- **The figure to quote against the incumbent is a pair, 7.17x and 10.27x**: the
-  same 24 columns rather than 5, so it composes with the `~40x` instead of
+- **The figure to quote against the incumbent is a pair, 9.06x and 12.97x**: the
+  same 24 columns rather than 5, so it composes with the `~51x` instead of
   standing beside it, and measured on bags `ros2 bag record` wrote. The artifact
-  is **7.17x** a `zstd_fast` bag of those columns, **10.27x** a `zstd_small` one
-  and **1.58x** the uncompressed default — the bags being 5.58x, 3.90x and 25.34x
-  the gzipped CSV, and `40.02x / 5.58x` is where 7.17x comes from. **Both
+  is **9.06x** a `zstd_fast` bag of those columns, **12.97x** a `zstd_small` one
+  and **2.00x** the uncompressed default — the bags being 5.58x, 3.90x and 25.34x
+  the gzipped CSV, and `50.56x / 5.58x` is where 9.06x comes from. **Both
   compressed profiles are published**, rosbag2 shipping both; if a single number
-  is wanted it is 7.17x, the larger bag and so the smaller ratio. Its Layer B
+  is wanted it is 9.06x, the larger bag and so the smaller ratio. Its Layer B
   half goes on `/tf`, the arrangement most favourable to the incumbent of those
   [`sensor-baseline.md`](sensor-baseline.md) prices, so nothing here is won by
   choosing the comparator. **The artifact is larger than the bag under every

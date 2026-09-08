@@ -1,11 +1,12 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
-**Status:** a design document; tiers 0-3 of §8 have landed — tier 2 in two
+**Status:** a design document; tiers 0-4 of §8 have landed — tier 2 in two
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
-#201, the recompute path refuses off the recording environment), and tier 3 as
-`reg.query.cold_read` (issue #231); tiers 4 and 5 have had their costings land
-(issues #249, #230) and neither decision taken · written 2026-09-05, tier 1's
-findings folded in 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07 · normative
+#201, the recompute path refuses off the recording environment), tier 3 as
+`reg.query.cold_read` (issue #231) and tier 4 as the layer basis per edge (issue
+#252); tier 5 has had its costing land (issue #230) and its decision is not
+taken · written 2026-09-05, tier 1's findings folded in 2026-09-05, tier 2
+2026-09-05, tier 3 2026-09-07, tier 4 2026-09-08 · normative
 over nothing yet; where it touches what the project may claim it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
 those files carry the change · the build order in §8 is the authority on what is
@@ -39,17 +40,20 @@ document's statement of the same three, for the argument it goes on to make.*
 
 | # | what an auditor cannot do with the file alone | why | where it is recorded now |
 |---|---|---|---|
-| 1 | Check a `layer` tag | The tag is written; what it was computed **from** is not | `sufficiency.md` §5.6, §5.9 |
+| ~~1~~ | Check a `layer` tag | The tag was written and what it was computed **from** was not — **closed by issue #252**: `edge_layer_basis` carries one row per input per tagged edge, and the tag is the weakest of them | `sufficiency.md` §5.6, §5.9 |
 | 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **closed in the weaker form by issues #200 and #201**: it records them, and `envelope_at` refuses to recompute where they differ. What is left is that a refusal is not an attribution | `limitations.md` §1 |
 | 3 | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` are retained, not the boundary | `limitations.md` §2, §3 |
 
-**Gap 1 — a tag that is asserted rather than checkable.** `envelope_layer` takes
-`Limits` and nothing else. That was sound while the only taint could arrive
-through the bounds; since issue #163 the outer set reads `state.base_vel`, and
-since issue #156 a `BaseVelocity` may be `DERIVED`. The stream records
-`base_vel_source`, so the dependency is *in the file* — but the `HAS_ENVELOPE`
-edge is still tagged from `Limits.source` alone, and the two can disagree with
-nothing to say so. A reader who trusts the tag gets the pre-#156 answer.
+**Gap 1 — a tag that was asserted rather than checkable. Closed 2026-09-08
+(issue #252).** `envelope_layer` took `Limits` and nothing else. That was sound
+while the only taint could arrive through the bounds; since issue #163 the outer
+set reads `state.base_vel`, and since issue #156 a `BaseVelocity` may be
+`DERIVED`. The stream recorded `base_vel_source`, so the dependency was *in the
+file* — but the `HAS_ENVELOPE` edge was tagged from `Limits.source` alone, and
+the two could disagree with nothing to say so. Now `envelope_layer` takes all
+three inputs and returns the weakest, every tagged edge carries what its tag was
+computed from, and `open_edge` refuses an edge whose tag and basis disagree. §8
+tier 4 is what it cost.
 
 **Gap 2 — recomputation with no stated environment.** The retention argument is
 that a polygon may be discarded because it is a deterministic function of the row
@@ -129,13 +133,14 @@ basis existed to agree or disagree with, so about a file where nothing carries o
 it could only say could-not-evaluate. What it called **pass** is the shipped
 **checkable**.
 
-What it says today, on an artifact built from `main` at `schema_version` 11: the
+What it says today, on an artifact built from `main` at `schema_version` 13: the
 recording environment **checkable**; recomputing a discarded polygon
 **checkable**, because `envelope_at` refuses off the recording environment; a
-`layer` tag's basis **readable, not checkable** — §1's gap 1; *could the robot
-have reached (x, y)* **readable, not checkable**, radially only — gap 3.
-`tests/test_query.py` pins those per shipped fixture, so closing a gap fails
-there and has to be updated on purpose.
+`layer` tag's basis **checkable** since issue #252 — §1's gap 1, closed, and the
+first of the four rows to move; *could the robot have reached (x, y)* **readable,
+not checkable**, radially only — gap 3. `tests/test_query.py` pins those per
+shipped fixture, so closing a gap fails there and has to be updated on purpose,
+which is what happened.
 
 It reports the environment and does not re-verify it: the report's
 `recompute_permitted` is held to agree with `reg.graph.envelope_at` on both
@@ -431,14 +436,26 @@ else here was waiting on either.
 `tests/` — §2 says why — and it is what makes tiers 4 and 5 judgeable by
 something other than a PR body.
 
-**Tier 4 — the layer basis** (issue #227). Depends on §7 question 1 being
-answered. Ships with the `DERIVED` fixture from question 2, because a basis
-nothing exercises is a basis nobody knows the shape of.
+**Tier 4 — the layer basis. Landed** (issue #252). **Option A, per edge**, is in
+the schema as `reg.store.EDGE_BASIS_TABLE` at `SCHEMA_VERSION` 13: one row per
+input per tagged edge, each naming the input, the value it had in this build,
+where it was read and the layer that input alone admits. `reg.store.open_edge`
+writes it and refuses an edge whose tag disagrees with it, `reg.envelope.
+envelope_layer` became the **weakest of its inputs** rather than of one of them,
+and `reg.query.cold_read` reports `layer-tag-basis` as `CHECKABLE`. §7 question 1
+is answered by the measurement below and question 2's `DERIVED` fixture
+(`reg.scenarios.mobile_derived_velocity`, issue #229) is what exercises it.
+**Every published retention figure moved** — [`retention.md`](retention.md) is
+the re-measurement, and it is the price of the tier.
 
-*Its own tier 2, the costing, has landed* (issue #249): `reg.bench
---layer-basis` prices both granularities and adopts neither. Measured with
+*Its own tier 2, the costing, landed first* (issue #249): `reg.bench
+--layer-basis` priced both granularities and adopted neither. Measured with
 `python -m reg.bench --layer-basis --seed 0` on the fixture Claim 1 is priced
-on, `long_run` at 3,000 frames. Nothing was retained and no figure republished.
+on, `long_run` at 3,000 frames. **The table below is that measurement as it was
+reported, against the figures published then** — the artifact has since grown by
+what option A costs, so re-running the study today prices the same question
+against a larger baseline, and republishing these cells would describe neither
+run.
 
 | level | option | artifact | vs today | basis rows | answers | 6 months | vs sensor |
 |---|---|---|---|---|---|---|---|
@@ -453,8 +470,8 @@ on, `long_run` at 3,000 frames. Nothing was retained and no figure republished.
 
 **The headline figures move here; under tier 5's options they did not.** A
 granularity adds a table rather than a column, and an empty table with its key
-costs SQLite pages at every level — so `265 GB` becomes 266 GB and `~689x`
-becomes ~687x even where no basis row is written. The totals and multiples are
+costs SQLite pages at every level — so `265 GB` became 266 GB and `~689x`
+became ~687x even where no basis row is written. The totals and multiples are
 the published figures scaled by the measured ratio; the sensor side of the last
 column is a projection wherever it is quoted
 ([`sensor-baseline.md`](sensor-baseline.md)).
@@ -476,12 +493,14 @@ source, horizon)` while the pose taint is read off the *edge's own endpoint*.
 `tests/test_bench.py` feeds the study that case and asserts it reports the
 second edge misstated.
 
-**Neither option closes gap 1 on its own.** `base_vel_source` is an input no
-table retains, so both write it as *not retained*: the builder has to record the
-value too, which is a change to what is retained rather than to where. That is a
-third decision and this tier does not take it. Neither moves
-`reg.query.cold_read`'s `layer-tag-basis`, which stays
-`READABLE-NOT-CHECKABLE` while nothing is adopted.
+**Neither option closed gap 1 on its own, and what took the third decision.**
+`base_vel_source` was an input no table retained, so both priced it as *not
+retained*: the builder had to record the value too, which is a change to what is
+retained rather than to where. Issue #252 took that decision with the
+granularity, because a basis whose rows a reader cannot check the tag against is
+not a basis. The value is on the basis row itself, so a run whose base rates came
+out of a perceiver and one whose came off its wheels produce different bases, and
+the tag follows.
 
 **Tier 5 — the boundary** (issue #228). A decision first, then bytes, then a
 re-measurement and republish of every figure that moves. Not to be started until
@@ -502,7 +521,7 @@ on, `long_run` at 3,000 frames. Nothing was retained and no figure republished.
 | `per-frame` | B | 3,746,816 B | +3.10% | 985 GB | ~185x |
 | `per-frame` | C | 3,649,536 B | +0.42% | 959 GB | ~190x |
 
-**The headline figures do not move at all.** `265 GB` and `~689x` are figures at
+**The headline figures do not move at all.** `265 GB` and `~689x` were figures at
 occurrence resolution, and that level retains no envelope row, so no rule for the
 outer boundary reaches it. The totals and multiples above are the published
 figures scaled by the measured ratio; the sensor side of the last column is a

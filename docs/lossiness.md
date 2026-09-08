@@ -157,8 +157,17 @@ Each entry is a claim that the graph can be tested against.
    frames get a row at all** is #10, and **which of those rows carry the polygon**
    is #9. Neither narrows what a row *says* — every `envelope` row the artifact
    holds carries every field above.
-9. **The layer tag on every edge** — `A` or `B`, per Phase 9. Claim 3 is a query
-   over these tags, so an untagged edge is an unusable edge.
+9. **The layer tag on every edge, and what it was computed from** — `A` or `B`,
+   per Phase 9. Claim 3 is a query over these tags, so an untagged edge is an
+   unusable edge. Since issue #252 an untagged **basis** is one too:
+   `edge_layer_basis` carries one row per input per tagged edge — the input, its
+   value in this build, where it was read, and the layer it alone admits — and
+   the tag is the weakest of them. It is retained rather than recomputed because
+   recomputing it needs the `Limits` and the stream, which is exactly the access
+   an auditor holding the file does not have. Per **edge** and not per envelope,
+   measured in issue #249: envelope rows deduplicate, so a per-envelope basis has
+   one answer for two edges whose bases differ. Every published figure moved
+   ([`retention.md`](retention.md)).
 10. **The run's provenance** — scenario name, seed, tolerance constants in force,
     and the schema version, once per artifact. Determinism is only checkable if the
     artifact says what produced it.
@@ -425,8 +434,8 @@ though it were the only one. It is not, and saying so is the point.
 
 The question the levels answer is *how coarse can the evidence get before it stops
 answering the question?* — and they turn out to be **where the compression argument
-actually lives**: a measured **265 GB** per robot per six months at occurrence
-resolution against a projected 182.5 TB of sensor log, i.e. ~689x
+actually lives**: a measured **266 GB** per robot per six months at occurrence
+resolution against a projected 182.5 TB of sensor log, i.e. ~686x
 ([`retention.md`](retention.md); measured 2026-08-20 at seed 0, and the sensor rate
 is an assumption with a sourced range and a sensitivity table,
 [`sensor-baseline.md`](sensor-baseline.md)). It lives there **less comfortably than
@@ -964,6 +973,7 @@ discard is worth least once nobody remembers what it was weighed against.
 | *Retained* #8 and *Discarded* #9, the pose written and the polygon kept | #191 | — |
 | *Discarded* #9, the buildinfo in `meta` | #200 | — |
 | *Discarded* #9, `envelope_at` refusing off-environment | #201 | — |
+| *Retained* #9, the layer basis per tagged edge | #252 | — |
 
 ### The lists described one level, and said so only implicitly
 

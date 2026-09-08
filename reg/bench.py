@@ -847,10 +847,16 @@ def claim_verdict(ratio: float) -> str:
 #: every readable identifier in the artifact now lives, and identifier text is
 #: exactly what that issue's measurement was about — attributing it to "indexes
 #: + schema" would hide the cost of the thing being traded against.
+#:
+#: `store.EDGE_BASIS_TABLE` is named for the same reason (issue #252). It is what
+#: the layer basis cost, it is the largest single share of the transition level's
+#: +26%, and a table whose bytes arrive labelled *indexes + schema* is a cost
+#: attributed to the one line of the breakdown a reader reads as unavoidable.
 _TABLE_LABELS: tuple[str, ...] = (
     "node",
     *[t for t, _ in store.NODE_TABLES.values()],
     "edge",
+    store.EDGE_BASIS_TABLE,
     "meta",
 )
 INDEX_LABEL = "indexes + schema"
@@ -5815,9 +5821,9 @@ class PublishedRetention:
 #: 50 Hz row). `tests/test_bench.py` holds each rate against that document, so
 #: a figure republished there without this table moving is caught.
 PUBLISHED_RETENTION: dict[str, PublishedRetention] = {
-    OCCURRENCE_LEVEL: PublishedRetention("60.54 MB/h", 265.0, 689.0),
-    TRANSITION_LEVEL: PublishedRetention("150.27 MB/h", 658.0, 277.0),
-    PER_FRAME_LEVEL: PublishedRetention("218.12 MB/h", 955.0, 191.0),
+    OCCURRENCE_LEVEL: PublishedRetention("60.72 MB/h", 266.0, 686.0),
+    TRANSITION_LEVEL: PublishedRetention("190.34 MB/h", 834.0, 219.0),
+    PER_FRAME_LEVEL: PublishedRetention("294.09 MB/h", 1288.0, 142.0),
 }
 
 

@@ -4,9 +4,9 @@
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
 #201, the recompute path refuses off the recording environment), tier 3 as
 `reg.query.cold_read` (issue #231) and tier 4 as the layer basis per edge (issue
-#252); tier 5 has had its costing land (issue #230) and its decision is not
-taken · written 2026-09-05, tier 1's findings folded in 2026-09-05, tier 2
-2026-09-05, tier 3 2026-09-07, tier 4 2026-09-08 · normative
+#252); tier 5 has its costing (issue #230) and not its decision · written
+2026-09-05, tier 1 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07, tier 4
+2026-09-08 · normative
 over nothing yet; where it touches what the project may claim it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
 those files carry the change · the build order in §8 is the authority on what is
@@ -136,8 +136,8 @@ it could only say could-not-evaluate. What it called **pass** is the shipped
 What it says today, on an artifact built from `main` at `schema_version` 13: the
 recording environment **checkable**; recomputing a discarded polygon
 **checkable**, because `envelope_at` refuses off the recording environment; a
-`layer` tag's basis **checkable** since issue #252 — §1's gap 1, closed, and the
-first of the four rows to move; *could the robot have reached (x, y)* **readable,
+`layer` tag's basis **checkable** — §1's gap 1, closed, and the first of the four
+rows to move; *could the robot have reached (x, y)* **readable,
 not checkable**, radially only — gap 3. `tests/test_query.py` pins those per
 shipped fixture, so closing a gap fails there and has to be updated on purpose,
 which is what happened.

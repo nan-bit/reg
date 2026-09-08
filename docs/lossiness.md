@@ -159,14 +159,15 @@ Each entry is a claim that the graph can be tested against.
    holds carries every field above.
 9. **The layer tag on every edge, and what it was computed from** — `A` or `B`,
    per Phase 9. Claim 3 is a query over these tags, so an untagged edge is an
-   unusable edge. Since issue #252 an untagged **basis** is one too:
+   unusable edge, and an untagged **basis** is one too.
+
    `edge_layer_basis` carries one row per input per tagged edge — the input, its
    value in this build, where it was read, and the layer it alone admits — and
-   the tag is the weakest of them. It is retained rather than recomputed because
-   recomputing it needs the `Limits` and the stream, which is exactly the access
-   an auditor holding the file does not have. Per **edge** and not per envelope,
-   measured in issue #249: envelope rows deduplicate, so a per-envelope basis has
-   one answer for two edges whose bases differ. Every published figure moved
+   the tag is the weakest of them. Retained rather than recomputed: recomputing
+   it needs the `Limits` and the stream, the access an auditor holding the file
+   does not have. Per **edge** and not per envelope, measured rather than argued:
+   envelope rows deduplicate, so a per-envelope basis has one answer for two
+   edges whose bases differ. Every published figure moved
    ([`retention.md`](retention.md)).
 10. **The run's provenance** — scenario name, seed, tolerance constants in force,
     and the schema version, once per artifact. Determinism is only checkable if the

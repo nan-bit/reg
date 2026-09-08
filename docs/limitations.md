@@ -900,7 +900,7 @@ artifacts cannot answer, and must come here for.
 | ~~2~~ | *Whose recomputation is wrong, mine or the file's?* — **closed, weaker form** | §1 |
 | 3 | *Could the robot have reached (x, y)?* | §2, §3 |
 
-*1 — closed 2026-09-08 (issue #252).* The edge carried `A` or `B` and the file
+*1 — closed 2026-09-08.* The edge carried `A` or `B` and the file
 carried nothing it was computed from. It carries it now, per edge, in
 `edge_layer_basis`, and `reg.query.cold_read` reports `layer-tag-basis` as
 CHECKABLE: the tag is the weakest of its own recorded inputs, and a reader

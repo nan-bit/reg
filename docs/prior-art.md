@@ -1243,26 +1243,16 @@ than projected, **5.58x** the gzipped CSV, and against `zstd_small` 17.9%
 cheaper, **3.90x**. What this pass argued — the incumbent is dearer than the
 gzipped baseline this project chose to lose against — holds at both.
 
-**Corrected again 2026-09-07 (issue #247).** The artifact side moved, not the
-bags: schema 12 added the acknowledgment table, and the build this entry divides
-went 2,584,576 B to 2,587,648 B. So the composition above reads
-**40.02x** / 5.58x and 40.02x / 3.90x, and the pair was 7.17x and 10.27x. The
-`39.98x / 4.75x` two paragraphs up is left as the arithmetic that pass did. What
-this entry argues is unchanged by 0.1%; it is republished because a figure quoted
-against a measurement has to be the measurement.
-
-**Corrected again 2026-09-08 (issue #252).** The artifact side moved again, and
-by more than any previous correction to this entry: schema 13 records what every
-`layer` tag was computed from, one retained row per input per tagged edge, and
-the build this entry divides went 2,587,648 B to **3,268,608 B** — +26.32%. So
-`~40x` above is **~51x**, the composition reads **50.56x** / 5.58x and
-50.56x / 3.90x, and the pair is **9.06x** and **12.97x**; the uncompressed
-comparison is **2.00x**. The bags did not move and the gzipped CSV did not move,
-so every ratio here moved for one reason. **What this entry argues is unchanged
-in direction and strengthened in size** — the artifact is further from the
-incumbent than when this pass was written, which is the direction least
-flattering to this project, and it is republished for that reason rather than
-despite it.
+**Corrected again 2026-09-07 (issue #247) and 2026-09-08 (issue #252).** Both
+times the artifact side moved and the bags did not. Schema 12 took the build this
+entry divides from 2,584,576 B to 2,587,648 B, 0.1%, where the composition read
+**40.02x** / 5.58x and the pair was 7.17x and 10.27x; schema 13 — a retained row
+per input per tagged edge, recording what every `layer` tag was computed from —
+took it to **3,268,608 B**, +26.32%. So `~40x` above is **~51x**, the composition
+reads **50.56x** / 5.58x and 50.56x / 3.90x, the pair is **9.06x** and
+**12.97x**, and the uncompressed comparison is **2.00x**. The `39.98x / 4.75x`
+two paragraphs up stands as that pass's arithmetic. What this entry argues is
+unchanged in direction and larger in size.
 
 ---
 

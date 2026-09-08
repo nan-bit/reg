@@ -297,6 +297,14 @@ EXEMPT: dict[str, str] = {
 #         it did *not* need is a second statement of the finding, because the
 #         report `reg.bench` writes carries the argument and §8 carries the
 #         numbers a decision is taken from
+#   85.2  today, 2026-09-08, after #252 adopted the layer basis per edge.
+#         `reg.store` gained thirteen public symbols and `reg.envelope` one,
+#         against the prose that closes `self-describing.md` §1 gap 1 and its
+#         §8 tier 4, `sensor-baseline.md`'s republished ladder and `README.md`'s
+#         republished headline. 27,329 / 321 = 85.14, rounded up to the next
+#         tenth. The symbols are what the file now carries — a table, a row
+#         type, the arithmetic over it and the four input names — so the
+#         denominator moved for the same reason the prose did
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -307,7 +315,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 85.5
+RATE = 85.2
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -403,7 +411,17 @@ RATE = 85.5
 #           which is where that argument is made in full. Seventeen words lower
 #           than the last ceiling rather than level with it, for the reason the
 #           #233 row gives — measured, no headroom
-ARGUMENT_MAX = 47164
+#   47,132  today, 2026-09-08, after #252 made the layer tag the weakest of its
+#           inputs. `limitations.md` §11's first gap closed and §12's first two
+#           rows with it, `sufficiency.md` §5.8 and §5.9 record where the two
+#           cases were settled together, `lossiness.md` *Retained* #9 gained the
+#           basis, and `retention.md` is republished throughout. Paid for
+#           entirely out of what closing a gap made redundant: §11's account of
+#           a tag that does not follow its value, and §12's restatement of §1's
+#           environment argument, are both gone. Thirty-two words lower than the
+#           last ceiling rather than level with it, for the reason the #233 row
+#           gives — measured, no headroom
+ARGUMENT_MAX = 47132
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -449,7 +467,12 @@ PARAGRAPH_MAX_WORDS = 120
 #        the artifact could not hold, which is now a pointer at
 #        `lossiness.md` *Retained* #7 — cut for the word budget rather than for
 #        this ceiling, and lowered here for the reason the #241 row gives
-LONG_PARAGRAPHS_MAX = 90
+#    89  today, 2026-09-08, after #252: `docs/limitations.md` went 17 -> 15 and
+#        three files went up by one each. The two that fell are §11's account of
+#        the gap that closed and §12's restatement of §1; the three that rose
+#        were then cut back under the threshold rather than banked, so the net
+#        is one paragraph and it is lowered rather than held
+LONG_PARAGRAPHS_MAX = 89
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

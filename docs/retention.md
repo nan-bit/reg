@@ -301,17 +301,17 @@ Claim 1 prices:
 
 *`acknowledgment` arrives with schema 12 and `edge_layer_basis` with schema 13;
 `long_run` passivates never and this level holds no edge, so each is one empty
-page. `edge_layer_basis` is **named rather than swept into `indexes + schema`**
-(issue #252): at the transition level it is 553,984 B, and a cost that arrived
-labelled as the schema's would be attributed to the one line of this breakdown a
-reader takes for unavoidable.*
+page.*
 
 1. **The scene rows are 5,120 B**, 0.5% of the level: `entity`, `envelope` and
    `robot_config` together, two of the three being a single empty page at this
    level. Half a percent of a file cannot account for a fifth of its growth.
 2. **`indexes + schema` is not the artifact's fixed cost.** It is 133,120 B
    here and most of it is indexes *over rows*, which arrive with the rows and
-   leave with them. The genuinely fixed part is the schema: an artifact created
+   leave with them. `edge_layer_basis` is **named rather than swept into it**:
+   at the transition level the basis is 553,984 B, and a cost arriving labelled
+   as the schema's is attributed to the one line of this breakdown a reader
+   takes for unavoidable. The genuinely fixed part is the schema: an artifact created
    and never written to is **30,720 B** — `reg.store.create(path,
    record_tables=True)`, eleven tables and their indexes at `reg.store.PAGE_SIZE`
    — which is 3.0% of this level.

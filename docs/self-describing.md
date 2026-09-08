@@ -3,8 +3,8 @@
 **Status:** a design document; tiers 0-4 of §8 have landed — tier 2 in two
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
 #201, the recompute path refuses off the recording environment), tier 3 as
-`reg.query.cold_read` (issue #231) and tier 4 as the layer basis per edge (issue
-#252); tier 5 has its costing (issue #230) and not its decision · written
+`reg.query.cold_read` (issues #231, #242) and tier 4 as the layer basis per edge
+(issue #252); tier 5 has its costing (issue #230) and not its decision · written
 2026-09-05, tier 1 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07, tier 4
 2026-09-08 · normative
 over nothing yet; where it touches what the project may claim it defers to
@@ -67,11 +67,9 @@ the six keys §3's first row asks for — `reg.store.ENVIRONMENT_KEYS`, read off
 running interpreter and read back by `reg.graph.recorded_environment` — with
 `SCHEMA_VERSION` at 11 and its note beside the others. **And the reader now acts
 on them.** `reg.graph.envelope_at` refuses to recompute a discarded polygon off
-the recording environment, comparing five of the six —
-`reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`: the platform's system and machine,
-shapely, GEOS and numpy, the sixth being
-`reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS` — and naming the key that differs and
-both values. It **refuses
+the recording environment, comparing `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` —
+five of the six, the sixth being `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS` — and
+naming the key that differs and both values. It **refuses
 rather than warning**, because a recomputed polygon that reaches a caller under a
 warning is a polygon that reaches a query result. Three states and the third
 never resolves to the first: the keys agree and the recomputation happens exactly
@@ -105,53 +103,60 @@ the question straight back through gap 2.
 document**. For every claim the file makes, either it can be checked from the file
 or it cannot.
 
-*That sentence declares a reader, and after the sixth prior-art pass it says so.*
-"The code that reads artifacts and no document" is a statement about what the
-reader already knows — in OAIS's vocabulary a **Designated Community's Knowledge
-Base**, which is the only thing that terminates the recursion of what an artifact
-must carry ([`prior-art.md`](prior-art.md) §29). The declaration is not new; it was
-being made in passing. The reader it names is §4's, and the test is relative to
-that reader and to no other.
+*That sentence declares a reader.* "The code that reads artifacts and no
+document" names what the reader already knows, which is the only thing that
+terminates the recursion of what an artifact must carry — §6 item 4 and
+[`prior-art.md`](prior-art.md) §29. The reader it names is §4's, and the test is
+relative to that reader and to no other.
 
 **Landed as `reg.query.cold_read`, and it is not a test.** It ships in the
 package because the audience is an assessor holding a file, and a check they
 cannot run tells them nothing; `python -m reg.query FILE --cold-read` prints it.
-One row per claim the file makes about itself, in four states, per *a check must
+One row per claim the file makes about itself, in five states, per *a check must
 be able to fail*:
 
 | state | meaning |
 |---|---|
 | **checkable** | the file carries what is needed to verify the claim |
+| **checkable with a key the file does not contain** | the record is there and the check on it is deliberately gated on a key |
 | **readable, not checkable** | the claim is present and the file does not support verifying it |
 | **absent** | the claim is not in this file |
 | **could-not-evaluate** | the file was written against a schema these states were not derived against |
 
-**The third and fourth never resolve to the first**, and the second is not a soft
-pass — it is the honest verdict on a `layer` tag today, and reporting it is the
-point. *The three-state table this replaces had no room for it*: it assumed a
-basis existed to agree or disagree with, so about a file where nothing carries one
-it could only say could-not-evaluate. What it called **pass** is the shipped
-**checkable**.
+**The last three never resolve to the first.** Nor is the second a weaker form of
+the first: a MAC verifiable with nothing but the file it sits in attests to
+nobody, so the gate **is** the design, and a report flattening that row into
+either neighbour would call a deliberate gate a shortcoming, or a shortcoming a
+gate. It is the one claim here whose verification is withheld on purpose.
 
-What it says today, on an artifact built from `main` at `schema_version` 13: the
-recording environment **checkable**; recomputing a discarded polygon
-**checkable**, because `envelope_at` refuses off the recording environment; a
-`layer` tag's basis **checkable** — §1's gap 1, closed, and the first of the four
-rows to move; *could the robot have reached (x, y)* **readable,
-not checkable**, radially only — gap 3. `tests/test_query.py` pins those per
-shipped fixture, so closing a gap fails there and has to be updated on purpose,
-which is what happened.
+**It covers all four of [`plan.md`](plan.md)'s claims**, in six rows, on an
+artifact built from `main` at `schema_version` 13 with a record stream stored.
+Claim 4's two are **absent** on a build handed none — a fact about the build
+rather than about the schema:
 
-It reports the environment and does not re-verify it: the report's
-`recompute_permitted` is held to agree with `reg.graph.envelope_at` on both
-sides, matching and mismatched. The negatives ship with it — `env_*` keys
-stripped is *absent* and not *checkable*, a file predating schema 11 is
-*could-not-evaluate* and not *absent*, and an intact `layer` column is *readable,
-not checkable*, because the healthy-looking case is the one that must not read as
-a pass.
+| claim | row | what the file supports |
+|---|---|---|
+| 4 | `chain-intact` | **checkable with a key it does not contain** — both chains are in the file, every record carries its link and its MAC, and `verify_chain(conn, keyring)` is what a key-holder runs |
+| 4 | `passivation-acknowledged` | **checkable** — `acknowledgments(conn)` needs no key; a passivation nobody cleared is a could-not-evaluate, never a *no* |
+| 3 | `layer-tag-basis` | **checkable** — gap 1, closed |
+| 2 | `reached-point` | **readable, not checkable**, radially only — gap 3 |
+| 1 | `recompute-discarded-polygon` | **checkable** — the discard contract retention rests on |
+| — | `recording-environment` | **checkable** — what the row above rests on |
+
+Claim 4's two rows are what the other four support. `tests/test_query.py` pins
+every row per shipped fixture, so closing a gap fails there and has to be updated
+on purpose.
+
+**It reports and it re-verifies nothing.** `recompute_permitted` is held to agree
+with `reg.graph.envelope_at` on both sides; the chain row runs *nothing*, having
+no keyring, `reg.chain.verify_chain` being the one implementation of that walk.
+The negatives ship with each — `env_*` keys stripped is *absent* and not
+*checkable*, a file predating schema 11 is *could-not-evaluate* and not *absent*,
+a file with no chain in it is *absent* and not the fifth state, and a record whose
+MAC has been blanked is *readable, not checkable*, being unverifiable by anybody.
 
 **It closes no gap.** It makes them legible from the file, which is what lets
-#227 and #228 be judged by something other than a PR body.
+#228 be judged by more than a PR body.
 
 ## 3. What moves into the file
 
@@ -171,9 +176,8 @@ expensive one and is a decision, not a task — see §8.
   **buildinfo** — the Reproducible Builds project's name for it — and that project
   is the precedent, not SLSA. The list to carry is *the dependencies and their
   versions, the configuration and the environment variables the computation
-  actually uses*, minimised rather than enumerated. C2PA carries the same idea one
-  layer up in `claim_generator_info`, which records a claim generator's name,
-  version and operating system.
+  actually uses*, minimised rather than enumerated; §6 item 3 is C2PA's
+  shipped form of the same idea.
 
   *What the minimise rule settled when it was applied* (issue #200). Two keys
   arrived that the row above did not name — **numpy**, because `np.cos` and
@@ -219,10 +223,9 @@ which superseded the first version of this section.** The line does not fall
 between *in the file* and *in prose*, because that boundary cannot be drawn on its
 own terms: there is no quantity of material that makes an artifact
 self-interpreting to a reader nobody has named, and a small quantity suffices for
-a reader who has been. OAIS calls the material **Representation Information**,
-observes that it recurses — a schema needs its schema language, which needs its
-own specification — and terminates the recursion in exactly one place: a
-**declared Designated Community** and what it already knows.
+a reader who has been. OAIS calls the material **Representation Information**, and
+terminates its recursion in exactly one place: a **declared Designated Community**
+and what it already knows (§6 item 4).
 
 **So the line is drawn by naming the reader, and this project's reader is
 already named.** [`prior-art.md`](prior-art.md) §12 identifies it as IEEE
@@ -256,10 +259,8 @@ is a person's decision.
 
 ## 5. Relation to the documents epic
 
-Issue #170 measured the corpus and diagnosed it correctly: specification and
-rationale are interleaved at the paragraph level, and 23% of prose narrates a
-past defect. Its method — a normative core, rationale below a line — is right and
-this document is written in that shape.
+Issue #170 diagnosed the corpus correctly, and its method — a normative core,
+rationale below a line — is right; this document is written in that shape.
 
 **This is a different cut, one step earlier.** #170 separates specification from
 rationale inside the prose. This asks how much of that specification should be
@@ -287,13 +288,10 @@ They are independent and can be done in either order. Doing this one first makes
 this document ordered before anything here is built). It did not end the track and
 it changed four things:
 
-1. **§26 corrected this document.** *"SLSA and in-toto attestations do exactly
-   this"* was wrong and is edited below. That literature gives the **statement
-   shape** — a signed predicate about a subject digest, which this repository's
-   `.wake` records already use — and *not* an environment record: SLSA identifies
-   the build platform and requires the verifier to trust it, its
-   environment-adjacent fields are optional and best-effort, and it declines to
-   require reproducible builds at any level.
+1. **§26 corrected this document.** That literature gives the **statement
+   shape** — a signed predicate about a subject digest — and *not* an environment
+   record: SLSA identifies the build platform and requires the verifier to trust
+   it, and it declines to require reproducible builds at any level.
 2. **§27 found gap 2 solved, with a standard shape, and this document should
    adopt rather than invent.** The shape is the Reproducible Builds project's
    **buildinfo**, and reproducibility there is defined *relative to a stated
@@ -415,26 +413,20 @@ the tiers below. Everything downstream depended on it, per the rule that prior a
 wins.
 
 **Tier 2 — the environment in `meta`. Landed, in two halves.** The recording
-(issue #200): six keys — Python, numpy, shapely, GEOS, and the platform's system
-and machine — written by `reg.store.build_environment` from the running
-interpreter, read by `reg.graph.recorded_environment`, `SCHEMA_VERSION` at 11 with
-its note, and no published figure moved. The acting (issue #201):
-`reg.graph.envelope_at` refuses to recompute a discarded polygon off the
-recording environment, comparing `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — the
-platform's system and machine, shapely and GEOS, and numpy since #241 — and
-reporting a could-not-evaluate rather than a pass or a failure, on the pattern
-issue #175
-established for the bit-identity tables. An artifact stating no environment is a
-third state distinct from both. The split was on the seam this build order is cut
-along — writing the data and using it are different work, and only the second
-changes what a query answers. Tier 3 was unblocked by the first half; nothing
-else here was waiting on either.
+(issue #200): six keys written by `reg.store.build_environment` from the running
+interpreter, read back by `reg.graph.recorded_environment`, `SCHEMA_VERSION` at 11
+with its note, and no published figure moved. The acting (issue #201):
+`reg.graph.envelope_at` refuses to recompute a discarded polygon off the recording
+environment. §1's gap 2 is which keys that refusal compares and what each half
+bought. The split was on the seam this build order is cut along — writing the data
+and using it are different work, and only the second changes what a query answers.
+Tier 3 was unblocked by the first half; nothing else here was waiting on either.
 
-**Tier 3 — the cold read. Landed** (issue #231): `reg.query.cold_read` and
-`--cold-read`, four states per claim, pinned per shipped fixture in
-`tests/test_query.py` with its negatives. It ships in the package rather than in
-`tests/` — §2 says why — and it is what makes tiers 4 and 5 judgeable by
-something other than a PR body.
+**Tier 3 — the cold read. Landed** (issue #231) **and extended to Claim 4** (issue
+#242): `reg.query.cold_read` and `--cold-read`, six claims in five states, pinned
+per shipped fixture in `tests/test_query.py` with its negatives. The fifth state
+is `chain-intact`'s, and §2 says why it is a state and not a shade of one of the
+four. It ships in the package rather than in `tests/`, and §2 says why.
 
 **Tier 4 — the layer basis. Landed** (issue #252). **Option A, per edge**, is in
 the schema as `reg.store.EDGE_BASIS_TABLE` at `SCHEMA_VERSION` 13: one row per

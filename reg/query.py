@@ -132,12 +132,16 @@ THE COLD READ, AND WHY IT IS NOT A QUERY EITHER (ISSUE #231)
 `cold_read(conn)` asks docs/self-describing.md §2's question — *open an artifact
 with the code that reads artifacts and no document; for every claim the file
 makes, either it can be checked from the file or it cannot* — and answers it as
-a row per claim, in four states. It ships here rather than in `tests/` because
+a row per claim, in five states. It ships here rather than in `tests/` because
 the audience for it is an assessor holding a file, and a check they cannot run
-tells them nothing. It closes no gap: two of its four rows are
-`READABLE-NOT-CHECKABLE` today, which is the report working. See the section
-above `cold_read` for the states, for why nothing here imports `reg.graph` to
-compute them, and for what is pinned to `schema_version` 11.
+tells them nothing. It closes no gap. Since issue #242 it covers docs/plan.md
+Claim 4 as well, in two rows: *has this record been altered since it was
+written* is checkable **with a key the file does not contain**, which is the
+fifth state and the only claim here whose verification is deliberately gated;
+*was the passivation acknowledged, and by whom* is checkable from the file
+alone. See the section above `cold_read` for the states, for why nothing here
+imports `reg.graph` or `reg.chain` to compute them, and for what is pinned to
+`schema_version` 13.
 
 LAYER
 -----
@@ -173,12 +177,15 @@ __all__ = [
     "ATTESTATION_PRESENT",
     "CHAIN_VERIFIED",
     "CHECKABLE",
+    "CHECKABLE_WITH_A_KEY",
     "CLAUSES",
     "CLAUSE_DECLARED",
     "CLAUSE_ENFORCEMENT",
     "CLAUSE_INTEGRITY",
     "CLAUSE_SCENE",
     "CLAUSE_VIOLATION",
+    "CLAIM_ACKNOWLEDGMENT",
+    "CLAIM_CHAIN_INTACT",
     "CLAIM_ENVIRONMENT",
     "CLAIM_LAYER_BASIS",
     "CLAIM_REACHED_POINT",
@@ -186,6 +193,7 @@ __all__ = [
     "COLD_READ_CLAIMS",
     "COLD_READ_QUESTIONS",
     "COLD_READ_RECOMPUTE_KEYS",
+    "COLD_READ_RECORD_CHAINS",
     "COLD_READ_RECORDED_ONLY_KEYS",
     "COLD_READ_SCHEMA_VERSION",
     "COLD_READ_STATES",
@@ -198,6 +206,7 @@ __all__ = [
     "GSN_FIELDS",
     "LAYER_A",
     "LAYER_B",
+    "META_ACKNOWLEDGMENT_COUNT",
     "META_ATTESTATION_RECORDS",
     "META_ATTESTATION_RETENTION",
     "META_DECLARATION_COUNT",
@@ -385,9 +394,14 @@ META_ATTESTATION_RETENTION = "attestation_retention"
 
 #: How many records the build says each chain holds. Read by the report only to
 #: quote the record count beside the chain verdict — the walk itself compares
-#: them (`reg.chain`), and this module never re-derives that comparison.
+#: them (`reg.chain`), and this module never re-derives that comparison. The
+#: third arrived with the `Acknowledgment` (issue #247) and is read for the same
+#: reason and nothing more: the cold read quotes what the artifact states its
+#: chains should hold, and a count this module compared itself would be a second
+#: opinion about a chain it does not walk.
 META_DECLARATION_COUNT = "declaration_count"
 META_VERDICT_COUNT = "verdict_count"
+META_ACKNOWLEDGMENT_COUNT = "acknowledgment_count"
 
 #: Who the build said was responsible for the run (issue #83). Read only by
 #: `acknowledgments`, and read as *the operator this artifact names* and never as
@@ -3126,9 +3140,11 @@ def incident_report(
 # audience for it is an assessor holding a file, and a check they cannot run
 # tells them nothing.
 #
-# FOUR STATES, AND THE LAST TWO NEVER RESOLVE TO THE FIRST.
+# FIVE STATES, AND THE LAST THREE NEVER RESOLVE TO THE FIRST.
 #
 #   CHECKABLE                the file carries what is needed to verify the claim
+#   CHECKABLE-WITH-A-KEY-…   the file carries the record and the verification is
+#                            deliberately gated on a key it does not contain
 #   READABLE-NOT-CHECKABLE   the claim is present and the file does not support
 #                            verifying it
 #   ABSENT                   the claim is not in this file
@@ -3136,8 +3152,26 @@ def incident_report(
 #                            were not derived against
 #
 # `READABLE-NOT-CHECKABLE` is a distinct state and not a soft pass. It is the
-# honest verdict on a `layer` tag today, and reporting it is the point: it is
-# what lets issues #227 and #228 be judged by something other than a PR body.
+# honest verdict on `reached-point` today, and reporting it is the point: it is
+# what lets issue #228 be judged by something other than a PR body.
+#
+# THE FIFTH STATE, AND WHY IT IS ONE (ISSUE #242).
+# `chain-intact` — *has this record been altered since it was written?* — is the
+# claim the other rows exist to support, and none of the four above fits it.
+# Not `CHECKABLE`: `reg.chain.verify_chain(conn, keyring)` needs a keyring, and
+# no key is in the artifact. Not `READABLE-NOT-CHECKABLE`: it *is* checkable, by
+# whoever holds the key, and calling it unverifiable would understate the file.
+# Not `ABSENT`: the chain is there. Not `COULD-NOT-EVALUATE`: nothing failed to
+# be established. It is the only claim here whose verification is *deliberately*
+# gated — a MAC anyone could verify without a key is not worth taking — so
+# flattening it into either neighbour would report the design as a defect or the
+# defect as a design. The state is named for exactly that and the name is long
+# on purpose: it is printed verbatim, and an assessor reading one word would
+# have to be told the rest.
+#
+# This report **does not run the walk**. `verify_chain` is the one
+# implementation of it, and a second here would be free to disagree with the one
+# under test — the same rule the environment row is held to.
 #
 # WHY THIS DOES NOT IMPORT `reg.graph`, AND WHAT HOLDS IT TO IT INSTEAD.
 # `reg.graph.recorded_environment` and `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS`
@@ -3194,24 +3228,40 @@ def incident_report(
 #: The file carries what is needed to verify the claim.
 CHECKABLE = "CHECKABLE"
 
+#: The file carries the record and the check on it is gated on a key the file
+#: does not contain (issue #242). **Not a weaker `CHECKABLE` and not a stronger
+#: `READABLE_NOT_CHECKABLE`**: the verification exists, it succeeds or fails,
+#: and what it needs is a keyring rather than another column. The gate is the
+#: design — a MAC verifiable with nothing but the file it sits in attests to
+#: nobody — so a report that flattened this into either neighbour would describe
+#: the design as a defect or the defect as a design. The string is a sentence
+#: because it is printed verbatim.
+CHECKABLE_WITH_A_KEY = "CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN"
+
 #: The claim is present in the file and the file does not support verifying it.
-#: **Not a soft pass**, and it must never be reported as one: a `layer` tag is
-#: readable and unverifiable today, and an assessor who read that as a pass
-#: would be trusting exactly the assertion docs/self-describing.md gap 1 is
-#: about.
+#: **Not a soft pass**, and it must never be reported as one: a record whose MAC
+#: is blank is readable and unverifiable by anyone, key or no key, and an
+#: assessor who read that as a pass would be trusting exactly the assertion
+#: docs/self-describing.md §2 is about.
 READABLE_NOT_CHECKABLE = "READABLE-NOT-CHECKABLE"
 
-#: The claim is not in this file. Distinct from the two above and from
+#: The claim is not in this file. Distinct from the three above and from
 #: `COULD_NOT_EVALUATE`: an artifact that never made a claim has not failed to
 #: support one, and a file that predates the schema carrying it has not chosen
 #: to leave it out.
 ABSENT = "ABSENT"
 
-#: The four states, in decreasing order of what the file supports. Spelled once
+#: The five states, in decreasing order of what the file supports. Spelled once
 #: here so a caller can check a state it was handed is one this module produces;
 #: `COULD_NOT_EVALUATE` is the module's existing third verdict rather than a
-#: fifth string with the same meaning.
-COLD_READ_STATES = (CHECKABLE, READABLE_NOT_CHECKABLE, ABSENT, COULD_NOT_EVALUATE)
+#: sixth string with the same meaning.
+COLD_READ_STATES = (
+    CHECKABLE,
+    CHECKABLE_WITH_A_KEY,
+    READABLE_NOT_CHECKABLE,
+    ABSENT,
+    COULD_NOT_EVALUATE,
+)
 
 #: The `schema_version` the states above were derived against. See the section
 #: header: an artifact stating anything else is a could-not-evaluate in both
@@ -3223,16 +3273,27 @@ CLAIM_ENVIRONMENT = "recording-environment"
 CLAIM_RECOMPUTE = "recompute-discarded-polygon"
 CLAIM_LAYER_BASIS = "layer-tag-basis"
 CLAIM_REACHED_POINT = "reached-point"
+CLAIM_CHAIN_INTACT = "chain-intact"
+CLAIM_ACKNOWLEDGMENT = "passivation-acknowledged"
 
 #: The claims an artifact makes about itself, in the order the report lists
 #: them. One row each, and the set is closed: a claim nobody put here is a claim
 #: the cold read is silent about, which is why adding one is how this report
 #: grows rather than widening an existing row's meaning.
+#:
+#: The last two are docs/plan.md **Claim 4**'s, added by issue #242, and they
+#: are the reason the other four are worth reading: an assessor arrives asking
+#: whether the record was altered, and a report that covered everything except
+#: that would answer around the question. They are two rows rather than one
+#: because the two halves of Claim 4 land in different states — the first is
+#: gated on a key and the second is not.
 COLD_READ_CLAIMS = (
     CLAIM_ENVIRONMENT,
     CLAIM_RECOMPUTE,
     CLAIM_LAYER_BASIS,
     CLAIM_REACHED_POINT,
+    CLAIM_CHAIN_INTACT,
+    CLAIM_ACKNOWLEDGMENT,
 )
 
 #: What each claim asks, in the words an assessor would ask it in. Carried
@@ -3242,7 +3303,28 @@ COLD_READ_QUESTIONS: Mapping[str, str] = {
     CLAIM_RECOMPUTE: "can a discarded polygon be recomputed and the result trusted?",
     CLAIM_LAYER_BASIS: "what was this edge's layer tag computed from?",
     CLAIM_REACHED_POINT: "could the robot have reached (x, y)?",
+    CLAIM_CHAIN_INTACT: "has this record been altered since it was written?",
+    CLAIM_ACKNOWLEDGMENT: "was the passivation acknowledged, and by whom?",
 }
+
+#: This module's copy of `reg.chain.CHAINS` — the party each record chain is
+#: signed by, the table its records live in, and the `meta` key stating how many
+#: it should hold. Copied rather than imported for the reason the recompute keys
+#: below are: `reg.chain` reaches `reg.stream`, so this module may only name it
+#: inside `verify_chain`, and a cold read that imported it would put the stream
+#: one attribute away from every claim in this report.
+#: `tests/test_query.py::test_the_cold_read_names_the_record_chains_reg_chain_
+#: walks` holds the two lists equal, which is what the copy is paid for with.
+#:
+#: One entry per (party, table) and not per chain: enforcement signs verdicts
+#: and acknowledgments into **one** chain over two tables (issue #247), and a
+#: report that counted only the first would say a file held no acknowledgment
+#: chain when what it holds is one chain with acknowledgments in it.
+COLD_READ_RECORD_CHAINS: tuple[tuple[str, str, str], ...] = (
+    ("policy", "declaration", META_DECLARATION_COUNT),
+    ("enforcement", "verdict", META_VERDICT_COUNT),
+    ("enforcement", "acknowledgment", META_ACKNOWLEDGMENT_COUNT),
+)
 
 #: This module's copy of `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` — the five keys
 #: of the six recorded that `reg.graph.envelope_at` refuses a recomputation on.
@@ -3296,8 +3378,11 @@ class ColdReadClaim:
         if self.state not in COLD_READ_STATES:
             raise QueryError(
                 f"{self.claim} was given state {self.state!r}, which is not one "
-                f"of {', '.join(COLD_READ_STATES)}. A fifth state is a state "
-                "nobody defined the relationship of to a pass."
+                f"of {', '.join(COLD_READ_STATES)}. A sixth state is a state "
+                "nobody defined the relationship of to a pass. The fifth was "
+                "added deliberately, by issue #242, because tamper-evidence is "
+                "checkable with a key the file does not contain and none of the "
+                "four before it could say that."
             )
         if not self.detail.strip():
             raise QueryError(
@@ -3307,7 +3392,11 @@ class ColdReadClaim:
 
     @property
     def checkable(self) -> bool:
-        """Exactly `CHECKABLE`. The other three are not degrees of it."""
+        """Exactly `CHECKABLE` — *from the file, by this reader, now*. The other
+        four are not degrees of it, and `CHECKABLE_WITH_A_KEY` least of all: it
+        is `False` here because the file alone does not settle the claim, which
+        is a different sentence from *this claim cannot be settled*. The row's
+        own `state` is where that difference is read."""
         return self.state == CHECKABLE
 
     @property
@@ -3378,10 +3467,15 @@ class ColdRead:
     def not_checkable(self) -> tuple[str, ...]:
         """Every claim the file does not support checking, in report order.
 
-        The three states this collects are not one state. They are kept apart
+        The four states this collects are not one state. They are kept apart
         in `claims` and gathered here only for a caller asking the cold read's
         own question — *is there anything in this file that cannot be checked
         from it* — whose answer is the empty tuple or a list of names.
+        `chain-intact` is in here on an artifact holding records, and that is
+        the question being answered literally: it is not checkable *from the
+        file*, it is checkable from the file and a key. A caller who wants the
+        distinction reads the row's `state`, which is why the state string says
+        so in full.
         """
         return tuple(row.claim for row in self.claims if not row.checkable)
 
@@ -3788,6 +3882,205 @@ def _reached_point_claim(
     )
 
 
+def _chain_intact_claim(
+    conn: sqlite3.Connection, stated: Mapping[str, str]
+) -> ColdReadClaim:
+    """Has this record been altered since it was written (issue #242)?
+
+    **This does not walk the chain.** `reg.chain.verify_chain(conn, keyring)` is
+    the one implementation of that walk and this report does not have a keyring
+    to run it with; a second walk here would be a second definition of the
+    preimage every MAC in the record is taken over, free to disagree with the
+    one under test. What this reads is what the *file* carries towards the
+    question: how many records are in each chain, whether every one of them
+    carries the `prev_hash` that links it to its predecessor and the `mac` its
+    party signed it with, and what the artifact states those counts should be.
+
+    Three states, and the middle one is the fifth state this report gained:
+
+    * no record in any of `COLD_READ_RECORD_CHAINS` — **ABSENT**. There is no
+      chain in this file to have been altered, which is not the same fact as a
+      chain nobody can check. A build handed no record stream does not carry the
+      tables at all (`reg.store.create(record_tables=False)`), so a missing
+      table is read here as the artifact holding no records of that kind and
+      **not** as a fault: it is the same decision, taken at build time, that
+      `meta[attestation_records]` states in prose.
+    * every record carries a link and a MAC — **CHECKABLE-WITH-A-KEY-THE-FILE-
+      DOES-NOT-CONTAIN**. The check exists and is gated on a keyring, and the
+      detail names both the keyring and what `verify_chain` would then say.
+    * a record carrying a blank `mac` or `prev_hash` — **READABLE-NOT-CHECKABLE**.
+      That one is unverifiable by *anyone*, key or no key, so it is not the
+      state above with a key missing; it is the file holding a record and not
+      the signature the record would be checked against.
+    """
+    present = {
+        str(row["name"])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    held: list[tuple[str, str, str, int]] = []
+    unsigned: list[str] = []
+    for role, table, count_key in COLD_READ_RECORD_CHAINS:
+        if table not in present:
+            continue
+        row = conn.execute(
+            "SELECT count(*) AS held, "
+            "count(nullif(trim(mac), '')) AS macs, "
+            "count(nullif(trim(prev_hash), '')) AS links "
+            f"FROM {table}"  # noqa: S608
+        ).fetchone()
+        rows, macs, links = (
+            int(row["held"]),
+            int(row["macs"]),
+            int(row["links"]),
+        )
+        if not rows:
+            continue
+        held.append((role, table, count_key, rows))
+        if macs < rows or links < rows:
+            unsigned.append(
+                f"{table}: {rows} row(s), {macs} carrying a mac and {links} a "
+                "prev_hash"
+            )
+
+    if not held:
+        recorded = attestation_state(conn)
+        return ColdReadClaim(
+            claim=CLAIM_CHAIN_INTACT,
+            question=COLD_READ_QUESTIONS[CLAIM_CHAIN_INTACT],
+            state=ABSENT,
+            detail=(
+                "this file holds no record in "
+                + ", ".join(
+                    f"{table} ({'empty' if table in present else 'no such table'})"
+                    for _, table, _ in COLD_READ_RECORD_CHAINS
+                )
+                + f", and meta[{META_ATTESTATION_RECORDS!r}] is "
+                + (f"{recorded!r}" if recorded is not None else "not stated")
+                + ". There is no chain here to have been altered, so the file "
+                "makes no claim rather than making one nobody can check. A "
+                "build handed no record stream does not create the tables, so "
+                "their absence is that decision and not a loss. A build is "
+                "handed one with `python -m reg.graph build ... --keyring`."
+            ),
+        )
+
+    summary = "; ".join(
+        f"{table} ({role} chain): {rows} record(s), the artifact "
+        + (
+            f"states meta[{count_key!r}]={stated[count_key]}"
+            if count_key in stated
+            else f"states no meta[{count_key!r}]"
+        )
+        for role, table, count_key, rows in held
+    )
+    if unsigned:
+        return ColdReadClaim(
+            claim=CLAIM_CHAIN_INTACT,
+            question=COLD_READ_QUESTIONS[CLAIM_CHAIN_INTACT],
+            state=READABLE_NOT_CHECKABLE,
+            detail=(
+                f"{summary}. But {'; '.join(unsigned)} — so for those the file "
+                "holds the record and not the signature a reader would check it "
+                "against. A record whose mac or prev_hash is blank is "
+                "unverifiable by anyone, holding the key or not, which is a "
+                "different fact from a check gated on a key this file does not "
+                "carry. Nothing this repository writes can produce it: both "
+                "columns are NOT NULL and reg.chain writes both."
+            ),
+        )
+    return ColdReadClaim(
+        claim=CLAIM_CHAIN_INTACT,
+        question=COLD_READ_QUESTIONS[CLAIM_CHAIN_INTACT],
+        state=CHECKABLE_WITH_A_KEY,
+        detail=(
+            f"{summary}. Every one of those records carries the prev_hash "
+            "linking it to its predecessor and the mac its party signed it "
+            "with, so the walk that answers this question is runnable — and "
+            "what it needs beyond this file is **the key**. No key is in the "
+            "artifact and none should be: a MAC verifiable with nothing but the "
+            "file it sits in attests to nobody. A reader brings a keyring "
+            "naming the "
+            + " and ".join(sorted({role for role, _, _, _ in held}))
+            + " key(s), and reg.query.verify_chain(conn, keyring) then reports "
+            "VERIFIED, BROKEN or COULD-NOT-EVALUATE per chain, naming the "
+            "record and what changed. Without a keyring the links are still "
+            "walked and no MAC is checked, which is a could-not-evaluate and "
+            "never a pass. This report does not run that walk: verify_chain is "
+            "the one implementation of it, and a second here would be free to "
+            "disagree with the one under test."
+        ),
+    )
+
+
+def _acknowledgment_claim(conn: sqlite3.Connection) -> ColdReadClaim:
+    """Was the passivation acknowledged, and by whom (issues #247, #242)?
+
+    Claim 4's second question, and the one half of it the file answers **alone**
+    — `acknowledgments(conn)` takes a connection and no keyring. So this row
+    runs that query and reads its verdict; it does not re-derive the passivation
+    walk, for the reason the row above does not re-walk the chain.
+
+    Three states and the third never resolves to the first:
+
+    * the build was handed no record stream — **ABSENT**. It holds no verdict
+      that could have stopped the robot and no acknowledgment that could have
+      cleared one.
+    * the query answers — **CHECKABLE**, whether the answer is *every
+      passivation was acknowledged* or *enforcement never stopped the robot*.
+      Both are closed answers about this run.
+    * the query refuses — **COULD-NOT-EVALUATE**, carrying its own reason. A
+      passivation this artifact holds no acknowledgment of is never a *no*: the
+      record holds what enforcement was *told*, and an operator who cleared the
+      cell without telling it leaves the same absence as one who did nothing.
+      Flattening that into ABSENT would undo the distinction issue #247 exists
+      for.
+    """
+    recorded = attestation_state(conn)
+    if recorded != ATTESTATION_PRESENT:
+        return ColdReadClaim(
+            claim=CLAIM_ACKNOWLEDGMENT,
+            question=COLD_READ_QUESTIONS[CLAIM_ACKNOWLEDGMENT],
+            state=ABSENT,
+            detail=(
+                f"meta[{META_ATTESTATION_RECORDS!r}] is "
+                + (f"{recorded!r}" if recorded is not None else "not stated")
+                + ": this build was handed no record stream, so it holds no "
+                "verdict that could have stopped the robot and no "
+                "acknowledgment that could have cleared one. The file makes no "
+                "claim here rather than making one it cannot support."
+            ),
+        )
+    answer = acknowledgments(conn)
+    if answer.verdict != ANSWERED:
+        return ColdReadClaim(
+            claim=CLAIM_ACKNOWLEDGMENT,
+            question=COLD_READ_QUESTIONS[CLAIM_ACKNOWLEDGMENT],
+            state=COULD_NOT_EVALUATE,
+            detail=(
+                "reg.query.acknowledgments refuses on this file: "
+                f"{answer.reason} That is a could-not-evaluate and never a "
+                "*no*; the second half of the question — *and by whom* — has "
+                "nobody to name here."
+            ),
+        )
+    return ColdReadClaim(
+        claim=CLAIM_ACKNOWLEDGMENT,
+        question=COLD_READ_QUESTIONS[CLAIM_ACKNOWLEDGMENT],
+        state=CHECKABLE,
+        detail=(
+            "reg.query.acknowledgments answers from this file and takes no "
+            f"keyring to do it: {answer.reason}. Checked here with nothing but "
+            "the connection, which is what separates this half of Claim 4 from "
+            "the chain row above. It answers *and by whom* with the signing "
+            f"party — {ACKNOWLEDGING_PARTY} — and never with a person: no field "
+            "of the record holds one, and meta[operator_id] names who the build "
+            "said was responsible for the run rather than who cleared the stop."
+        ),
+    )
+
+
 def cold_read(conn: sqlite3.Connection) -> ColdRead:
     """What this artifact says about itself, checked against itself alone.
 
@@ -3797,14 +4090,16 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
     one of `COLD_READ_STATES`.
 
     **It closes no gap.** It makes the gaps legible from the file, which is what
-    lets issues #227 and #228 be judged by something other than a PR body. Two
-    of the four rows are `READABLE-NOT-CHECKABLE` today and that is the report
-    working, not failing.
+    lets issue #228 be judged by something other than a PR body. One of the six
+    rows is `READABLE-NOT-CHECKABLE` today and that is the report working, not
+    failing.
 
-    **It reports the environment and does not re-verify it.** The comparison is
-    issue #201's, spelled over `COLD_READ_RECOMPUTE_KEYS`, and
-    `recompute_permitted` is held to agree with `reg.graph.envelope_at` by
-    `tests/test_query.py` on both sides. If the two disagree that is a bug here,
+    **It reports and does not re-verify.** The environment comparison is issue
+    #201's, spelled over `COLD_READ_RECOMPUTE_KEYS`, and `recompute_permitted`
+    is held to agree with `reg.graph.envelope_at` by `tests/test_query.py` on
+    both sides. The chain row goes further and runs *nothing*: it has no
+    keyring, and `reg.chain.verify_chain` is the one implementation of that walk
+    (issue #242). If any of them disagrees with its reader that is a bug here,
     not a second opinion.
 
     Args:
@@ -3850,6 +4145,8 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
             _reached_point_claim(
                 conn, int(envelopes["radial"]), int(envelopes["total"])
             ),
+            _chain_intact_claim(conn, stated),
+            _acknowledgment_claim(conn),
         ),
         recompute_permitted=permitted,
     )
@@ -4260,11 +4557,15 @@ def _list_text() -> str:
         "not a query, and not an Answer: --cold-read asks docs/self-describing."
         "md \u00a72's question of the file itself — for every claim this artifact "
         "makes about itself, can it be checked from the file or not. One row "
-        "per claim in CHECKABLE, READABLE-NOT-CHECKABLE, ABSENT or "
-        "COULD-NOT-EVALUATE; the last two never resolve to the first, and "
-        "READABLE-NOT-CHECKABLE is a state of its own rather than a soft pass. "
-        "It closes no gap and it opens no document. Exit 0, or 1 if a row could "
-        "not be evaluated."
+        f"per claim in {', '.join(COLD_READ_STATES)}; the last three never "
+        "resolve to the first, and READABLE-NOT-CHECKABLE is a state of its own "
+        "rather than a soft pass. "
+        + CHECKABLE_WITH_A_KEY
+        + " is the tamper-evidence row: the chain is checkable and the key is "
+        "deliberately not in the file, so --cold-read reads no key and reports "
+        "what --verify-chain would tell a reader who brought one. It closes no "
+        "gap and it opens no document. Exit 0, or 1 if a row could not be "
+        "evaluated."
     )
     return "\n".join(lines)
 

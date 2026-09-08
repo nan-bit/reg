@@ -3024,14 +3024,24 @@ def test_the_separation_a_mobile_artifact_reports_is_measured_from_where_it_drov
 #    be changed on purpose rather than drift.
 # 2. **They feed it the conditions it reports on.** An environment stripped out,
 #    an environment blanked, a schema older than the states were derived
-#    against, and a `layer` column left intact. Three of those must come back
-#    something other than CHECKABLE, and the fourth must come back
-#    READABLE-NOT-CHECKABLE rather than CHECKABLE — a report whose only
-#    exercised path is the healthy one has not been shown able to say no.
-# 3. **They hold it to `reg.graph`.** `reg.query` cannot import the builder, so
-#    the recompute keys are a copy, and a copy that nothing compares is a second
-#    definition waiting to drift. Two tests compare it: one on the key list, one
-#    on the behaviour, in both directions.
+#    against, a `layer` column left intact, an artifact with no chain in it at
+#    all, and a record whose MAC has been blanked. Most of those must come back
+#    something other than CHECKABLE, and the intact ones must come back in the
+#    state their evidence actually supports rather than CHECKABLE — a report
+#    whose only exercised path is the healthy one has not been shown able to
+#    say no.
+# 3. **They hold it to `reg.graph` and to `reg.chain`.** `reg.query` cannot
+#    import either, so the recompute keys and the record chains are copies, and
+#    a copy that nothing compares is a second definition waiting to drift.
+#    Three tests compare them: one on the key list, one on the behaviour in both
+#    directions, and one on the chains `reg.chain` walks.
+#
+# THE FIFTH STATE (issue #242). `chain-intact` arrived with a state of its own,
+# and the test that used to refuse a fifth now refuses a **sixth**. That was the
+# deliberate act the refusal exists to force: none of the four fitted a claim
+# that is checkable by a key-holder and by nobody else, and flattening it into a
+# neighbour would have reported the design as a defect or the defect as a
+# design.
 # --------------------------------------------------------------------------
 
 #: What the cold read must say today, per claim, on an artifact built from
@@ -3050,6 +3060,26 @@ COLD_READ_TODAY = {
     query.CLAIM_RECOMPUTE: query.CHECKABLE,
     query.CLAIM_LAYER_BASIS: query.CHECKABLE,
     query.CLAIM_REACHED_POINT: query.READABLE_NOT_CHECKABLE,
+    query.CLAIM_CHAIN_INTACT: query.ABSENT,
+    query.CLAIM_ACKNOWLEDGMENT: query.ABSENT,
+}
+
+#: The same four rows, on a build that **was** handed a record stream — plus
+#: Claim 4's two, which are the whole point of issue #242. `chain-intact` is the
+#: fifth state: the records are there, every one of them carries its link and
+#: its MAC, and what a reader needs beyond the file is a key. `passivation-
+#: acknowledged` is CHECKABLE from the file alone, and it is the first row in
+#: this report to become checkable by *evidence being added* (issue #247) rather
+#: than by provenance being recorded.
+#:
+#: Two tables and not one, because the first four states are a property of the
+#: schema and these two are a property of **what this build was handed**. A
+#: single table would have had to pick one, and the pick would have hidden the
+#: other fixture's row.
+COLD_READ_ATTESTED = {
+    **COLD_READ_TODAY,
+    query.CLAIM_CHAIN_INTACT: query.CHECKABLE_WITH_A_KEY,
+    query.CLAIM_ACKNOWLEDGMENT: query.CHECKABLE,
 }
 
 #: The same, for a view with no edge layer and no envelopes. `materialize_level`
@@ -3062,6 +3092,8 @@ COLD_READ_OCCURRENCE_VIEW = {
     query.CLAIM_RECOMPUTE: query.CHECKABLE,
     query.CLAIM_LAYER_BASIS: query.ABSENT,
     query.CLAIM_REACHED_POINT: query.ABSENT,
+    query.CLAIM_CHAIN_INTACT: query.ABSENT,
+    query.CLAIM_ACKNOWLEDGMENT: query.ABSENT,
 }
 
 #: Names of the cold read's implementation, for the structural check that it
@@ -3078,6 +3110,21 @@ COLD_READ_FUNCTIONS = (
     "_recompute_claim",
     "_layer_basis_claim",
     "_reached_point_claim",
+    "_chain_intact_claim",
+    "_acknowledgment_claim",
+    # Reached by `_acknowledgment_claim`, which answers by running the query
+    # rather than re-deriving the passivation walk (issue #242). Listed because
+    # the promise is about what the cold read *reaches*, not about which
+    # functions it is spelled in — a callee that opened a second file would
+    # break the promise just as thoroughly.
+    "acknowledgments",
+    "attestation_state",
+    "_no_record_layer",
+    "_refuse_record",
+    "_acknowledgment_rows",
+    "_verdict_rows",
+    "_passivation",
+    "_acknowledged",
 )
 
 #: Names that would mean the cold read read something other than the artifact it
@@ -3145,23 +3192,30 @@ def _named_calls(source: str, function_names: tuple[str, ...]) -> set[str]:
     "fixture, index, expected",
     [
         ("built", 1, COLD_READ_TODAY),
-        ("attested", 0, COLD_READ_TODAY),
-        ("clean_attested", 0, COLD_READ_TODAY),
+        ("attested", 0, COLD_READ_ATTESTED),
+        ("clean_attested", 0, COLD_READ_ATTESTED),
         ("mobile_built", 1, COLD_READ_TODAY),
         ("occurrence_view", None, COLD_READ_OCCURRENCE_VIEW),
     ],
 )
-def test_the_cold_read_says_the_same_four_things_about_every_shipped_fixture(
+def test_the_cold_read_says_the_same_things_about_every_shipped_fixture(
     request, fixture: str, index: int | None, expected: dict[str, str]
 ) -> None:
-    """THE PINNED TABLE. Issue #231's four rows, per artifact this file builds.
+    """THE PINNED TABLE. Every row, per artifact this file builds.
 
     Every fixture here is a different run — one fixed-arm scenario with no
     records, two with both record chains, one whose base drives, and one view at
-    the occurrence resolution. The states do not depend on the run, and that is
-    the finding: what a file supports is a property of the schema, so an
-    assessor meets the same rows whatever they were handed — including on the
-    run whose base drove and whose every base rate came out of a perceiver.
+    the occurrence resolution. **The first four states do not depend on the
+    run**, and that is the finding: what a file supports there is a property of
+    the schema, so an assessor meets the same rows whatever they were handed —
+    including on the run whose base drove and whose every base rate came out of
+    a perceiver.
+
+    Claim 4's two rows are the exception and it is not a weakening (issue #242):
+    whether a file holds a signed record is a property of *the build*, not of
+    the schema, so `built` reports ABSENT and `attested` reports the fifth
+    state. A single expectation covering both would have had to call one of them
+    wrong.
 
     **Closing a gap breaks this test**, which is the point of pinning it. Issue
     #252 put the basis in the file and `layer-tag-basis` moved to CHECKABLE;
@@ -3188,16 +3242,20 @@ def test_the_cold_read_says_the_same_four_things_about_every_shipped_fixture(
         assert row.detail.strip(), f"{row.claim} carries no detail"
 
 
-def test_the_third_and_fourth_states_are_not_a_pass(artifact: Path) -> None:
-    """`READABLE-NOT-CHECKABLE` and `ABSENT` never resolve to `CHECKABLE`.
+def test_the_last_four_states_are_not_a_pass(attested: tuple[Path, Path]) -> None:
+    """Only `CHECKABLE` is a pass, and the other four are not degrees of it.
 
     The states are strings and `checkable` is the only predicate over them, so
     this is the test that keeps the vocabulary from collapsing into a boolean
-    somewhere downstream.
+    somewhere downstream. Run on `attested` since issue #242, because that is
+    the fixture whose report carries the fifth state — the one a reader is most
+    likely to mistake for a pass, being the one that says *checkable* in its own
+    name.
     """
-    report = _cold_read(artifact)
+    report = _cold_read(attested[0])
     assert set(query.COLD_READ_STATES) == {
         query.CHECKABLE,
+        query.CHECKABLE_WITH_A_KEY,
         query.READABLE_NOT_CHECKABLE,
         query.ABSENT,
         COULD_NOT_EVALUATE,
@@ -3211,7 +3269,13 @@ def test_the_third_and_fourth_states_are_not_a_pass(artifact: Path) -> None:
     )
     assert not set(report.checkable) & set(report.not_checkable)
     assert query.CLAIM_LAYER_BASIS in report.checkable
+    assert query.CLAIM_ACKNOWLEDGMENT in report.checkable
     assert query.CLAIM_REACHED_POINT in report.not_checkable
+    assert query.CLAIM_CHAIN_INTACT in report.not_checkable, (
+        "the chain row is checkable with a key and not from the file, so it "
+        "belongs in `not_checkable` — a report that promoted it would tell an "
+        "assessor the file settles tamper-evidence on its own"
+    )
 
 
 def test_the_cold_read_is_pinned_to_this_build_s_schema() -> None:
@@ -3510,9 +3574,276 @@ def test_the_radius_answers_radially_and_says_so(artifact: Path) -> None:
     assert str(radial) in row.detail
 
 
+def test_a_chain_in_the_file_is_checkable_with_a_key_the_file_does_not_contain(
+    attested: tuple[Path, Path],
+) -> None:
+    """THE FIFTH ROW, and the fifth state (issue #242).
+
+    Nothing is wrong with this file: both record chains are in it and every
+    record carries the `prev_hash` that links it to its predecessor and the
+    `mac` its party signed it with. So the claim is checkable — by whoever holds
+    the key — and the report has to say both halves of that: what a reader would
+    need, and what `verify_chain` would then tell them.
+
+    Asserted against the file rather than against the prose: the record counts
+    come out of the tables, and the detail has to quote them.
+    """
+    artifact, _ = attested
+    conn = store.connect(artifact)
+    try:
+        counts = {
+            table: int(
+                conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"]
+            )
+            for _, table, _ in query.COLD_READ_RECORD_CHAINS
+        }
+    finally:
+        conn.close()
+    assert counts["declaration"] > 0 and counts["verdict"] > 0, (
+        f"this fixture holds {counts}; the point of the test is that a chain is "
+        "in the file"
+    )
+
+    row = _cold_read(artifact)[query.CLAIM_CHAIN_INTACT]
+    assert row.state == query.CHECKABLE_WITH_A_KEY
+    assert not row.checkable, (
+        "the file alone does not settle it, so `checkable` is False — the state "
+        "string is where the distinction from READABLE-NOT-CHECKABLE is read"
+    )
+    for table, held in counts.items():
+        if held:
+            assert f"{table}" in row.detail and str(held) in row.detail
+    assert "keyring" in row.detail, "the detail does not name what a reader needs"
+    assert "verify_chain" in row.detail, (
+        "the detail does not name what the reader would then run, so it states "
+        "a gate without stating what is behind it"
+    )
+    for verdict in ("VERIFIED", "BROKEN", COULD_NOT_EVALUATE):
+        assert verdict in row.detail
+
+
+def test_the_cold_read_does_not_verify_the_chain(
+    attested: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """THE NEGATIVE that keeps the row a *report* rather than a second walk.
+
+    A file whose MACs have been rewritten to a value no key produces is one
+    `verify_chain` says BROKEN of. The cold read must report the **same state**
+    it reports on the intact file, because it is not checking: it says the
+    record is there and the check is gated on a key, and running the check is
+    `verify_chain`'s job. A report that changed its answer here would be a
+    second implementation of that walk, free to disagree with the one under
+    test — and it would be doing it without a key, which is the part that could
+    not be right.
+    """
+    artifact, keyring_path = attested
+    tampered = _copy(
+        artifact,
+        tmp_path / "rewritten-macs.sqlite",
+        # One hex digit of every verdict MAC, flipped. The *shape* has to
+        # survive: a MAC of the wrong length is a could-not-evaluate for every
+        # reader, and this test needs the walk to say BROKEN.
+        "UPDATE verdict SET mac = substr(mac, 1, length(mac) - 1) || "
+        "CASE WHEN substr(mac, length(mac), 1) = 'a' THEN 'b' ELSE 'a' END",
+    )
+    assert (
+        _cold_read(tampered).state(query.CLAIM_CHAIN_INTACT)
+        == query.CHECKABLE_WITH_A_KEY
+    )
+
+    conn = store.connect(tampered)
+    try:
+        report = chain.verify_chain(conn, chain.load_keyring(keyring_path))
+    finally:
+        conn.close()
+    assert report.state is chain.ChainState.BROKEN, (
+        "the tamper this test makes must be one the real walk rejects, or it "
+        "shows nothing about the cold read declining to run that walk"
+    )
+
+
+def test_an_artifact_with_no_chain_is_absent_and_not_the_fifth_state(
+    artifact: Path,
+) -> None:
+    """THE FIRST NEGATIVE for the row above (issue #242). No records — ABSENT.
+
+    Not the fifth state, which is the whole point of the test: a file with
+    nothing signed in it has not failed to support a check, and reporting
+    *checkable with a key* over an empty chain would tell an assessor to go and
+    find a keyring for a record that is not there.
+    """
+    conn = store.connect(artifact)
+    try:
+        tables = {
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        held = sum(
+            int(conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"])
+            for _, table, _ in query.COLD_READ_RECORD_CHAINS
+            if table in tables
+        )
+    finally:
+        conn.close()
+    assert held == 0, "this fixture was built with no record stream"
+    assert not tables & {t for _, t, _ in query.COLD_READ_RECORD_CHAINS}, (
+        "a build handed no record stream does not create the record tables, so "
+        "this is the arm where a missing table has to read as no records"
+    )
+
+    row = _cold_read(artifact)[query.CLAIM_CHAIN_INTACT]
+    assert row.state == query.ABSENT
+    assert row.state != query.CHECKABLE_WITH_A_KEY
+    for _, table, _ in query.COLD_READ_RECORD_CHAINS:
+        assert table in row.detail
+
+
+def test_the_fifth_state_does_not_depend_on_the_reader_holding_a_key(
+    attested: tuple[Path, Path], tmp_path: Path, monkeypatch
+) -> None:
+    """THE SECOND NEGATIVE. The state is about the file, not about the caller.
+
+    `cold_read` takes a connection and nothing else, so there is no keyring to
+    hand it — and that is the property being asserted. A state that moved when a
+    keyring happened to be lying next to the artifact would be reporting the
+    reader's desk rather than the file, and two assessors would get two answers
+    about one artifact.
+    """
+    artifact, keyring_path = attested
+    with_key = _cold_read(artifact).state(query.CLAIM_CHAIN_INTACT)
+
+    away = tmp_path / "no-keys-here"
+    away.mkdir()
+    monkeypatch.chdir(away)
+    assert not list(away.iterdir()), "the working directory holds no keyring"
+    without_key = _cold_read(artifact).state(query.CLAIM_CHAIN_INTACT)
+
+    assert with_key == without_key == query.CHECKABLE_WITH_A_KEY
+    assert not keyring_path.is_relative_to(away)
+
+
+def test_a_record_with_a_blank_mac_is_readable_and_not_checkable_at_all(
+    attested: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """THE THIRD NEGATIVE, and the one that separates the two middle states.
+
+    A record whose `mac` is blank is unverifiable by *anyone* — the key-holder
+    included — so it is not the fifth state with a key missing. It is the file
+    holding a record and not the signature the record would be checked against,
+    which is exactly READABLE-NOT-CHECKABLE. Without this, the fifth state would
+    be a state the report has never been shown able to leave for the right
+    reason.
+    """
+    artifact, _ = attested
+    blanked = _copy(
+        artifact,
+        tmp_path / "blank-mac.sqlite",
+        "UPDATE verdict SET mac = '' WHERE seq = (SELECT min(seq) FROM verdict)",
+    )
+    row = _cold_read(blanked)[query.CLAIM_CHAIN_INTACT]
+    assert row.state == query.READABLE_NOT_CHECKABLE
+    assert row.state != query.CHECKABLE_WITH_A_KEY
+    assert "mac" in row.detail and "verdict" in row.detail
+
+
+def test_the_acknowledgment_row_is_checkable_from_the_file_alone(
+    attested: tuple[Path, Path],
+) -> None:
+    """THE SIXTH ROW. Claim 4's other question, and it needs no key (issue #247).
+
+    `reg.query.acknowledgments(conn)` takes only a connection, so this half of
+    Claim 4 really is answerable from the file — the first row in this report to
+    become CHECKABLE because *evidence was added* rather than because provenance
+    was recorded.
+
+    Held to the query rather than re-derived: the row's state is whatever
+    `acknowledgments` answers, so the two cannot disagree about one file.
+    """
+    artifact, _ = attested
+    answer = _ask(artifact, query.acknowledgments)
+    assert answer.verdict == ANSWERED, (
+        "this fixture must answer the question, or the row below is pinned to a "
+        "refusal"
+    )
+    row = _cold_read(artifact)[query.CLAIM_ACKNOWLEDGMENT]
+    assert row.state == query.CHECKABLE
+    assert answer.reason in row.detail
+    assert query.ACKNOWLEDGING_PARTY in row.detail
+
+
+def test_an_unacknowledged_passivation_is_could_not_evaluate_and_never_absent(
+    attested: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """THE NEGATIVE for the row above, and it is issue #247's whole distinction.
+
+    Delete the acknowledgment and leave the passivation: the artifact then holds
+    a stop nobody in it cleared. That is **not** "nobody acknowledged it" — the
+    record holds what enforcement was told — so it is a could-not-evaluate, and
+    a report that said ABSENT would have flattened the distinction the
+    acknowledgment exists to draw.
+    """
+    artifact, _ = attested
+    passivated = _copy(
+        artifact,
+        tmp_path / "unacknowledged.sqlite",
+        # A passivating verdict with no acknowledgment of it: rewrite one
+        # PERMIT to a VETO, which the walk reads as a stop that never ended.
+        "UPDATE verdict SET outcome = 'VETO', fault = 'stale_declaration' "
+        "WHERE seq = (SELECT max(seq) FROM verdict)",
+    )
+    assert _ask(passivated, query.acknowledgments).verdict == COULD_NOT_EVALUATE
+
+    row = _cold_read(passivated)[query.CLAIM_ACKNOWLEDGMENT]
+    assert row.state == COULD_NOT_EVALUATE
+    assert row.state != query.ABSENT
+    assert "never a" in row.detail
+
+
+def test_the_acknowledgment_row_is_absent_where_no_record_stream_was_given(
+    artifact: Path,
+) -> None:
+    """And ABSENT here is right, unlike above: this build was handed no record
+    stream at all, so it holds no verdict that could have stopped the robot. The
+    file makes no claim rather than making one it cannot support."""
+    row = _cold_read(artifact)[query.CLAIM_ACKNOWLEDGMENT]
+    assert row.state == query.ABSENT
+    assert query.META_ATTESTATION_RECORDS in row.detail
+
+
 # --------------------------------------------------------------------------
-# Held to `reg.graph`. The copy, and the behaviour behind it.
+# Held to `reg.graph` and to `reg.chain`. The copies, and the behaviour behind
+# them.
 # --------------------------------------------------------------------------
+
+
+def test_the_cold_read_names_the_record_chains_reg_chain_walks() -> None:
+    """The second copy, checked (issue #242). `reg.query` cannot import
+    `reg.chain` at module level — it reaches `reg.stream` — so the party, table
+    and count key of every record chain are spelled a second time in
+    `reg.query`. This is what pays for that.
+
+    The same discipline as the recompute keys next door, and the failure it
+    prevents is sharper: a table this copy did not name is a chain the cold read
+    counts zero records in, and zero records is how it reports **ABSENT**. So a
+    record kind added to `reg.chain` and not here would make an artifact holding
+    a signed chain report that it holds none — the one direction of error a
+    tamper-evidence row must not have.
+    """
+    walked = tuple(
+        (str(spec.role), record.table, record.count_key)
+        for spec in chain.CHAINS
+        for record in spec.records
+    )
+    assert query.COLD_READ_RECORD_CHAINS == walked, (
+        "reg.query's copy of the record chains has drifted from "
+        "reg.chain.CHAINS. The cold read would then report a chain as absent "
+        "that verify_chain walks, or count a table nothing signs."
+    )
+    assert query.META_DECLARATION_COUNT == chain.META_DECLARATION_COUNT
+    assert query.META_VERDICT_COUNT == chain.META_VERDICT_COUNT
+    assert query.META_ACKNOWLEDGMENT_COUNT == chain.META_ACKNOWLEDGMENT_COUNT
 
 
 def test_the_cold_read_names_the_recompute_keys_the_builder_refuses_on() -> None:
@@ -3660,9 +3991,18 @@ def test_a_file_with_no_environment_refuses_a_recompute_on_both_readers(
 # --------------------------------------------------------------------------
 
 
-def test_a_fifth_state_is_refused(artifact: Path) -> None:
-    """A row may only carry one of the four. A fifth is a state nobody defined
-    the relationship of to a pass, and a caller reading it would have to guess."""
+def test_a_sixth_state_is_refused(artifact: Path) -> None:
+    """A row may only carry one of the five. A sixth is a state nobody defined
+    the relationship of to a pass, and a caller reading it would have to guess.
+
+    **This test used to refuse a fifth, and issue #242 was the deliberate act it
+    existed to force.** It is not an obstacle that was routed around: the fifth
+    state was added because `chain-intact` fits none of the four — the file
+    alone cannot check it, it is not unverifiable, the chain is not absent, and
+    nothing failed to be established — and because flattening it into a
+    neighbour would report a deliberate gate as a defect. Editing this line is
+    the cost of that, and the cost is paid once per state rather than never.
+    """
     with pytest.raises(QueryError) as caught:
         query.ColdReadClaim(
             claim=query.CLAIM_ENVIRONMENT,
@@ -3671,6 +4011,9 @@ def test_a_fifth_state_is_refused(artifact: Path) -> None:
             detail="d",
         )
     assert "MOSTLY-FINE" in str(caught.value)
+    assert query.CHECKABLE_WITH_A_KEY in str(caught.value), (
+        "the refusal lists the states it accepts, and the fifth is one of them"
+    )
 
     with pytest.raises(QueryError):
         query.ColdReadClaim(
@@ -3696,16 +4039,17 @@ def test_a_partial_report_is_refused(artifact: Path) -> None:
             claims=full.claims[:-1],
             recompute_permitted=full.recompute_permitted,
         )
-    assert query.CLAIM_REACHED_POINT in str(caught.value)
+    assert query.CLAIM_ACKNOWLEDGMENT in str(caught.value)
+    assert query.CLAIM_CHAIN_INTACT in str(caught.value)
     with pytest.raises(QueryError):
         full[query.CLAIM_ENVIRONMENT + "-nope"]
 
 
 def test_the_cli_prints_the_cold_read(artifact: Path, capsys) -> None:
-    """`--cold-read` on an artifact from `main`: exit 0 and four rows, each with
-    its state and its detail. `READABLE-NOT-CHECKABLE` is not a failure of the
-    run — an exit code that treated it as one would be red on every artifact
-    this project has ever built."""
+    """`--cold-read` on an artifact from `main`: exit 0 and one row per claim,
+    each with its state and its detail. `READABLE-NOT-CHECKABLE` is not a
+    failure of the run — an exit code that treated it as one would be red on
+    every artifact this project has ever built."""
     code = query.main([str(artifact), "--cold-read"])
     out = capsys.readouterr().out
     assert code == query.EXIT_OK
@@ -3713,6 +4057,26 @@ def test_the_cli_prints_the_cold_read(artifact: Path, capsys) -> None:
         assert f"{claim}: {state}" in out
     assert query.READABLE_NOT_CHECKABLE in out
     assert "recompute permitted: yes" in out
+
+
+def test_the_cli_prints_the_fifth_state_on_an_attested_artifact(
+    attested: tuple[Path, Path], capsys
+) -> None:
+    """And exit 0 with it. `CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN` is
+    not a could-not-evaluate: nothing failed to be established, so a `1` here
+    would be red on every artifact this project builds with a record stream.
+
+    The printed row must carry the whole state string, because that string *is*
+    the finding — an assessor who saw only "CHECKABLE" would take the file to
+    settle tamper-evidence on its own.
+    """
+    code = query.main([str(attested[0]), "--cold-read"])
+    out = capsys.readouterr().out
+    assert code == query.EXIT_OK
+    for claim, state in COLD_READ_ATTESTED.items():
+        assert f"{claim}: {state}" in out
+    assert f"{query.CLAIM_CHAIN_INTACT}: {query.CHECKABLE_WITH_A_KEY}" in out
+    assert "keyring" in out
 
 
 def test_the_cli_refuses_a_key_it_would_otherwise_drop_on_a_cold_read(
@@ -3735,4 +4099,8 @@ def test_the_cold_read_is_in_the_list_output(capsys) -> None:
     query.main(["--list"])
     out = capsys.readouterr().out
     assert "--cold-read" in out
-    assert query.READABLE_NOT_CHECKABLE in out
+    for state in query.COLD_READ_STATES:
+        assert state in out, (
+            f"--list does not name the {state} state, so a reader meeting it in "
+            "a report has nowhere to look it up"
+        )

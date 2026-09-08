@@ -1596,25 +1596,30 @@ def test_a_document_that_never_cites_the_module_is_not_a_pass() -> None:
 
 
 # ==========================================================================
-# THE CONDITION ON CLAIM 3 (issue #243).
+# THE BASIS BESIDE CLAIM 3 (issue #243, repointed by issue #253).
 #
 # The same defect as the `13x` above, one level up: not a figure a reader can
-# take away without its condition, but a **claim**. `docs/plan.md` Claim 3 said
+# take away without its condition, but a **claim**. `docs/plan.md` Claim 3 says
 # which answers rest on a conjunction with *the entity was where the artifact
 # says it was* are "recorded per answer, in the artifact, and queryable
-# afterwards" — and the artifact delivers the first two words of that and not
-# the third's object. `reg.query.cold_read` answers `READABLE-NOT-CHECKABLE`
-# for the layer tag (issue #231), because the `mobile_derived_velocity` and
-# `mobile_transit` fixtures (issue #229) — every base rate from a perceiver,
-# and every base rate off wheel encoders — produce identical tags on identical
-# edges. An assessor can ask *was this answer conditional* and get a tag. They
-# cannot ask *conditional on what* and get anything from the file.
+# afterwards" — and issue #243 found the artifact delivering the first two
+# words of that and not the third's object, so every unit stating the claim had
+# to carry the condition **the tag is recorded and not the basis it was
+# computed from** and to name the layer basis as what would retire it.
 #
-# So every unit of text that states Claim 3 has to state the condition in that
-# same unit, and has to name what would retire it — the layer basis, epic
-# #227 — so a reader knows this is a gap being closed and not a permanent
-# limitation. The claim's substance is unchanged; what is checked here is that
-# its reach travels with it.
+# The basis landed (issue #252). Every tagged edge now records what its tag was
+# computed from, one row per input, and `reg.query.cold_read` answers
+# `CHECKABLE` for `layer-tag-basis`. **So this check is repointed rather than
+# retired**, and the direction is what changed: what had to be present must now
+# be absent, and the strengthened clause is what has to travel. A stale
+# condition would have passed the #243 form of this check — the sentence is
+# still there, the retirement is still named — and nothing would have said the
+# claim had begun to understate the artifact. That is the window issue #253
+# closes, and `test_the_retired_condition_is_caught` is where it is held shut.
+#
+# What is kept is the shape: a unit stating Claim 3 must state, in that same
+# unit, what the file retains beside the tag. The claim's substance is
+# unchanged; what is checked is that its reach travels with it.
 #
 # This module is about figures and Claim 3 is not a figure. The check lives
 # here because the machinery is the one the `13x` already needs —
@@ -1639,20 +1644,28 @@ CLAIM_3_LAYER_B_HALF = re.compile(
     re.IGNORECASE,
 )
 
-#: The condition, in either direction it can be written. Both name an
-#: *absence*, which is the thing the reader has to be told: the tag is in the
-#: file and the input it was computed from is not.
-CLAIM_3_CONDITION = re.compile(
-    r"not the basis it was computed from|the basis it was computed from is not",
+#: What the file retains beside the tag, in the forms the documents state it
+#: in. This is the clause that has to travel with the claim now: the basis is
+#: recorded per tagged edge, so a unit naming the column satisfies this as well
+#: as one saying it in words. Forgiving on the *wording* for the reason the
+#: `13x` patterns are, and not on the reach.
+CLAIM_3_BASIS = re.compile(
+    r"basis (?:it|each tag|the tag) was computed from recorded|"
+    r"records what its tag was computed from|"
+    r"edge_layer_basis",
     re.IGNORECASE,
 )
 
-#: What would retire the condition. A condition with no end named reads as a
-#: permanent limitation, which is a different claim from the one being made, so
-#: a unit stating the condition and naming nothing that would close it fails
-#: here too. `#227` is the epic; `layer basis` is what it lands, and a document
-#: that names the thing rather than the issue number satisfies this.
-CLAIM_3_RETIREMENT = re.compile(r"#227|layer basis", re.IGNORECASE)
+#: **The condition issue #243 required and issue #252 retired**, in either
+#: direction it could be written. It is kept, with its meaning inverted: a unit
+#: still saying the file holds the tag and not its basis is stating something
+#: the artifact stopped doing at schema 13, and it fails below. Deleting this
+#: pattern with the condition would have left nothing able to say a stale
+#: statement of the claim is stale.
+CLAIM_3_RETIRED_CONDITION = re.compile(
+    r"not the basis it was computed from|the basis it was computed from is not",
+    re.IGNORECASE,
+)
 
 #: The documents stating Claim 3 today. Pinned for the reason the `13x` roster
 #: is: deleting the statement is the one way a check of this shape goes green
@@ -1662,8 +1675,14 @@ DOCS_STATING_CLAIM_3: frozenset[str] = frozenset(
 )
 
 
-def condition_travels_with_claim_3(text: str) -> tuple[str, list[str]]:
-    """Verdict on whether every statement of Claim 3 in `text` carries its condition.
+def basis_travels_with_claim_3(text: str) -> tuple[str, list[str]]:
+    """Verdict on whether every statement of Claim 3 in `text` carries the basis.
+
+    Two ways to fail, and they are the two directions the claim can drift from
+    the artifact. A unit that never says what the file retains beside the tag
+    states less than the artifact supports; a unit still carrying the retired
+    condition states something the artifact stopped doing at schema 13. Both
+    are DISAGREE, and the second is the one issue #253 added.
 
     Three-valued, and the third does not resolve to the first: a document that
     states the claim nowhere is `COULD-NOT-EVALUATE`, because deleting the
@@ -1680,7 +1699,7 @@ def condition_travels_with_claim_3(text: str) -> tuple[str, list[str]]:
         if not (CLAIM_3_LAYER_A_HALF.search(unit) and CLAIM_3_LAYER_B_HALF.search(unit)):
             continue
         checked += 1
-        if not (CLAIM_3_CONDITION.search(unit) and CLAIM_3_RETIREMENT.search(unit)):
+        if CLAIM_3_RETIRED_CONDITION.search(unit) or not CLAIM_3_BASIS.search(unit):
             missing.append(unit)
     if not checked:
         return COULD_NOT_EVALUATE, []
@@ -1688,24 +1707,26 @@ def condition_travels_with_claim_3(text: str) -> tuple[str, list[str]]:
 
 
 @pytest.mark.parametrize("doc,path", CORPUS_QUOTING_FIGURES)
-def test_claim_3_is_never_stated_without_its_condition(doc: str, path: Path) -> None:
-    """**THE DOCUMENT CHECK ISSUE #243 EXISTS FOR.**
+def test_claim_3_is_never_stated_without_its_basis(doc: str, path: Path) -> None:
+    """**THE DOCUMENT CHECK ISSUE #243 EXISTS FOR, POINTED AT WHAT LANDED.**
 
     Claim 3 promised the conditionality of an answer is retained *with the
-    answer* and can be asked about afterwards. What the file retains is the tag
-    and not its basis, so the promise has to be stated with its reach until
-    #227 lands.
+    answer* and can be asked about afterwards. The file retains the basis per
+    tagged edge now, so what has to be stated beside the claim is that — and a
+    unit still saying the basis is absent fails here rather than passing on a
+    condition that no longer holds.
     """
-    verdict, missing = condition_travels_with_claim_3(
+    verdict, missing = basis_travels_with_claim_3(
         path.read_text(encoding="utf-8")
     )
     assert verdict != DISAGREE, (
         f"{doc} states Claim 3 in {len(missing)} place(s) that never say the "
-        "artifact records the layer tag and not the basis it was computed "
-        "from, or never name what would retire that:\n"
+        "artifact records the basis each layer tag was computed from, or that "
+        "still carry the condition issue #252 retired:\n"
         + "\n".join(f"  - {unit[:160]}" for unit in missing)
-        + "\nState the condition in the same paragraph or table row as the "
-        "claim, and name the layer basis (#227) as what closes it."
+        + "\nState the basis in the same paragraph or table row as the claim, "
+        "and do not say the file holds the tag and not its basis — since "
+        "schema 13 it holds both."
     )
 
 
@@ -1717,7 +1738,7 @@ def test_the_documents_that_state_claim_3_are_the_ones_expected() -> None:
     stating = {
         doc
         for doc, path in CORPUS_QUOTING_FIGURES
-        if condition_travels_with_claim_3(path.read_text(encoding="utf-8"))[0]
+        if basis_travels_with_claim_3(path.read_text(encoding="utf-8"))[0]
         != COULD_NOT_EVALUATE
     }
     assert stating == set(DOCS_STATING_CLAIM_3), (
@@ -1735,7 +1756,7 @@ def test_the_documents_that_state_claim_3_are_the_ones_expected() -> None:
 def test_claim_3_stated_bare_is_caught() -> None:
     """**The negative this check exists for**, and it is `plan.md`'s own sentence
     as it stood before this change."""
-    verdict, missing = condition_travels_with_claim_3(
+    verdict, missing = basis_travels_with_claim_3(
         "**The claim.** Which answers the proprioception-only layer supports on\n"
         "its own authority, and which are a conjunction with *the entity was\n"
         "where the artifact says it was* — recorded per answer, in the artifact,\n"
@@ -1745,12 +1766,12 @@ def test_claim_3_stated_bare_is_caught() -> None:
     assert len(missing) == 1
 
 
-def test_the_condition_two_paragraphs_away_does_not_cover_the_claim() -> None:
+def test_the_basis_two_paragraphs_away_does_not_cover_the_claim() -> None:
     """The defect the `13x` taught: correct elsewhere in the document, absent
     where a reader takes the claim away from."""
-    verdict, missing = condition_travels_with_claim_3(
-        "The tag is recorded and not the basis it was computed from, until the\n"
-        "layer basis lands.\n"
+    verdict, missing = basis_travels_with_claim_3(
+        "Every tagged edge records what its tag was computed from, one row per\n"
+        "input.\n"
         "\n"
         "Some other paragraph entirely.\n"
         "\n"
@@ -1761,25 +1782,50 @@ def test_the_condition_two_paragraphs_away_does_not_cover_the_claim() -> None:
     assert len(missing) == 1
 
 
-def test_the_condition_in_the_same_paragraph_passes() -> None:
+def test_the_basis_in_the_same_paragraph_passes() -> None:
     """The positive control, across a line break, since the documents wrap."""
-    verdict, missing = condition_travels_with_claim_3(
+    verdict, missing = basis_travels_with_claim_3(
+        "Which audit questions this artifact answers on its own authority, and\n"
+        "which it answers only as well as whatever supplied the entity positions\n"
+        "— with the basis each tag was computed from recorded beside it, per\n"
+        "edge.\n"
+    )
+    assert (verdict, missing) == (AGREE, [])
+
+
+def test_the_retired_condition_is_caught() -> None:
+    """**THE NEGATIVE ISSUE #253 EXISTS FOR**, and it is `plan.md`'s own
+    sentence as it stood between #243 and #252.
+
+    Under the #243 form of this check that text was the *pass*: the condition
+    is present and the layer basis is named as what retires it. The basis has
+    landed, so the same sentence now understates the artifact — and a check
+    that went on accepting it would let the claim drift from the file in the
+    one direction nothing else here is watching.
+    """
+    verdict, missing = basis_travels_with_claim_3(
         "Which audit questions this artifact answers on its own authority, and\n"
         "which it answers only as well as whatever supplied the entity positions\n"
         "— with the tag recorded and not the basis it was computed from, until\n"
         "the layer basis lands.\n"
     )
-    assert (verdict, missing) == (AGREE, [])
+    assert verdict == DISAGREE
+    assert len(missing) == 1
 
 
-def test_a_condition_that_names_no_end_is_caught() -> None:
-    """A condition with nothing that would retire it reads as a permanent
-    limitation. Claim 3's is a gap being closed, and #227 is the thing closing
-    it, so the unit has to name one or the other."""
-    verdict, missing = condition_travels_with_claim_3(
+def test_the_retired_condition_is_caught_beside_the_basis() -> None:
+    """And naming the basis does not buy the stale sentence a pass.
+
+    A document being edited towards the strengthened claim can hold both for
+    one revision. The unit a reader takes away still says the file does not
+    carry the basis, so it fails until the retired half is gone — otherwise
+    this check would grade an edit by whether it *added* text.
+    """
+    verdict, missing = basis_travels_with_claim_3(
         "Which audit questions this artifact answers on its own authority, and\n"
         "which it answers only as well as whatever supplied the entity positions\n"
-        "— with the tag recorded and not the basis it was computed from.\n"
+        "— with the tag recorded and not the basis it was computed from, though\n"
+        "every tagged edge carries a row per input in `edge_layer_basis`.\n"
     )
     assert verdict == DISAGREE
     assert len(missing) == 1
@@ -1787,11 +1833,11 @@ def test_a_condition_that_names_no_end_is_caught() -> None:
 
 def test_a_claim_3_table_row_is_its_own_unit() -> None:
     """`README.md`'s claim table is four rows and only one of them is Claim 3.
-    A condition in a neighbouring row is not one a reader of this row sees."""
-    verdict, missing = condition_travels_with_claim_3(
+    A basis stated in a neighbouring row is not one a reader of this row sees."""
+    verdict, missing = basis_travels_with_claim_3(
         "| | claim | status |\n"
         "|---|---|---|\n"
-        "| **4** | the tag is recorded and not the basis it was computed from |\n"
+        "| **4** | each tagged edge records what its tag was computed from |\n"
         "| **3** | which claims proprioception-only evidence supports, and which "
         "depend on an uncertifiable perceiver |\n"
     )
@@ -1804,11 +1850,11 @@ def test_a_claim_3_table_row_is_its_own_unit() -> None:
 
 def test_a_document_that_never_states_the_claim_is_not_a_pass() -> None:
     """**THE NEGATIVE THE ACCEPTANCE CRITERIA ASK FOR BY NAME.** A document that
-    does not state Claim 3 must not be required to carry its condition — that is
+    does not state Claim 3 must not be required to carry the basis — that is
     every file in the corpus but four — and it must not read as agreement
     either. Three-valued, with the roster above as what stops the third value
     from becoming a hiding place."""
-    verdict, missing = condition_travels_with_claim_3(
+    verdict, missing = basis_travels_with_claim_3(
         "This document is about the retention curve and says nothing about "
         "layers at all.\n"
     )
@@ -1818,9 +1864,9 @@ def test_a_document_that_never_states_the_claim_is_not_a_pass() -> None:
 def test_one_half_of_the_claim_is_not_the_claim() -> None:
     """`docs/mobile-base.md` says a driving base shrinks the set of questions the
     artifact answers on its own authority. That is a finding about the mobile
-    track; demanding Claim 3's condition beside it would be noise, and noise is
+    track; demanding Claim 3's basis beside it would be noise, and noise is
     how a check of this shape gets switched off."""
-    verdict, _ = condition_travels_with_claim_3(
+    verdict, _ = basis_travels_with_claim_3(
         "The second is that the envelope stops being answerable in room\n"
         "coordinates without perception — which shrinks the set of questions\n"
         "this artifact can answer on its own authority, and is the finding worth\n"

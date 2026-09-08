@@ -323,11 +323,11 @@ Quote the agreement, mention the speed once, and never lead with it.
 **The claim.** Which answers the proprioception-only layer supports on its own
 authority, and which are a conjunction with *the entity was where the artifact
 says it was* — recorded per answer, in the artifact, and queryable afterwards,
-**with the tag recorded and not the basis it was computed from**, until issue
-#227's layer basis lands. So the file answers *was this answer conditional* and
-not *conditional on what*: `reg.query.cold_read` reports the layer tag
-`READABLE-NOT-CHECKABLE`, and `WHERE layer = 'B'` returns an envelope over a
-perceived base velocity and one over an encoder-measured one alike
+**with the basis it was computed from recorded beside it**, one row per input in
+`edge_layer_basis`. So the file answers *conditional on what* and not only *was
+this answer conditional*: `reg.query.cold_read` reports the layer tag
+`CHECKABLE`, and a reader recomputes it from the file as the weakest of its own
+recorded inputs, with no document open
 ([`docs/limitations.md`](limitations.md) §11 and §12).
 
 **Stated narrowly, because the broad version is taken.** ConSerts (Schneider &

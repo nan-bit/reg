@@ -421,7 +421,16 @@ RATE = 85.2
 #           environment argument, are both gone. Thirty-two words lower than the
 #           last ceiling rather than level with it, for the reason the #233 row
 #           gives — measured, no headroom
-ARGUMENT_MAX = 47132
+#   47,131  today, 2026-09-08, after #253 retired Claim 3's condition. The basis
+#           had landed, so `plan.md`'s claim and `sufficiency.md`'s normative
+#           restatement of it say what the file now carries — the basis beside
+#           the tag, per edge — instead of naming an absence and the issue that
+#           would end it. It costs one word less than the condition did:
+#           `plan.md` -1, and `sufficiency.md` level, its clause going -2 and
+#           its `## Why` provenance row +2 to record the retirement beside the
+#           condition. One word lower than the last ceiling rather than level
+#           with it, for the reason the #233 row gives — measured, no headroom
+ARGUMENT_MAX = 47131
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -534,7 +543,13 @@ LONG_PARAGRAPHS_MAX = 89
 #        by addition and a correction that narrates is the form the file takes,
 #        and it is paid for by §17's SOTER comparison no longer narrating a gap
 #        that has closed
-NARRATION_MAX = 137
+#    136  today, 2026-09-08, after #253: `docs/plan.md` went 6 -> 5. Claim 3's
+#        paragraph stopped matching because the marker in it was `until issue
+#        #227` — the condition itself, and the whole of what that paragraph
+#        narrated. A claim that states what the artifact does needs no issue
+#        number to say when it will, so nothing was reworded for this ceiling;
+#        it is lowered for the reason the #241 row gives
+NARRATION_MAX = 136
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

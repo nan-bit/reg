@@ -4496,17 +4496,35 @@ def test_the_basis_study_prices_every_level_under_every_option(basis_study) -> N
     ]
 
 
-def test_today_is_the_artifact_the_curve_already_measured(basis_study) -> None:
-    """The baseline is not a re-measurement. It is the same file.
+def test_today_is_the_curve_s_artifact_with_the_adopted_basis_removed(
+    basis_study,
+) -> None:
+    """The baseline is the schema as it stood while the question was open.
 
-    If `today`'s bytes were anything but the curve's own, every movement below
-    would be measured against an artifact no document publishes.
+    It *was* the curve's own file, byte for byte, until issue #252 adopted option
+    A — and then the curve's file started carrying the basis this study exists to
+    price. So `today` is now reconstructed: `cost_layer_basis` drops
+    `reg.store.EDGE_BASIS_TABLE` from its copy before it measures anything.
+
+    Two assertions and the second is the one that matters. `today` is **strictly
+    smaller** than the curve's point at every level, including the occurrence
+    level that holds no edge at all — an empty table with its key still costs
+    SQLite pages, which is exactly the finding this study published. And it is
+    still the baseline the movements are read against, so its own factor is 1.0.
+
+    A `today` equal to the curve's point would mean the drop did nothing and the
+    study was pricing a second basis on top of the adopted one, which describes
+    no granularity.
     """
     study, _ = basis_study
     for point in study.curve.points:
         cost = study.cost(point.level, bench.LAYER_BASIS_TODAY)
-        assert cost.size_bytes == point.size_bytes, point.level
-        assert cost.bytes_per_hour == pytest.approx(point.bytes_per_hour)
+        assert cost.size_bytes < point.size_bytes, (
+            f"{point.level}: the pre-adoption baseline is {cost.size_bytes} B "
+            f"and the curve's own artifact is {point.size_bytes} B. They are "
+            "equal, so the adopted basis table was not dropped and every "
+            "movement below is a second basis priced on top of the first"
+        )
         assert study.factor(point.level, bench.LAYER_BASIS_TODAY) == 1.0
 
 
@@ -4643,15 +4661,21 @@ def test_the_basis_study_writes_nothing_into_the_artifact_it_priced(basis_study)
 
 
 def test_nothing_here_moves_what_the_cold_read_reports(basis_study) -> None:
-    """The acceptance criterion stated as a check: `layer-tag-basis` is where it
-    was, on the artifact this study priced, after the study priced it."""
+    """The acceptance criterion stated as a check: this study moves nothing.
+
+    `layer-tag-basis` is `CHECKABLE` on the artifact this study priced, and it is
+    `CHECKABLE` because `reg.store` writes the basis (issue #252) — not because
+    anything here does. What is asserted is that the study left it where the
+    schema puts it: a study that had written its own variant table into the
+    artifact would show up here as a report about a file nobody built.
+    """
     _, work = basis_study
     conn = store.connect(work / f"long_run_{_LAYER_BASIS_FRAMES}.sqlite")
     try:
         report = query.cold_read(conn)
     finally:
         conn.close()
-    assert report.state(query.CLAIM_LAYER_BASIS) == query.READABLE_NOT_CHECKABLE
+    assert report.state(query.CLAIM_LAYER_BASIS) == query.CHECKABLE
 
 
 def test_the_basis_study_is_deterministic(tmp_path: Path) -> None:
@@ -5050,12 +5074,19 @@ def _basis_section(study: bench.LayerBasisStudy) -> str:
     return report.split("## The layer basis", 1)[1].split("\n## ", 1)[0]
 
 
-def test_the_basis_report_states_that_nothing_was_adopted(basis_study) -> None:
-    """The section a person takes a decision from says what it is not."""
+def test_the_basis_report_states_which_option_was_adopted(basis_study) -> None:
+    """The section a person reads says what it is and what it is not.
+
+    It was *nothing here is adopted* until issue #252 adopted option A on these
+    numbers; a section that went on saying so would be a costing presenting a
+    taken decision as an open one, which is the same failure as a cold read
+    calling a closed gap open. What it must still say is that the study itself
+    retains nothing — the variants are measurements and not artifacts.
+    """
     study, _ = basis_study
     section = _basis_section(study)
-    assert "Nothing here is adopted, and nothing here is retained." in section
-    assert "still reports `layer-tag-basis` exactly as it did" in section
+    assert "**Option A was adopted on these numbers" in section
+    assert "This study still retains nothing" in section
     for option in bench.LAYER_BASIS_OPTIONS:
         assert f"| **{option}** |" in section
 

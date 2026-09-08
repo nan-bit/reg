@@ -99,7 +99,23 @@ from reg.kinematics import (
     clamp_to_limits,
     link_polygons,
 )
-from reg.types import Layer, Limits, LimitSource, ProprioState
+# The basis is a row in the artifact, and its shape is the schema's. Imported
+# rather than restated because two definitions of one row is how the writer and
+# the reader of it drift apart — and because this module has to name the two
+# inputs it decides so that `reg.store.open_edge` can refuse a basis missing
+# either. Nothing geometric comes across: `reg.store` imports `reg.types` and no
+# more, so this is not the world arriving through the persistence layer, and
+# `tests/test_envelope.py::test_envelope_module_imports_nothing_from_layer_b` is
+# what keeps that true.
+from reg.store import (
+    BASIS_BASE_VEL_SOURCE,
+    BASIS_LIMITS_SOURCE,
+    BASIS_NO_BASE_VELOCITY,
+    BASIS_PROVENANCE,
+    LayerInput,
+    layer_from_basis,
+)
+from reg.types import Layer, Limits, LimitSource, ProprioState, VelocitySource
 
 __all__ = [
     "ARC_QUAD_SEGS",
@@ -111,6 +127,7 @@ __all__ = [
     "envelope_area",
     "envelope_hash",
     "envelope_layer",
+    "envelope_layer_basis",
     "outer_envelope",
     "outer_envelope_looseness",
     "outer_radius",
@@ -1206,45 +1223,78 @@ _LAYER_BY_LIMIT_SOURCE: dict[LimitSource, Layer] = {
     LimitSource.DERIVED: "B",
 }
 
+#: The layer an outer envelope inherits from the provenance of the base velocity
+#: it was integrated from (issue #252, docs/limitations.md §11,
+#: docs/sufficiency.md §5.9). The same shape as the table above and for the same
+#: reason: `reg.envelope.base_motion_bounds` reads `state.base_vel` into the
+#: displacement term of `outer_envelope`, and a `BaseVelocity` filled by visual
+#: odometry is a perceiver's output arriving in a *value* under field names —
+#: `vx`, `vy`, `omega` — that no word check can hold against the world.
+#:
+#: **It is a `VelocitySource` table and never a `PoseSource` one.** A body-frame
+#: rate genuinely forks — a wheel encoder measures one and a camera estimates one
+#: — which is what makes this mapping honest; a room-frame pose does not fork,
+#: both its provenances are Layer B, and `tests/test_layer_boundary.py::
+#: test_no_function_in_reg_maps_a_pose_provenance_to_a_layer` is what stops this
+#: table being copied one type over.
+_LAYER_BY_VELOCITY_SOURCE: dict[VelocitySource, Layer] = {
+    VelocitySource.PROPRIOCEPTIVE: "A",
+    VelocitySource.DERIVED: "B",
+}
 
-def envelope_layer(limits: Limits) -> Layer:
-    """The layer an envelope computed from `limits` belongs to.
 
-    `A` when the bounds are a property of the robot, `B` when they are derived
-    from something perceived. The state side of the computation is Layer A by
-    construction — `compute_envelope` takes a `ProprioState` and that structure
-    cannot name the world — so the provenance of the bounds is the only thing
-    left that decides this, and `Limits.source` is where it is written down.
+def _velocity_input(base_vel_source: VelocitySource | None) -> LayerInput:
+    """The `base_vel_source` basis row, or the stated absence of one.
 
-    **That sentence is exactly true of `compute_envelope` and not of
-    `outer_envelope`** (issue #156). The outer set reads `state.base_vel` through
-    `base_motion_bounds`, and a `BaseVelocity` can be filled by visual odometry —
-    the taint arrives in a *value* on the state side too, which is why
-    `reg.types.VelocitySource` is required on that type. Nothing maps a member of
-    it to a layer yet and this function does not consult one, so an outer set
-    whose base term came from a perceiver is still tagged from its bounds alone.
-    Recorded rather than hidden: docs/limitations.md §11, docs/sufficiency.md
-    §5.9. Closing it is a decision about the *edge*, taken together with the
-    posed-configuration case §5.8 holds open, and not a patch to this function.
-
-    The case that makes it matter is ISO/TS 15066 speed-and-separation
-    monitoring: `qd_max` capped by a measured separation distance is
-    perception-derived, so the envelope integrated under it is Layer B and the
-    `HAS_ENVELOPE` edge in the artifact says so. That is not a downgrade — it is
-    what the edge always was, now visible to the `WHERE layer = 'B'` query Claim
-    3 is (docs/sufficiency.md §7).
-
-    Raises:
-        TypeError: `limits` is not a `Limits`.
-        ValueError: its `source` has no layer decision — a could-not-evaluate,
-            never the permissive answer.
+    `None` means *this run's frames record no base velocity*, which is a fact
+    about the bound and not a gap in it: `base_motion_bounds` returns
+    `(0.0, 0.0)` exactly for a state with no base velocity, so nothing a
+    perceiver could have touched entered the displacement term. It is recorded as
+    `BASIS_NO_BASE_VELOCITY` at layer `A` and never as a substituted
+    `proprioceptive`, which would make a run that recorded nothing and a run that
+    measured its own wheels produce identical rows — the defect issue #227 was
+    regroomed around.
     """
+    if base_vel_source is None:
+        return LayerInput(
+            name=BASIS_BASE_VEL_SOURCE,
+            value=BASIS_NO_BASE_VELOCITY,
+            provenance=BASIS_PROVENANCE[BASIS_BASE_VEL_SOURCE],
+            layer="A",
+        )
+    if not isinstance(base_vel_source, VelocitySource):
+        raise TypeError(
+            f"the base velocity provenance must be a VelocitySource or None, got "
+            f"{type(base_vel_source).__name__}. `None` is the one way to say "
+            "'this run records no base velocity'; a string or a BaseVelocity is "
+            "a provenance nothing here can map to a layer."
+        )
+    try:
+        layer = _LAYER_BY_VELOCITY_SOURCE[base_vel_source]
+    except KeyError:  # pragma: no cover - unreachable while the map is exhaustive
+        raise ValueError(
+            f"no layer is decided for VelocitySource {base_vel_source!r}. Adding "
+            "a velocity source means deciding which layer an outer envelope "
+            "integrated from it belongs to, in "
+            "reg.envelope._LAYER_BY_VELOCITY_SOURCE — an undecided source must "
+            "not resolve to 'A', which is issue #84's rule one type over."
+        ) from None
+    return LayerInput(
+        name=BASIS_BASE_VEL_SOURCE,
+        value=base_vel_source.value,
+        provenance=BASIS_PROVENANCE[BASIS_BASE_VEL_SOURCE],
+        layer=layer,
+    )
+
+
+def _limits_input(limits: Limits) -> LayerInput:
+    """The `limits_source` basis row. Refuses anything that is not a `Limits`."""
     if not isinstance(limits, Limits):
         raise TypeError(
             f"envelope_layer takes a Limits, got {type(limits).__name__}."
         )
     try:
-        return _LAYER_BY_LIMIT_SOURCE[limits.source]
+        layer = _LAYER_BY_LIMIT_SOURCE[limits.source]
     except KeyError:  # pragma: no cover - unreachable while the map is exhaustive
         raise ValueError(
             f"no layer is decided for LimitSource {limits.source!r}. Adding a "
@@ -1253,6 +1303,102 @@ def envelope_layer(limits: Limits) -> Layer:
             "undecided source must not resolve to 'A', which is the whole point "
             "of issue #84."
         ) from None
+    return LayerInput(
+        name=BASIS_LIMITS_SOURCE,
+        value=limits.source.value,
+        provenance=BASIS_PROVENANCE[BASIS_LIMITS_SOURCE],
+        layer=layer,
+    )
+
+
+def envelope_layer_basis(
+    limits: Limits, base_vel_source: VelocitySource | None
+) -> tuple[LayerInput, ...]:
+    """What a `HAS_ENVELOPE` tag is computed from, on this side of the edge.
+
+    `reg.store.ENVELOPE_BASIS_INPUTS`, in order: the provenance of the bounds and
+    the provenance of the base velocity the outer set was integrated from. Each
+    row carries the layer that input alone admits, so a reader holding the file
+    recomputes the tag with `reg.store.layer_from_basis` and no document open.
+
+    **The pose is not here and must not be.** An envelope's configuration may
+    state a room-frame pose, and that decides the tag too — but it is read off
+    the *edge's own endpoint* by `reg.store.open_edge`, which is what makes the
+    per-edge granularity express a case a per-envelope one cannot (issue #249):
+    envelope rows deduplicate and endpoints do not. This function is Layer A and
+    has no business reading a pose in any case.
+
+    Raises:
+        TypeError: `limits` is not a `Limits`, or `base_vel_source` is neither a
+            `VelocitySource` nor `None`.
+        ValueError: a source with no layer decision — a could-not-evaluate,
+            never the permissive answer.
+    """
+    return (_limits_input(limits), _velocity_input(base_vel_source))
+
+
+def envelope_layer(
+    limits: Limits, base_vel_source: VelocitySource | None, *, posed: bool
+) -> Layer:
+    """The layer an envelope belongs to: **the weakest of its inputs**.
+
+    `A` only if every input admits `A`; `B` if any of them does not. Three inputs
+    decide it and each one is a way something outside the robot reaches a region
+    whose geometry is Layer A either way:
+
+    * `limits.source` — bounds that are a property of the robot, or bounds
+      derived from something perceived. An ISO/TS 15066 speed cap on `qd_max` is
+      the case that matters (issue #84).
+    * `base_vel_source` — where the base's body-frame rates came from.
+      `base_motion_bounds` integrates them into the displacement term of
+      `outer_envelope`, which for a vehicle is the only bound a VETO rests on
+      (issue #163), and visual odometry is ordinary on a real base. `None` says
+      the run records no base velocity, which is a stated absence and not a
+      substituted `proprioceptive`.
+    * `posed` — whether the configuration this region was computed at states a
+      room-frame **pose**. A pose is Layer B structurally, on both `PoseSource`
+      values and with no localizer an argument (docs/sufficiency.md §5.6), so
+      this is the *presence* of a pose and never its provenance. There is no
+      mapping from a `PoseSource` to a layer in this package and there must not
+      be one.
+
+    **This is where §5.8 and §11 were settled together, which is why the
+    signature changed** (issue #252). Before it, the tag followed `Limits.source`
+    alone; the pose was patched on by `reg.graph.build` and guarded by
+    `reg.store.open_edge`, and the velocity was not read at all. Three places
+    deciding one tag is three answers to it, and the two that were open — the
+    posed-configuration case docs/sufficiency.md §5.8 held and the velocity case
+    docs/limitations.md §11 held — say in as many words that writing them
+    separately is how they end up disagreeing. So `base_vel_source` and `posed`
+    are **required and have no defaults**: a caller that has not thought about
+    either does not get an `A` for free, which is issue #84's rule applied to the
+    two doors it did not cover.
+
+    The state side of the *inner* envelope is Layer A by construction —
+    `compute_envelope` takes a `ProprioState` and that structure cannot name the
+    world — so nothing about `q` or `qd` enters this. That remains a residual and
+    not a settled question: `qd` carries no provenance at all, and
+    docs/limitations.md §11 is where the argument for why that is tolerable
+    lives.
+
+    Raises:
+        TypeError: `limits` is not a `Limits`, `base_vel_source` is neither a
+            `VelocitySource` nor `None`, or `posed` is not a `bool`.
+        ValueError: a source with no layer decision — a could-not-evaluate,
+            never the permissive answer.
+    """
+    if not isinstance(posed, bool):
+        raise TypeError(
+            f"envelope_layer takes posed as a bool, got {type(posed).__name__}. "
+            "It says whether the configuration this region was computed at "
+            "states a room-frame pose; a PoseSource is not that question and "
+            "there is no mapping from one to a layer (docs/sufficiency.md §5.6)."
+        )
+    basis = envelope_layer_basis(limits, base_vel_source)
+    if posed:
+        return "B"
+    return layer_from_basis(basis)
+
 
 
 def _checked_region(poly: object, fn: str) -> Polygon:

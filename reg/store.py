@@ -180,7 +180,7 @@ import os
 import platform
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -211,6 +211,19 @@ __all__ = [
     "POSE_SOURCES",
     "EDGE_SPECS",
     "LAYER_FROM_LIMIT_SOURCE",
+    "EDGE_BASIS_TABLE",
+    "BASIS_EDGE_TYPE",
+    "BASIS_LIMITS_SOURCE",
+    "BASIS_BASE_VEL_SOURCE",
+    "BASIS_BASE_POSE_SOURCE",
+    "LAYER_BASIS_INPUTS",
+    "BASIS_PROVENANCE",
+    "BASIS_NO_POSE",
+    "BASIS_NO_BASE_VELOCITY",
+    "ENVELOPE_BASIS_INPUTS",
+    "LayerInput",
+    "layer_from_basis",
+    "edge_basis",
     "NODE_TABLES",
     "OCCURRENCE_SPECS",
     "RECORD_KINDS",
@@ -362,7 +375,28 @@ __all__ = [
 #: file cannot tell an artifact built on its own platform from one built
 #: somewhere else, and `connect` refusing it is that could-not-evaluate rather
 #: than this machine assumed on the file's behalf.
-SCHEMA_VERSION = 12
+#: 13: `edge_layer_basis` arrived (issue #252, docs/self-describing.md gap 1)
+#: and `reg.envelope.envelope_layer` became the weakest of its inputs rather
+#: than of one of them. Every tagged edge now records **what its tag was
+#: computed from** — one row per input, each naming the input, the value it had
+#: in this build, where it was read, and the layer that input alone admits — and
+#: `open_edge` refuses an edge whose tag disagrees with that basis. Two things a
+#: v12 reader would be confidently wrong about, and the second is the worse one.
+#: **The table.** It cannot see `edge_layer_basis` at all, so *this file does
+#: not say what its tags were computed from* and *this reader cannot see what it
+#: says* are the same answer to it — which is the assertion this whole track
+#: exists to remove. **The tag.** A v12 `HAS_ENVELOPE` tag follows
+#: `Limits.source` and a posed configuration, and nothing else; a v13 tag also
+#: follows the provenance of the base velocity the outer set was integrated
+#: from (issue #156, docs/limitations.md §11). So a v12 reader meeting a v13
+#: file would read a `B` on an envelope whose limits are a datasheet's and whose
+#: configuration is bolted as a tag somebody got wrong, when it is the tag
+#: following a perceiver that reached the bound through a *value*. In the other
+#: direction a v13 reader meeting a v12 file cannot tell an artifact whose tags
+#: were checked against a basis from one that carries no basis to check them
+#: against, and `connect` refusing it is that could-not-evaluate rather than a
+#: basis assumed on the file's behalf.
+SCHEMA_VERSION = 13
 
 #: What each version changed, one line each, keyed by the version it arrived in.
 #: The comment block above is the argument; this is the part a **refusal** can
@@ -401,6 +435,10 @@ SCHEMA_CHANGES: dict[int, str] = {
     "gained acknowledgment_count, and the enforcement chain now runs over two "
     "record tables — so a passivation's clearing is in the artifact and a "
     "v11 reader would walk the verdicts alone and report a complete chain",
+    13: "the edge_layer_basis table arrived and a HAS_ENVELOPE tag became the "
+    "weakest of its inputs rather than of one of them — so every tag can be "
+    "checked against what it was computed from, and a base velocity out of a "
+    "perceiver moves the tag it always reached the bound through",
 }
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
@@ -722,6 +760,183 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
 }
 
 
+# --------------------------------------------------------------------------
+# THE LAYER BASIS (issue #252, tier 4 of docs/self-describing.md §8; gap 1).
+#
+# WHAT A `layer` TAG SAID BEFORE THIS. `A` or `B`, and nothing in the file said
+# what it was computed **from**. A reader could read it and not check it, which
+# is the assertion the self-describing track exists to remove — and the tag can
+# be wrong in a way no other column contradicts, because since issue #163 the
+# outer set integrates `state.base_vel` and since issue #156 a `BaseVelocity`
+# may be `DERIVED`.
+#
+# THE GRANULARITY IS PER EDGE, AND IT WAS MEASURED (issue #249). Per envelope is
+# cheaper in bytes and loses on every other axis: it answers 84 of a transition
+# view's 9,724 tagged edges, costs 3.8x per edge answered, and — the half that
+# decided it — **cannot express the case the basis exists for**. Envelope rows
+# deduplicate on `(envelope_hash, source, horizon)` while the pose taint is read
+# off the *edge's own endpoint* below, so two `HAS_ENVELOPE` edges over one
+# envelope row whose bases differ get one basis between them and one of them is
+# misstated. A reader who consults a misstatement is worse off than one who
+# consults silence. docs/self-describing.md §8 tier 4 carries the table.
+#
+# EACH ROW CARRIES THE LAYER THAT INPUT ALONE ADMITS, AND THAT IS NOT
+# REDUNDANT. It is what makes the tag checkable *from the file* rather than from
+# a vocabulary the reader has to already hold: `layer_from_basis` is the whole
+# check, and it is arithmetic over rows. It is also what keeps one mapping in
+# one place — `reg.envelope` decides what a `LimitSource` and a `VelocitySource`
+# admit, this module decides what an edge type and a stated pose admit, and
+# neither re-derives the other's answer in order to verify it.
+# --------------------------------------------------------------------------
+
+#: Where a tagged edge's basis lives, one row per input.
+EDGE_BASIS_TABLE = "edge_layer_basis"
+
+#: The edge type, which fixes the layer for every type but `HAS_ENVELOPE`.
+BASIS_EDGE_TYPE = "edge_type"
+
+#: `Limits.source`, which decides `HAS_ENVELOPE` (issue #84).
+BASIS_LIMITS_SOURCE = "limits_source"
+
+#: `BaseVelocity.source` — an input to the outer set the bound is projected
+#: from (issue #163), and since this schema an input to the tag as well.
+BASIS_BASE_VEL_SOURCE = "base_vel_source"
+
+#: `robot_config.base_pose_source` at an endpoint, which is what makes a
+#: `HAS_ENVELOPE` tag `B` and a fixed-`A` type a refusal (issue #166).
+BASIS_BASE_POSE_SOURCE = "base_pose_source"
+
+#: The four inputs a `layer` tag in this schema is computed from, spelled once.
+#: A fifth is a decision about what decides a tag, taken in `reg.envelope` and
+#: here together, and not a string to add to this tuple.
+LAYER_BASIS_INPUTS: tuple[str, ...] = (
+    BASIS_EDGE_TYPE,
+    BASIS_LIMITS_SOURCE,
+    BASIS_BASE_VEL_SOURCE,
+    BASIS_BASE_POSE_SOURCE,
+)
+
+#: Where each input is read from. A closed vocabulary of four short tokens: what
+#: this table costs is its **row count**, and a sentence somebody wrote into a
+#: column would make it the length of the sentence instead.
+BASIS_PROVENANCE: dict[str, str] = {
+    BASIS_EDGE_TYPE: "reg.store.EDGE_SPECS",
+    BASIS_LIMITS_SOURCE: "reg.types.Limits.source",
+    BASIS_BASE_VEL_SOURCE: "reg.types.BaseVelocity.source",
+    BASIS_BASE_POSE_SOURCE: "robot_config.base_pose_source",
+}
+
+#: What a `base_pose_source` row says for an endpoint whose configuration states
+#: no pose. **A stated absence, because it is what makes the `A` legitimate** —
+#: an omitted row would leave a reader unable to tell *this endpoint states no
+#: pose* from *nobody looked*, and those are the two things this table exists to
+#: separate.
+BASIS_NO_POSE = "none stated"
+
+#: What a `base_vel_source` row says for a run whose frames record no base
+#: velocity — every fixed-base fixture in this repository. Same rule as above,
+#: and it is a fact about the bound rather than a convenience: with no base
+#: velocity `reg.envelope.base_motion_bounds` returns `(0.0, 0.0)` exactly, so
+#: no perceiver reached the displacement term and the input admits `A`. It is
+#: **not** a substituted `proprioceptive`, which would make a run that recorded
+#: nothing indistinguishable from one that measured its own wheels.
+BASIS_NO_BASE_VELOCITY = "none recorded"
+
+#: The inputs a caller opening a `HAS_ENVELOPE` edge has to supply, in order.
+#: The fourth — the pose — is **not** among them and must not be: `open_edge`
+#: reads it off the endpoint, on the rule the layer column has always been under
+#: (no tag is written by an omission, and nobody has to remember this one).
+#: `reg.envelope.envelope_layer_basis` returns exactly this tuple.
+ENVELOPE_BASIS_INPUTS: tuple[str, ...] = (
+    BASIS_LIMITS_SOURCE,
+    BASIS_BASE_VEL_SOURCE,
+)
+
+
+@dataclass(frozen=True)
+class LayerInput:
+    """One input a `layer` tag was computed from, and the layer it alone admits.
+
+    Four short fields and no free prose: `name` is one of `LAYER_BASIS_INPUTS`,
+    `value` is what that input said in this build, `provenance` is the
+    `BASIS_PROVENANCE` token for where it was read, and `layer` is what this
+    input on its own would allow the edge to be. A basis is a tuple of these and
+    the tag is `layer_from_basis` over it.
+
+    `value` may not be blank. An empty value is the assertion the basis exists
+    to remove, arriving inside the thing that was supposed to remove it; where a
+    build has nothing to state, `BASIS_NO_POSE` and `BASIS_NO_BASE_VELOCITY` are
+    the stated absences to state instead.
+    """
+
+    name: str
+    value: str
+    provenance: str
+    layer: Layer
+
+    def __post_init__(self) -> None:
+        if self.name not in LAYER_BASIS_INPUTS:
+            raise StoreError(
+                f"{self.name!r} is not one of the inputs a layer tag is computed "
+                f"from ({', '.join(LAYER_BASIS_INPUTS)}). An input nobody "
+                "declared would be stored as part of the basis while deciding no "
+                "tag, which is a row a reader would check the tag against and be "
+                "wrong."
+            )
+        if not str(self.value).strip():
+            raise StoreError(
+                f"the {self.name} input was given no value. A basis row with an "
+                "empty value asserts exactly what the basis exists to stop being "
+                f"asserted; state {BASIS_NO_POSE!r} or "
+                f"{BASIS_NO_BASE_VELOCITY!r} where this build has nothing to "
+                "read."
+            )
+        if self.provenance != BASIS_PROVENANCE[self.name]:
+            raise StoreError(
+                f"the {self.name} input states provenance {self.provenance!r}; "
+                f"it is read from {BASIS_PROVENANCE[self.name]!r}. The "
+                "provenance is where this repository reads the input, not a "
+                "free field: a row naming somewhere else would send a reader "
+                "checking the tag to a column that decided nothing."
+            )
+        if self.layer not in ("A", "B"):
+            raise StoreError(
+                f"the {self.name} input was given layer {self.layer!r}. An input "
+                "admits 'A' or 'B'; a third value is a layer nobody defined the "
+                "relationship of to Claim 3's WHERE clause."
+            )
+
+
+def layer_from_basis(inputs: Sequence[LayerInput]) -> Layer:
+    """The layer a basis admits: the **weakest** of its inputs.
+
+    `B` if any input is `B`, `A` only if every one of them is. That is the whole
+    of *the tag follows the basis*: a region computed from a datasheet bound, at
+    a bolted configuration, from a base velocity a camera estimated, inherits the
+    camera — exactly as a fused estimator inherits its weakest input
+    (docs/sufficiency.md §5.9).
+
+    Raises:
+        StoreError: an empty basis. There is no weakest of nothing, and an empty
+            basis resolving to `A` would be the permissive answer arriving by an
+            omission — which is the failure the layer column has been guarded
+            against since issue #84.
+    """
+    items = tuple(inputs)
+    if not items:
+        raise StoreError(
+            "a layer tag cannot be derived from an empty basis. A tag with no "
+            "input under it is the assertion docs/self-describing.md gap 1 is "
+            "about, and 'A' is not what an absence resolves to."
+        )
+    for item in items:
+        if not isinstance(item, LayerInput):
+            raise StoreError(
+                f"a layer basis holds LayerInput rows, got {type(item).__name__}."
+            )
+    return "B" if any(item.layer == "B" for item in items) else "A"
+
+
 @dataclass(frozen=True)
 class OccurrenceSpec:
     """What one occurrence type is: its layer, its subject, and its metric.
@@ -812,6 +1027,7 @@ _SQL_EDGE_TYPES = ", ".join(f"'{name}'" for name in EDGE_SPECS)
 _SQL_NODE_KINDS = ", ".join(f"'{name}'" for name in NODE_TABLES)
 _SQL_ENVELOPE_SOURCES = ", ".join(f"'{name}'" for name in ENVELOPE_SOURCES)
 _SQL_POSE_SOURCES = ", ".join(f"'{name}'" for name in POSE_SOURCES)
+_SQL_BASIS_INPUTS = ", ".join(f"'{name}'" for name in LAYER_BASIS_INPUTS)
 _SQL_OCCURRENCE_TYPES = ", ".join(f"'{name}'" for name in OCCURRENCE_SPECS)
 _SQL_OCCURRENCE_ENTITY_TYPES = ", ".join(
     f"'{name}'" for name, spec in OCCURRENCE_SPECS.items() if spec.subject == "entity"
@@ -1122,6 +1338,37 @@ CREATE TABLE occurrence (
     recorder_version TEXT    NOT NULL,
     CHECK ((type IN ({_SQL_OCCURRENCE_ENTITY_TYPES})) = (entity_key IS NOT NULL)),
     CHECK ((type IN ({_SQL_OCCURRENCE_VALUED_TYPES})) = (value IS NOT NULL))
+);
+
+-- THE LAYER BASIS (issue #252, docs/self-describing.md gap 1). One row per
+-- input per tagged edge: what the `layer` one row up was computed from, what
+-- that input said in this build, where it was read, and the layer that input
+-- alone admits. `open_edge` writes it and refuses to write an edge whose tag
+-- disagrees with it, so the two cannot part company in a file this module
+-- produced — and a reader who did not trust that can recompute the tag from
+-- these rows with no document open, which is the whole point.
+--
+-- **Per edge and not per envelope**, measured rather than argued (issue #249):
+-- an envelope row is shared by deduplication while the pose taint is read off
+-- the edge's own endpoint, so a per-envelope basis has one answer to give two
+-- edges whose bases differ — and a misstatement is worse than a silence.
+--
+-- `seq` is the order the inputs were derived in, and it is what makes the basis
+-- of one edge a *sequence* rather than a set: two rows differing only in value
+-- — two endpoints reaching two configurations with different pose provenances —
+-- are two inputs and must not collide on a key.
+--
+-- No index. The basis is read one edge at a time, by primary key, from a report
+-- that already holds the edge; an index over `input` would be a page cost per
+-- level for a query nothing asks.
+CREATE TABLE edge_layer_basis (
+    edge_id    INTEGER NOT NULL REFERENCES edge (edge_id),
+    seq        INTEGER NOT NULL,
+    input      TEXT    NOT NULL CHECK (input IN ({_SQL_BASIS_INPUTS})),
+    value      TEXT    NOT NULL CHECK (length(trim(value)) > 0),
+    provenance TEXT    NOT NULL,
+    layer      TEXT    NOT NULL CHECK (layer IN ('A', 'B')),
+    PRIMARY KEY (edge_id, seq)
 );
 
 -- Claim 3 is `WHERE layer = ?`; queries 1-4 are `WHERE type = ? AND dst_key = ?`
@@ -2938,6 +3185,97 @@ def _room_frame_endpoint(
     return (str(row["config_id"]), str(row["base_pose"]))
 
 
+def _endpoint_pose_input(
+    conn: sqlite3.Connection, kind: str, node_key: int
+) -> LayerInput | None:
+    """The `base_pose_source` one edge endpoint rests on, as a basis row.
+
+    `_room_frame_endpoint`'s reach read for its *provenance* rather than for its
+    refusal: a `RobotConfig` endpoint, or an `Envelope` endpoint through the
+    configuration it was computed from. Every other kind reaches no configuration
+    and contributes no input — which is a fact about the endpoint and not a
+    missing row.
+
+    An endpoint that reaches a configuration stating **no** pose contributes
+    `BASIS_NO_POSE` at layer `A`. That is the stated absence `BASIS_NO_POSE`
+    exists for: it is what makes the `A` legitimate rather than unexamined.
+
+    **The layer here follows the presence of a pose and never its `PoseSource`.**
+    Both provenances are Layer B in the room (docs/sufficiency.md §5.6) and
+    `tests/test_layer_boundary.py::test_no_function_in_reg_maps_a_pose_provenance_to_a_layer`
+    is what keeps that mapping from being written; the source is recorded as the
+    row's *value*, which is a record and not a decision.
+    """
+    if kind == "RobotConfig":
+        row = conn.execute(
+            "SELECT base_pose_source FROM robot_config WHERE config_key = ?",
+            (int(node_key),),
+        ).fetchone()
+    elif kind == "Envelope":
+        row = conn.execute(
+            "SELECT c.base_pose_source AS base_pose_source FROM envelope e "
+            "JOIN robot_config c ON c.config_key = e.config_key "
+            "WHERE e.envelope_key = ?",
+            (int(node_key),),
+        ).fetchone()
+    else:
+        return None
+    if row is None:
+        return None
+    stated = row["base_pose_source"]
+    return LayerInput(
+        name=BASIS_BASE_POSE_SOURCE,
+        value=BASIS_NO_POSE if stated is None else str(stated),
+        provenance=BASIS_PROVENANCE[BASIS_BASE_POSE_SOURCE],
+        layer="A" if stated is None else "B",
+    )
+
+
+def edge_basis(conn: sqlite3.Connection, edge_id: int) -> tuple[LayerInput, ...]:
+    """What one edge's `layer` tag was computed from, read back off the file.
+
+    The rows `open_edge` wrote, in `seq` order, as the objects it wrote them
+    from. `layer_from_basis` over the result is the edge's tag, and a reader who
+    wants to check rather than trust compares the two.
+
+    Raises:
+        StoreError: this artifact holds no edge with that id, or holds the edge
+            and no basis for it. The second is a could-not-evaluate and never an
+            empty basis: an edge whose basis is missing is one whose tag cannot
+            be checked, and returning `()` for it would let `layer_from_basis`
+            refuse somewhere that could not say which edge it was about.
+    """
+    edge = conn.execute(
+        "SELECT layer FROM edge WHERE edge_id = ?", (int(edge_id),)
+    ).fetchone()
+    if edge is None:
+        raise StoreError(
+            f"no edge with edge_id={edge_id}, so there is no layer tag of it to "
+            "state a basis for."
+        )
+    rows = conn.execute(
+        f"SELECT input, value, provenance, layer FROM {EDGE_BASIS_TABLE} "  # noqa: S608
+        "WHERE edge_id = ? ORDER BY seq",
+        (int(edge_id),),
+    ).fetchall()
+    if not rows:
+        raise StoreError(
+            f"edge {edge_id} carries layer {str(edge['layer'])!r} and this "
+            f"artifact holds no {EDGE_BASIS_TABLE} row for it, so what that tag "
+            "was computed from is not in the file. That is a could-not-evaluate "
+            "about this edge and it does not resolve to 'the tag is right'."
+        )
+    return tuple(
+        LayerInput(
+            name=str(row["input"]),
+            value=str(row["value"]),
+            provenance=str(row["provenance"]),
+            layer=str(row["layer"]),  # type: ignore[arg-type]
+        )
+        for row in rows
+    )
+
+
 # --------------------------------------------------------------------------
 # Edges
 # --------------------------------------------------------------------------
@@ -3044,6 +3382,69 @@ def _edge_layer(
     return given
 
 
+def _edge_basis(
+    spec_layer: Layer | frozenset[Layer],
+    given: Sequence[LayerInput] | None,
+    edge_type: str,
+) -> tuple[LayerInput, ...]:
+    """The basis rows one edge's caller states. From the caller, or refused.
+
+    The same shape as `_edge_layer` and under the same rule: a layer that is a
+    property of the type has a basis that is a property of the type, so stating
+    one is refused; a layer that varies has a basis that varies, so *not* stating
+    one is refused and there is nothing to fall back on.
+
+    `ENVELOPE_BASIS_INPUTS` has to be complete and in order. A partial basis is
+    not a smaller basis — it is an input nobody stated, and an input nobody
+    stated is precisely what a reader checking the tag would take for an input
+    that did not matter.
+    """
+    if isinstance(spec_layer, str):
+        if given is not None:
+            raise StoreError(
+                f"a {edge_type} edge is always layer {spec_layer} by its type, so "
+                "its type is its basis and there is no basis to state; "
+                f"{[item.name for item in given]} was supplied. Writing it would "
+                "put a row in the file that decided nothing about the tag, which "
+                "is the misstatement the per-edge granularity was chosen over "
+                "(issue #249)."
+            )
+        return ()
+    if given is None:
+        raise StoreError(
+            f"a {edge_type} edge may be layer {sorted(spec_layer)}, so its tag "
+            "has to be checkable against what it was computed from, and no basis "
+            "was supplied (issue #252). reg.envelope.envelope_layer_basis is the "
+            f"answer: it returns {list(ENVELOPE_BASIS_INPUTS)} for the same "
+            "arguments reg.envelope.envelope_layer decides the tag from. A "
+            "tagged edge with no basis is refused rather than written, because a "
+            "basis that can be absent is one no reader can rely on."
+        )
+    items = tuple(given)
+    for item in items:
+        if not isinstance(item, LayerInput):
+            raise StoreError(
+                f"a {edge_type} basis holds LayerInput rows, got "
+                f"{type(item).__name__}."
+            )
+    names = tuple(item.name for item in items)
+    if names != ENVELOPE_BASIS_INPUTS:
+        raise StoreError(
+            f"a {edge_type} edge states basis inputs {list(names)}; its basis is "
+            f"{list(ENVELOPE_BASIS_INPUTS)}, in that order. "
+            + (
+                f"{BASIS_BASE_POSE_SOURCE!r} is not the caller's to state — "
+                "open_edge reads it off the endpoint — and "
+                if BASIS_BASE_POSE_SOURCE in names
+                else ""
+            )
+            + "a basis missing an input is not a shorter basis: it is an input "
+            "nobody stated, which reads downstream as an input that did not "
+            "matter."
+        )
+    return items
+
+
 def open_edge(
     conn: sqlite3.Connection,
     edge_type: str,
@@ -3057,6 +3458,7 @@ def open_edge(
     src_kind: str | None = None,
     dst_kind: str | None = None,
     layer: Layer | None = None,
+    basis: Sequence[LayerInput] | None = None,
 ) -> int:
     """Insert an edge and return its `edge_id`. `t_end` defaults to `t_start`.
 
@@ -3069,11 +3471,35 @@ def open_edge(
     The layer comes from `EDGE_SPECS` and never from the caller — except for the
     one edge type whose layer is not a property of its type. `layer` is required
     for `HAS_ENVELOPE`, whose region is Layer A or Layer B according to
-    `reg.envelope.envelope_layer(limits)` (issue #84), and refused for every
+    `reg.envelope.envelope_layer` (issues #84 and #252), and refused for every
     other type. The endpoint kinds work the same way: `src_kind` and `dst_kind`
     are required for `FOLLOWS`, which joins two declarations in the policy chain
     and any two of a verdict and an acknowledgment in the enforcement one, and
     are refused for every other type.
+
+    **`basis` travels with that layer and is required with it** (issue #252). It
+    is what the tag was computed from — `ENVELOPE_BASIS_INPUTS`, in order, from
+    `reg.envelope.envelope_layer_basis` — and it is refused for every type whose
+    layer is a property of its type, because for those the type *is* the basis
+    and this function writes that row itself. Three refusals come out of it and
+    each is a wrong answer that has no other detector:
+
+    * a `HAS_ENVELOPE` edge with **no** basis, or with a partial one. A basis
+      that can be absent is one a reader cannot rely on, so an edge whose tag
+      cannot be checked is not written rather than written unchecked.
+    * a basis that **disagrees** with the tag — `layer_from_basis` over the rows
+      is not the layer being written. That is the case a per-envelope basis
+      could not express (issue #249) and the reason this granularity was chosen.
+    * a basis naming an input this schema does not derive a tag from, or one
+      naming the pose, which is read off the endpoint here and never taken from
+      the call site.
+
+    The pose input is appended by this function from each endpoint that reaches
+    a `robot_config`, deduplicated: an edge whose two endpoints reach the same
+    provenance consulted it once, and two endpoints reaching different ones are
+    two inputs. That is the same read the room-frame refusal below makes, from
+    the same rows, so the refusal and the basis cannot disagree about what the
+    file says.
 
     The metric argument for the edge type is required and the other one must be
     absent: an `INTERSECTS` with no `overlap_area` answers "how much" with
@@ -3088,6 +3514,7 @@ def open_edge(
     resolved_src = _endpoint_kind(spec.src_kind, src_kind, edge_type, "src")
     resolved_dst = _endpoint_kind(spec.dst_kind, dst_kind, edge_type, "dst")
     resolved_layer = _edge_layer(spec.layer, layer, edge_type)
+    stated_basis = _edge_basis(spec.layer, basis, edge_type)
 
     metrics = {"overlap_area": overlap_area, "min_distance": min_distance}
     for name, value in metrics.items():
@@ -3146,6 +3573,49 @@ def open_edge(
             )
         )
 
+    # THE BASIS (issue #252). The rows the caller stated, plus the pose this
+    # function read for itself, plus — for a type whose layer is a property of
+    # its type — the type. Assembled here rather than at the call site for the
+    # reason the refusal above is here: an input a caller has to remember is an
+    # input a caller forgets, and a forgotten one is silence in a table whose
+    # whole purpose is to make silence impossible to mistake for a check.
+    full_basis: list[LayerInput] = list(stated_basis)
+    for kind, key in (
+        (resolved_src, src_key),
+        (resolved_dst, dst_key),
+    ):
+        found = _endpoint_pose_input(conn, kind, key)
+        if found is not None and found not in full_basis:
+            full_basis.append(found)
+    if isinstance(spec.layer, str):
+        # The type fixes the layer, so the type is the basis and the pose is not
+        # an input to it: an endpoint stating one is the refusal above, which
+        # this write never reaches. Reading the pose for a `B` edge would price
+        # a lookup that decided nothing.
+        full_basis = [
+            LayerInput(
+                name=BASIS_EDGE_TYPE,
+                value=edge_type,
+                provenance=BASIS_PROVENANCE[BASIS_EDGE_TYPE],
+                layer=spec.layer,
+            )
+        ]
+
+    derived = layer_from_basis(full_basis)
+    if derived != resolved_layer:
+        raise StoreError(
+            f"a {edge_type} edge would be written layer {resolved_layer!r}, and "
+            f"the basis it states admits {derived!r}: "
+            + "; ".join(
+                f"{item.name}={item.value!r} -> {item.layer}" for item in full_basis
+            )
+            + ". The tag follows the basis and the weakest input decides it "
+            "(issue #252), so a tag that disagrees with what it was computed "
+            "from is refused rather than written — a reader who consulted that "
+            "basis would be told the tag is checked and get the wrong answer, "
+            "which is worse than a file that carried no basis at all."
+        )
+
     t_start = float(t_start)
     t_end = t_start if t_end is None else float(t_end)
     if t_end < t_start:
@@ -3177,6 +3647,14 @@ def open_edge(
     edge_id = cursor.lastrowid
     if edge_id is None:  # pragma: no cover - sqlite3 always sets it on INSERT
         raise StoreError("sqlite did not return an edge_id for the inserted edge.")
+    conn.executemany(
+        f"INSERT INTO {EDGE_BASIS_TABLE} "  # noqa: S608
+        "(edge_id, seq, input, value, provenance, layer) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (edge_id, seq, item.name, item.value, item.provenance, item.layer)
+            for seq, item in enumerate(full_basis)
+        ],
+    )
     return int(edge_id)
 
 

@@ -3181,6 +3181,14 @@ def incident_report(
 # each came back where it was. Re-deriving and finding nothing moved is the
 # work this gate asks for — the failure it exists to prevent is the constant
 # moving *without* that pass, not the constant moving.
+#
+# Schema 13 is the other kind, and the one this gate was built for (issue #252).
+# `edge_layer_basis` arrived, so `layer-tag-basis` moved from
+# `READABLE-NOT-CHECKABLE` to `CHECKABLE` — the first of the four rows to move
+# since the report shipped, and it moved because a gap closed rather than
+# because a row was relabelled. The other three were re-derived against the new
+# table and came back where they were: the basis is not an environment, it is
+# not a polygon, and it is not a reachable-set boundary.
 # --------------------------------------------------------------------------
 
 #: The file carries what is needed to verify the claim.
@@ -3209,7 +3217,7 @@ COLD_READ_STATES = (CHECKABLE, READABLE_NOT_CHECKABLE, ABSENT, COULD_NOT_EVALUAT
 #: header: an artifact stating anything else is a could-not-evaluate in both
 #: directions, and this constant moving is a decision about every claim below
 #: rather than a version bump.
-COLD_READ_SCHEMA_VERSION = 12
+COLD_READ_SCHEMA_VERSION = 13
 
 CLAIM_ENVIRONMENT = "recording-environment"
 CLAIM_RECOMPUTE = "recompute-discarded-polygon"
@@ -3617,8 +3625,26 @@ def _recompute_claim(
 def _layer_basis_claim(conn: sqlite3.Connection) -> ColdReadClaim:
     """Can a `layer` tag be checked against what it was computed from?
 
-    No, and the file is what says so: every tagged edge carries the tag and no
-    column carries its basis. docs/self-describing.md gap 1, issue #227.
+    Since schema 13, yes — and this row is the one place in the report that
+    reports the *result* of running the check rather than only the file's
+    ability to support it (issue #252, docs/self-describing.md gap 1). Every
+    tagged edge carries a basis in `edge_layer_basis`: one row per input, each
+    naming what that input said and the layer it alone admits. The tag is the
+    weakest of them, `reg.store.layer_from_basis` is that arithmetic, and this
+    function runs it over the whole file with no document open.
+
+    Three states and the last never resolves to the first:
+
+    * every tagged edge has a basis and every tag equals it — **CHECKABLE**,
+      with the count checked and the inputs it was checked over.
+    * some tagged edge has no basis row — **READABLE-NOT-CHECKABLE**, which is
+      what a file written before schema 13 would be if it could reach here at
+      all, and what a file this reader cannot vouch for looks like.
+    * a tag and its basis disagree — **COULD-NOT-EVALUATE**. The file states
+      two answers to one question and does not settle which is its own, so
+      *what was this tag computed from* has no answer here. It must not be
+      reported as a pass, and it must not be reported as a missing basis
+      either: a basis that is present and contradicted is a finding.
     """
     counts = conn.execute(
         "SELECT layer, count(*) AS n FROM edge GROUP BY layer ORDER BY layer"
@@ -3635,23 +3661,80 @@ def _layer_basis_claim(conn: sqlite3.Connection) -> ColdReadClaim:
                 "cannot be checked."
             ),
         )
-    columns = tuple(
-        str(row["name"]) for row in conn.execute("PRAGMA table_info(edge)").fetchall()
-    )
     breakdown = ", ".join(f"{row['layer']}={row['n']}" for row in counts)
+
+    unbacked = int(
+        conn.execute(
+            f"SELECT count(*) AS n FROM edge e WHERE NOT EXISTS ("  # noqa: S608
+            f"SELECT 1 FROM {store.EDGE_BASIS_TABLE} b WHERE b.edge_id = e.edge_id)"
+        ).fetchone()["n"]
+    )
+    if unbacked:
+        return ColdReadClaim(
+            claim=CLAIM_LAYER_BASIS,
+            question=COLD_READ_QUESTIONS[CLAIM_LAYER_BASIS],
+            state=READABLE_NOT_CHECKABLE,
+            detail=(
+                f"{tagged} edge(s) carry a layer tag ({breakdown}) and every one "
+                f"of them is readable, but {unbacked} of them has no row in "
+                f"{store.EDGE_BASIS_TABLE} — so for those the file says what the "
+                "tag is and not what it was computed from. A tag with no basis "
+                "under it is an assertion, and a reader who trusts it is "
+                "trusting exactly what this row exists to measure."
+            ),
+        )
+
+    inputs_seen: set[str] = set()
+    disagreements: list[str] = []
+    for edge_id, layer in conn.execute(
+        "SELECT edge_id, layer FROM edge ORDER BY edge_id"
+    ).fetchall():
+        basis = store.edge_basis(conn, int(edge_id))
+        inputs_seen.update(item.name for item in basis)
+        derived = store.layer_from_basis(basis)
+        if derived != str(layer):
+            disagreements.append(
+                f"edge {int(edge_id)} is tagged {str(layer)!r} and its basis "
+                + "("
+                + "; ".join(f"{i.name}={i.value}->{i.layer}" for i in basis)
+                + f") admits {derived!r}"
+            )
+    named = ", ".join(sorted(inputs_seen))
+    if disagreements:
+        shown = "; ".join(disagreements[:3])
+        more = (
+            f" and {len(disagreements) - 3} more" if len(disagreements) > 3 else ""
+        )
+        return ColdReadClaim(
+            claim=CLAIM_LAYER_BASIS,
+            question=COLD_READ_QUESTIONS[CLAIM_LAYER_BASIS],
+            state=COULD_NOT_EVALUATE,
+            detail=(
+                f"{tagged} edge(s) carry a layer tag ({breakdown}) and each one "
+                f"carries a basis over {named}, so the check could be run — and "
+                f"it says no on {len(disagreements)} of them: {shown}{more}. The "
+                "file states two answers to what this tag was computed from and "
+                "settles neither, which is a could-not-evaluate about the tag "
+                "and never a pass. Nothing this repository writes can produce "
+                "it: reg.store.open_edge refuses such an edge rather than "
+                "storing it."
+            ),
+        )
     return ColdReadClaim(
         claim=CLAIM_LAYER_BASIS,
         question=COLD_READ_QUESTIONS[CLAIM_LAYER_BASIS],
-        state=READABLE_NOT_CHECKABLE,
+        state=CHECKABLE,
         detail=(
             f"{tagged} edge(s) carry a layer tag ({breakdown}) and every one of "
-            "them is readable. The edge table's columns are "
-            f"{', '.join(columns)} — none of them says what the tag was computed "
-            "from. meta[limits_source] states one input to the HAS_ENVELOPE tag, "
-            "and since issue #163 the outer set also reads the base velocity, "
-            "whose provenance is in the stream and not on the edge. So a tag and "
-            "its basis can disagree with nothing in the file to say so, and a "
-            "reader who trusts the tag is trusting an assertion (issue #227)."
+            f"them carries its basis in {store.EDGE_BASIS_TABLE} — one row per "
+            f"input, over {named}, each naming what that input said in this "
+            "build and the layer it alone admits. Checked here, all "
+            f"{tagged} tags equal the weakest of their own inputs, so a reader "
+            "holding this file checks the tag instead of trusting it (issue "
+            "#252). That is a pass on this check and not a claim that the inputs "
+            "are the right ones: which inputs decide a tag is a decision "
+            "recorded in reg.envelope and reg.store, and this file states the "
+            "ones that build derived."
         ),
     )
 

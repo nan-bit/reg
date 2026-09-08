@@ -3035,12 +3035,20 @@ def test_the_separation_a_mobile_artifact_reports_is_measured_from_where_it_drov
 # --------------------------------------------------------------------------
 
 #: What the cold read must say today, per claim, on an artifact built from
-#: `main` at `schema_version` 11 — the table in issue #231. Pinned here so that
-#: closing #227 or #228 **fails this file** and has to be updated deliberately.
+#: `main` — the table in issue #231. Pinned here so that closing a gap **fails
+#: this file** and has to be updated deliberately.
+#:
+#: **`layer-tag-basis` moved to CHECKABLE at schema 13** (issue #252), and it is
+#: the first of the four rows to move since the report shipped. It moved because
+#: `edge_layer_basis` puts the basis in the file and `reg.store.open_edge`
+#: refuses a tag that disagrees with it, so a reader recomputes the tag from the
+#: rows rather than trusting it. Editing this line was the deliberate act the
+#: pin exists to force; #228 is the remaining open gap and `reached-point` is
+#: still where it was.
 COLD_READ_TODAY = {
     query.CLAIM_ENVIRONMENT: query.CHECKABLE,
     query.CLAIM_RECOMPUTE: query.CHECKABLE,
-    query.CLAIM_LAYER_BASIS: query.READABLE_NOT_CHECKABLE,
+    query.CLAIM_LAYER_BASIS: query.CHECKABLE,
     query.CLAIM_REACHED_POINT: query.READABLE_NOT_CHECKABLE,
 }
 
@@ -3151,13 +3159,15 @@ def test_the_cold_read_says_the_same_four_things_about_every_shipped_fixture(
     Every fixture here is a different run — one fixed-arm scenario with no
     records, two with both record chains, one whose base drives, and one view at
     the occurrence resolution. The states do not depend on the run, and that is
-    the finding: the gaps are properties of the schema, so an assessor meets the
-    same two `READABLE-NOT-CHECKABLE` rows whatever they were handed.
+    the finding: what a file supports is a property of the schema, so an
+    assessor meets the same rows whatever they were handed — including on the
+    run whose base drove and whose every base rate came out of a perceiver.
 
-    **Closing a gap breaks this test**, which is the point of pinning it. When
-    #227 puts a basis in the file, `layer-tag-basis` stops being
-    READABLE-NOT-CHECKABLE and this expectation has to be edited by whoever
-    closed it.
+    **Closing a gap breaks this test**, which is the point of pinning it. Issue
+    #252 put the basis in the file and `layer-tag-basis` moved to CHECKABLE;
+    this expectation was edited by the change that closed it, which is the
+    sequence the pin exists to force. `reached-point` is #228's and is still
+    READABLE-NOT-CHECKABLE.
     """
     value = request.getfixturevalue(fixture)
     artifact = value if index is None else value[index]
@@ -3200,7 +3210,7 @@ def test_the_third_and_fourth_states_are_not_a_pass(artifact: Path) -> None:
         query.COLD_READ_CLAIMS
     )
     assert not set(report.checkable) & set(report.not_checkable)
-    assert query.CLAIM_LAYER_BASIS in report.not_checkable
+    assert query.CLAIM_LAYER_BASIS in report.checkable
     assert query.CLAIM_REACHED_POINT in report.not_checkable
 
 
@@ -3208,10 +3218,11 @@ def test_the_cold_read_is_pinned_to_this_build_s_schema() -> None:
     """The deliberate-update gate, and the whole reason the pin is a constant.
 
     Every state above is a property of a particular set of columns and `meta`
-    keys. #227 puts a basis column in the file and #228 puts a boundary in it;
+    keys. #227 put a basis table in the file and #228 will put a boundary in it;
     either one bumps `store.SCHEMA_VERSION`, and this fails the moment it moves
     — before an assessor is handed a report still calling a closed gap
-    *readable, not checkable*.
+    *readable, not checkable*. It is what made issue #252 re-derive all four
+    states against schema 13 rather than only the one it was about.
     """
     assert query.COLD_READ_SCHEMA_VERSION == store.SCHEMA_VERSION, (
         f"reg.query.COLD_READ_SCHEMA_VERSION is "
@@ -3371,14 +3382,20 @@ def test_a_newer_schema_is_could_not_evaluate_rather_than_a_stale_pass(
     assert "COLD_READ_SCHEMA_VERSION" in report[query.CLAIM_LAYER_BASIS].detail
 
 
-def test_an_intact_layer_column_is_readable_not_checkable(artifact: Path) -> None:
-    """THE THIRD NEGATIVE (issue #231), and the least obvious of the three.
+def test_an_intact_layer_column_is_checkable_against_its_basis(
+    artifact: Path,
+) -> None:
+    """THE THIRD ROW, after issue #252 closed the gap it used to report.
 
-    Nothing is broken in this file: every edge carries a well-formed `layer`
-    tag, and the healthy-looking case is exactly the one that must not come back
-    CHECKABLE. What is missing is the basis, and no column in the edge table
-    carries one — so the tag is an assertion, and *readable, not checkable* is
-    the honest verdict on it (docs/self-describing.md gap 1, issue #227).
+    Nothing is broken in this file: every edge carries a well-formed `layer` tag
+    and every one of them carries the basis it was computed from. So the check
+    runs — the report recomputes each tag as the weakest of its own inputs and
+    compares — and the healthy case comes back CHECKABLE with the count it
+    checked and the inputs it checked over, which is what separates a pass from
+    an assertion (docs/self-describing.md gap 1).
+
+    The two negatives are next door: a basis removed from the file, and a tag
+    edited to disagree with the basis under it.
     """
     conn = store.connect(artifact)
     try:
@@ -3386,9 +3403,14 @@ def test_an_intact_layer_column_is_readable_not_checkable(artifact: Path) -> Non
             str(row["layer"])
             for row in conn.execute("SELECT DISTINCT layer FROM edge").fetchall()
         }
-        columns = {
-            str(row["name"])
-            for row in conn.execute("PRAGMA table_info(edge)").fetchall()
+        tagged = int(
+            conn.execute("SELECT count(*) AS n FROM edge").fetchone()["n"]
+        )
+        inputs = {
+            str(row["input"])
+            for row in conn.execute(
+                f"SELECT DISTINCT input FROM {store.EDGE_BASIS_TABLE}"
+            ).fetchall()
         }
     finally:
         conn.close()
@@ -3398,12 +3420,65 @@ def test_an_intact_layer_column_is_readable_not_checkable(artifact: Path) -> Non
     )
 
     row = _cold_read(artifact)[query.CLAIM_LAYER_BASIS]
+    assert row.state == query.CHECKABLE
+    assert row.checkable
+    assert str(tagged) in row.detail, (
+        "the report does not say how many tags it checked, so a reader cannot "
+        "tell the check ran over the whole file"
+    )
+    assert all(name in row.detail for name in inputs), (
+        "the report does not name the inputs it checked over, so a reader "
+        "cannot tell what the tag was said to follow"
+    )
+
+
+def test_a_tag_with_no_basis_under_it_is_readable_not_checkable(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE NEGATIVE.** Delete the basis and the row must stop being a pass.
+
+    Without this, CHECKABLE above asserts a state the report has never been
+    shown able to leave — a `_layer_basis_claim` that returned CHECKABLE
+    unconditionally would pass every assertion in the test above. This feeds it
+    exactly the file the claim is about: tags intact, basis gone, which is what
+    every artifact this project built before schema 13 looks like.
+    """
+    stripped = _copy(
+        artifact,
+        tmp_path / "no-basis.sqlite",
+        f"DELETE FROM {store.EDGE_BASIS_TABLE}",
+    )
+    row = _cold_read(stripped)[query.CLAIM_LAYER_BASIS]
     assert row.state == query.READABLE_NOT_CHECKABLE
     assert not row.checkable
-    assert all(column in row.detail for column in columns), (
-        "the report does not name the columns it looked at, so a reader cannot "
-        "tell what it concluded the basis was missing from"
+    assert store.EDGE_BASIS_TABLE in row.detail
+
+
+def test_a_tag_that_disagrees_with_its_basis_is_could_not_evaluate(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE SECOND NEGATIVE**, and the state is deliberately the third one.
+
+    A tag whose basis admits the other layer is not a missing basis and it is not
+    a pass: the file states two answers to *what was this tag computed from* and
+    settles neither. Reporting it as READABLE-NOT-CHECKABLE would say the file
+    carries nothing when it carries a contradiction, and reporting it as
+    CHECKABLE would hand an assessor a verified-looking row over a tag the file
+    itself disputes.
+
+    `reg.store.open_edge` cannot produce this file, which is why the fixture is
+    made with `UPDATE`: the writer refuses such an edge. What is being tested is
+    that the *reader* says no when handed one anyway.
+    """
+    broken = _copy(
+        artifact,
+        tmp_path / "disagreeing.sqlite",
+        "UPDATE edge SET layer = 'A' WHERE layer = 'B'",
     )
+    row = _cold_read(broken)[query.CLAIM_LAYER_BASIS]
+    assert row.state == COULD_NOT_EVALUATE
+    assert not row.checkable
+    assert "admits" in row.detail
 
 
 def test_the_radius_answers_radially_and_says_so(artifact: Path) -> None:

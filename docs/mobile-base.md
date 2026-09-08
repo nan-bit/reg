@@ -794,7 +794,8 @@ eleven fixed-base ones, so their bytes are not identical — #166 is the precede
 for expecting movement. It was re-measured with `python -m reg.bench --resolution
 --seed 0` and the report is byte-identical to the one before the change:
 1,008,640 B / 2,503,680 B / 3,634,176 B, which at this fixture's 50 Hz control
-rate is 60.54 / 150.27 / 218.12 MB/h.
+rate was 60.54 / 150.27 / 218.12 MB/h — the figures published then, since
+republished by issue #252.
 
 One longer string in one `meta` row does not cross a page boundary, where #166's
 two nullable columns cost a record-header byte on every one of 2,560

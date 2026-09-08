@@ -271,6 +271,7 @@ from reg.envelope import (
     compute_envelope,
     envelope_hash,
     envelope_layer,
+    envelope_layer_basis,
     outer_envelope,
     outer_radius,
 )
@@ -298,6 +299,7 @@ from reg.types import (
     PoseSource,
     ProprioState,
     StateFrame,
+    VelocitySource,
 )
 
 __all__ = [
@@ -2168,6 +2170,57 @@ def _refuse_a_stream_whose_pose_recording_is_partial(
     )
 
 
+def _run_base_velocity_provenance(
+    frames: tuple[StateFrame, ...], csv_path: str | os.PathLike[str]
+) -> VelocitySource | None:
+    """This run's base-velocity provenance, or a refusal if the run has two.
+
+    `None` when no frame records a base velocity at all — every fixed-base
+    fixture in this repository — and the `VelocitySource` every frame agrees on
+    otherwise. Returned rather than recomputed by the caller so that the check
+    and the decision cannot disagree, which is
+    `_refuse_a_stream_whose_pose_recording_is_partial`'s rule and this is its
+    sibling.
+
+    **Whole-run, because the layer of a `HAS_ENVELOPE` edge is a whole-run
+    fact.** The tag follows the weakest of the envelope's inputs (issue #252) and
+    one of those inputs is where the base's rates came from; an envelope does not
+    become certifiable halfway through a run, and a stream that swaps odometry
+    for wheel encoders mid-run is describing two runs. There is no honest repair
+    — the frames that were `DERIVED` were derived, and reading the run as its
+    strongest half is exactly the mislabelling the tag exists to prevent — so it
+    is refused.
+
+    It cannot arrive from anything in this repository: `reg.scenarios.Scenario`
+    carries one `base_vel_source` for the whole fixture. That is why it is a
+    refusal and not a repair.
+    """
+    stated = [frame.base_vel.source for frame in frames if frame.base_vel is not None]
+    if not stated:
+        return None
+    distinct = {source for source in stated}
+    if len(distinct) > 1 or len(stated) != len(frames):
+        counts = ", ".join(
+            f"{source.value}={sum(1 for s in stated if s is source)}"
+            for source in sorted(distinct, key=lambda s: s.value)
+        )
+        silent = len(frames) - len(stated)
+        raise GraphBuildError(
+            f"{csv_path}: this run's {len(frames)} frame(s) do not agree on where "
+            f"the base velocity came from ({counts}"
+            + (f", and {silent} frame(s) record none" if silent else "")
+            + "). Since issue #252 the HAS_ENVELOPE tag is the weakest of the "
+            "envelope's inputs and the base velocity's provenance is one of "
+            "them, so this is a whole-run fact in the same way meta[base_frame] "
+            "is: an envelope does not become certifiable halfway through a run. "
+            "Building it would have to pick one answer for edges computed under "
+            "two, and reading the run as its stronger half is the mislabelling "
+            "the tag exists to prevent. A stream that swapped one provenance for "
+            "another is two runs and is refused as one."
+        )
+    return stated[0]
+
+
 def _refuse_a_posed_envelope_row_with_no_geometry(
     conn, csv_path: str | os.PathLike[str]
 ) -> None:
@@ -2343,6 +2396,11 @@ def build(
     # whole run: it decides `meta[base_frame]` and the layer of every
     # HAS_ENVELOPE edge below, and both are whole-run facts.
     drives = _refuse_a_stream_whose_pose_recording_is_partial(frames, csv_path)
+    # Where this run's base rates came from, once, for the same reason and with
+    # the same shape: it is one of the inputs the HAS_ENVELOPE tag is the
+    # weakest of (issue #252), and a run that changed its mind about it is two
+    # runs.
+    base_vel_source = _run_base_velocity_provenance(frames, csv_path)
     period = _frame_period(frames, csv_path)
     # How many distinct instants this run's frames can be addressed at, which is
     # `len(frames)` at or below `TIME_BASE_MAX_RATE_HZ` and fewer above it. Not a
@@ -2405,26 +2463,28 @@ def build(
             static_geoms[obstacle.entity_id] = geometry
         store.insert_entity(conn, HUMAN_ENTITY_ID, HUMAN_KIND, geometry=None)
 
-        # The layer every HAS_ENVELOPE edge in this build carries, decided once
-        # from the provenance of the limits (issue #84). `Limits` is frozen and
-        # one object drives the whole run, so this is a property of the build and
-        # not of a frame — an envelope does not become certifiable halfway
-        # through. Computed here rather than at the call site so that a build
-        # whose limits have no layer decision fails before it writes a row.
-        envelope_edge_layer = envelope_layer(limits)
-        if drives:
-            # ...unless the base drove, and then it is `B` whatever the limits
-            # say (issue #191). A HAS_ENVELOPE edge over a posed configuration
-            # rests on a room-frame pose, which is Layer B structurally and for
-            # which no localizer is an argument (docs/sufficiency.md §5.6), and
-            # the region on the far end of the edge is that pose applied to a
-            # body-frame set. `reg.store.open_edge` refuses an `A` on such an
-            # edge and names the pose; this states the `B` rather than being
-            # told about it one row too late, because the refusal is the guard
-            # and not the specification. The limits' own provenance cannot
-            # loosen this: `B` is the weaker tag and `envelope_layer` returning
-            # `B` already agrees with it.
-            envelope_edge_layer = "B"
+        # The layer every HAS_ENVELOPE edge in this build carries and what it
+        # was computed from, decided once and in one place (issues #84, #191,
+        # #252). All three inputs are whole-run facts — `Limits` is frozen and
+        # one object drives the run, the pose recording is whole-run by
+        # `_refuse_a_stream_whose_pose_recording_is_partial`, and the velocity
+        # provenance is whole-run by `_run_base_velocity_provenance` — so this
+        # is a property of the build and not of a frame. An envelope does not
+        # become certifiable halfway through.
+        #
+        # `posed` is the pose arriving here rather than being patched on
+        # afterwards, which is the change issue #252 made: the tag is the
+        # weakest of the envelope's inputs, computed by `envelope_layer`, and
+        # `reg.store.open_edge`'s refusal stays where it is as the guard. The
+        # guard and the specification were the same line before and were two
+        # answers to one question; now the guard checks an answer this build
+        # states, and it is unweakened — an artifact whose base drove still
+        # cannot carry a Layer A edge over the pose.
+        #
+        # Computed here rather than at the call site so that a build whose
+        # limits or velocity have no layer decision fails before it writes a row.
+        envelope_edge_layer = envelope_layer(limits, base_vel_source, posed=drives)
+        envelope_edge_basis = envelope_layer_basis(limits, base_vel_source)
 
         active: dict[tuple[str, str], _Active] = {}
         has_envelope: _Active | None = None
@@ -2484,6 +2544,7 @@ def build(
                 nodes.envelope_node(),
                 nodes.t,
                 layer=envelope_edge_layer,
+                basis=envelope_edge_basis,
             )
             has_envelope = _Active(edge_id, nodes.digest, "HAS_ENVELOPE")
 

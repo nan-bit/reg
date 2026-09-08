@@ -847,10 +847,16 @@ def claim_verdict(ratio: float) -> str:
 #: every readable identifier in the artifact now lives, and identifier text is
 #: exactly what that issue's measurement was about — attributing it to "indexes
 #: + schema" would hide the cost of the thing being traded against.
+#:
+#: `store.EDGE_BASIS_TABLE` is named for the same reason (issue #252). It is what
+#: the layer basis cost, it is the largest single share of the transition level's
+#: +26%, and a table whose bytes arrive labelled *indexes + schema* is a cost
+#: attributed to the one line of the breakdown a reader reads as unavoidable.
 _TABLE_LABELS: tuple[str, ...] = (
     "node",
     *[t for t, _ in store.NODE_TABLES.values()],
     "edge",
+    store.EDGE_BASIS_TABLE,
     "meta",
 )
 INDEX_LABEL = "indexes + schema"
@@ -4287,6 +4293,12 @@ def materialize_level(
             # retention rule itself, so the view still says what its own silences
             # mean.
             conn.execute("DELETE FROM edge")
+            # The basis goes with the edges it is about (issue #252). A basis
+            # row whose edge is gone is a row nothing can join to and nothing
+            # can check: it would price as retention this level does not have
+            # and would make the level's own cold read read a file that holds
+            # bases for edges it does not hold.
+            conn.execute(f"DELETE FROM {store.EDGE_BASIS_TABLE}")  # noqa: S608
             # `drop_nodes` and not `DELETE FROM envelope` (issue #55): the
             # readable identifier lives in `node` now, and a view that kept
             # identity rows for envelopes it no longer holds would measure as
@@ -4369,8 +4381,23 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
         for row in store.read_edges(conn)
         if str(row["type"]) in _EXPANDED_EDGE_TYPES
     ]
+    # The basis travels with the edge (issue #252). An expanded edge is the same
+    # relationship written once per frame, so its tag is the same tag and was
+    # computed from the same inputs; a per-frame view whose edges carried no
+    # basis would report `layer-tag-basis` as unbacked and would price a
+    # retention this level does not have. Read before the DELETE below, because
+    # afterwards there is nothing to read it off.
+    bases = {
+        int(row["edge_id"]): store.edge_basis(conn, int(row["edge_id"]))
+        for row in rows
+    }
     period = _asking(conn, "the per-frame view", frame_period)
     placeholders = ", ".join("?" for _ in _EXPANDED_EDGE_TYPES)
+    conn.execute(
+        f"DELETE FROM {store.EDGE_BASIS_TABLE} WHERE edge_id IN "  # noqa: S608
+        f"(SELECT edge_id FROM edge WHERE type IN ({placeholders}))",
+        _EXPANDED_EDGE_TYPES,
+    )
     conn.execute(
         f"DELETE FROM edge WHERE type IN ({placeholders})",  # noqa: S608 - literals
         _EXPANDED_EDGE_TYPES,
@@ -4396,8 +4423,9 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
                     f"contains no frame at period {period}. The per-frame view "
                     "would have to invent one."
                 )
+        basis = bases[int(row["edge_id"])]
         for t in covered:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO edge (type, layer, src_kind, src_key, dst_kind,
                                   dst_key, t_start, t_end, overlap_area,
@@ -4421,6 +4449,22 @@ def _expand_to_frames(conn: sqlite3.Connection) -> None:
                     row["overlap_area"],
                     row["min_distance"],
                 ),
+            )
+            conn.executemany(
+                f"INSERT INTO {store.EDGE_BASIS_TABLE} "  # noqa: S608
+                "(edge_id, seq, input, value, provenance, layer) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        cursor.lastrowid,
+                        seq,
+                        item.name,
+                        item.value,
+                        item.provenance,
+                        item.layer,
+                    )
+                    for seq, item in enumerate(basis)
+                ],
             )
 
 
@@ -5777,9 +5821,9 @@ class PublishedRetention:
 #: 50 Hz row). `tests/test_bench.py` holds each rate against that document, so
 #: a figure republished there without this table moving is caught.
 PUBLISHED_RETENTION: dict[str, PublishedRetention] = {
-    OCCURRENCE_LEVEL: PublishedRetention("60.54 MB/h", 265.0, 689.0),
-    TRANSITION_LEVEL: PublishedRetention("150.27 MB/h", 658.0, 277.0),
-    PER_FRAME_LEVEL: PublishedRetention("218.12 MB/h", 955.0, 191.0),
+    OCCURRENCE_LEVEL: PublishedRetention("60.72 MB/h", 266.0, 686.0),
+    TRANSITION_LEVEL: PublishedRetention("190.34 MB/h", 834.0, 219.0),
+    PER_FRAME_LEVEL: PublishedRetention("294.09 MB/h", 1288.0, 142.0),
 }
 
 
@@ -6231,11 +6275,21 @@ def run_outer_boundary_study(
 # precise and multiplies rows; per envelope is cheaper and coarser — and on a
 # project whose headline claim is a row count, neither description settles it.
 #
-# THIS RETAINS NOTHING. The schema is unchanged, nothing in `reg.store`
-# declares either table below, no build in this repository writes a basis row,
-# and `reg.query.cold_read` still reports `layer-tag-basis` exactly as it did.
-# The variant files are written under the work directory, measured, and left
-# there. Adopting a granularity is #227's to do, on these numbers.
+# THE DECISION WAS TAKEN ON THESE NUMBERS, AND THIS IS NOW THE RECORD OF IT
+# (issue #252). Per edge is adopted: `reg.store.EDGE_BASIS_TABLE` is in the
+# schema, `reg.store.open_edge` writes a basis for every tagged edge and refuses
+# a tag that disagrees with it, and `reg.query.cold_read` reports
+# `layer-tag-basis` as `CHECKABLE`. What is below still prices *the question*,
+# which means pricing it against the schema as it stood while the question was
+# open: `cost_layer_basis` drops the adopted table from its copy before it
+# measures anything, so `today` is the pre-adoption artifact and the table this
+# section publishes stays the table that decided the question. Pricing a basis
+# onto a file that already has one would double-count it and describe no
+# granularity at all.
+#
+# THIS STILL RETAINS NOTHING. Neither table below is declared by `reg.store`,
+# no build writes a row into either, and the variant files are written under the
+# work directory, measured, and left there.
 #
 # MEASURED, NOT PROJECTED, on #230's terms and for its reason: each option is
 # priced by copying a level's view, creating the table that option would create,
@@ -6268,9 +6322,14 @@ def run_outer_boundary_study(
 # regroomed around.
 # --------------------------------------------------------------------------
 
-#: The artifact as it is built today: a `layer` on every edge and no basis for
-#: any of them. The baseline the other two options' movement is measured
-#: against, and the row the report's benefit column is read against.
+#: The artifact as it was built while the question was open: a `layer` on every
+#: edge and no basis for any of them. The baseline the other two options'
+#: movement is measured against, and the row the report's benefit column is read
+#: against. Since issue #252 it is reconstructed rather than found — the adopted
+#: `reg.store.EDGE_BASIS_TABLE` is dropped from the copy — because the movement
+#: this study reports is the movement a reader finds in
+#: `docs/self-describing.md` §8 tier 4, and a baseline that quietly became the
+#: adopted schema would report zero for the thing that was adopted.
 LAYER_BASIS_TODAY = "today"
 
 #: Option A — per edge. Every tagged edge records what its tag was computed
@@ -6300,12 +6359,16 @@ LAYER_BASIS_RETAINS: dict[str, str] = {
     ),
 }
 
-#: Where a per-edge basis would land. Both tables exist only inside the variant
-#: files this study writes: nothing in `reg.store` declares either.
-LAYER_BASIS_EDGE_TABLE = "edge_layer_basis"
+#: Where this study's per-edge basis lands. **Named apart from the adopted
+#: table on purpose** (issue #252): `reg.store.EDGE_BASIS_TABLE` is the real one
+#: now, and a study that wrote into it would be measuring the schema it was
+#: supposed to be pricing an alternative to. Both tables below exist only inside
+#: the variant files this study writes.
+LAYER_BASIS_EDGE_TABLE = "priced_edge_layer_basis"
 
-#: Where a per-envelope basis would land. Same status as the table above.
-LAYER_BASIS_ENVELOPE_TABLE = "envelope_layer_basis"
+#: Where a per-envelope basis would land. Same status as the table above, and
+#: option B was not adopted, so this one exists nowhere else at all.
+LAYER_BASIS_ENVELOPE_TABLE = "priced_envelope_layer_basis"
 
 #: The edge type, which fixes the layer for every type but `HAS_ENVELOPE`.
 BASIS_EDGE_TYPE = "edge_type"
@@ -6699,6 +6762,15 @@ def cost_layer_basis(
 
     conn = store.connect(out_path)
     try:
+        # The pre-adoption baseline, reconstructed (issue #252). Every option
+        # is priced against the schema as it stood while the granularity was an
+        # open question, including `today` — otherwise `today` would already
+        # carry the basis this study exists to price and the movement would come
+        # back as zero for the option that was adopted.
+        conn.execute(f"DROP TABLE IF EXISTS {store.EDGE_BASIS_TABLE}")  # noqa: S608
+        conn.commit()
+        conn.execute("VACUUM")
+        conn.commit()
         edges = conn.execute(
             "SELECT edge_id, type, layer, src_kind, src_key, dst_kind, dst_key "
             "FROM edge ORDER BY edge_id"
@@ -6774,7 +6846,9 @@ def cost_layer_basis(
             )
         if option != LAYER_BASIS_TODAY:
             conn.commit()
-            # Outside the transaction, for `materialize_level`'s reason.
+            # Outside the transaction, for `materialize_level`'s reason. The
+            # `today` variant was already vacuumed above, when the adopted table
+            # came out of it.
             conn.execute("VACUUM")
             conn.commit()
 
@@ -8154,16 +8228,20 @@ def _layer_basis_section(study: LayerBasisStudy) -> list[str]:
         "",
         "## The layer basis — per edge against per computed envelope, priced",
         "",
-        "**Nothing here is adopted, and nothing here is retained.** The schema is",
-        "unchanged, no build in this repository writes a basis row, and",
-        "`reg.query.cold_read` still reports `layer-tag-basis` exactly as it did.",
-        "Issue #227 is where the decision is taken; this is the measurement it",
-        "needs.",
+        "**Option A was adopted on these numbers, and this section is the record",
+        "of the measurement rather than an open question** (issue #252). Per edge",
+        "is in the schema as `reg.store.EDGE_BASIS_TABLE`, `reg.store.open_edge`",
+        "refuses a tag that disagrees with its basis, and `reg.query.cold_read`",
+        "reports `layer-tag-basis` as `CHECKABLE` where it used to report",
+        "`READABLE-NOT-CHECKABLE`. **This study still retains nothing**: it",
+        "reconstructs the pre-adoption baseline by dropping that table from its",
+        "own copy, writes its variants under the work directory, and leaves the",
+        "artifact it priced untouched.",
         "",
-        "An edge carries `layer='A'` or `'B'` and no column says what that tag was",
-        "computed from, so it can be read and not checked",
-        "(`docs/self-describing.md` gap 1). The two options are the two",
-        "granularities §7 question 1 asks between.",
+        "Before the adoption an edge carried `layer='A'` or `'B'` and no column",
+        "said what that tag was computed from, so it could be read and not checked",
+        "(`docs/self-describing.md` gap 1). The two options below are the two",
+        "granularities §7 question 1 asked between.",
         "",
     ]
     lines += _table(
@@ -8414,25 +8492,29 @@ def _layer_basis_finding(study: LayerBasisStudy) -> list[str]:
         "— it can only be right where every edge over an envelope shares a basis, "
         "and nothing in the schema makes that true.",
         "",
-        "**Neither option changes what `reg.query.cold_read` reports today**, "
-        "because neither is adopted: `layer-tag-basis` stays "
-        "`READABLE-NOT-CHECKABLE`. Adopting either would bump "
-        "`reg.store.SCHEMA_VERSION`, which makes every cold-read state a "
-        "`COULD-NOT-EVALUATE` until `reg.query.COLD_READ_SCHEMA_VERSION` is moved "
-        "deliberately and each claim re-derived. Under A the claim could then "
-        "become `CHECKABLE`; under B it could not, because the report's four "
-        "states are one state per claim and a basis covering "
+        "**What adoption did to `reg.query.cold_read`.** Under A the claim became "
+        "`CHECKABLE`, and it is (issue #252): the basis is per edge, so every "
+        "tagged edge has one and the report recomputes each tag from its own "
+        "rows. Under B it could not have, because the report's four states are "
+        "one state per claim and a basis covering "
         f"{covered:.2f}% of tagged edges does not make the claim checkable — it "
-        "would need the claim itself narrowed to `HAS_ENVELOPE` edges, which is a "
-        "second decision #227 would be taking without saying so.",
+        "would have needed the claim itself narrowed to `HAS_ENVELOPE` edges, "
+        "which is a second decision taken without saying so. The adoption bumped "
+        "`reg.store.SCHEMA_VERSION` to 13, which makes every cold-read state a "
+        "`COULD-NOT-EVALUATE` on a file this reader was not derived against until "
+        "`reg.query.COLD_READ_SCHEMA_VERSION` is moved deliberately and each "
+        "claim re-derived — which is what #252 did, for all four.",
         "",
-        "**One input neither option can state from the file.** "
-        "`base_vel_source` is an input to the outer set that no table retains, so "
-        "both options write it as *not retained*. Recording the basis at either "
-        "granularity therefore does not by itself close gap 1: the builder has to "
-        "write that value too, which is a change to what is retained and not to "
-        "where it is retained. That is a third thing #227 must decide and it is "
-        "orthogonal to this one.",
+        "**One input neither option could state from the file, and what closed "
+        "it.** `base_vel_source` is an input to the outer set that no table "
+        "retained, so both options price it as *not retained* — which is why the "
+        "line above says recording the basis at either granularity does not by "
+        "itself close gap 1. The builder had to write the value too, which is a "
+        "change to what is retained and not to where. Issue #252 took that third "
+        "decision with this one: the value is on the basis row itself, so a run "
+        "whose base rates came out of a perceiver and one whose came off its "
+        "wheels produce different bases, and `reg.envelope.envelope_layer` reads "
+        "it into the tag.",
         "",
     ]
 

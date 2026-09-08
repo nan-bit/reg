@@ -83,6 +83,8 @@ from reg.enforce import (
 from reg.envelope import (
     compute_envelope,
     envelope_hash,
+    envelope_layer,
+    envelope_layer_basis,
     outer_envelope,
     outer_envelope_looseness,
     outer_radius,
@@ -110,6 +112,13 @@ from reg.tolerances import (
 )
 from reg.types import Obstacle, ProprioState, StateFrame, VelocitySource
 from reg.world import DEMO_WORLD
+
+#: What a `HAS_ENVELOPE` edge over this repository's own limits states as its
+#: basis (issue #252). `open_edge` requires it beside the layer, so every
+#: hand-built edge below states it exactly as `reg.graph.build` does: no fixture
+#: here records a base velocity, and the pose input is read off the endpoint and
+#: is never the caller's to state.
+BASIS = envelope_layer_basis(DEMO_WORLD.limits, None)
 
 LIMITS = DEMO_WORLD.limits
 HUMAN_RADIUS = DEMO_WORLD.human_radius
@@ -759,19 +768,37 @@ def _assert_a_room_frame_pose_is_layer_b(tmp_path: Path) -> None:
     conn = _posed_artifact(tmp_path / "posed.sqlite")
     try:
         assert store.open_edge(
-            conn, "HAS_ENVELOPE", "cfg_bolted", "env_bolted", 0.0, layer="A"
+            conn,
+            "HAS_ENVELOPE",
+            "cfg_bolted",
+            "env_bolted",
+            0.0,
+            layer="A",
+            basis=BASIS,
         )
 
         with pytest.raises(store.StoreError, match="base_pose") as excinfo:
             store.open_edge(
-                conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="A"
+                conn,
+                "HAS_ENVELOPE",
+                "cfg_posed",
+                "env_posed",
+                0.0,
+                layer="A",
+                basis=BASIS,
             )
         message = str(excinfo.value)
         assert "cfg_posed" in message, message
         assert "Layer A" in message or "layer 'A'" in message, message
 
         assert store.open_edge(
-            conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="B"
+            conn,
+            "HAS_ENVELOPE",
+            "cfg_posed",
+            "env_posed",
+            0.0,
+            layer="B",
+            basis=BASIS,
         )
 
         # And it reaches through the envelope, which is the half that would be
@@ -1328,7 +1355,14 @@ def seeded(tmp_path: Path):
 def test_a_backwards_interval_is_refused(seeded) -> None:
     with pytest.raises(store.StoreError, match="backwards"):
         store.open_edge(
-            seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 1.0, t_end=0.5, layer="A"
+            seeded,
+            "HAS_ENVELOPE",
+            "cfg_0",
+            "env_0",
+            1.0,
+            t_end=0.5,
+            layer="A",
+            basis=BASIS,
         )
 
 
@@ -1355,7 +1389,9 @@ def test_the_schema_refuses_an_untagged_layer(seeded) -> None:
 
 
 def test_extending_an_edge_backwards_is_refused(seeded) -> None:
-    edge_id = store.open_edge(seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer="A")
+    edge_id = store.open_edge(
+        seeded, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer="A", basis=BASIS
+    )
     store.extend_edge(seeded, edge_id, 2.0)
     with pytest.raises(store.StoreError, match="backwards"):
         store.extend_edge(seeded, edge_id, 1.0)
@@ -7057,11 +7093,16 @@ def test_two_builds_of_a_mobile_fixture_are_byte_identical(tmp_path: Path) -> No
 # *a base velocity's provenance is recorded, and nothing reads it* — is a
 # property of an artifact somebody can open rather than of a paragraph.
 #
-# WHAT THESE TESTS ARE FOR, SAID PLAINLY: they assert the defect. They are
-# expected to fail when issue #227 makes the tag follow the value, and that is
-# the point of writing them — a fixture whose wrong tag nothing asserts is a
-# fixture that quietly starts passing for the wrong reason, and the next reader
-# has no way to tell whether the tag is right or merely unexamined.
+# WHAT THESE TESTS WERE FOR AND WHAT THEY ARE FOR NOW. They asserted the defect,
+# in §11's own words, and they were written to go red when the tag started
+# following the value — which is what issue #252 did. They went red, and this is
+# the deliberate rewrite that was the point of writing them that way. What they
+# assert now is the repair, in the form the issue names: the two runs differ in
+# one field of one stream, and the artifacts they build differ in **exactly the
+# rows that record what each tag was computed from**. Neither the tags nor the
+# geometry moves, because the base drove in both and a posed configuration was
+# already Layer B; what moves is that a reader can now tell which fact the tag
+# followed, which is the whole of docs/self-describing.md gap 1.
 # --------------------------------------------------------------------------
 
 
@@ -7098,42 +7139,41 @@ def test_the_stream_carries_the_perceived_provenance_the_artifact_does_not(
     assert {f.base_vel.source for f in frames} == {VelocitySource.DERIVED}
 
 
-def test_the_envelope_tag_of_a_perceived_base_velocity_is_decided_without_it(
+def test_the_envelope_tag_of_a_perceived_base_velocity_now_follows_it(
     derived_velocity_built, transit_artifact: Path
 ) -> None:
-    """**THE DEFECT, ASSERTED IN THE WORDS docs/limitations.md §11 USES.**
+    """**THE REPAIR, ASSERTED WHERE THE DEFECT WAS** (issue #252).
 
-    *The tag does not follow the value.* `reg.envelope.envelope_layer` decides
-    the `HAS_ENVELOPE` edge's layer from `Limits.source` alone and nothing maps
-    a `VelocitySource` member to a `Layer`, so for this run — whose every base
-    rate came out of a perceiver, and whose rates
-    `reg.envelope.base_motion_bounds` integrates into the displacement term of
-    the outer set — that function answers **`A`**.
+    *The tag follows the basis.* `reg.envelope.envelope_layer` is the weakest of
+    its inputs, and one of those inputs is where the base's body-frame rates came
+    from — which `reg.envelope.base_motion_bounds` integrates into the
+    displacement term of the outer set, the only bound a VETO rests on for a
+    vehicle. So for a run whose every rate came out of a perceiver the function
+    answers **`B`**, on the bounds alone and with no pose in the question, where
+    before issue #252 it answered `A`.
 
-    **And the edges in the file come out `B` anyway**, which is why this is a
-    defect worth a fixture rather than one worth a sentence. The base drove, so
-    every configuration states a room-frame pose and a `HAS_ENVELOPE` edge over
-    one is Layer B whatever the limits say (issue #191). The tag is therefore
-    right here by coincidence: `mobile_transit`, whose rates came off wheel
-    encoders, produces exactly the same tag on exactly the same edges. A
-    `WHERE layer = 'B'` query returns both, and nothing in either file says
-    which of the two facts the answer followed.
-
-    **This test is expected to go red when issue #227 lands** and the layer
-    becomes the weakest of its inputs. Updating it then is the deliberate act
-    this file exists to force; a green suite over a changed tag would be the
-    failure.
+    The rest of the assertion is what has *not* changed, and it is why the fixture
+    pair is still worth having. The base drove in both runs, so every
+    configuration states a room-frame pose and every `HAS_ENVELOPE` edge is `B`
+    whatever the velocity says (issue #191). The tag is therefore the same in the
+    two files — the coincidence the defect version of this test named — and what
+    separates them now is the basis under it, which the next test is about.
     """
-    from reg.envelope import envelope_layer
-
     _, derived = derived_velocity_built
     limits = MOBILE_SCENARIOS["mobile_derived_velocity"].world.limits
+    transit_limits = MOBILE_SCENARIOS["mobile_transit"].world.limits
 
-    assert envelope_layer(limits) == "A", (
-        "envelope_layer no longer answers `A` for a run whose base velocity is "
-        "DERIVED. If that is issue #227 landing, this test and the fixture's "
-        "comment in reg/scenarios.py both have to be rewritten — the gap they "
-        "record has closed, and docs/limitations.md §11 with them"
+    assert envelope_layer(limits, VelocitySource.DERIVED, posed=False) == "B", (
+        "envelope_layer answers `A` for a run whose base velocity is DERIVED. "
+        "That is the defect docs/limitations.md §11 recorded and issue #252 "
+        "closed: the tag is the weakest of its inputs, and a rate assembled by "
+        "looking at the room is not a Layer A input"
+    )
+    # The control, so this is a test about the velocity and not about a function
+    # that has started answering `B` for everything.
+    assert (
+        envelope_layer(transit_limits, VelocitySource.PROPRIOCEPTIVE, posed=False)
+        == "A"
     )
 
     derived_edges = _edges(derived, edge_type="HAS_ENVELOPE")
@@ -7143,41 +7183,46 @@ def test_the_envelope_tag_of_a_perceived_base_velocity_is_decided_without_it(
     assert Counter(row["layer"] for row in derived_edges) == Counter(
         row["layer"] for row in transit_edges
     ), (
-        "the two runs' envelope tags now differ. The only thing that differs "
-        "between the runs is `base_vel_source`, so something has started "
-        "reading it — which is issue #227's work and not a passing detail"
+        "the two runs' envelope tags now differ. Both runs drove, so a posed "
+        "configuration already makes every one of these edges `B`; the velocity "
+        "moves the *basis* and not the tag, and a tag that moved here would mean "
+        "one of the two runs has stopped recording its pose"
     )
 
 
-def test_nothing_the_artifact_records_distinguishes_a_perceived_base_velocity(
+def test_the_artifact_now_records_what_each_tag_was_computed_from(
     derived_velocity_built, transit_artifact: Path
 ) -> None:
-    """**The cost §11 states, and the sharpest form it takes** (issue #229).
+    """**The cost §11 stated, paid** (issues #229, #252).
 
-    Not merely that the tag was decided without the provenance — the provenance
-    is not in the file at all. `robot_config` carries the base's *pose* and no
-    base velocity (`reg.graph._recompute` says so where it passes `base_vel=
-    None`), so the `derived` in the stream reaches the artifact nowhere: every
-    node, every edge, every envelope and every configuration of this build
-    equals `mobile_transit`'s, and the two artifacts part company only in the
-    scenario name inside `meta[source_provenance]`.
+    The defect version of this test asserted that the two builds differ *only* in
+    `meta[source_provenance]` — that the `derived` in the stream reached the
+    artifact nowhere, so a reader could not tell which of two facts a `B` tag
+    followed. That was docs/self-describing.md gap 1 against a real file.
 
-    That is [`docs/self-describing.md`](../docs/self-describing.md) §1 gap 1
-    against a real file — *the tag is written; what it was computed from is
-    not* — and it is the measurement §7 question 1 asks for: there is no
-    per-edge basis to make finer or coarser today, because there is no basis.
+    Now they differ in `edge_layer_basis` as well, and in nothing else: same
+    nodes, same edges, same envelopes, same configurations, same tags — and one
+    row per `HAS_ENVELOPE` edge saying `base_vel_source=derived` where the other
+    says `base_vel_source=proprioceptive`. That row is the answer to *what was
+    this tag computed from*, and it is the only thing in either file that
+    distinguishes a perceived base rate from a measured one.
 
-    **The negative is the last assertion.** The two builds must not be equal
-    everywhere, or this test would pass for a bug in itself — two reads of one
-    file, or a builder that had stopped recording which run it built.
+    **The negatives are the last two assertions.** The difference must be
+    confined to the basis — a difference in `envelope` or `edge` would mean the
+    provenance had started moving the geometry or the tag, which is not what was
+    built — and the two bases must disagree on the velocity row and agree
+    everywhere else, or this would pass for two builds that differ for some other
+    reason entirely.
     """
     _, derived = derived_velocity_built
 
     differing = _tables_that_differ(derived, transit_artifact)
-    assert differing == {"meta"}, (
-        f"the two builds differ in {sorted(differing)}. A difference outside "
-        "`meta` means something about the base velocity's provenance now "
-        "reaches the artifact, which is issue #227's work arriving"
+    assert differing == {"meta", store.EDGE_BASIS_TABLE}, (
+        f"the two builds differ in {sorted(differing)}. Since issue #252 the "
+        f"base velocity's provenance reaches exactly one table, "
+        f"{store.EDGE_BASIS_TABLE}; a difference anywhere else means it has "
+        "started moving the geometry or the tag, and a difference in *neither* "
+        "means the artifact has stopped recording it again"
     )
 
     derived_meta = _meta_rows(derived)
@@ -7185,15 +7230,57 @@ def test_nothing_the_artifact_records_distinguishes_a_perceived_base_velocity(
     keys = {k for k in set(derived_meta) | set(transit_meta)
             if derived_meta.get(k) != transit_meta.get(k)}
     assert keys == {_META_SOURCE_PROVENANCE}, (
-        f"the two builds' meta differs in {sorted(keys)}; the run name is the "
-        "only thing in this artifact that a reader could resolve the base "
-        "velocity's provenance back through"
+        f"the two builds' meta differs in {sorted(keys)}; the provenance is "
+        "recorded per edge and not per run, so meta must still differ only in "
+        "the name of the run that was built"
     )
     assert "mobile_derived_velocity" in derived_meta[_META_SOURCE_PROVENANCE]
     assert "derived" not in transit_meta[_META_SOURCE_PROVENANCE], (
         "the control names this fixture too, so the assertion above says "
         "nothing about which run was built"
     )
+
+    derived_rows = _basis_rows(derived)
+    transit_rows = _basis_rows(transit_artifact)
+    assert derived_rows and transit_rows
+    velocity = {
+        name: {
+            (row["value"], row["layer"])
+            for row in rows
+            if row["input"] == store.BASIS_BASE_VEL_SOURCE
+        }
+        for name, rows in (("derived", derived_rows), ("transit", transit_rows))
+    }
+    assert velocity["derived"] == {("derived", "B")}, velocity["derived"]
+    assert velocity["transit"] == {("proprioceptive", "A")}, velocity["transit"]
+    other = {
+        name: sorted(
+            (row["edge_id"], row["seq"], row["input"], row["value"], row["layer"])
+            for row in rows
+            if row["input"] != store.BASIS_BASE_VEL_SOURCE
+        )
+        for name, rows in (("derived", derived_rows), ("transit", transit_rows))
+    }
+    assert other["derived"] == other["transit"], (
+        "the two bases differ somewhere other than the velocity row. The runs "
+        "differ in one field of one stream, so a second difference is a build "
+        "that has stopped being the comparison this fixture pair is for"
+    )
+
+
+def _basis_rows(path: Path) -> list[dict[str, object]]:
+    """Every `edge_layer_basis` row in an artifact, as plain dicts."""
+    conn = store.connect(path)
+    try:
+        return [
+            dict(row)
+            for row in conn.execute(
+                f"SELECT edge_id, seq, input, value, provenance, layer "
+                f"FROM {store.EDGE_BASIS_TABLE} ORDER BY edge_id, seq"
+            )
+        ]
+    finally:
+        conn.close()
 
 
 def _tables_that_differ(left: Path, right: Path) -> set[str]:

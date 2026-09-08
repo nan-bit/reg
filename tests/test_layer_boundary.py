@@ -67,7 +67,13 @@ from reg import graph, store
 from reg.chain import GENESIS_HASH, UNSIGNED_MAC
 from reg.declare import Declaration, envelope_wkb
 from reg.identity import RunIdentity
-from reg.envelope import envelope_hash, envelope_layer, outer_envelope, outer_radius
+from reg.envelope import (
+    envelope_hash,
+    envelope_layer,
+    envelope_layer_basis,
+    outer_envelope,
+    outer_radius,
+)
 from reg.stream import write_frames
 from reg.types import (
     BasePose,
@@ -106,6 +112,14 @@ DATASHEET_LIMITS = Limits(**_BOUNDS, source=LimitSource.PROPRIOCEPTIVE)
 #: The ISO/TS 15066 case: the same `qd_max`, but arrived at by capping the
 #: commanded speed with a separation distance somebody's perceiver measured.
 SSM_LIMITS = Limits(**_BOUNDS, source=LimitSource.DERIVED)
+
+#: What a `HAS_ENVELOPE` edge over each of those states as its basis (issue
+#: #252). `open_edge` requires it beside the layer, so a hand-built store here
+#: states it exactly as `reg.graph.build` does: no fixture in this file records
+#: a base velocity, and the pose input is read off the endpoint and is never the
+#: caller's to state.
+BASIS_DATASHEET = envelope_layer_basis(DATASHEET_LIMITS, None)
+BASIS_SSM = envelope_layer_basis(SSM_LIMITS, None)
 
 #: Coarse envelope parameters — 4 samples is the corner count for a two-link
 #: arm. These tests are about the layer tag, not envelope fidelity.
@@ -737,9 +751,15 @@ def test_limits_refuse_a_source_that_is_not_a_limit_source(bad: object) -> None:
 
 
 def test_envelope_layer_follows_the_provenance_of_the_bounds() -> None:
-    """The mapping, in one place: datasheet bounds are A, derived bounds are B."""
-    assert envelope_layer(DATASHEET_LIMITS) == "A"
-    assert envelope_layer(SSM_LIMITS) == "B"
+    """The mapping, in one place: datasheet bounds are A, derived bounds are B.
+
+    The other two inputs are held at their `A` values — no base velocity, no
+    pose — so this asserts what the bounds decide and nothing else. That they
+    have to be *stated* rather than omitted is issue #252's rule and is asserted
+    next door.
+    """
+    assert envelope_layer(DATASHEET_LIMITS, None, posed=False) == "A"
+    assert envelope_layer(SSM_LIMITS, None, posed=False) == "B"
 
 
 def test_every_limit_source_has_a_layer_decision() -> None:
@@ -750,7 +770,81 @@ def test_every_limit_source_has_a_layer_decision() -> None:
     checked at the vocabulary level, so adding an enum member fails here first.
     """
     for source in LimitSource:
-        assert envelope_layer(Limits(**_BOUNDS, source=source)) in ("A", "B")
+        assert envelope_layer(
+            Limits(**_BOUNDS, source=source), None, posed=False
+        ) in ("A", "B")
+
+
+def test_every_velocity_source_has_a_layer_decision() -> None:
+    """The same, one type over (issue #252). `VelocitySource` decides a layer.
+
+    `reg.envelope.base_motion_bounds` integrates `state.base_vel` into the
+    displacement term of the outer set, so a rate out of visual odometry reaches
+    the bound a VETO rests on. A member added with no layer decided must reach
+    `envelope_layer` as a refusal and not as an `A`, which is issue #84's rule
+    applied to the door docs/limitations.md §11 recorded and did not close.
+    """
+    for source in VelocitySource:
+        assert envelope_layer(DATASHEET_LIMITS, source, posed=False) in ("A", "B")
+    assert envelope_layer(
+        DATASHEET_LIMITS, VelocitySource.PROPRIOCEPTIVE, posed=False
+    ) == "A"
+    assert envelope_layer(
+        DATASHEET_LIMITS, VelocitySource.DERIVED, posed=False
+    ) == "B"
+
+
+def test_the_envelope_layer_is_the_weakest_of_its_inputs() -> None:
+    """**THE DECISION ISSUE #252 TOOK.** Any `B` input makes the tag `B`.
+
+    Three inputs, eight combinations, and `A` in exactly one of them. This is
+    what docs/sufficiency.md §5.8 and docs/limitations.md §11 both said had to
+    be settled once: before this, the bounds decided the tag, the pose was
+    patched on by `reg.graph.build`, and the velocity decided nothing at all —
+    three places, and the two documents say in as many words that writing them
+    separately is how they end up disagreeing.
+    """
+    cases = {
+        (LimitSource.PROPRIOCEPTIVE, None, False): "A",
+        (LimitSource.PROPRIOCEPTIVE, None, True): "B",
+        (LimitSource.PROPRIOCEPTIVE, VelocitySource.PROPRIOCEPTIVE, False): "A",
+        (LimitSource.PROPRIOCEPTIVE, VelocitySource.DERIVED, False): "B",
+        (LimitSource.PROPRIOCEPTIVE, VelocitySource.DERIVED, True): "B",
+        (LimitSource.DERIVED, None, False): "B",
+        (LimitSource.DERIVED, VelocitySource.PROPRIOCEPTIVE, False): "B",
+        (LimitSource.DERIVED, VelocitySource.DERIVED, True): "B",
+    }
+    for (limit_source, vel_source, posed), expected in cases.items():
+        got = envelope_layer(
+            Limits(**_BOUNDS, source=limit_source), vel_source, posed=posed
+        )
+        assert got == expected, (
+            f"limits={limit_source}, base_vel={vel_source}, posed={posed} gave "
+            f"{got!r} and the weakest of those inputs is {expected!r}. A tag "
+            "that is not the weakest of its inputs is a Layer A answer that "
+            "inherits a perceiver, which is the whole of docs/limitations.md §11."
+        )
+
+
+def test_the_two_state_side_inputs_have_no_default() -> None:
+    """**THE NEGATIVE.** A caller who has not thought about them gets no 'A'.
+
+    `CLAUDE.md`: never invent a default. A `posed=False` or a
+    `base_vel_source=None` this function supplied on the caller's behalf would
+    be indistinguishable downstream from one a build actually established, and
+    it would hand back the permissive answer — which is precisely what issue #84
+    made `Limits.source` required to stop.
+    """
+    with pytest.raises(TypeError):
+        envelope_layer(DATASHEET_LIMITS)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        envelope_layer(DATASHEET_LIMITS, None)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="posed as a bool"):
+        envelope_layer(DATASHEET_LIMITS, None, posed="yes")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="VelocitySource or None"):
+        envelope_layer(
+            DATASHEET_LIMITS, PoseSource.LOCALIZED, posed=False  # type: ignore[arg-type]
+        )
 
 
 def test_layer_of_refuses_the_edge_type_whose_layer_is_not_its_type() -> None:
@@ -1165,15 +1259,132 @@ def test_an_envelope_edge_may_not_be_written_without_stating_its_layer(
         )
 
         with pytest.raises(store.StoreError, match="no default to fall back on"):
-            store.open_edge(conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0)
-        with pytest.raises(store.StoreError, match="cannot be layer"):
-            store.open_edge(conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer="C")
-        # Both legal answers are accepted, so the refusal above is about the
-        # omission and not about the argument being unusable.
-        for layer in ("A", "B"):
-            assert store.open_edge(
-                conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer=layer
+            store.open_edge(
+                conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, basis=BASIS_DATASHEET
             )
+        with pytest.raises(store.StoreError, match="cannot be layer"):
+            store.open_edge(
+                conn,
+                "HAS_ENVELOPE",
+                "cfg_0",
+                "env_0",
+                0.0,
+                layer="C",
+                basis=BASIS_DATASHEET,
+            )
+        # Both legal answers are accepted, so the refusal above is about the
+        # omission and not about the argument being unusable. Each states the
+        # basis that admits it — issue #252: the tag follows the basis, so an
+        # 'A' beside a derived basis is a different refusal, asserted below.
+        for layer, basis in (("A", BASIS_DATASHEET), ("B", BASIS_SSM)):
+            assert store.open_edge(
+                conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer=layer, basis=basis
+            )
+    finally:
+        conn.close()
+
+
+def test_an_envelope_edge_may_not_be_written_without_stating_its_basis(
+    tmp_path: Path,
+) -> None:
+    """**THE NEGATIVE ISSUE #252 SHIPS WITH.** Two refusals, and they differ.
+
+    A tag with no basis under it is the assertion the basis exists to remove,
+    and a tag *contradicted* by its basis is worse than both — a reader who
+    consults it is told the tag is checked and gets the wrong answer, which is
+    the case a per-envelope basis could not express and the reason the per-edge
+    granularity was chosen (issue #249).
+    """
+    conn = store.create(tmp_path / "basis.sqlite", record_tables=False)
+    try:
+        store.insert_robot_config(
+            conn,
+            "cfg_0",
+            "0.000000,0.000000",
+            "0.000000,0.000000",
+            base_pose=None,
+            base_pose_source=None,
+        )
+        store.insert_envelope(
+            conn,
+            "env_0",
+            envelope_hash="a1" * 32,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id="cfg_0",
+            horizon=0.1,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+        )
+
+        # No basis at all.
+        with pytest.raises(store.StoreError, match="no basis was supplied"):
+            store.open_edge(conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer="A")
+        # A partial one — an input nobody stated reads downstream as an input
+        # that did not matter.
+        with pytest.raises(store.StoreError, match="in that order"):
+            store.open_edge(
+                conn,
+                "HAS_ENVELOPE",
+                "cfg_0",
+                "env_0",
+                0.0,
+                layer="A",
+                basis=BASIS_DATASHEET[:1],
+            )
+        # The pose is not the caller's to state; open_edge reads it.
+        with pytest.raises(store.StoreError, match="not the caller's to state"):
+            store.open_edge(
+                conn,
+                "HAS_ENVELOPE",
+                "cfg_0",
+                "env_0",
+                0.0,
+                layer="B",
+                basis=(
+                    BASIS_DATASHEET[0],
+                    store.LayerInput(
+                        name=store.BASIS_BASE_POSE_SOURCE,
+                        value="localized",
+                        provenance=store.BASIS_PROVENANCE[
+                            store.BASIS_BASE_POSE_SOURCE
+                        ],
+                        layer="B",
+                    ),
+                ),
+            )
+        # And a basis that disagrees with the tag.
+        with pytest.raises(store.StoreError, match="the basis it states admits"):
+            store.open_edge(
+                conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer="A", basis=BASIS_SSM
+            )
+        with pytest.raises(store.StoreError, match="the basis it states admits"):
+            store.open_edge(
+                conn,
+                "HAS_ENVELOPE",
+                "cfg_0",
+                "env_0",
+                0.0,
+                layer="B",
+                basis=BASIS_DATASHEET,
+            )
+        # A fixed-layer type has its type for a basis and takes none.
+        with pytest.raises(store.StoreError, match="there is no basis to state"):
+            store.open_edge(
+                conn, "SEPARATION", "cfg_0", "obs", 0.0, basis=BASIS_DATASHEET
+            )
+        # The positive control: the same edge with the basis its tag follows.
+        edge_id = store.open_edge(
+            conn, "HAS_ENVELOPE", "cfg_0", "env_0", 0.0, layer="A", basis=BASIS_DATASHEET
+        )
+        stored = store.edge_basis(conn, edge_id)
+        assert [item.name for item in stored] == [
+            store.BASIS_LIMITS_SOURCE,
+            store.BASIS_BASE_VEL_SOURCE,
+            store.BASIS_BASE_POSE_SOURCE,
+        ]
+        assert store.layer_from_basis(stored) == "A"
     finally:
         conn.close()
 
@@ -1394,7 +1605,7 @@ def test_the_limit_source_mapping_cannot_be_borrowed_for_a_pose() -> None:
     """
     pose = BasePose(**_POSE, source=PoseSource.DEAD_RECKONED)
     with pytest.raises(TypeError, match="envelope_layer takes a Limits"):
-        envelope_layer(pose)  # type: ignore[arg-type]
+        envelope_layer(pose, None, posed=False)  # type: ignore[arg-type]
 
 
 def test_propriostate_cannot_hold_a_base_pose() -> None:
@@ -1561,17 +1772,46 @@ def test_an_edge_resting_on_a_room_frame_pose_cannot_be_layer_a(
     conn = _posed_store(tmp_path / "posed.sqlite", "localized")
     try:
         assert store.open_edge(
-            conn, "HAS_ENVELOPE", "cfg_bolted", "env_bolted", 0.0, layer="A"
+            conn,
+            "HAS_ENVELOPE",
+            "cfg_bolted",
+            "env_bolted",
+            0.0,
+            layer="A",
+            basis=BASIS_DATASHEET,
         )
 
         with pytest.raises(store.StoreError, match="pose in the room") as excinfo:
             store.open_edge(
-                conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="A"
+                conn,
+                "HAS_ENVELOPE",
+                "cfg_posed",
+                "env_posed",
+                0.0,
+                layer="A",
+                basis=BASIS_DATASHEET,
             )
         assert "cfg_posed" in str(excinfo.value)
-        assert store.open_edge(
-            conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="B"
+        posed_edge = store.open_edge(
+            conn,
+            "HAS_ENVELOPE",
+            "cfg_posed",
+            "env_posed",
+            0.0,
+            layer="B",
+            basis=BASIS_DATASHEET,
         )
+        assert posed_edge
+        # And the basis says *why* it is B, which is the half issue #252 added:
+        # the caller stated a datasheet bound and no base velocity, both `A`,
+        # and the pose read off the endpoint is what makes the weakest input B.
+        stored = store.edge_basis(conn, posed_edge)
+        assert [(item.name, item.layer) for item in stored] == [
+            (store.BASIS_LIMITS_SOURCE, "A"),
+            (store.BASIS_BASE_VEL_SOURCE, "A"),
+            (store.BASIS_BASE_POSE_SOURCE, "B"),
+        ]
+        assert store.layer_from_basis(stored) == "B"
     finally:
         conn.close()
 
@@ -1594,8 +1834,31 @@ def test_the_taint_is_the_pose_and_never_its_provenance(
     try:
         with pytest.raises(store.StoreError, match="pose in the room"):
             store.open_edge(
-                conn, "HAS_ENVELOPE", "cfg_posed", "env_posed", 0.0, layer="A"
+                conn,
+                "HAS_ENVELOPE",
+                "cfg_posed",
+                "env_posed",
+                0.0,
+                layer="A",
+                basis=BASIS_DATASHEET,
             )
+        # And the basis a `B` edge over each provenance stores is identical
+        # apart from the value: the layer follows the *presence* of a pose and
+        # never the member, so a `pose_layer` inlined here would show up as one
+        # of these rows carrying an `A`.
+        edge_id = store.open_edge(
+            conn,
+            "HAS_ENVELOPE",
+            "cfg_posed",
+            "env_posed",
+            0.0,
+            layer="B",
+            basis=BASIS_DATASHEET,
+        )
+        pose_row = store.edge_basis(conn, edge_id)[-1]
+        assert pose_row.name == store.BASIS_BASE_POSE_SOURCE
+        assert pose_row.value == pose_source
+        assert pose_row.layer == "B"
     finally:
         conn.close()
 

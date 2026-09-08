@@ -1,0 +1,165 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "242-1788843952686232691-758139",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "duration_s": 2828,
+      "harness": "wake-runner",
+      "harness_version": "v0.4.8 (6a04cc329)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "503977ca09480def5d58db88d5112c083c6a06bf1b902fd1e17c2a41496d5476",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "5944831cb52e8c6e4a115ce3f9dfb2321fa4593d65aff76291723f84fb66feb4",
+        "authored_by": "a28ea138dacb2470d71368581eefe471eb17c147d8cdc6bf881cb2c9bd1abf83",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "79ef7aed01469458e070e37db38d67150dd708b1512c6ce3cac5b91f30c8c106",
+        "concluded": "3bdb1d33a115bc8e4c628784eb20e71236491067c16713270e6443616964a6cc",
+        "coverage": "e6d3cbf3512a791ac8d4162caeb8a2d911016bdce36399ad9d6f45145a4f51cc",
+        "declared": "6f1cc901e5b644f01354fe0ba254f9651af92da2016a56968530d9dc185d86ea",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "14063697603e22d600d336bee6cff12c8be93509ce84a0642918d89b2aef1753",
+        "out_of_scope": "7cf4ccd35bb87335ed8bff3e9bbcabb3b67011a27139aa52fc3daf78915a7fcd",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "ec3be11c8ecb5b7ae171606edf37c36c7b3184dc787fe50f57d18a2cb9b8e2a8",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "6e634d557cdb10c8c2c8691fbdf030bc8986e444",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/self-describing.md",
+        "reg/query.py",
+        "tests/test_doc_shape.py",
+        "tests/test_query.py"
+      ],
+      "edge_kinds": [
+        "file-reference",
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/self-describing.md",
+        "reg/bench.py",
+        "reg/query.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_doc_shape.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_layout.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_readme.py",
+        "tests/test_scenarios.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 50
+      },
+      "changed_unreadable": [
+        "docs/self-describing.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 1
+      },
+      "unresolved_edges": [
+        {
+          "at": "reg/chain.py:496",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "reg/commit.py:452",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "scripts/record_rosbag2.py:239",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1468",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1470",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "docs/self-describing.md",
+        "reg/query.py",
+        "tests/test_doc_shape.py",
+        "tests/test_query.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 242,
+    "out_of_scope": [
+      "reg/bench.py",
+      "scripts/check_bench_determinism.py",
+      "tests/test_baseline_stream_description.py",
+      "tests/test_bench.py",
+      "tests/test_bench_determinism.py",
+      "tests/test_graph.py",
+      "tests/test_incumbent_encoding.py",
+      "tests/test_layout.py",
+      "tests/test_published_figures.py",
+      "tests/test_readme.py",
+      "tests/test_scenarios.py"
+    ],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "out-of-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "6e634d557cdb10c8c2c8691fbdf030bc8986e444"
+      },
+      "name": "auto/issue-242"
+    }
+  ]
+}

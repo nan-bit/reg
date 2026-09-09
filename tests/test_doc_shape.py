@@ -481,7 +481,13 @@ PARAGRAPH_MAX_WORDS = 120
 #        the gap that closed and §12's restatement of §1; the three that rose
 #        were then cut back under the threshold rather than banked, so the net
 #        is one paragraph and it is lowered rather than held
-LONG_PARAGRAPHS_MAX = 89
+#    88  today, 2026-09-08, after #242: `docs/self-describing.md` went 4 -> 3.
+#        The paragraph that fell below the threshold is §8 tier 2's account of
+#        which environment keys the recompute path compares, which is now a
+#        pointer at §1's gap 2 — cut to pay for §2's fifth state and Claim 4's
+#        two rows, not for this ceiling, and lowered here for the reason the
+#        #241 row gives
+LONG_PARAGRAPHS_MAX = 88
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

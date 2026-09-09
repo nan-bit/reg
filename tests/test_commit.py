@@ -55,7 +55,7 @@ from reg.commit import (
     verify_commitment,
     write_witness,
 )
-from reg.identity import RunIdentity
+from reg.identity import DPIA_NONE, Disclosures, RunIdentity
 from reg.scenarios import SCENARIOS
 from reg.sim import provenance
 from reg.stream import write_frames
@@ -74,6 +74,18 @@ TEST_IDENTITY = RunIdentity.declare(
     run_start="2026-08-21T09:00:00Z",
     unit_id="unit-test-arm-1",
     operator_id="op-test",
+)
+
+#: What every build in this file states about the obligations
+#: `docs/limitations.md` §8 names (issue #125). Required at build with no
+#: default, and declared once here for `TEST_IDENTITY`'s reason: a value that varied
+#: per call would make two artifacts in this file two different runs. These
+#: tests are not about the disclosure keys — `tests/test_personal_data.py` and
+#: `tests/test_graph.py` are — so they state one and move on.
+TEST_DISCLOSURES = Disclosures.declare(
+    worker_notice="not-given",
+    dpia_reference=DPIA_NONE,
+    operator_id_kind="pseudonym",
 )
 
 WITNESS_ID = "site-safety-officer"
@@ -119,6 +131,7 @@ def _build(tmp_path: Path, name: str, *, witness: Witness | None, records=True) 
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         records=_records(csv, scn, tmp_path) if records else None,
         commitment=None if witness is None else WitnessCommitter(witness),
@@ -203,6 +216,7 @@ def test_an_empty_chain_has_the_genesis_hash_as_its_head(tmp_path: Path) -> None
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         records=graph.AttestationRecords(
             declarations=(), verdicts=(), acknowledgments=()
@@ -656,6 +670,7 @@ def test_a_supplier_that_is_not_callable_is_refused(tmp_path: Path) -> None:
             tmp_path / "bad.sqlite",
             scn.world.limits,
             identity=TEST_IDENTITY,
+            disclosures=TEST_DISCLOSURES,
             human_radius=scn.world.human_radius,
             records=_records(csv, scn, tmp_path),
             commitment="not a committer",
@@ -681,6 +696,7 @@ def test_a_supplier_that_commits_to_other_heads_is_refused(tmp_path: Path) -> No
             tmp_path / "liar.sqlite",
             scn.world.limits,
             identity=TEST_IDENTITY,
+            disclosures=TEST_DISCLOSURES,
             human_radius=scn.world.human_radius,
             records=_records(csv, scn, tmp_path),
             commitment=wrong,

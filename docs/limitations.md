@@ -553,7 +553,7 @@ limits whether it may be **kept**, which is a different kind of limit.
 
 **Nothing here is legal advice and nothing here is a claim of compliance.** The
 obligations below are named because they exist and because this project does not
-discharge any of them. That is the same register as the seven sections above it.
+discharge any of them.
 
 **What the artifact records about a person.** Per shift:
 
@@ -570,91 +570,98 @@ discharge any of them. That is the same register as the seven sections above it.
 `operator_id` with `run_start_utc` is what turns the rest from telemetry into
 personal data: together they select a shift, and a shift resolves against any
 roster to a person. The proximity and contact record then attaches to that
-person. Retained for six months and **handed to an assessor or an insurer** —
-which is the use this project was built for — that is processing of personal data
-in an employment context, and in Germany it is also a technical device objectively
+person. Retained for six months and **handed to an assessor or an insurer** — the
+use this project was built for — that is processing of personal data in an
+employment context, and in Germany it is also a technical device objectively
 suitable for monitoring workers' behaviour or performance under **§87(1)(6)
-BetrVG**, which is subject to works-council co-determination *before the robot
-runs*, not before the artifact is exported.
+BetrVG**, subject to works-council co-determination *before the robot runs*.
 
 **The retention window is bounded from both sides and this project has only ever
 cited one of them.** AI Act **Art. 19** (providers) and **Art. 26(6)** (deployers)
 set the six-month period *"unless provided otherwise in applicable Union or
 national law, **in particular Union law on the protection of personal data**"*.
-The floor is expressly subordinate on its own face. So for the Layer B half of an
+The floor is expressly subordinate on its face. So for the Layer B half of an
 artifact six months may be a **ceiling** rather than a floor, and
 [`docs/plan.md`](plan.md)'s Claim 1 is citation-correct and
 **argument-incomplete**: it prices retaining an artifact for a window that
-data-protection law may forbid it from filling. The two bounds come from different
-instruments and this project has measured against one of them.
+data-protection law may forbid it from filling.
 
-**Two further obligations, named and not discharged.**
+**Two further obligations, recorded and still undischarged.**
 
 - **Art. 26(7).** A deployer who is an employer must inform workers'
   representatives and the affected workers *before* putting a high-risk AI system
-  into service at the workplace. Nothing in this repository produces that notice
-  or records that it was given, and `meta` has no key that would say so.
+  into service at the workplace. Nothing here gives that notice; what the
+  artifact carries is the deployer's statement of which case it was built in, in
+  `meta[worker_notice]`.
 - **A DPIA.** GDPR **Art. 35(1)** requires one where processing is likely to
   result in a high risk to data subjects; systematic monitoring of employees is on
   the Art. 35(4) lists national supervisory authorities publish, which is why one
   is near-certain here. Whether this processing also lands inside Art. 35(3)'s
-  three enumerated cases is not a question this project is competent to answer.
-  That there is no DPIA is not in doubt, and that is the part stated here.
+  three enumerated cases is not a question this project can answer.
+  That there is no DPIA is not in doubt, and `meta[dpia_reference]` states it in
+  words rather than by omission.
+
+**Three keys, so that silence stops reading as a stated negative.** An assessor
+holding a file that says nothing cannot separate *a notice given and no key
+recording it* from *none given* — the inversion `commitment: none` and a required
+`Limits.source` already refuse. So the deployer states three facts at build time,
+each required with no default (`reg.identity.Disclosures`):
+
+- `meta[worker_notice]` — `given <yyyy/mm/dd>`, `not-given`, or
+  `not-applicable <reason>`;
+- `meta[dpia_reference]` — where an assessment lives, or `none`;
+- `meta[operator_id_kind]` — whether `operator_id` is a `pseudonym`, whose roster
+  is held outside the artifact, or a `direct-identifier` such as a payroll
+  number. Both are opaque strings, and neither is inferable from the value.
+
+**Recording is not discharging.** Nothing here adjudicates whether a notice was
+adequate, an assessment owed or a pseudonym enough, and an artifact carrying the
+three keys is not thereby lawful to retain. The vocabulary states no legal
+conclusion, and `tests/test_personal_data.py` holds it to that.
+
+**The fourth fact stays a gap: which basis the file is kept under.** Naming the
+instrument a six-month retention is claimed under is a legal determination this
+project has no standing to make, so there is no key for it and the absence is
+stated rather than dropped — an artifact that cannot say what basis it was
+retained under cannot be assessed against either bound. The retention rules
+already in `meta` state what a *build* keeps, not how long the *file* may be,
+and there is no deadline field or expiry path here.
 
 **The minimisation is real, and it is in the schema rather than in a policy.**
 `entity` holds four columns — `entity_key`, `kind`, `is_static`, `geometry_wkb` —
 and not one of them names a person: the human's `node_id` is `human`, a role, and
 the kind vocabulary is `human`, `crate`, `pillar`, `pallet`. There is no
 biometric, no image and no raw frame; [`docs/lossiness.md`](lossiness.md)
-*Discarded* #5 excludes raw sensor data "by construction", for a retention
-reason, and the effect of that is a data-protection one. And the Layer A boundary
-keeps the certifiable half clear of the person entirely: `ProprioState` has no
-field naming an entity and `tests/test_layer_boundary.py` fails if one appears
-(CLAUDE.md rule 1). **The artifact is data-minimising almost by accident** — a
-consequence of a 2D simulator and a structural boundary drawn for a different
-reason, not of a data-protection decision anyone took, which is exactly why the
-honest statement is *"this contains personal data and here is the minimisation
-contract"* rather than silence. `tests/test_personal_data.py` is what turns the
-accident into a contract: it fails if the `entity` table grows a column this
-section does not disclose, or if `RunIdentity` grows a field it does not name.
+*Discarded* #5 excludes raw sensor data "by construction". And the Layer A
+boundary keeps the certifiable half clear of the person: `ProprioState` has no
+field naming an entity. **The artifact is data-minimising almost by accident** —
+a consequence of a 2D simulator and a boundary drawn for another reason.
+`tests/test_personal_data.py` turns the accident into a contract: it fails if the
+`entity` table grows a column this section leaves undisclosed, if `RunIdentity`
+grows a field it does not name, or if a key above goes unnamed here.
 
 **What this limitation is not.**
 
 - **It is not an argument for dropping `operator_id`.** *Which robot, which
   shift* is what makes the file handable to an assessor at all, and Art. 73's
   15-day serious-incident clock cannot start against a record that will not place
-  itself in time (`reg/identity.py`). Two obligations pull in opposite directions
-  here; that is a conflict to resolve in a deployment, not something to patch out
-  of a prototype.
-- **It is not confined to Layer B.** The identity block is **Layer A** —
-  `reg/identity.py` says so in its first line — so discarding every entity-naming
-  edge in the file would still leave an artifact stating which operator ran which
-  unit from which instant. Minimisation cannot be reached by dropping Layer B, and
-  the Layer A / Layer B boundary is not a personal-data boundary. It was never
-  drawn to be one.
-- **It is not something the retention rules already in `meta` address.**
-  `GEOMETRY_RETENTION`, `ENVELOPE_RETENTION`, `OCCURRENCE_RETENTION` and
-  `ATTESTATION_RETENTION` each state what a *build* keeps. None of them states how
-  long the *file* may be kept, there is no deadline field and there is no erasure
-  or expiry path anywhere in this codebase. An artifact carries no date after
-  which it should not exist.
-- **It is not inherited from DSSAD.** DSSAD is privacy-light precisely because it
-  records authority transitions and system events and says nothing about third
-  parties. `reg` borrows that schema shape and **inverts its privacy profile** —
-  [`docs/prior-art.md` §9](prior-art.md) is where that is stated, beside the
-  element-by-element mapping that borrows it.
+  itself in time. Two obligations pull in opposite directions here; that is a
+  conflict to resolve in a deployment.
+- **It is not confined to Layer B.** The identity block is **Layer A**, so
+  discarding every entity-naming edge would still leave an artifact stating which
+  operator ran which unit from which instant. The Layer A / Layer B boundary is
+  not a personal-data boundary.
+- **It is not inherited from DSSAD.** DSSAD is privacy-light: it records
+  authority transitions and system events, and says nothing about third parties.
+  `reg` borrows that schema shape and **inverts its privacy profile** —
+  [`docs/prior-art.md` §9](prior-art.md) states that beside the mapping.
 
 **What a claim would need instead.** A DPIA on record; where §87(1)(6) BetrVG
 applies, a works agreement in place before the robot runs; the Art. 26(7) notice
-given and recorded; and a retention rule that is the **minimum** of the AI Act
-floor and the data-protection ceiling, written into `meta` with the same
-discipline as the four retention rules already there, so that a reader holding
-only the file learns when it should have been destroyed. None of that is code this
-prototype should invent: like `--run-start` and the keyring, each is a
-caller-supplied input from a deployment that does not exist here, and a plausible
-invented retention deadline would be indistinguishable downstream from a lawful
-one. What this section does is stop the artifact reading as though the question
-had been asked and answered.
+actually given rather than only stated; and a retention rule that is the
+**minimum** of the AI Act floor and the data-protection ceiling, written into
+`meta` with the same discipline as the four retention rules already there, so that
+a reader holding only the file learns when it should have been destroyed.
 
 ---
 

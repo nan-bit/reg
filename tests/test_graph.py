@@ -95,7 +95,15 @@ from reg.graph import (
     GraphBuildError,
     build,
 )
-from reg.identity import RunIdentity
+from reg.identity import (
+    DPIA_NONE,
+    Disclosures,
+    IdentityError,
+    OperatorIdKind,
+    RunIdentity,
+    WorkerNotice,
+    WorkerNoticeStatus,
+)
 from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
 from reg.scenarios import MOBILE_SCENARIOS, SCENARIOS
 from reg.sim import provenance, simulate
@@ -144,6 +152,31 @@ IDENTITY_ARGV = [
     TEST_IDENTITY.unit_id,
     "--operator-id",
     TEST_IDENTITY.operator_id,
+]
+
+#: What every build in this file states about the obligations
+#: `docs/limitations.md` §8 names (issue #125). Stated once for
+#: `TEST_IDENTITY`'s reason — `build` records it in the artifact, so a value
+#: that varied per call would be comparing two runs — and stated as the plain
+#: negative, because a fixture that claimed a notice had been given would put a
+#: date in every artifact this file writes that nothing here is about.
+TEST_DISCLOSURES = Disclosures.declare(
+    worker_notice="not-given",
+    dpia_reference=DPIA_NONE,
+    operator_id_kind="pseudonym",
+)
+
+#: The three disclosure flags as argv, beside the three identity ones and for
+#: the same reason: required with no default, so a CLI test that omitted them
+#: would exercise that refusal instead of whatever it says it exercises.
+#: `test_cli_refuses_a_build_with_no_disclosure` is the one that omits them.
+DISCLOSURE_ARGV = [
+    "--worker-notice",
+    TEST_DISCLOSURES.worker_notice.text,
+    "--dpia-reference",
+    TEST_DISCLOSURES.dpia_reference,
+    "--operator-id-kind",
+    TEST_DISCLOSURES.operator_id_kind.value,
 ]
 
 #: The seed every scenario stream in this file is generated at. Stated once
@@ -217,7 +250,12 @@ def _build(csv: Path, out: Path, **overrides):
     # the declared start are the ones that show it reaches the artifact — but it
     # defaults to the one identity this file declares, so a test that is not
     # about time does not have to name an instant to say anything.
-    params = {"identity": TEST_IDENTITY, **_FAST, **overrides}
+    params = {
+        "identity": TEST_IDENTITY,
+        "disclosures": TEST_DISCLOSURES,
+        **_FAST,
+        **overrides,
+    }
     return build(csv, out, LIMITS, human_radius=HUMAN_RADIUS, **params)
 
 
@@ -400,6 +438,7 @@ def test_node_rows_are_sub_linear_for_every_fixture(tmp_path: Path, name: str) -
         tmp_path / f"{name}_coarse.sqlite",
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         **_FAST,
     )
@@ -408,6 +447,7 @@ def test_node_rows_are_sub_linear_for_every_fixture(tmp_path: Path, name: str) -
         tmp_path / f"{name}_fine.sqlite",
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         **_FAST,
     )
@@ -1302,6 +1342,7 @@ def test_a_non_positive_human_radius_is_refused(
             tmp_path / "held.sqlite",
             LIMITS,
             identity=TEST_IDENTITY,
+            disclosures=TEST_DISCLOSURES,
             human_radius=bad_radius,
             **_FAST,
         )
@@ -1847,6 +1888,7 @@ def test_geometry_rows_are_far_fewer_than_frames_in_a_moving_scenario(
         out,
         world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=world.human_radius,
         **_FAST,
     )
@@ -1969,6 +2011,7 @@ def test_the_separation_timeline_answers_every_frame_within_tolerance(
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         **_FAST,
     )
@@ -2042,6 +2085,7 @@ def _rate_build(tmp_path_factory, dt: float) -> tuple[Path, Path, object]:
         # TEST_IDENTITY every other build in this file uses, so runs stay
         # comparable rather than differing in a field nobody set on purpose.
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         **_FAST,
     )
     return csv, out, scn
@@ -3356,6 +3400,7 @@ def test_cli_builds_end_to_end(tmp_path: Path, capsys) -> None:
             "--substep-dt",
             "0.05",
             *IDENTITY_ARGV,
+            *DISCLOSURE_ARGV,
         ]
     )
     assert code == 0
@@ -3386,7 +3431,8 @@ def test_cli_says_so_when_the_stream_is_faster_than_the_time_quantum(
     out = tmp_path / "fast.sqlite"
     code = graph.main(
         ["build", str(csv), "--out", str(out), "--horizon", "0.1",
-         "--n-samples", "4", "--substep-dt", "0.05", *IDENTITY_ARGV]
+         "--n-samples", "4", "--substep-dt", "0.05", *IDENTITY_ARGV,
+         *DISCLOSURE_ARGV]
     )
     assert code == 0
     assert out.exists()
@@ -3407,7 +3453,14 @@ def test_cli_refuses_a_stream_that_does_not_say_what_produced_it(
         tmp_path / "bare.csv", [_frame(i, (2.0, 0.0)) for i in range(4)], scenario=None
     )
     code = graph.main(
-        ["build", str(csv), "--out", str(tmp_path / "bare.sqlite"), *IDENTITY_ARGV]
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(tmp_path / "bare.sqlite"),
+            *IDENTITY_ARGV,
+            *DISCLOSURE_ARGV,
+        ]
     )
     assert code == graph.EXIT_USAGE
     assert "provenance" in capsys.readouterr().err
@@ -3420,7 +3473,14 @@ def test_cli_refuses_an_unknown_scenario(tmp_path: Path, capsys) -> None:
         scenario="not_a_scenario",
     )
     code = graph.main(
-        ["build", str(csv), "--out", str(tmp_path / "odd.sqlite"), *IDENTITY_ARGV]
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(tmp_path / "odd.sqlite"),
+            *IDENTITY_ARGV,
+            *DISCLOSURE_ARGV,
+        ]
     )
     assert code == graph.EXIT_USAGE
     assert "does not know" in capsys.readouterr().err
@@ -4285,9 +4345,229 @@ def test_a_build_with_no_identity_is_refused(tmp_path: Path) -> None:
                 tmp_path / "b.sqlite",
                 LIMITS,
                 identity=wrong,
+                disclosures=TEST_DISCLOSURES,
                 human_radius=HUMAN_RADIUS,
                 **_FAST,
             )
+
+
+# --------------------------------------------------------------------------
+# What the deployer states about the obligations docs/limitations.md §8 names
+# (issue #125).
+#
+# WHAT THESE TESTS ARE ABOUT. Not that three more rows arrive in `meta` — that
+# is the easy half. Two things:
+#
+# * **The negative is a value, not an absence.** An artifact built where no
+#   notice was given and no DPIA exists says so in words. A build given none of
+#   the three fails instead of writing a file that is silent about them, which
+#   is what makes the two cases distinguishable at all.
+# * **What is recorded is what was stated.** The value in the artifact is the
+#   deployer's sentence, unmodified — no code here adjudicates it, and none of
+#   these tests asserts anything about whether what was stated is enough.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stated",
+    [
+        "given 2026/08/01",
+        "not-given",
+        "not-applicable no worker is present: this cell runs unstaffed",
+    ],
+)
+def test_every_worker_notice_answer_reaches_the_artifact(
+    tmp_path: Path, stated: str
+) -> None:
+    """All three answers, including both negatives, land verbatim in `meta`.
+
+    The parametrization is the point. A test that only built the `given` case
+    would leave the two answers this key exists for unexercised — the whole
+    argument is that *not-given* is a fact the file can carry, and a fact only
+    counts as carried if it is written where a reader will find it.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / f"{stated.split()[0]}.sqlite"
+    _build(
+        csv,
+        out,
+        disclosures=Disclosures.declare(
+            worker_notice=stated,
+            dpia_reference=DPIA_NONE,
+            operator_id_kind="pseudonym",
+        ),
+    )
+
+    meta = _meta(out)
+    assert meta[graph.META_WORKER_NOTICE] == stated
+    # And the explicit negative reads as a negative rather than as an absence:
+    # the key is present either way, which is the difference the artifact could
+    # not previously express.
+    assert graph.META_WORKER_NOTICE in meta
+    assert meta[graph.META_DPIA_REFERENCE] == DPIA_NONE
+    assert meta[graph.META_OPERATOR_ID_KIND] == OperatorIdKind.PSEUDONYM.value
+
+
+def test_the_disclosures_are_recorded_as_stated(tmp_path: Path) -> None:
+    """Two builds differing only in what was stated are two different files.
+
+    The same property `test_the_declared_start_reaches_the_artifact` asserts for
+    the run start, and for the same reason: a parameter that did not reach the
+    artifact would leave every claim about it a claim about a value nobody can
+    read back. A DPIA reference is opaque text and is stored unchanged — nothing
+    here resolves it, and nothing here decides whether it is enough.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    stated = tmp_path / "stated.sqlite"
+    absent = tmp_path / "absent.sqlite"
+    _build(
+        csv,
+        stated,
+        disclosures=Disclosures.declare(
+            worker_notice="given 2026/08/01",
+            dpia_reference="DPIA-2026-014, in the records of processing",
+            operator_id_kind="direct-identifier",
+        ),
+    )
+    _build(csv, absent)
+
+    assert _meta(stated)[graph.META_DPIA_REFERENCE] == (
+        "DPIA-2026-014, in the records of processing"
+    )
+    assert _meta(absent)[graph.META_DPIA_REFERENCE] == DPIA_NONE
+    assert (
+        _meta(stated)[graph.META_OPERATOR_ID_KIND]
+        != _meta(absent)[graph.META_OPERATOR_ID_KIND]
+    )
+    assert stated.read_bytes() != absent.read_bytes()
+
+
+def test_a_build_with_no_disclosures_is_refused(tmp_path: Path) -> None:
+    """THE NEGATIVE for "required, no default" (issue #125).
+
+    An artifact silent about the obligations `docs/limitations.md` §8 names
+    reads exactly like one built where none of them was done, so the build has
+    to stop rather than write it. `disclosures` is keyword-only with no default,
+    so omitting it is a `TypeError` from Python itself; anything that is not a
+    `Disclosures` is the case the builder catches, and it refuses rather than
+    reading three strings out of whatever it was handed.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    with pytest.raises(TypeError, match="disclosures"):
+        build(
+            csv,
+            tmp_path / "a.sqlite",
+            LIMITS,
+            identity=TEST_IDENTITY,
+            human_radius=HUMAN_RADIUS,
+            **_FAST,
+        )
+
+    for wrong in (None, "not-given", ("not-given", "none")):
+        with pytest.raises(GraphBuildError, match="Disclosures"):
+            build(
+                csv,
+                tmp_path / "b.sqlite",
+                LIMITS,
+                identity=TEST_IDENTITY,
+                disclosures=wrong,
+                human_radius=HUMAN_RADIUS,
+                **_FAST,
+            )
+    assert not (tmp_path / "b.sqlite").exists(), (
+        "a refused build must leave no artifact behind"
+    )
+
+
+@pytest.mark.parametrize(
+    "omit", ["--worker-notice", "--dpia-reference", "--operator-id-kind"]
+)
+def test_cli_refuses_a_build_with_no_disclosure(
+    tmp_path: Path, capsys, omit: str
+) -> None:
+    """One case per flag, and the message names the flag that is missing.
+
+    Checked by hand rather than with `required=True` for the reason the identity
+    flags are: argparse says a flag is absent without saying why there is no
+    default for it, and a reader who does not know why will supply something
+    plausible — which for these keys means writing a fact about an obligation
+    that nobody established.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    argv = ["build", str(csv), "--out", str(out), *IDENTITY_ARGV, *DISCLOSURE_ARGV]
+    at = argv.index(omit)
+    del argv[at : at + 2]
+
+    with pytest.raises(SystemExit) as excinfo:
+        graph.main(argv)
+    assert excinfo.value.code == graph.EXIT_USAGE
+    assert omit in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_cli_records_the_stated_negatives(tmp_path: Path, capsys) -> None:
+    """The explicit negatives build, and the file says them.
+
+    The other half of the refusal above: a deployment where nothing was done
+    must still be able to produce an artifact, and what distinguishes it from a
+    silent one is that the negatives are written in words.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    code = graph.main(
+        [
+            "build",
+            str(csv),
+            "--out",
+            str(out),
+            *IDENTITY_ARGV,
+            "--worker-notice",
+            WorkerNoticeStatus.NOT_GIVEN.value,
+            "--dpia-reference",
+            DPIA_NONE,
+            "--operator-id-kind",
+            OperatorIdKind.DIRECT_IDENTIFIER.value,
+        ]
+    )
+    assert code == graph.EXIT_OK
+    meta = _meta(out)
+    assert meta[graph.META_WORKER_NOTICE] == WorkerNoticeStatus.NOT_GIVEN.value
+    assert meta[graph.META_DPIA_REFERENCE] == DPIA_NONE
+    assert meta[graph.META_OPERATOR_ID_KIND] == (
+        OperatorIdKind.DIRECT_IDENTIFIER.value
+    )
+
+
+@pytest.mark.parametrize(
+    "flag, value, says",
+    [
+        ("--worker-notice", "informed", "worker-notice status"),
+        ("--worker-notice", "given last summer", "date"),
+        ("--operator-id-kind", "anonymous", "operator_id_kind"),
+        ("--dpia-reference", "   ", "dpia_reference"),
+    ],
+)
+def test_cli_refuses_a_disclosure_it_cannot_read(
+    tmp_path: Path, capsys, flag: str, value: str, says: str
+) -> None:
+    """Supplied but unusable is its own outcome, and it is not a pass.
+
+    `informed` and `anonymous` are the cases that matter: both look like
+    answers, and neither is one this project can read back. Refused rather than
+    stored verbatim — a value nobody defined is one every reader has to guess
+    at, and guessing is what a closed vocabulary exists to stop. Each refusal
+    names what it could not read, because the reader has to know which of the
+    six flags to fix.
+    """
+    csv = _held_stream(tmp_path / "held.csv", 4)
+    out = tmp_path / "held.sqlite"
+    argv = ["build", str(csv), "--out", str(out), *IDENTITY_ARGV, *DISCLOSURE_ARGV]
+    argv[argv.index(flag) + 1] = value
+
+    assert graph.main(argv) == graph.EXIT_USAGE
+    assert says in capsys.readouterr().err
+    assert not out.exists()
 
 
 # --------------------------------------------------------------------------
@@ -4374,6 +4654,7 @@ def attested(tmp_path_factory) -> tuple[Path, AttestationRecords]:
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         records=records,
         **_FAST,
@@ -5495,6 +5776,7 @@ def test_cli_builds_the_attestation_layer(tmp_path: Path, capsys) -> None:
             "--watchdog-period",
             str(FIXTURE_WATCHDOG_S),
             *IDENTITY_ARGV,
+            *DISCLOSURE_ARGV,
         ]
     )
     assert code == 0
@@ -5536,6 +5818,7 @@ def test_cli_refuses_a_keyring_without_the_parameters_it_needs(
         "--watchdog-period",
         "1.0",
         *IDENTITY_ARGV,
+        *DISCLOSURE_ARGV,
     ]
     at = argv.index(omit)
     del argv[at : at + 2]
@@ -5559,6 +5842,7 @@ def test_cli_refuses_the_parameters_without_a_keyring(tmp_path: Path) -> None:
                 "--replan-interval",
                 "0.5",
                 *IDENTITY_ARGV,
+                *DISCLOSURE_ARGV,
             ]
         )
     assert excinfo.value.code == graph.EXIT_USAGE
@@ -5584,7 +5868,7 @@ def test_cli_refuses_a_build_with_no_identity(
     """
     csv = _held_stream(tmp_path / "held.csv", 4)
     out = tmp_path / "held.sqlite"
-    argv = ["build", str(csv), "--out", str(out), *IDENTITY_ARGV]
+    argv = ["build", str(csv), "--out", str(out), *IDENTITY_ARGV, *DISCLOSURE_ARGV]
     at = argv.index(omit)
     del argv[at : at + 2]
 
@@ -5620,6 +5904,7 @@ def test_cli_refuses_a_run_start_that_is_not_an_instant(
             "unit-7",
             "--operator-id",
             "op-day",
+            *DISCLOSURE_ARGV,
         ]
     )
     assert code == graph.EXIT_USAGE
@@ -5645,6 +5930,7 @@ def test_cli_refuses_a_blank_identifier(tmp_path: Path, capsys) -> None:
             "   ",
             "--operator-id",
             "op-day",
+            *DISCLOSURE_ARGV,
         ]
     )
     assert code == graph.EXIT_USAGE
@@ -5672,6 +5958,7 @@ def test_cli_refuses_a_keyring_it_cannot_read(tmp_path: Path, capsys) -> None:
             "--watchdog-period",
             "1.0",
             *IDENTITY_ARGV,
+            *DISCLOSURE_ARGV,
         ]
     )
     assert code == graph.EXIT_USAGE
@@ -6912,6 +7199,7 @@ def _build_mobile(name: str, tmp_path: Path, **overrides):
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         **{**_MOBILE_FAST, **overrides},
     )
@@ -6985,6 +7273,7 @@ def test_a_bolted_fixture_built_the_same_way_states_its_base_frame_instead(
         out,
         LIMITS,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=HUMAN_RADIUS,
         **_MOBILE_FAST,
     )
@@ -7077,6 +7366,7 @@ def test_two_builds_of_a_mobile_fixture_are_byte_identical(tmp_path: Path) -> No
         second,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         **_MOBILE_FAST,
     )

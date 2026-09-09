@@ -66,7 +66,7 @@ import reg
 from reg import graph, store
 from reg.chain import GENESIS_HASH, UNSIGNED_MAC
 from reg.declare import Declaration, envelope_wkb
-from reg.identity import RunIdentity
+from reg.identity import DPIA_NONE, Disclosures, RunIdentity
 from reg.envelope import (
     envelope_hash,
     envelope_layer,
@@ -132,12 +132,22 @@ _IDENTITY = RunIdentity.declare(
     unit_id="unit-layer-boundary",
     operator_id="op-test",
 )
+#: What every build here states about the obligations `docs/limitations.md` §8
+#: names — required at build with no default since issue #125, and declared
+#: once for the reason `_IDENTITY` is. These tests are about the Layer A/B
+#: boundary and not about the disclosure keys.
+_DISCLOSURES = Disclosures.declare(
+    worker_notice="not-given",
+    dpia_reference=DPIA_NONE,
+    operator_id_kind="pseudonym",
+)
 _FAST = {
     "horizon": 0.1,
     "n_samples": 4,
     "seed": 0,
     "substep_dt": 0.05,
     "identity": _IDENTITY,
+    "disclosures": _DISCLOSURES,
 }
 _HUMAN_RADIUS = 0.3
 

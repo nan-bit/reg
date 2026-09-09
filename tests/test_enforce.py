@@ -1869,8 +1869,9 @@ def test_the_grid_changes_the_bound_by_more_than_rounding() -> None:
     )
 
 
-#: The three identity flags as argv. Required with no default (issue #83), so a
-#: CLI test that omitted them would exercise that refusal instead of the grid.
+#: The three identity flags as argv, and the three disclosure flags beside them.
+#: All six are required with no default (issues #83 and #125), so a CLI test
+#: that omitted any of them would exercise that refusal instead of the grid.
 _IDENTITY_ARGV = [
     "--run-start",
     "2026-08-21T09:00:00Z",
@@ -1878,6 +1879,12 @@ _IDENTITY_ARGV = [
     "unit-test-arm-1",
     "--operator-id",
     "op-test",
+    "--worker-notice",
+    "not-given",
+    "--dpia-reference",
+    "none",
+    "--operator-id-kind",
+    "pseudonym",
 ]
 
 

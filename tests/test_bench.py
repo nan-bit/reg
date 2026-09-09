@@ -827,15 +827,22 @@ def test_a_long_run_stream_can_be_rebuilt_from_its_own_provenance(
             str(_FAST["horizon"]),
             "--substep-dt",
             str(_FAST["substep_dt"]),
-            # Required with no default (issue #83). This test is about the
-            # scenario lookup, so it declares the same identity the benchmark's
-            # own builds declare rather than inventing a second one.
+            # Required with no default (issues #83 and #125). This test is
+            # about the scenario lookup, so it declares the same identity and
+            # the same disclosures the benchmark's own builds declare rather
+            # than inventing a second set.
             "--run-start",
             bench.BENCH_IDENTITY.run_start_text,
             "--unit-id",
             bench.BENCH_IDENTITY.unit_id,
             "--operator-id",
             bench.BENCH_IDENTITY.operator_id,
+            "--worker-notice",
+            bench.BENCH_DISCLOSURES.worker_notice.text,
+            "--dpia-reference",
+            bench.BENCH_DISCLOSURES.dpia_reference,
+            "--operator-id-kind",
+            bench.BENCH_DISCLOSURES.operator_id_kind.value,
         ]
     )
     assert code == graph.EXIT_OK

@@ -275,7 +275,14 @@ from reg.envelope import (
     outer_envelope,
     outer_radius,
 )
-from reg.identity import IdentityError, RunIdentity
+from reg.identity import (
+    DPIA_NONE,
+    Disclosures,
+    IdentityError,
+    OperatorIdKind,
+    RunIdentity,
+    WorkerNoticeStatus,
+)
 from reg.kinematics import ORIGIN_FRAME, BaseFrame, link_polygons
 from reg.stream import FLOAT_PRECISION, read_comments, read_frames
 from reg.tolerances import (
@@ -319,18 +326,21 @@ __all__ = [
     "META_ATTESTATION_RECORDS",
     "META_ATTESTATION_RETENTION",
     "META_DECLARATION_COUNT",
+    "META_DPIA_REFERENCE",
     "META_ENVELOPE_RETENTION",
     "META_GEOMETRY_RETENTION",
     "META_OCCURRENCE_RECORDER_VERSION",
     "META_OCCURRENCE_RESOLUTION",
     "META_OCCURRENCE_RETENTION",
     "META_OPERATOR_ID",
+    "META_OPERATOR_ID_KIND",
     "META_RUN_START",
     "META_TIME_BASE_DOMAIN",
     "META_TIME_BASE_INSTANTS",
     "META_TIME_BASE_RESOLVES",
     "META_UNIT_ID",
     "META_VERDICT_COUNT",
+    "META_WORKER_NOTICE",
     "OCCURRENCE_MATERIAL_EDGES",
     "OCCURRENCE_RETENTION",
     "OCCURRENCE_TIME_RESOLUTION_S",
@@ -783,6 +793,25 @@ TIME_BASE_COLLAPSED = "no"
 META_RUN_START = "run_start_utc"
 META_UNIT_ID = "unit_id"
 META_OPERATOR_ID = "operator_id"
+
+#: What the deployer states about the obligations `docs/limitations.md` §8 names
+#: (issue #125). Three more keys written on every build, from a `Disclosures`
+#: the caller supplies and none of them defaulted, for the reason the three
+#: above have none: §8 disclosed the obligations in prose and the artifact said
+#: nothing, so an assessor holding the file could not separate *a worker notice
+#: was given and no key recorded it* from *none was given*. That is the
+#: inversion `commitment: none` and `Limits.source` already refuse, one subject
+#: over. Every value can say *not done* in words, and **recording is not
+#: discharging**: nothing here adjudicates whether what is stated is enough, and
+#: `reg.identity` carries the vocabulary and why it names no legal conclusion.
+#:
+#: The fourth fact §8 asks for — the **retention basis** — is deliberately not a
+#: key. Naming the instrument a six-month window is claimed under is a legal
+#: determination this project has no standing to make, and §8 records it as an
+#: open gap rather than dropping it.
+META_WORKER_NOTICE = "worker_notice"
+META_DPIA_REFERENCE = "dpia_reference"
+META_OPERATOR_ID_KIND = "operator_id_kind"
 
 #: The `meta` keys `envelope_at` reads back to recompute a discarded polygon.
 #: Named constants because the writer and the reader are one contract now: a key
@@ -2282,6 +2311,7 @@ def build(
     limits: Limits,
     *,
     identity: RunIdentity,
+    disclosures: Disclosures,
     human_radius: float,
     horizon: float = ENVELOPE_HORIZON,
     n_samples: int = ENVELOPE_N_SAMPLES,
@@ -2306,6 +2336,17 @@ def build(
             from a clock here, so determinism is preserved exactly: same seed
             **and** same declared start, same bytes. Every occurrence's DSSAD
             `date` and absolute timestamp is derived from it.
+        disclosures: **required, and there is no default** (issue #125). What
+            the deployer states about the obligations `docs/limitations.md` §8
+            names: whether the EU AI Act Art. 26(7) worker notice was given,
+            where a DPIA lives or that there is none, and whether
+            `meta[operator_id]` is a pseudonym. Each lands in `meta` on every
+            build and each can say *not done* in words, because a file that is
+            silent about them cannot be told from one built where nothing was
+            done — the inversion `commitment: none` already refuses. **The
+            artifact records these and discharges nothing**: no code here
+            adjudicates what is stated, and §8 keeps the retention basis as an
+            open gap rather than turning a legal determination into a key.
         human_radius: **required, and there is no default.** The raw stream
             carries the human's position and velocity and *not* its extent
             (`reg.stream._HUMAN_COLUMNS`), so every separation and contact
@@ -2376,6 +2417,16 @@ def build(
             "be handed to anyone, and neither fact is recoverable from the file "
             "afterwards."
         )
+    if not isinstance(disclosures, Disclosures):
+        raise GraphBuildError(
+            f"disclosures must be a Disclosures, got {type(disclosures).__name__}. "
+            "The Art. 26(7) worker notice, the DPIA reference and whether "
+            "`operator_id` is a pseudonym have no defaults: docs/limitations.md "
+            "§8 names those obligations, and an artifact that is silent about "
+            "them reads the same as one built where none of them was done. Each "
+            "can say so explicitly — 'not-given', 'none', and either kind of "
+            "identifier are answers."
+        )
     if commitment is not None and records is None:
         raise GraphBuildError(
             "a commitment supplier was given and no record stream was. There is "
@@ -2437,6 +2488,7 @@ def build(
             instants=instants,
             limits=limits,
             identity=identity,
+            disclosures=disclosures,
             human_radius=human_radius,
             horizon=horizon,
             n_samples=n_samples,
@@ -2896,6 +2948,7 @@ def _write_provenance(
     instants: int,
     limits: Limits,
     identity: RunIdentity,
+    disclosures: Disclosures,
     human_radius: float,
     horizon: float,
     n_samples: int,
@@ -2950,6 +3003,15 @@ def _write_provenance(
     store.put_meta(conn, META_RUN_START, identity.run_start_text)
     store.put_meta(conn, META_UNIT_ID, identity.unit_id)
     store.put_meta(conn, META_OPERATOR_ID, identity.operator_id)
+
+    # ...and what the deployer states about the obligations that identity block
+    # creates (issue #125). Beside it rather than anywhere else because
+    # `operator_id` with `run_start_utc` is what makes the rest personal data,
+    # and these three keys are what stop the file being silent about the
+    # obligations `docs/limitations.md` §8 names. Recorded, never adjudicated.
+    store.put_meta(conn, META_WORKER_NOTICE, disclosures.worker_notice.text)
+    store.put_meta(conn, META_DPIA_REFERENCE, disclosures.dpia_reference)
+    store.put_meta(conn, META_OPERATOR_ID_KIND, disclosures.operator_id_kind.value)
 
     store.put_meta(conn, "frame_count", str(len(frames)))
     store.put_meta(conn, store.META_FRAME_PERIOD, _float_text(period))
@@ -4077,6 +4139,46 @@ def _parser() -> argparse.ArgumentParser:
             "other half of 'which robot, which shift'."
         ),
     )
+    # What the deployer states about the obligations docs/limitations.md §8
+    # names (issue #125). Required and undefaulted for the reason the three
+    # above are: an artifact silent about them reads exactly like one built
+    # where none of them was done, and only the deployer knows which it is.
+    # Every flag takes an explicit negative — that is the point of them.
+    build_parser.add_argument(
+        "--worker-notice",
+        metavar="NOTICE",
+        help=(
+            "whether the EU AI Act Art. 26(7) notice to workers' "
+            "representatives and affected workers was given before the system "
+            f"entered service: '{WorkerNoticeStatus.GIVEN.value} <yyyy/mm/dd>', "
+            f"'{WorkerNoticeStatus.NOT_GIVEN.value}', or "
+            f"'{WorkerNoticeStatus.NOT_APPLICABLE.value} <reason>'. Required, "
+            "no default. The artifact records what is stated and adjudicates "
+            "nothing; the negative is an answer and silence is not."
+        ),
+    )
+    build_parser.add_argument(
+        "--dpia-reference",
+        metavar="REFERENCE",
+        help=(
+            "where the data-protection impact assessment for this deployment "
+            f"lives — any text that locates it — or '{DPIA_NONE}' if there is "
+            "none. Required, no default: docs/limitations.md §8 states that "
+            "there is no DPIA here, and the artifact outlives this repository, "
+            "so it has to state it too."
+        ),
+    )
+    build_parser.add_argument(
+        "--operator-id-kind",
+        metavar="KIND",
+        help=(
+            "what kind of identifier --operator-id is: "
+            f"'{OperatorIdKind.PSEUDONYM.value}', with the roster held outside "
+            f"the artifact, or '{OperatorIdKind.DIRECT_IDENTIFIER.value}', a "
+            "payroll or badge number. Required, no default, and never inferred "
+            "— both are opaque strings and an assessor cannot tell them apart."
+        ),
+    )
     build_parser.add_argument(
         "--horizon",
         type=_positive_float,
@@ -4223,6 +4325,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             "the same one twice still gives byte-identical output."
         )
 
+    # The same shape, and a separate message: what a reader needs here is not
+    # that a flag is absent but why nothing may be assumed in its place.
+    disclosure_args = {
+        "--worker-notice": args.worker_notice,
+        "--dpia-reference": args.dpia_reference,
+        "--operator-id-kind": args.operator_id_kind,
+    }
+    absent = [name for name, value in disclosure_args.items() if value is None]
+    if absent:
+        parser.error(
+            f"{', '.join(absent)} {'is' if len(absent) == 1 else 'are'} required, "
+            "with no default. docs/limitations.md section 8 names the "
+            "obligations an artifact carrying `operator_id` and `run_start_utc` "
+            "creates, and an artifact silent about them cannot be told from one "
+            "built where none of them was done. Each flag takes an explicit "
+            "negative — a notice that was not given, and no DPIA, are answers a "
+            "file can carry. Recording them discharges nothing."
+        )
+
     attestation_args = {
         "--replan-interval": args.replan_interval,
         "--declaration-horizon": args.declaration_horizon,
@@ -4261,6 +4382,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             unit_id=args.unit_id,
             operator_id=args.operator_id,
         )
+        disclosures = Disclosures.declare(
+            worker_notice=args.worker_notice,
+            dpia_reference=args.dpia_reference,
+            operator_id_kind=args.operator_id_kind,
+        )
     except IdentityError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -4295,6 +4421,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.out,
             world.limits,
             identity=identity,
+            disclosures=disclosures,
             human_radius=world.human_radius,
             horizon=args.horizon,
             n_samples=args.n_samples,

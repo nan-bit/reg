@@ -141,7 +141,7 @@ fifth state and the only claim here whose verification is deliberately gated;
 *was the passivation acknowledged, and by whom* is checkable from the file
 alone. See the section above `cold_read` for the states, for why nothing here
 imports `reg.graph` or `reg.chain` to compute them, and for what is pinned to
-`schema_version` 13.
+`schema_version` 14.
 
 LAYER
 -----
@@ -3267,7 +3267,7 @@ COLD_READ_STATES = (
 #: header: an artifact stating anything else is a could-not-evaluate in both
 #: directions, and this constant moving is a decision about every claim below
 #: rather than a version bump.
-COLD_READ_SCHEMA_VERSION = 13
+COLD_READ_SCHEMA_VERSION = 14
 
 CLAIM_ENVIRONMENT = "recording-environment"
 CLAIM_RECOMPUTE = "recompute-discarded-polygon"
@@ -3838,10 +3838,21 @@ def _reached_point_claim(
 ) -> ColdReadClaim:
     """Can the file answer *could the robot have reached (x, y)?*
 
-    Radially only, which is the whole finding: `outer_radius` is a scalar about
-    the base frame and the boundary it projects is not retained, so the file
-    answers *not at that distance* and cannot answer *not at that point*.
-    docs/limitations.md §2 and §3, issue #228.
+    **Still READABLE-NOT-CHECKABLE at schema 14, and the reason moved** (issue
+    #257). Until this schema the answer was radial everywhere: `outer_radius` is
+    a scalar about the base frame and the boundary it projects was retained
+    nowhere, so the file said *not at that distance* and could not say *not at
+    that point*. The boundary is now in the file wherever the inner polygon is —
+    the two ends of the run, every `INTERSECTS` or `CONTACT` transition, every
+    posed frame — so at those rows the region itself is readable and the answer
+    is the region's.
+
+    What has not arrived is a **check**: no query in this build takes a point and
+    tests it against a retained boundary, so what an assessor can do is read the
+    WKB and run their own containment. That is the difference between this state
+    and CHECKABLE, and moving the state is the issue that depends on this one.
+    Reporting it as checkable here would credit the file with a check nothing
+    runs. docs/limitations.md §2 and §3, issues #228 and #257.
     """
     if not radial:
         return ColdReadClaim(
@@ -3856,9 +3867,8 @@ def _reached_point_claim(
             ),
         )
     frame = store.get_meta(conn, store.META_BASE_FRAME)
-    columns = tuple(
-        str(row["name"])
-        for row in conn.execute("PRAGMA table_info(envelope)").fetchall()
+    stored = int(
+        conn.execute("SELECT count(outer_wkb) AS n FROM envelope").fetchone()["n"]
     )
     return ColdReadClaim(
         claim=CLAIM_REACHED_POINT,
@@ -3872,12 +3882,18 @@ def _reached_point_claim(
                 if frame is not None
                 else f"a base frame this file does not state in meta[{store.META_BASE_FRAME}]"
             )
-            + f" — and the envelope table's columns are {', '.join(columns)}, "
-            "none of which holds the outer boundary. So the question is "
-            "answerable **radially only**: this file says *not at that "
-            "distance* and cannot say *not at that point*. The region that "
+            + f" — and {stored} of them also carry outer_wkb, the boundary that "
+            "scalar projects, retained wherever the inner polygon is, on the "
+            "geometry-retention rule this file states in its own meta table. "
+            "So the question is "
+            "answerable from the region at those rows and **radially only** at "
+            f"the other {radial - stored}: there this file says *not at that "
+            "distance* and cannot say *not at that point*, and the region that "
             "would answer it is recomputable, which routes the question "
-            "straight back through the recompute claim above (issue #228)."
+            "straight back through the recompute claim above. What no query in "
+            "this build does is *test a point against a retained boundary*, "
+            "which is why this is readable rather than checkable (issues #228 "
+            "and #257)."
         ),
     )
 

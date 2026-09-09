@@ -1201,7 +1201,7 @@ def test_an_artifact_that_does_not_record_its_provenance_is_could_not_evaluate(
         # Blanking the retained polygon is what puts `envelope_at` on the
         # recompute path — the path that needs the limits, and so the one where
         # a provenance nobody recorded would otherwise be invented.
-        conn.execute("UPDATE envelope SET geometry_wkb = NULL")
+        conn.execute("UPDATE envelope SET geometry_wkb = NULL, outer_wkb = NULL")
         conn.commit()
         with pytest.raises(graph.GraphQueryError, match=graph.META_LIMITS_SOURCE):
             graph.envelope_at(conn, 0.0)
@@ -1266,6 +1266,7 @@ def test_an_envelope_edge_may_not_be_written_without_stating_its_layer(
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
 
         with pytest.raises(store.StoreError, match="no default to fall back on"):
@@ -1326,6 +1327,7 @@ def test_an_envelope_edge_may_not_be_written_without_stating_its_basis(
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
 
         # No basis at all.
@@ -1764,6 +1766,7 @@ def _posed_store(path: Path, pose_source: str) -> sqlite3.Connection:
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
     return conn
 
@@ -1930,6 +1933,7 @@ def test_an_attestation_edge_over_a_posed_region_is_refused_not_relabelled(
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
         store.insert_declaration(
             conn,

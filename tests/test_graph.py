@@ -789,6 +789,7 @@ def _posed_artifact(path: Path) -> sqlite3.Connection:
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
     return conn
 
@@ -1387,6 +1388,7 @@ def seeded(tmp_path: Path):
         source="computed",
         outer_area=0.5,
         outer_radius=0.95,
+        outer_geometry=Point(0.0, 0.0).buffer(0.95),
     )
     store.insert_entity(conn, "obs_a", "crate", geometry=Point(2.0, 0.0).buffer(0.25))
     yield conn
@@ -1529,6 +1531,7 @@ def test_an_out_of_vocabulary_envelope_source_is_refused(seeded) -> None:
             source="guessed",
             outer_area=None,
             outer_radius=None,
+            outer_geometry=None,
         )
 
 
@@ -1560,7 +1563,8 @@ def _envelope_rows(path: Path) -> list[sqlite3.Row]:
                 "e.area AS area, e.geometry_wkb AS geometry_wkb, "
                 "e.config_key AS config_key, c.node_id AS config_id, "
                 "e.horizon AS horizon, e.source AS source, "
-                "e.outer_area AS outer_area, e.outer_radius AS outer_radius "
+                "e.outer_area AS outer_area, e.outer_radius AS outer_radius, "
+                "e.outer_wkb AS outer_wkb "
                 "FROM envelope e JOIN node n ON n.node_key = e.envelope_key "
                 "LEFT JOIN node c ON c.node_key = e.config_key "
                 "ORDER BY e.envelope_key"
@@ -1731,6 +1735,183 @@ def test_an_overlap_that_moves_a_quantum_is_not_a_transition(tmp_path: Path) -> 
     assert _frames_with_geometry(out) == {0, n_frames - 1}
 
 
+# --------------------------------------------------------------------------
+# THE OUTER BOUNDARY, RETAINED WHERE THE INNER POLYGON ALREADY IS (issue #257,
+# option C of #228). The rule has no separate condition of its own — which is
+# the whole of the decision — so what these tests assert is the *coincidence* of
+# two sets, and both of its negatives.
+#
+# The cheap way to get this wrong in either direction is invisible from a query:
+# a row the rule covers and that carries no boundary answers radially while the
+# rule in `meta` says the file answers pointwise there, and a boundary on a row
+# the rule excludes is retention nothing in the artifact states. Neither shows
+# up as an error; both show up as an assessor being told the wrong thing about
+# what the file can support.
+# --------------------------------------------------------------------------
+
+
+def test_the_outer_boundary_is_retained_exactly_where_the_geometry_is(
+    tmp_path: Path,
+) -> None:
+    """The rule, as the coincidence of two sets over a run that has both kinds.
+
+    The sliding fixture is the one where rows far outnumber polygons, so both
+    halves of the biconditional are exercised: rows that keep the inner polygon
+    must carry the boundary, and the majority that do not must carry none. The
+    two preconditions are what stop this passing vacuously on a run where every
+    row is retained or none is.
+    """
+    frames = _sliding_frames(12)
+    csv = _write_stream(tmp_path / "slide.csv", frames)
+    out = tmp_path / "slide.sqlite"
+    _build(csv, out)
+
+    rows = _envelope_rows(out)
+    kept = [row for row in rows if row["geometry_wkb"] is not None]
+    discarded = [row for row in rows if row["geometry_wkb"] is None]
+    assert kept and discarded, (
+        "precondition failed: this run has only one kind of envelope row, so "
+        "the rule and 'a boundary everywhere' are indistinguishable on it."
+    )
+    for row in rows:
+        expected = row["geometry_wkb"] is not None and row["outer_area"] is not None
+        assert (row["outer_wkb"] is not None) is expected, str(row["envelope_id"])
+
+
+def test_a_retained_boundary_is_the_outer_set_of_its_own_row(
+    tmp_path: Path,
+) -> None:
+    """It is *this* frame's outer region, and it over-covers *this* frame's
+    inner one.
+
+    A boundary of plausible size stored against the wrong frame answers the
+    pointwise question with a region the robot was in at some other instant,
+    which is the failure mode a retained polygon has and a scalar does not. Two
+    invariants pin it: the area the row already published is the area of the
+    polygon now stored beside it, and the sampled envelope — which under-covers
+    — lies inside the outer set, which over-covers. `quantize_area` on both
+    sides because `outer_area` is the rounded column and the polygon is not.
+    """
+    frames = _creep_frames(12, lambda i: (0.55, 0.0) if 3 <= i <= 6 else (2.4, 0.0))
+    csv = _write_stream(tmp_path / "bracket.csv", frames)
+    out = tmp_path / "bracket.sqlite"
+    _build(csv, out)
+
+    rows = [r for r in _envelope_rows(out) if r["outer_wkb"] is not None]
+    assert rows, "precondition failed: this run retained no boundary at all"
+    for row in rows:
+        outer = store.from_wkb(row["outer_wkb"])
+        inner = store.from_wkb(row["geometry_wkb"])
+        assert quantize_area(outer.area) == pytest.approx(float(row["outer_area"]))
+        assert outer.contains(inner), str(row["envelope_id"])
+
+
+def test_a_row_the_rule_covers_and_carrying_no_boundary_is_refused(
+    seeded,
+) -> None:
+    """THE FIRST NEGATIVE. The write is refused, not completed and reported.
+
+    Both layers say no, and they are not the same check: `insert_envelope`
+    refuses in terms of the rule, so the message names what the artifact would
+    have claimed, and the schema's own CHECK refuses the same state reached by
+    any other route — which is the one a later `UPDATE` would take.
+    """
+    with pytest.raises(store.StoreError, match="outer boundary"):
+        store.insert_envelope(
+            seeded,
+            "env_covered_no_boundary",
+            envelope_hash=_HASH_D,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id="cfg_0",
+            horizon=0.2,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+            outer_geometry=None,
+        )
+    assert store.envelope_row(seeded, "env_covered_no_boundary") is None
+
+    store.insert_envelope(
+        seeded,
+        "env_covered",
+        envelope_hash=_HASH_D,
+        area=0.25,
+        geometry=Point(0.0, 0.0).buffer(0.5),
+        config_id="cfg_0",
+        horizon=0.2,
+        source="computed",
+        outer_area=0.5,
+        outer_radius=0.95,
+        outer_geometry=Point(0.0, 0.0).buffer(0.95),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        seeded.execute(
+            "UPDATE envelope SET outer_wkb = NULL WHERE envelope_key = "
+            "(SELECT node_key FROM node WHERE node_id = 'env_covered')"
+        )
+
+
+def test_a_row_the_rule_excludes_carries_no_boundary(seeded) -> None:
+    """THE CRY-WOLF CONTROL, and the reason the first negative is not enough.
+
+    A check that demanded a boundary on every `computed` envelope would refuse
+    every artifact this repository builds — `ENVELOPE_RETENTION` keeps a row at
+    frames `GEOMETRY_RETENTION` keeps no polygon for, and those rows are the
+    majority. So the rule has to *exclude*, and a boundary written on one of
+    them is refused for the mirror-image reason: it is retention on a rule the
+    artifact does not state, which a reader could only discover by inferring a
+    rule from the pattern of NULLs.
+    """
+    store.insert_envelope(
+        seeded,
+        "env_excluded",
+        envelope_hash=_HASH_D,
+        area=0.25,
+        geometry=None,
+        config_id="cfg_0",
+        horizon=0.2,
+        source="computed",
+        outer_area=0.5,
+        outer_radius=0.95,
+        outer_geometry=None,
+    )
+    assert store.envelope_row(seeded, "env_excluded")["outer_wkb"] is None
+
+    with pytest.raises(store.StoreError, match="keeps no inner polygon"):
+        store.insert_envelope(
+            seeded,
+            "env_excluded_with_boundary",
+            envelope_hash=_HASH_C,
+            area=0.25,
+            geometry=None,
+            config_id="cfg_0",
+            horizon=0.2,
+            source="computed",
+            outer_area=0.5,
+            outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
+        )
+    # And a region that has no outer set at all takes no boundary either: a
+    # declared region is the policy's claim and a clamped one is what a verdict
+    # applied, so a polygon stored for either would be read as the region the
+    # robot could not leave.
+    with pytest.raises(store.StoreError, match="no outer_area beside it"):
+        store.insert_envelope(
+            seeded,
+            "env_declared_with_boundary",
+            envelope_hash=_HASH_C,
+            area=0.25,
+            geometry=Point(0.0, 0.0).buffer(0.5),
+            config_id="cfg_0",
+            horizon=0.2,
+            source="declared",
+            outer_area=None,
+            outer_radius=None,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
+        )
+
+
 def test_every_retained_envelope_carries_its_scalars(tmp_path: Path) -> None:
     """The half of the rule that is easy to lose: the scalars are not discarded.
 
@@ -1794,7 +1975,7 @@ def test_envelope_at_recomputes_the_stored_polygon_exactly(tmp_path: Path) -> No
     blanked.write_bytes(out.read_bytes())
     conn = store.connect(blanked)
     try:
-        conn.execute("UPDATE envelope SET geometry_wkb = NULL")
+        conn.execute("UPDATE envelope SET geometry_wkb = NULL, outer_wkb = NULL")
         conn.commit()
         for envelope_id, polygon in stored.items():
             edge = conn.execute(
@@ -3050,6 +3231,7 @@ def test_a_radius_is_stored_with_its_frame_or_it_is_not_stored(seeded) -> None:
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
@@ -3291,6 +3473,7 @@ def test_an_envelope_with_neither_geometry_nor_config_is_refused(seeded) -> None
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=None,
         )
     with pytest.raises(sqlite3.IntegrityError):
         seeded.execute(
@@ -3305,12 +3488,21 @@ def test_attaching_a_different_geometry_to_one_envelope_id_is_refused(
 ) -> None:
     """The id is content-derived from the envelope hash, so two distinct
     polygons under it is a collision, not an update — and an update would leave
-    the artifact holding whichever was written last."""
-    store.attach_envelope_geometry(seeded, "env_0", Point(0.0, 0.0).buffer(0.5))
+    the artifact holding whichever was written last. The outer boundary is the
+    same collision one region out (issue #257): it arrives with the inner
+    polygon, so a second one under the same id is not an update either."""
+    inner, outer = Point(0.0, 0.0).buffer(0.5), Point(0.0, 0.0).buffer(0.95)
+    store.attach_envelope_geometry(seeded, "env_0", inner, outer)
     with pytest.raises(store.StoreError, match="different geometry"):
-        store.attach_envelope_geometry(seeded, "env_0", Point(1.0, 0.0).buffer(0.5))
+        store.attach_envelope_geometry(
+            seeded, "env_0", Point(1.0, 0.0).buffer(0.5), outer
+        )
+    with pytest.raises(store.StoreError, match="different outer boundary"):
+        store.attach_envelope_geometry(
+            seeded, "env_0", inner, Point(1.0, 0.0).buffer(0.95)
+        )
     with pytest.raises(store.StoreError, match="no envelope"):
-        store.attach_envelope_geometry(seeded, "env_nope", Point(0.0, 0.0).buffer(0.5))
+        store.attach_envelope_geometry(seeded, "env_nope", inner, outer)
 
 
 def test_geometry_attached_later_fills_a_row_written_without_it(seeded) -> None:
@@ -3327,10 +3519,22 @@ def test_geometry_attached_later_fills_a_row_written_without_it(seeded) -> None:
         source="computed",
         outer_area=0.5,
         outer_radius=0.95,
+        outer_geometry=None,
     )
-    assert store.envelope_row(seeded, "env_late")["geometry_wkb"] is None
-    store.attach_envelope_geometry(seeded, "env_late", Point(0.0, 0.0).buffer(0.5))
-    assert store.envelope_row(seeded, "env_late")["geometry_wkb"] is not None
+    row = store.envelope_row(seeded, "env_late")
+    assert row["geometry_wkb"] is None and row["outer_wkb"] is None
+    # And the boundary arrives in the same statement, because the rule that
+    # retains it is the rule that retained this polygon (issue #257). Attaching
+    # the inner one alone is what the refusal below is about.
+    with pytest.raises(store.StoreError, match="outer boundary is retained"):
+        store.attach_envelope_geometry(
+            seeded, "env_late", Point(0.0, 0.0).buffer(0.5), None
+        )
+    store.attach_envelope_geometry(
+        seeded, "env_late", Point(0.0, 0.0).buffer(0.5), Point(0.0, 0.0).buffer(0.95)
+    )
+    row = store.envelope_row(seeded, "env_late")
+    assert row["geometry_wkb"] is not None and row["outer_wkb"] is not None
     assert store.envelope_row(seeded, "env_missing") is None
 
 
@@ -5040,6 +5244,7 @@ def test_an_outer_bracket_on_something_that_is_not_a_reachable_set_is_refused(
             source="declared",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
     with pytest.raises(store.StoreError, match="computed envelope"):
         store.insert_envelope(
@@ -5053,6 +5258,7 @@ def test_an_outer_bracket_on_something_that_is_not_a_reachable_set_is_refused(
             source="computed",
             outer_area=None,
             outer_radius=None,
+            outer_geometry=None,
         )
 
 
@@ -5070,6 +5276,7 @@ def test_half_a_bracket_is_refused(seeded) -> None:
             source="computed",
             outer_area=0.5,
             outer_radius=None,
+            outer_geometry=Point(0.0, 0.0).buffer(0.95),
         )
 
 
@@ -5711,6 +5918,7 @@ def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:
             source="clamped",
             outer_area=None,
             outer_radius=None,
+            outer_geometry=None,
         )
     with pytest.raises(store.StoreError, match="clamped bound"):
         store.insert_envelope(
@@ -5724,6 +5932,7 @@ def test_a_clamped_envelope_carrying_a_horizon_is_refused(seeded) -> None:
             source="declared",
             outer_area=None,
             outer_radius=None,
+            outer_geometry=None,
         )
 
 
@@ -6104,6 +6313,7 @@ def test_the_record_layer_refuses_rather_than_answering_from_a_missing_table(
             source="declared",
             outer_area=None,
             outer_radius=None,
+            outer_geometry=None,
         )
         with pytest.raises(store.StoreError, match="attestation_records"):
             store.open_edge(conn, "DECLARED", "dec_0", "env_0", 0.0)
@@ -6414,6 +6624,7 @@ def test_a_hash_that_is_not_a_full_width_digest_is_refused(seeded) -> None:
                 source="computed",
                 outer_area=0.5,
                 outer_radius=0.95,
+                outer_geometry=Point(0.0, 0.0).buffer(0.95),
             )
     with pytest.raises(store.StoreError, match="32"):
         store.from_hash(b"\x00" * 16)
@@ -6757,6 +6968,64 @@ def test_the_retained_polygon_is_the_body_frame_one_placed_at_the_pose(
     )
 
 
+def test_the_retained_outer_boundary_is_placed_at_the_pose_too(
+    tmp_path: Path,
+) -> None:
+    """The same failure one region out, and the retained boundary is new
+    surface for it (issue #257).
+
+    `outer_area` and `outer_radius` are invariant under the rigid placement, so
+    for eleven schema versions nothing about the outer set could be about the
+    wrong point. A polygon can be: stored body-frame, it would say *the robot
+    could not have reached (x, y)* about a robot that was somewhere else, and
+    the answer would arrive looking exactly like a right one — which is the
+    reason #191 gave for the inner polygon and it transfers unchanged.
+
+    Same shape as the test above: six frames built twice, and the posed
+    boundary must be the bolted one rotated about the base point and
+    translated.
+    """
+    x, y, theta = 0.7, -0.4, 0.3
+    held = _write_stream(
+        tmp_path / "held.csv", [_frame(i, (2.0, 0.0)) for i in range(6)]
+    )
+    posed = _write_stream(
+        tmp_path / "posed.csv",
+        [_posed_frame(i, x, y=y, theta=theta) for i in range(6)],
+    )
+    held_out, posed_out = tmp_path / "held.sqlite", tmp_path / "posed.sqlite"
+    _build(held, held_out)
+    _build(posed, posed_out)
+
+    def first_boundary(path: Path):
+        rows = [r for r in _envelope_rows(path) if r["outer_wkb"] is not None]
+        assert rows, f"{path.name} retained no outer boundary to compare"
+        return store.from_wkb(rows[0]["outer_wkb"]), store.from_wkb(
+            rows[0]["geometry_wkb"]
+        )
+
+    body_frame, body_inner = first_boundary(held_out)
+    room_frame, room_inner = first_boundary(posed_out)
+
+    from shapely.affinity import affine_transform
+
+    cos, sin = np.cos(theta), np.sin(theta)
+    expected = affine_transform(body_frame, (cos, -sin, sin, cos, x, y))
+    assert room_frame.equals_exact(expected, 0.0), (
+        "the retained outer boundary is not the body-frame set placed at the "
+        "pose. A region the robot provably could not leave, stated about a "
+        "point the robot was not at, is not a bound on anything."
+    )
+    assert not room_frame.equals(body_frame), (
+        "precondition failed: the pose used here does not move the region, so "
+        "the assertion above would hold for a builder that ignored it"
+    )
+    # And the placement did not break the bracket it is half of: the sampled
+    # region under-covers and this one over-covers, in whichever frame both are
+    # stated in.
+    assert room_frame.contains(room_inner) and body_frame.contains(body_inner)
+
+
 def test_the_separation_of_a_posed_run_is_measured_from_where_the_base_was(
     tmp_path: Path,
 ) -> None:
@@ -6849,7 +7118,7 @@ def test_envelope_at_reads_a_posed_polygon_back_and_never_recomputes_one(
     finally:
         graph.compute_envelope = original  # type: ignore[assignment]
 
-    conn.execute("UPDATE envelope SET geometry_wkb = NULL")
+    conn.execute("UPDATE envelope SET geometry_wkb = NULL, outer_wkb = NULL")
     with pytest.raises(graph.GraphQueryError, match="base_pose") as refusal:
         graph.envelope_at(conn, 0.0)
     assert "GEOMETRY_RETENTION" in str(refusal.value)
@@ -6963,6 +7232,7 @@ def test_a_posed_envelope_row_with_no_geometry_is_refused(
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=None,
         )
         with pytest.raises(GraphBuildError, match="no geometry") as refusal:
             graph._refuse_a_posed_envelope_row_with_no_geometry(conn, "hand.csv")
@@ -6970,7 +7240,7 @@ def test_a_posed_envelope_row_with_no_geometry_is_refused(
         assert "env_posed" in message and "cfg_posed" in message, message
 
         store.attach_envelope_geometry(
-            conn, "env_posed", Point(1.2, -0.4).buffer(0.5)
+            conn, "env_posed", Point(1.2, -0.4).buffer(0.5), Point(1.2, -0.4).buffer(0.95)
         )
         graph._refuse_a_posed_envelope_row_with_no_geometry(conn, "hand.csv")
     finally:
@@ -7003,6 +7273,7 @@ def test_a_bolted_row_with_no_geometry_is_not_refused(tmp_path: Path) -> None:
             source="computed",
             outer_area=0.5,
             outer_radius=0.95,
+            outer_geometry=None,
         )
         graph._refuse_a_posed_envelope_row_with_no_geometry(conn, "hand.csv")
     finally:

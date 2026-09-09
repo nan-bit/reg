@@ -65,8 +65,11 @@ states the `B` rather than being told about it a row too late.
 What stays per frame is what queries actually read and what costs almost
 nothing: `envelope_hash`, `area`, `horizon`, `source`, and — since issue #82 — `outer_area` and `outer_radius`, the same two projections of the
 *outer* reachable set for that frame, which bracket the sampled area from the
-side it cannot bound itself. The outer region's geometry is discarded under this
-same rule and for this same reason.
+side it cannot bound itself. The outer region's **boundary** follows the inner
+polygon exactly — retained where it is retained and discarded where it is
+discarded (issue #257), so the frames this artifact says something happened at
+answer *could the robot have reached (x, y)* pointwise, and every other frame
+answers it radially.
 
 The precondition is real and belongs beside the mechanism: recomputation
 reproduces the polygon **exactly for the same code and the same shapely
@@ -469,7 +472,14 @@ GEOMETRY_RETENTION = (
     "base_pose; on every other frame the envelope row carries its hash, area, "
     "horizon and source with a NULL geometry_wkb, and the polygon is recomputed "
     "from config_id and the envelope parameters in this meta table "
-    "(reg.graph.envelope_at, docs/lossiness.md Discarded #9). The posed clause "
+    "(reg.graph.envelope_at, docs/lossiness.md Discarded #9). The boundary of "
+    "the outer reachable set is retained under this same rule and no other: "
+    "outer_wkb is present on exactly the rows that carry a geometry_wkb and an "
+    "outer_area, so at those frames the question 'could the robot have reached "
+    "(x, y)' is answerable from the stored region, and on every other row it is "
+    "answerable radially from outer_radius alone. A row this rule covers and "
+    "that carries no outer_wkb is refused rather than written, and so is an "
+    "outer_wkb on a row it excludes. The posed clause "
     "is not a preference: every term of that recomputation is body-frame, so "
     "for a configuration that states a pose it would return the region a robot "
     "at the origin could reach, and reg.graph.envelope_at refuses it. A row "
@@ -1311,6 +1321,7 @@ class _FrameNodes:
         envelope: BaseGeometry,
         envelope_digest: str,
         horizon: float,
+        outer: BaseGeometry,
         outer_area: float,
         outer_radius: float,
         q_text: str,
@@ -1323,10 +1334,16 @@ class _FrameNodes:
         self._envelope_digest = envelope_digest
         self._horizon = horizon
         #: The other side of the bracket (issue #82): the horizon-limited outer
-        #: reachable set for this frame, as its area and its radius. The region
-        #: itself is not carried — it is recomputable from the config and the
-        #: horizon this frame already names, and a polygon a frame would undo the
-        #: retention work the incremental rule exists for.
+        #: reachable set for this frame, as the region and its two projections.
+        #: The scalars go on every retained row; the region goes only on the
+        #: rows `GEOMETRY_RETENTION` already keeps a polygon for (issue #257).
+        #: A boundary on every row would undo the retention work the incremental
+        #: rule exists for — it was measured at 7.3x the bytes of this rule for
+        #: 84 answerable frames of 3,000 against 12 (docs/self-describing.md §8).
+        #: Placed, like the inner polygon and for the same reason: a region
+        #: about the origin retained for a robot that was elsewhere is an answer
+        #: about a different robot.
+        self._outer = outer
         self._outer_area = outer_area
         self._outer_radius = outer_radius
         self._q_text = q_text
@@ -1449,6 +1466,12 @@ class _FrameNodes:
             source=ENVELOPE_SOURCE,
             outer_area=self._outer_area,
             outer_radius=self._outer_radius,
+            # THE SAME FLAG, WHICH IS THE WHOLE OF OPTION C (issue #257). The
+            # boundary follows the inner polygon rather than having a rule of
+            # its own, so there is one decision per frame and no second rule for
+            # the two to drift apart under. `insert_envelope` refuses either
+            # half on its own.
+            outer_geometry=self._outer if self._keep_geometry else None,
         )
 
     def config(self) -> str:
@@ -1888,10 +1911,12 @@ def _attestation_envelope(
         horizon=horizon,
         source=source,
         # A declared region and a clamped bound are not reachable sets, so
-        # neither has an outer approximation. `insert_envelope` refuses a number
-        # here rather than accepting an invented one.
+        # neither has an outer approximation — no area, no radius and no
+        # boundary. `insert_envelope` refuses any of the three here rather than
+        # accepting an invented one.
         outer_area=None,
         outer_radius=None,
+        outer_geometry=None,
     )
 
 
@@ -2862,6 +2887,14 @@ def _observe(
         envelope=envelope,
         envelope_digest=digest,
         horizon=horizon,
+        # Placed, and the scalars above it measured before the placement (issue
+        # #257). Distances and areas are invariant under a rigid transform and a
+        # polygon's coordinates are not, so the two projections are the same
+        # numbers either way and the retained region is only the right one in
+        # the room frame — `envelope_at` refuses to recompute a posed row
+        # precisely because a region about the origin is an answer about a robot
+        # that was somewhere else, and a retained one must not reintroduce it.
+        outer=_place(outer, base),
         outer_area=quantize_area(outer.area),
         outer_radius=quantize_distance(outer_radius(outer, ORIGIN_FRAME)),
         q_text=_joint_text(frame.q),

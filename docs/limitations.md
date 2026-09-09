@@ -151,9 +151,10 @@ against: the evidence graph records the region the robot *demonstrably swept*.
 `reg.envelope.outer_envelope(state, limits, horizon)` over-covers — the
 horizon-limited joint box pushed through the forward kinematics as an interval,
 so every configuration the arm can reach in the window has its body inside it.
-It is **not** stored as geometry and replaces nothing. What the artifact retains
-is two scalars per computed envelope, `outer_area` and `outer_radius`, which
-bracket the sampled area from the other side.
+It replaces nothing. What every computed envelope retains is the two scalars
+`outer_area` and `outer_radius`, which bracket the sampled area from the other
+side; the **boundary** is retained on the rows that keep the sampled polygon and
+on no others (issue #257, `reg.graph.GEOMETRY_RETENTION`).
 `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
 is what makes it a bound rather than an estimate, and it ships with the negative
 that proves the test can fail.
@@ -163,13 +164,12 @@ So the statement about *this* project's answers, in the two directions:
 - "the robot **could have** reached (x, y)" — supported, from the sampled
   envelope: every point in it is reachable.
 - "the robot **could not have** reached (x, y)" — supported **for a point
-  outside the outer set**, which for a retained frame means *at a radius greater
-  than `outer_radius`* from the base. The artifact stores the outer set's radius
-  and area, not its boundary, so the answer a *stored* row alone gives is
-  radial. The full region is recomputable from the `robot_config` and `horizon`
-  the row already names, at which point the answer is the region's, not the
-  disc's; that recomputation inherits §1's dependence on the geometry library
-  exactly as the inner one does.
+  outside the outer set**, and what a stored row alone gives depends on which
+  row. Where the boundary is retained the answer is the region's. Everywhere
+  else it is *at a radius greater than `outer_radius`* from the base — a disc —
+  and the region is recomputable from the `robot_config` and `horizon` the row
+  already names, at which point that recomputation inherits §1's dependence on
+  the geometry library exactly as the inner one does.
 - Between them lies the gap the bracket makes visible rather than closes: a
   point inside the outer set and outside the sampled one is one the artifact
   says nothing about.
@@ -905,7 +905,7 @@ artifacts cannot answer, and must come here for.
 |---|---|---|
 | ~~1~~ | *What was this `layer` tag computed from?* — **closed** | §11 |
 | ~~2~~ | *Whose recomputation is wrong, mine or the file's?* — **closed, weaker form** | §1 |
-| 3 | *Could the robot have reached (x, y)?* | §2, §3 |
+| 3 | *Could the robot have reached (x, y)?* — **narrowed to the rows that keep no polygon** | §2, §3 |
 
 *1 — closed 2026-09-08.* The edge carried `A` or `B` and the file
 carried nothing it was computed from. It carries it now, per edge, in
@@ -924,13 +924,19 @@ is a could-not-evaluate rather than an attribution, and that matching
 environments are necessary and not sufficient — the C library is not among the
 keys.
 
-*3 — the pointwise question requires a recomputation, which routes back through
-2.* A stored `envelope` row retains `outer_area` and `outer_radius`, not a
-boundary, and for most frames not the sampled polygon either. So from the row
-alone the answer to a question about a *point* is a radial one, in whichever
-direction it is asked — §2's three bullets are the exact statement, and §3 is what
-that costs the overclaim check. The region is recomputable, and a recomputation is
-gap 2.
+*3 — narrowed 2026-09-09 (issue #257), and what is left of it still routes back
+through 2.* Every `envelope` row retains `outer_area` and `outer_radius`, and
+since #257 the rows that keep the sampled polygon retain the outer **boundary**
+beside it: the two ends of the run, every relationship transition, every posed
+frame — 12 of `long_run`'s 3,000 frames, which are the frames an incident report
+cites because they are the ones an edge anchors. There the answer to a question
+about a *point* is the region's. On the rows that keep no polygon it is still
+radial in whichever direction it is asked — §2's three bullets are the exact
+statement, and §3 is what that costs the overclaim check — and the region is
+recomputable, which is gap 2. **The ceiling on the rest is `ENVELOPE_RETENTION`,
+not this gap**: a boundary on every retained row would answer 84 of those 3,000
+frames for 7.3x the bytes, so closing it further is a decision about which frames
+get a row at all.
 
 **The cost.** What is left is a fact a reader must take from a markdown file that
 no test holds against the artifact. That is the cost this project has already
@@ -938,24 +944,28 @@ refused to accept one level down — `reg.enforce` recomputes its own bound rath
 than reading the declared one, precisely because a value supplied by the party
 being checked is not evidence.
 
-**What closing two cost.** Gap 2 cost a schema bump and a refusal; gap 1 cost a
-schema bump, a retained row per input per tagged edge, and **every published
-retention figure** — [`retention.md`](retention.md) is the re-measurement. Neither
-resolved gap 3: polygon containment (issue #82, §3) stays open and still changes
-what a published claim means.
+**What closing two and narrowing one cost.** Gap 2 cost a schema bump and a
+refusal; gap 1 cost a schema bump, a retained row per input per tagged edge, and
+**every published retention figure** — [`retention.md`](retention.md) is the
+re-measurement. Gap 3's narrowing cost a schema bump and +0.61% / +0.42% of the
+two finer figures. None of the three resolved polygon containment for the
+overclaim check (issue #82, §3): the recomputation blocker is gone at the rows
+that keep a boundary, and adopting containment re-labels three of five fault
+fixtures, which is a decision about what a fault means and stays open.
 
 **What a claim would need in order not to inherit this.** That the file carry
 what the prose carries, which is [`self-describing.md`](self-describing.md) §3 and
-its build order in §8. Tiers 2, 3 and 4 have landed — the recording environment
-and the guard that acts on it (issues #200 and #201), the cold-read report, and
-the layer basis per tagged edge (issue #252). What is left is the outer boundary
-retained rather than projected (tier 5, a decision and not a task, because it
-moves published figures), and tier 1's [`prior-art.md`](prior-art.md) pass on
+its build order in §8. Tiers 2 to 5 have landed — the recording environment
+and the guard that acts on it (issues #200 and #201), the cold-read report, the
+layer basis per tagged edge (issue #252), and the outer boundary retained where
+the sampled polygon is (issue #257). What is left is tier 1's
+[`prior-art.md`](prior-art.md) pass on
 build provenance, in-toto and SLSA, because recording the toolchain that produced
 an artifact is ordinary practice with names on it and this project does not get to
 discover it. Until then the supportable claim is exactly: **this artifact lets a
 reader check a layer tag and an environment from the graph alone; the reachable
-region behind an edge is still radial.**
+region behind an edge is a region where an edge anchors one and a radius
+everywhere else.**
 
 ---
 

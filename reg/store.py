@@ -60,6 +60,11 @@ would otherwise be indistinguishable from a right one:
 * an `outer_radius` with no `config_id` — a radius is a distance about a centre,
   and the configuration is what names the frame that centre is in (issue #166).
   A radius about an unstated centre reads as a measurement and is not one.
+* an `outer_wkb` anywhere but where `geometry_wkb` and `outer_area` both are —
+  the retention rule for the outer boundary is `GEOMETRY_RETENTION`'s own
+  (issue #257), so a row it covers that carries no boundary has quietly stopped
+  answering pointwise, and one it excludes that carries a boundary is retention
+  no `meta` text states. See `insert_envelope`.
 * a `base_pose` with no `base_pose_source`, and either of them in an artifact
   that states `meta[base_frame]` — a room-frame pose whose provenance nobody
   stated, and a run claiming both that its base was bolted and that a localizer
@@ -396,7 +401,24 @@ __all__ = [
 #: were checked against a basis from one that carries no basis to check them
 #: against, and `connect` refusing it is that could-not-evaluate rather than a
 #: basis assumed on the file's behalf.
-SCHEMA_VERSION = 13
+#:
+#: 14: `envelope.outer_wkb` arrived (issue #257, option C of #228). The outer
+#: reachable set's boundary is retained where `reg.graph.GEOMETRY_RETENTION`
+#: already keeps the inner polygon — the two ends of the run, every relationship
+#: transition, every posed frame — and nowhere else. **What a v13 reader would
+#: be confidently wrong about is what the file can answer, and in both
+#: directions.** Asked *could the robot have reached (x, y)*, a v13 reader has
+#: `outer_radius` and no boundary column, so it answers *not at that distance*
+#: and reports the pointwise question as one this artifact does not carry — on a
+#: v14 file that carries the exact region at every frame an `INTERSECTS` or
+#: `CONTACT` edge anchors, which is where an incident report asks. That is a
+#: readable answer reported as an absent one, and the assertion
+#: docs/self-describing.md exists to remove. In the other direction the boundary
+#: is a *retention rule*, not a column: a v14 reader meeting a v13 file cannot
+#: tell an artifact that retained no boundary from one whose build predates the
+#: rule, and `connect` refusing it is that could-not-evaluate rather than a
+#: recomputation run on the reader's own machine and returned as the file's.
+SCHEMA_VERSION = 14
 
 #: What each version changed, one line each, keyed by the version it arrived in.
 #: The comment block above is the argument; this is the part a **refusal** can
@@ -439,6 +461,11 @@ SCHEMA_CHANGES: dict[int, str] = {
     "weakest of its inputs rather than of one of them — so every tag can be "
     "checked against what it was computed from, and a base velocity out of a "
     "perceiver moves the tag it always reached the bound through",
+    14: "envelope.outer_wkb arrived and the outer reachable set's boundary is "
+    "retained where the inner polygon already is — so the file answers "
+    "*could the robot have reached (x, y)* pointwise at every frame an "
+    "INTERSECTS or CONTACT edge anchors, where a v13 reader has a radius and "
+    "reports the question as one this artifact does not carry",
 }
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
@@ -1182,12 +1209,41 @@ CREATE TABLE robot_config (
 -- question this artifact answers rather than one a benchmark answers about a run
 -- somebody still has.
 --
--- WHY SCALARS AND NOT THE POLYGON. The outer region is a deterministic function
--- of the `robot_config` this row names plus the horizon it stores, so retaining
--- its WKB would store the same information twice — once at 16 bytes a frame and
--- once at several kilobytes. Enforcement computes the region, uses it, and
--- discards it; these two numbers are what survives. The same condition as the
--- geometry above applies to that recomputation, and for the same reason.
+-- WHY SCALARS EVERYWHERE AND THE POLYGON WHERE THE INNER ONE ALREADY IS (issue
+-- #257, option C of #228). The outer region is a deterministic function of the
+-- `robot_config` this row names plus the horizon it stores, so retaining its
+-- WKB on every row would store the same information twice — once at 16 bytes a
+-- frame and once at several kilobytes. `outer_wkb` is therefore retained on
+-- exactly the rows that already keep `geometry_wkb`, which is
+-- `reg.graph.GEOMETRY_RETENTION`'s existing rule: the two ends of the run, every
+-- frame at which an `INTERSECTS` or `CONTACT` relationship begins or ceases, and
+-- every posed frame. Those are the frames the artifact already says something
+-- happened at, so that is where *could the robot have reached (x, y)* is
+-- answerable from a stored row rather than radially; everywhere else the two
+-- scalars are what survives. Measured before it was adopted: +0.61% of the
+-- transition figure and +0.42% of the per-frame one, against +4.50% and +3.10%
+-- for a boundary on every computed row (docs/self-describing.md §8 tier 5).
+--
+-- The last CHECK below is that rule in the schema rather than a convention on
+-- top of it: `outer_wkb` is present exactly where `geometry_wkb` and
+-- `outer_area` both are. A row C's rule covers and that carries no boundary
+-- would be a pointwise answer the artifact silently stopped writing, and a
+-- boundary on a row with no inner polygon would be a retention rule no `meta`
+-- text states. It carries no comment of its own, and that is not an oversight:
+-- SQLite keeps the text of a CREATE statement verbatim in `sqlite_master`, so
+-- prose *inside* these parentheses is bytes in every artifact and in every
+-- resolution view — including the occurrence level, which retains no envelope
+-- row for the rule to be about. Prose out here costs nothing, which is where
+-- the argument for the constraint belongs.
+-- The same condition as the geometry above applies to the recomputation the
+-- other rows promise, and for the same reason.
+--
+-- AND IT IS THE ROOM-FRAME POLYGON, ON THE SAME TERMS AS THE INNER ONE (issue
+-- #191). What is retained is the region placed where the robot was, not the
+-- body-frame region about the origin — the two scalars are invariant under that
+-- placement and a polygon is not. Handing back a region about the origin for a
+-- robot that was elsewhere is the failure `reg.graph.envelope_at`'s refusal
+-- exists to stop, and a retained boundary must not reintroduce it.
 --
 -- AND A RADIUS IS STORED WITH THE FRAME IT IS MEASURED FROM, OR NOT STORED
 -- (issue #166). `outer_radius` is a distance from the base to the furthest point
@@ -1215,6 +1271,7 @@ CREATE TABLE envelope (
     source        TEXT NOT NULL CHECK (source IN ({_SQL_ENVELOPE_SOURCES})),
     outer_area    REAL,
     outer_radius  REAL,
+    outer_wkb     BLOB,
     UNIQUE (envelope_hash, source, horizon),
     CHECK (geometry_wkb IS NOT NULL OR config_key IS NOT NULL),
     CHECK ((horizon IS NULL) = (source = 'clamped')),
@@ -1230,7 +1287,8 @@ CREATE TABLE envelope (
     -- rounding rather than for a fault. Zero, though, is always a failed
     -- computation: an outer bound of no extent contains no declared region.
     CHECK (outer_area IS NULL OR (outer_area > 0.0 AND outer_radius > 0.0)),
-    CHECK (outer_radius IS NULL OR config_key IS NOT NULL)
+    CHECK (outer_radius IS NULL OR config_key IS NOT NULL),
+    CHECK ((outer_wkb IS NOT NULL) = (geometry_wkb IS NOT NULL AND outer_area IS NOT NULL))
 );
 
 -- `geometry_wkb` is the entity's world-frame boundary and is present exactly
@@ -2203,6 +2261,7 @@ def insert_envelope(
     source: str,
     outer_area: float | None,
     outer_radius: float | None,
+    outer_geometry: BaseGeometry | None,
 ) -> str:
     """An envelope the artifact retains. Idempotent on `envelope_id`.
 
@@ -2240,6 +2299,29 @@ def insert_envelope(
     that names which frame the base was in — its own `base_pose`, or
     `meta[base_frame]` for a configuration that states none. A radius about an
     unstated centre is not a measurement of anything.
+
+    `outer_geometry` is that outer set's **boundary**, and it is required with no
+    default for the reason every other retention argument here is: *store the
+    region* and *keep the two scalars* are different decisions with different
+    costs and different answers downstream. It is retained on exactly the rows
+    that keep `geometry` and an outer set, which is `reg.graph.GEOMETRY_RETENTION`'s
+    own rule (issue #257, option C of #228), and both directions are refused
+    here rather than written:
+
+    * a row this rule covers — a `computed` envelope whose inner polygon is
+      being stored — and no boundary beside it. The `meta` rule says the file
+      answers *could the robot have reached (x, y)* pointwise at that frame, and
+      the row would answer radially while looking like every other one.
+    * a boundary on a row the rule excludes. That is retention on a rule nothing
+      in the artifact states, and a reader would have to infer the rule from the
+      pattern of NULLs — which is what recording the rule in `meta` exists to
+      make unnecessary.
+
+    The second refusal is the one that has to be able to fire without the first
+    firing everywhere: most rows keep no inner polygon, so a check that demanded
+    a boundary on every `computed` envelope would refuse every artifact this
+    repository builds. It is the same geometry the caller placed — the
+    room-frame region for a posed configuration, on `reg.graph._place`'s terms.
 
     Re-inserting an id whose row already exists fills in a geometry or a
     `config_id` the first insert left `NULL`, and refuses a *different* value for
@@ -2279,6 +2361,34 @@ def insert_envelope(
             "neither is a set the robot can reach. A computed envelope missing "
             "it would be an under-approximation with nothing bracketing it, "
             "which is the state issue #82 is about."
+        )
+    if outer_geometry is not None and outer_area is None:
+        raise StoreError(
+            f"envelope {envelope_id!r} has source={source!r} and would store an "
+            "outer boundary with no outer_area beside it. The boundary belongs "
+            "to the outer reachable set, and a row that retains no outer set "
+            "has none: a declared region is the policy's claim and a clamped "
+            "bound is what a verdict applied, and a polygon stored for either "
+            "would be read as the region the robot could not leave."
+        )
+    if outer_geometry is not None and geometry is None:
+        raise StoreError(
+            f"envelope {envelope_id!r} would store an outer boundary on a row "
+            "that keeps no inner polygon. The boundary is retained where "
+            "reg.graph.GEOMETRY_RETENTION already keeps the geometry and "
+            "nowhere else (issue #257), so this row is one the stated rule "
+            "excludes — and a retention nothing in meta states is one a reader "
+            "can only infer from the pattern of NULLs."
+        )
+    if outer_area is not None and geometry is not None and outer_geometry is None:
+        raise StoreError(
+            f"envelope {envelope_id!r} retains its inner polygon and an "
+            f"outer_area={outer_area!r}, and carries no outer boundary. That is "
+            "a row reg.graph.GEOMETRY_RETENTION covers: the rule in this "
+            "artifact's own meta table says the outer boundary is kept wherever "
+            "the geometry is, so the file would claim a pointwise answer at "
+            "this frame and hold a radius. Refused rather than written — the "
+            "absence is invisible in every scalar query the row still answers."
         )
     if outer_radius is not None and config_id is None:
         raise StoreError(
@@ -2335,6 +2445,9 @@ def insert_envelope(
                 **scalars,
                 "envelope_hash": digest,
                 "geometry_wkb": None if geometry is None else to_wkb(geometry),
+                "outer_wkb": (
+                    None if outer_geometry is None else to_wkb(outer_geometry)
+                ),
                 "config_key": config_key,
             },
         )
@@ -2359,20 +2472,32 @@ def insert_envelope(
             (config_key, key),
         )
     if geometry is not None:
-        attach_envelope_geometry(conn, envelope_id, geometry)
+        attach_envelope_geometry(conn, envelope_id, geometry, outer_geometry)
     return envelope_id
 
 
 def attach_envelope_geometry(
-    conn: sqlite3.Connection, envelope_id: str, geometry: BaseGeometry
+    conn: sqlite3.Connection,
+    envelope_id: str,
+    geometry: BaseGeometry,
+    outer_geometry: BaseGeometry | None,
 ) -> None:
-    """Store the polygon on an envelope row that was written without one.
+    """Store the polygons on an envelope row that was written without them.
 
     The retention rule (`reg.graph.GEOMETRY_RETENTION`) marks a frame as evidence
     for a reason that is only known one frame later — an interval ends at the
     last instant it held — so the row is written when the envelope changes and
     the geometry is attached when the run turns out to need it. Doing it the
     other way round would mean holding the whole stream in memory to decide.
+
+    **Both boundaries or neither, in one statement** (issue #257). The outer
+    boundary is retained where the inner polygon is, so a frame that turns out to
+    be evidence gains both at the same instant; attaching the inner one alone
+    would leave the row in the state this module refuses to write, and the
+    schema's own CHECK would refuse the write in a message about a constraint
+    rather than about a rule. `outer_geometry` is `None` for a row that has no
+    outer set at all — a declared region or a clamped bound — and required with
+    no default so that the two cases are stated by the caller.
 
     Refuses an unknown id, and refuses to *replace* a geometry that is already
     stored. Two different polygons under one content-derived id is a collision;
@@ -2388,7 +2513,17 @@ def attach_envelope_geometry(
             "an id that was never written means the geometry belongs to a frame "
             "the artifact has no record of."
         )
+    if (row["outer_area"] is not None) != (outer_geometry is not None):
+        raise StoreError(
+            f"envelope {envelope_id!r} has outer_area={row['outer_area']!r} and "
+            f"was handed outer_geometry={outer_geometry!r}. The row keeps the "
+            "inner polygon from here on, and the outer boundary is retained "
+            "wherever the inner one is (issue #257): a row with an outer set "
+            "must gain its boundary in the same statement, and a row without "
+            "one has no boundary to gain."
+        )
     blob = to_wkb(geometry)
+    outer_blob = None if outer_geometry is None else to_wkb(outer_geometry)
     if row["geometry_wkb"] is not None:
         if bytes(row["geometry_wkb"]) != blob:
             raise StoreError(
@@ -2396,10 +2531,17 @@ def attach_envelope_geometry(
                 "The id is derived from the envelope hash, so two distinct "
                 "polygons under it is a collision, not an update."
             )
+        if outer_blob is not None and bytes(row["outer_wkb"]) != outer_blob:
+            raise StoreError(
+                f"envelope {envelope_id!r} already stores a different outer "
+                "boundary. Same collision, one region out: the id is derived "
+                "from the envelope hash, so two distinct outer sets under it "
+                "cannot both be this frame's."
+            )
         return
     conn.execute(
-        "UPDATE envelope SET geometry_wkb = ? WHERE envelope_key = ?",
-        (blob, row["envelope_key"]),
+        "UPDATE envelope SET geometry_wkb = ?, outer_wkb = ? WHERE envelope_key = ?",
+        (blob, outer_blob, row["envelope_key"]),
     )
 
 
@@ -2420,6 +2562,7 @@ SELECT e.envelope_key              AS envelope_key,
        e.source                    AS source,
        e.outer_area                AS outer_area,
        e.outer_radius              AS outer_radius,
+       e.outer_wkb                 AS outer_wkb,
        rc.base_pose                AS base_pose,
        rc.base_pose_source         AS base_pose_source
 FROM envelope e

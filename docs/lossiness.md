@@ -134,13 +134,22 @@ Each entry is a claim that the graph can be tested against.
    reachable set for the same frame — `reg.envelope.outer_envelope`, which
    over-covers, against an `area` column that under-covers. Without them "how good
    is the sampled envelope" is a question only a benchmark can answer, and only
-   for a run somebody still has. Sixteen bytes a row buys it. What is *not*
-   retained is that region's geometry — a deterministic function of the
-   `robot_config` and the `horizon` the row already names, so storing its WKB
-   would store the same information twice (the same argument as #9 below). A
+   for a run somebody still has. Sixteen bytes a row buys it. A
    `declared` or `clamped` row carries neither: neither is a reachable set, and a
    number invented for them would be indistinguishable downstream from one
    something computed.
+
+   **And that region's boundary, wherever the sampled polygon is kept.**
+   `outer_wkb` is retained under #9's rule and no other — the two ends of the
+   run, every relationship transition, every posed frame — so at the frames this
+   artifact already says something happened at, *could the robot have reached
+   (x, y)* is answered by the region, and everywhere else by `outer_radius`,
+   which answers it about a disc. It is the room-frame polygon, on the same
+   terms as the sampled one. Retaining it on every row was priced first and
+   refused: it answers 84 frames of 3,000 rather than 12 for 7.3x the bytes,
+   because `ENVELOPE_RETENTION` caps both ([`self-describing.md`](self-describing.md)
+   §8). A row the rule covers and that carries no boundary is refused rather
+   than written, and so is a boundary on a row it excludes.
 
    **And a radius is retained with the frame it is measured from, or it is not
    retained.** `outer_radius` is a distance from the base, so it is a radius

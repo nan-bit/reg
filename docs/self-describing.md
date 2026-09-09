@@ -42,7 +42,7 @@ document's statement of the same three, for the argument it goes on to make.*
 |---|---|---|---|
 | ~~1~~ | Check a `layer` tag | The tag was written and what it was computed **from** was not — **closed by issue #252**: `edge_layer_basis` carries one row per input per tagged edge, and the tag is the weakest of them | `sufficiency.md` §5.6, §5.9 |
 | 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **closed in the weaker form by issues #200 and #201**: it records them, and `envelope_at` refuses to recompute where they differ. What is left is that a refusal is not an attribution | `limitations.md` §1 |
-| 3 | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` are retained, not the boundary | `limitations.md` §2, §3 |
+| ~~3~~ | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` were retained, not the boundary — **narrowed by issue #257**: the boundary is retained wherever the sampled polygon is, so the question is the region's at every frame an edge anchors and radial at the rest | `limitations.md` §2, §3 |
 
 **Gap 1 — a tag that was asserted rather than checkable. Closed 2026-09-08
 (issue #252).** `envelope_layer` took `Limits` and nothing else. That was sound
@@ -92,10 +92,15 @@ and is stated rather than left to be discovered, because `numpy.cos` and
 The split into two issues was deliberate: writing the data and using it are
 different work, and only the second changes what a query answers.
 
-**Gap 3 — a radius where the question wants a region.** A stored envelope row
-answers *not at that distance*. It cannot answer *not at that point*, because the
-boundary is not there to test against. The region is recomputable, which routes
-the question straight back through gap 2.
+**Gap 3 — a radius where the question wants a region. Narrowed 2026-09-09
+(issue #257).** A stored envelope row answered *not at that distance* and could
+not answer *not at that point*, because the boundary was not there to test
+against. `outer_wkb` is now retained under `GEOMETRY_RETENTION`'s own rule —
+option C of §8's tier 5 — so the rows that keep the sampled polygon carry the
+outer region too and answer pointwise. On the rest the answer is still radial
+and the region is still recomputable, which routes that remainder back through
+gap 2; and what caps it is `ENVELOPE_RETENTION` rather than this gap, which is
+why retaining a boundary everywhere buys 84 frames of 3,000 rather than 12.
 
 ## 2. The test that decides all three
 
@@ -130,7 +135,7 @@ either neighbour would call a deliberate gate a shortcoming, or a shortcoming a
 gate. It is the one claim here whose verification is withheld on purpose.
 
 **It covers all four of [`plan.md`](plan.md)'s claims**, in six rows, on an
-artifact built from `main` at `schema_version` 13 with a record stream stored.
+artifact built from `main` at `schema_version` 14 with a record stream stored.
 Claim 4's two are **absent** on a build handed none — a fact about the build
 rather than about the schema:
 
@@ -139,7 +144,7 @@ rather than about the schema:
 | 4 | `chain-intact` | **checkable with a key it does not contain** — both chains are in the file, every record carries its link and its MAC, and `verify_chain(conn, keyring)` is what a key-holder runs |
 | 4 | `passivation-acknowledged` | **checkable** — `acknowledgments(conn)` needs no key; a passivation nobody cleared is a could-not-evaluate, never a *no* |
 | 3 | `layer-tag-basis` | **checkable** — gap 1, closed |
-| 2 | `reached-point` | **readable, not checkable**, radially only — gap 3 |
+| 2 | `reached-point` | **readable, not checkable** — the boundary is in the file where an edge anchors one (gap 3, narrowed); no query tests a point against it |
 | 1 | `recompute-discarded-polygon` | **checkable** — the discard contract retention rests on |
 | — | `recording-environment` | **checkable** — what the row above rests on |
 
@@ -155,7 +160,7 @@ The negatives ship with each — `env_*` keys stripped is *absent* and not
 a file with no chain in it is *absent* and not the fifth state, and a record whose
 MAC has been blanked is *readable, not checkable*, being unverifiable by anybody.
 
-**It closes no gap.** It makes them legible from the file, which is what lets
+**It closes no gap.** It makes them legible from the file, which is what let
 #228 be judged by more than a PR body.
 
 ## 3. What moves into the file
@@ -164,10 +169,10 @@ MAC has been blanked is *readable, not checkable*, being unverifiable by anybody
 |---|---|---|
 | **Environment** in `meta`: shapely and GEOS versions, platform, Python — **landed, issue #200**, as six keys: those four, plus numpy, plus the platform's system and machine separately; **acted on, issue #201**, by `envelope_at` over four of them | Gap 2, in the weaker form below. A recomputation that disagrees becomes a could-not-evaluate rather than an unresolvable one — and off the recording environment it is refused before it can disagree | six rows; schema bump to 11; **no published figure moved**; a recompute off the recording environment stops returning a polygon |
 | **Layer basis** per tagged edge: the inputs the tag was computed from, each with its provenance | Gap 1, and the tag becomes checkable rather than trusted | a row per input per tagged edge |
-| **The outer boundary**, retained rather than projected | Gap 3 | bytes, and the published figures move |
+| **The outer boundary**, retained rather than projected — **landed, issue #257**, where the sampled polygon already is | Gap 3, at the frames an edge anchors | +0.61% and +0.42% of the two finer figures; schema bump to 14 |
 
-The first is small and unblocks the honesty of the other two. The third is the
-expensive one and is a decision, not a task — see §8.
+The first is small and unblocks the honesty of the other two. The third was the
+expensive one and was taken as a decision rather than a task — see §8.
 
 **What the sixth prior-art pass changed about the first row** ([`prior-art.md`](prior-art.md)
 §27, §28):

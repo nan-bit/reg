@@ -58,7 +58,7 @@ import pytest
 
 from reg import bench, chain, graph, query, store
 from reg.bench import AGREE, COULD_NOT_EVALUATE, DISAGREE, run_scenario
-from reg.identity import RunIdentity
+from reg.identity import DPIA_NONE, Disclosures, RunIdentity
 from reg.query import ANSWERED, QueryError
 from reg.scenarios import scenario
 from reg.tolerances import DISTANCE_TOL_M, TIME_TOL_S
@@ -85,6 +85,18 @@ TEST_IDENTITY = RunIdentity.declare(
     run_start="2026-08-21T09:00:00Z",
     unit_id="unit-test-arm-1",
     operator_id="op-test",
+)
+
+#: What every build in this file states about the obligations
+#: `docs/limitations.md` §8 names (issue #125). Required at build with no
+#: default, and declared once here for `TEST_IDENTITY`'s reason: a value that varied
+#: per call would make two artifacts in this file two different runs. These
+#: tests are not about the disclosure keys — `tests/test_personal_data.py` and
+#: `tests/test_graph.py` are — so they state one and move on.
+TEST_DISCLOSURES = Disclosures.declare(
+    worker_notice="not-given",
+    dpia_reference=DPIA_NONE,
+    operator_id_kind="pseudonym",
 )
 
 #: A separation the `contact` fixture crosses in both directions, so the at-risk
@@ -985,6 +997,7 @@ def _attested_build(tmp: Path, name: str) -> tuple[Path, Path]:
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         records=records,
         horizon=0.1,
@@ -2395,6 +2408,11 @@ def _build_at(csv_path: Path, out: Path, *, page_size: int, always_create: bool)
             # two different runs and the comparison would be about that rather
             # than about the encoding.
             identity=bench.BENCH_IDENTITY,
+            # And `bench.BENCH_DISCLOSURES` beside it, for the same reason:
+            # the three keys issue #125 added land in `meta`, so a different
+            # set here would show up as a `meta` difference the encoding did
+            # not cause.
+            disclosures=bench.BENCH_DISCLOSURES,
             human_radius=scenario(SCENARIO).world.human_radius,
             horizon=_FAST["horizon"],
             n_samples=_FAST["n_samples"],
@@ -2497,6 +2515,7 @@ def empty_record_stream(built, tmp_path_factory) -> Path:
         out,
         scenario(SCENARIO).world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scenario(SCENARIO).world.human_radius,
         records=graph.AttestationRecords(
             declarations=(), verdicts=(), acknowledgments=()
@@ -2846,6 +2865,7 @@ def mobile_built(tmp_path_factory) -> tuple[Path, Path]:
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         horizon=_MOBILE_FAST["horizon"],
         n_samples=_MOBILE_FAST["n_samples"],

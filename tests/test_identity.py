@@ -1,4 +1,5 @@
-"""`reg.identity` — the declared run start, the unit and the operator.
+"""`reg.identity` — the declared run start, the unit, the operator, and what
+the deployer states about the obligations that block creates.
 
 Issue #83. The artifact carried no absolute time and nothing naming the robot,
 and the reason given for the first was determinism. These tests are mostly about
@@ -10,6 +11,15 @@ a refusal with a test on it.
 The negatives outnumber the positives on purpose. A parser that accepts
 `2026-08-21T09:00:00` and assumes UTC produces a perfectly well-formed artifact
 that is wrong by up to fourteen hours, and nothing downstream can see it.
+
+Issue #125 added `Disclosures` beside them and the tests below have the same
+shape, because the argument is the same one: `docs/limitations.md` §8 names
+obligations this project does not discharge, and an artifact silent about them
+reads exactly like one built where none of them was done. So every value is
+required, every negative is a word rather than an absence, and each rule about
+what a status carries beside it is a refusal with a test on it. None of these
+tests asserts that anything stated is *enough* — nothing in the module decides
+that, and a test that implied otherwise would be claiming what §8 refuses to.
 """
 
 from __future__ import annotations
@@ -24,8 +34,13 @@ import pytest
 
 from reg.identity import (
     DATE_FORMAT,
+    DPIA_NONE,
+    Disclosures,
     IdentityError,
+    OperatorIdKind,
     RunIdentity,
+    WorkerNotice,
+    WorkerNoticeStatus,
     format_instant,
     parse_instant,
 )
@@ -282,3 +297,200 @@ def test_the_clock_check_can_fail() -> None:
         and isinstance(node.func, (ast.Attribute, ast.Name))
     }
     assert called & {"now", "utcnow", "today", "time", "fromtimestamp", "monotonic"}
+
+
+# --------------------------------------------------------------------------
+# Disclosures (issue #125)
+# --------------------------------------------------------------------------
+
+
+def _disclosures(**overrides) -> Disclosures:
+    fields = {
+        "worker_notice": "not-given",
+        "dpia_reference": DPIA_NONE,
+        "operator_id_kind": "pseudonym",
+    }
+    fields.update(overrides)
+    return Disclosures.declare(**fields)
+
+
+@pytest.mark.parametrize(
+    "stated",
+    [
+        "given 2026/08/01",
+        "not-given",
+        "not-applicable this cell runs unstaffed",
+    ],
+)
+def test_every_worker_notice_answer_round_trips_through_its_text_form(
+    stated: str,
+) -> None:
+    """What goes into the artifact is what the deployer wrote.
+
+    `parse` and `text` are one contract: the value in `meta` is the value a CLI
+    was handed, so nothing between the two can quietly re-word an answer about
+    an obligation. All three answers, because the two negatives are the ones
+    this key exists for.
+    """
+    assert WorkerNotice.parse(stated).text == stated
+    assert _disclosures(worker_notice=stated).worker_notice.text == stated
+
+
+def test_the_negatives_are_values_rather_than_absences() -> None:
+    """`not-given` and `none` are answers; nothing here may be omitted.
+
+    The whole argument for these three fields: a file that says *not-given* and
+    a file that says nothing are different facts, and only the first can be
+    assessed. So the negatives are ordinary values that construct, and the
+    absences below refuse.
+    """
+    stated = _disclosures()
+    assert stated.worker_notice.status is WorkerNoticeStatus.NOT_GIVEN
+    assert stated.dpia_reference == DPIA_NONE
+    assert stated.operator_id_kind is OperatorIdKind.PSEUDONYM
+
+
+def test_disclosures_are_frozen() -> None:
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        _disclosures().dpia_reference = "DPIA-1"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_worker_notice_is_refused(blank: str) -> None:
+    """THE NEGATIVE for "required, no default".
+
+    A blank value is the worst one available for the same reason a blank
+    `unit_id` is: it reads as absent in a `meta` dump while having been
+    supplied, so the artifact looks like one nobody was asked rather than one
+    that answered.
+    """
+    with pytest.raises(IdentityError, match="26\\(7\\)|empty"):
+        _disclosures(worker_notice=blank)
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_blank_dpia_reference_is_refused(blank: str) -> None:
+    with pytest.raises(IdentityError, match="dpia_reference"):
+        _disclosures(dpia_reference=blank)
+
+
+@pytest.mark.parametrize(
+    "status", ["informed", "GIVEN", "yes", "not applicable", "none"]
+)
+def test_a_worker_notice_status_outside_the_vocabulary_is_refused(
+    status: str,
+) -> None:
+    """The vocabulary is closed, and near-misses are the cases that matter.
+
+    `yes` and `not applicable` are what somebody writes when they mean an
+    answer this project defines; storing either verbatim would put a status in
+    the record that every reader has to guess at, and guessing is what a closed
+    vocabulary exists to stop.
+    """
+    with pytest.raises(IdentityError, match="worker-notice status"):
+        _disclosures(worker_notice=status)
+
+
+@pytest.mark.parametrize("kind", ["", "anonymous", "pseudonymous", "direct"])
+def test_an_operator_id_kind_outside_the_vocabulary_is_refused(kind: str) -> None:
+    """And nothing is inferred from the id itself — it is opaque either way."""
+    with pytest.raises(IdentityError, match="operator_id_kind"):
+        _disclosures(operator_id_kind=kind)
+
+
+@pytest.mark.parametrize(
+    "notice",
+    ["given", "given soon", "given 2026-08-01", "given 01/08/2026", "given 2026/8/1"],
+)
+def test_a_notice_given_without_a_readable_date_is_refused(notice: str) -> None:
+    """A `given` with no date states nothing an assessor can place.
+
+    The date is `DATE_FORMAT`, DSSAD's spelling and the one every occurrence in
+    an artifact already carries. `2026-08-01` and `01/08/2026` are the two
+    near-misses: both are dates, neither is this artifact's, and a second
+    spelling in one file is a reader's problem forever.
+    """
+    with pytest.raises(IdentityError, match="date"):
+        _disclosures(worker_notice=notice)
+
+
+def test_a_notice_that_was_never_given_carries_nothing_beside_it() -> None:
+    """Two facts inside one value, disagreeing, is worse than either alone.
+
+    A `not-given` with a date is either a wrong status or a wrong date, and
+    nothing downstream can say which — so it is refused rather than stored with
+    the surplus dropped, which would silently discard whichever half was right.
+    """
+    with pytest.raises(IdentityError, match="not-given"):
+        WorkerNotice(status=WorkerNoticeStatus.NOT_GIVEN, detail="2026/08/01")
+
+
+def test_a_not_applicable_notice_without_a_reason_is_refused() -> None:
+    """The member closest to an adjudication, held to stating why.
+
+    `not-applicable` on its own is a determination wearing a record's clothes.
+    With a reason it is what the rest of this module is: the deployer's
+    statement, carried unexamined — nothing here checks the reason, because
+    there is no registry of good ones and a check that only ever passes is not
+    a check.
+    """
+    with pytest.raises(IdentityError, match="not applicable|reason"):
+        _disclosures(worker_notice="not-applicable")
+    stated = _disclosures(worker_notice="not-applicable this cell runs unstaffed")
+    assert stated.worker_notice.detail == "this cell runs unstaffed"
+
+
+@pytest.mark.parametrize("bad", ["none\nnone", "none\x00", "none\rnone"])
+def test_a_dpia_reference_that_would_be_unreadable_in_meta_is_refused(
+    bad: str,
+) -> None:
+    with pytest.raises(IdentityError, match="unreadable"):
+        _disclosures(dpia_reference=bad)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("worker_notice", 7),
+        ("dpia_reference", 7),
+        ("operator_id_kind", 7),
+    ],
+)
+def test_a_disclosure_that_is_not_text_is_refused(field: str, value: object) -> None:
+    with pytest.raises(IdentityError):
+        _disclosures(**{field: value})
+
+
+def test_constructing_disclosures_from_the_wrong_types_is_refused() -> None:
+    """The dataclass is reachable directly, so it checks rather than assumes."""
+    with pytest.raises(IdentityError, match="WorkerNotice"):
+        Disclosures(
+            worker_notice="not-given",  # type: ignore[arg-type]
+            dpia_reference=DPIA_NONE,
+            operator_id_kind=OperatorIdKind.PSEUDONYM,
+        )
+    with pytest.raises(IdentityError, match="OperatorIdKind"):
+        Disclosures(
+            worker_notice=WorkerNotice(
+                status=WorkerNoticeStatus.NOT_GIVEN, detail=""
+            ),
+            dpia_reference=DPIA_NONE,
+            operator_id_kind="pseudonym",  # type: ignore[arg-type]
+        )
+    with pytest.raises(IdentityError, match="WorkerNoticeStatus"):
+        WorkerNotice(status="given", detail="2026/08/01")  # type: ignore[arg-type]
+
+
+def test_no_disclosure_value_is_a_number_or_a_bare_boolean() -> None:
+    """Every value a reader meets in `meta` is a word they can read.
+
+    `commitment: none` is the precedent — words rather than `1`/`0`, because a
+    bare `0` in a column of counts reads as a count of something. The same
+    argument applies here with more force: a `meta` value that read `0` against
+    a key about a worker notice would be unreadable in exactly the place it
+    matters most.
+    """
+    for member in (*WorkerNoticeStatus, *OperatorIdKind):
+        assert isinstance(member.value, str) and member.value.strip()
+        assert not member.value.isdigit()
+    assert DPIA_NONE == "none"

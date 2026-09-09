@@ -29,6 +29,26 @@ advice.** That was an explicit acceptance criterion, and it is the failure mode
 a document of this kind actually has — a sentence that reads as reassurance is
 worse than the silence it replaced.
 
+WHAT THE ARTIFACT ITSELF NOW SAYS, AND WHAT IT STILL CANNOT
+-----------------------------------------------------------
+The disclosure named those obligations in prose while the file was silent, so an
+assessor holding one could not separate *a notice given and no key recording it*
+from *none given*. Three `meta` keys close that (issue #125), and three more
+checks here hold the pair together:
+
+* **The section names the keys.** They join the meta identifiers in the
+  schema -> document direction, so renaming one without disclosing the new name
+  fails exactly as adding an `entity` column would.
+* **The section says recording is not discharging, and keeps the retention basis
+  stated as a gap.** Both are acceptance criteria of #125 and both are the kind
+  of sentence that quietly goes missing in an edit; a §8 that reads as though
+  the obligations had been met is the failure this whole module exists against.
+* **The vocabulary claims nothing.** The key names and every value they may take
+  are scanned for a term that reads as a legal conclusion — the same direction
+  as `test_a_compliance_claim_is_caught`, applied to the schema rather than to
+  the prose, because `meta[worker_notice] = lawful-basis-established` would be a
+  compliance claim in a place no document check would ever look.
+
 THREE-VALUED, LIKE EVERY OTHER CHECK HERE
 -----------------------------------------
 A missing section, an empty document and a schema that could not be read are
@@ -41,12 +61,18 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from reg import graph, store
-from reg.identity import RunIdentity
+from reg.identity import (
+    DPIA_NONE,
+    OperatorIdKind,
+    RunIdentity,
+    WorkerNoticeStatus,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 LIMITATIONS = REPO / "docs" / "limitations.md"
@@ -176,6 +202,89 @@ def identity_fields() -> tuple[str, ...]:
 #: same defect as adding one.
 META_IDENTIFIERS = (graph.META_UNIT_ID, graph.META_OPERATOR_ID, graph.META_RUN_START)
 
+#: The three keys the deployer states about the obligations §8 names (issue
+#: #125), taken from `reg.graph` for the same reason: a key the artifact writes
+#: and the disclosure does not name is a fact in the file that nothing tells a
+#: reader how to read.
+META_DISCLOSURES = (
+    graph.META_WORKER_NOTICE,
+    graph.META_DPIA_REFERENCE,
+    graph.META_OPERATOR_ID_KIND,
+)
+
+#: What §8 has to keep saying now that the artifact carries those three keys.
+#: Both halves are acceptance criteria of issue #125: a section that recorded
+#: the keys and stopped saying the obligations are undischarged would read as
+#: though the gap had closed, and the retention basis is the one fact of the
+#: four that stays unbuilt — stated as a gap rather than silently dropped.
+RECORDS_AND_STILL_OWES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("that recording is not discharging", re.compile(r"recording is not discharging", re.I)),
+    (
+        "that the retention basis is still a gap",
+        re.compile(r"(gap|cannot say what basis|no key for it)", re.I),
+    ),
+    (
+        "why the basis is not built — a legal determination this project cannot make",
+        re.compile(r"legal determination", re.I),
+    ),
+    (
+        "that an artifact with no basis cannot be assessed against either bound",
+        re.compile(r"against either bound", re.I),
+    ),
+)
+
+#: A term that reads as a legal conclusion. Scanned over the **vocabulary** —
+#: the key names and every value they may take — rather than over prose, so it
+#: is a word list and not the sentence patterns above: a value has no sentence
+#: around it to negate a claim, and `dpia_reference = compliant` would be a
+#: claim of compliance sitting in `meta` where no document check would find it.
+#: `pseudonym` is deliberately absent from this list and `pseudonymised` is
+#: deliberately in it: the first describes an identifier, the second names a
+#: GDPR Art. 4(5) measure and reads as a claim to have taken one.
+CLAIM_TERMS = re.compile(
+    r"(compliant|compliance|complies|lawful|legal|permitted|authoris|authoriz|"
+    r"approved|certified|exempt|waived|discharged|satisfied|anonymous|anonymis|"
+    r"anonymiz|pseudonymis|pseudonymiz|consent)",
+    re.IGNORECASE,
+)
+
+
+def disclosure_vocabulary() -> tuple[str, ...]:
+    """Every token the three disclosure keys can put in an artifact.
+
+    Derived from the enums rather than listed here, so a member added later is
+    scanned without anyone remembering to add it — which is the only version of
+    this check that stays true.
+    """
+    return (
+        *META_DISCLOSURES,
+        *(member.value for member in WorkerNoticeStatus),
+        *(member.value for member in OperatorIdKind),
+        DPIA_NONE,
+    )
+
+
+def check_vocabulary_claims_nothing(terms: Sequence[str]) -> tuple[str, list[str]]:
+    """Verdict on whether any key or value reads as a legal conclusion.
+
+    An empty vocabulary is COULD-NOT-EVALUATE: a scan over nothing finds
+    nothing, and reporting that as a pass is how this check would die the day
+    the enums moved.
+    """
+    if not terms:
+        return COULD_NOT_EVALUATE, ["no vocabulary to scan"]
+    found = [term for term in terms if CLAIM_TERMS.search(term)]
+    return (DISAGREE, [f"{term!r} reads as a legal conclusion" for term in found]) if found else (AGREE, [])
+
+
+def check_records_and_still_owes(section: str) -> tuple[str, list[str]]:
+    """Verdict on whether §8 states what the keys do and do not settle."""
+    if not section.strip():
+        return COULD_NOT_EVALUATE, ["no personal-data section in docs/limitations.md"]
+    flat = normalise(section)
+    missing = [label for label, pattern in RECORDS_AND_STILL_OWES if not pattern.search(flat)]
+    return (DISAGREE, missing) if missing else (AGREE, [])
+
 
 # --------------------------------------------------------------------------
 # The checks
@@ -208,7 +317,15 @@ def check_disclosure(
     missing += [
         f"`RunIdentity` field {field!r} is not disclosed" for field in fields if field not in section
     ]
-    missing += [f"meta key {key!r} is not disclosed" for key in meta_keys if key not in section]
+    # Whole-token, unlike the two loops above: `operator_id_kind` contains
+    # `operator_id`, so a plain substring test would let a section that named
+    # only the longer key pass for the shorter one — a disclosure gap that
+    # arrived *because* a key was added, which is the failure this loop guards.
+    missing += [
+        f"meta key {key!r} is not disclosed"
+        for key in meta_keys
+        if re.search(rf"(?<!\w){re.escape(key)}(?!\w)", section) is None
+    ]
     return (DISAGREE if missing else AGREE), missing
 
 
@@ -282,7 +399,7 @@ def test_the_disclosure_describes_the_schema_that_exists(
         disclosure(limitations),
         columns=entity_columns(tmp_path),
         fields=identity_fields(),
-        meta_keys=META_IDENTIFIERS,
+        meta_keys=META_IDENTIFIERS + META_DISCLOSURES,
     )
     assert verdict == AGREE, (
         "docs/limitations.md's personal-data section no longer matches what the "
@@ -309,6 +426,41 @@ def test_the_dssad_alignment_states_the_privacy_inversion() -> None:
     assert verdict == AGREE, (
         "docs/prior-art.md §9 claims the DSSAD alignment without stating that "
         "`reg` inverts its privacy profile: " + "; ".join(missing)
+    )
+
+
+def test_the_disclosure_says_what_the_artifact_records_and_still_owes(
+    limitations: str,
+) -> None:
+    """Both halves of issue #125's acceptance criteria, in one verdict.
+
+    The section has to say that the three keys record rather than discharge, and
+    it has to keep the retention basis stated as a gap with the reason it is one.
+    A §8 that carried the keys and dropped either sentence would read as though
+    the obligations had been met, which is the exact inversion this file exists
+    against — and it is a plausible edit, because the keys look like progress.
+    """
+    verdict, missing = check_records_and_still_owes(disclosure(limitations))
+    assert verdict == AGREE, (
+        "docs/limitations.md's personal-data section carries the three keys but "
+        "no longer states what they settle and what they do not: "
+        + "; ".join(missing)
+    )
+
+
+def test_no_disclosure_key_or_value_reads_as_a_legal_conclusion() -> None:
+    """The vocabulary an artifact can contain, scanned for a compliance claim.
+
+    Issue #125 required that no key imply a legal conclusion. The keys and their
+    values are where that would land without any document check noticing: a
+    `meta` value is read by whoever opens the file, and there is no sentence
+    around it to carry a disclaimer. Derived from the enums, so a fourth
+    `WorkerNoticeStatus` is scanned the day it is added.
+    """
+    verdict, found = check_vocabulary_claims_nothing(disclosure_vocabulary())
+    assert verdict == AGREE, (
+        "a disclosure key or value reads as a claim about the law rather than "
+        "as a statement of fact: " + "; ".join(found)
     )
 
 
@@ -342,6 +494,13 @@ in applicable Union or national law, in particular Union law on the protection
 of personal data", so the window may be a ceiling as well as a floor. Art. 26(7)
 and a DPIA under GDPR Art. 35 are named here and this project does not discharge
 them, nor does §87(1)(6) BetrVG go addressed.
+
+What the deployer states, each required with no default: meta[worker_notice],
+meta[dpia_reference] and meta[operator_id_kind]. Recording is not discharging.
+The basis the file is kept under has no key, because naming it is a legal
+determination this project has no standing to make, and an artifact that cannot
+say what basis it was retained under cannot be assessed against either bound;
+that gap stays open.
 """
 
 
@@ -358,7 +517,10 @@ def schema(tmp_path_factory: pytest.TempPathFactory) -> tuple[str, ...]:
 
 def check_good(section: str, schema: tuple[str, ...]) -> tuple[str, list[str]]:
     return check_disclosure(
-        section, columns=schema, fields=identity_fields(), meta_keys=META_IDENTIFIERS
+        section,
+        columns=schema,
+        fields=identity_fields(),
+        meta_keys=META_IDENTIFIERS + META_DISCLOSURES,
     )
 
 
@@ -377,6 +539,9 @@ def test_the_fixture_disclosure_passes(schema: tuple[str, ...]) -> None:
         "in particular Union law on the protection of personal data",
         "ceiling",
         "meta[operator_id]",
+        "meta[worker_notice]",
+        "meta[dpia_reference]",
+        "meta[operator_id_kind]",
     ],
 )
 def test_a_disclosure_missing_a_required_statement_is_caught(
@@ -412,7 +577,7 @@ def test_an_undisclosed_identity_field_is_caught(schema: tuple[str, ...]) -> Non
         GOOD,
         columns=schema,
         fields=tuple(field.name for field in dataclasses.fields(WithBadge)),
-        meta_keys=META_IDENTIFIERS,
+        meta_keys=META_IDENTIFIERS + META_DISCLOSURES,
     )
     assert verdict == DISAGREE
     assert any("badge_number" in item for item in missing)
@@ -429,7 +594,10 @@ def test_a_missing_section_is_not_a_pass(section: str, schema: tuple[str, ...]) 
 
 def test_an_unreadable_schema_is_not_a_pass() -> None:
     verdict, missing = check_disclosure(
-        GOOD, columns=(), fields=identity_fields(), meta_keys=META_IDENTIFIERS
+        GOOD,
+        columns=(),
+        fields=identity_fields(),
+        meta_keys=META_IDENTIFIERS + META_DISCLOSURES,
     )
     assert verdict == COULD_NOT_EVALUATE
     assert missing
@@ -490,3 +658,78 @@ def test_a_section_9_without_the_inversion_is_caught() -> None:
 def test_a_missing_section_9_is_not_a_pass() -> None:
     verdict, _ = check_inversion(prior_art_section_9("# no sections here\n"))
     assert verdict == COULD_NOT_EVALUATE
+
+
+@pytest.mark.parametrize(
+    "removed",
+    [
+        "Recording is not discharging.",
+        "legal determination",
+        "against either bound",
+    ],
+)
+def test_a_section_that_drops_what_it_still_owes_is_caught(removed: str) -> None:
+    """THE NEGATIVE for the pair above, one sentence at a time.
+
+    Each removal is the edit that would make §8 read as though the three keys
+    closed the obligations they record. The check has to say no to every one of
+    them, or it is asserting nothing about a document that will be edited.
+    """
+    verdict, missing = check_records_and_still_owes(mutate(removed))
+    assert verdict == DISAGREE
+    assert missing
+
+
+def test_a_missing_section_cannot_pass_the_records_and_owes_check() -> None:
+    verdict, missing = check_records_and_still_owes("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert missing
+
+
+@pytest.mark.parametrize(
+    "term",
+    [
+        "gdpr-compliant",
+        "lawful-basis-established",
+        "dpia_approved",
+        "worker_notice_legal",
+        "pseudonymised",
+        "anonymised",
+        "consent-given",
+    ],
+)
+def test_a_vocabulary_term_that_claims_compliance_is_caught(term: str) -> None:
+    """THE NEGATIVE, in the shape `test_a_compliance_claim_is_caught` uses.
+
+    Every one of these is a value somebody could plausibly want: they read as
+    progress, and each of them would put a legal conclusion in `meta` under this
+    project's name. `pseudonymised` is the subtle one — `pseudonym` describes an
+    identifier and passes, while the participle names a GDPR Art. 4(5) measure
+    and claims one was taken.
+    """
+    verdict, found = check_vocabulary_claims_nothing((*disclosure_vocabulary(), term))
+    assert verdict == DISAGREE, f"{term!r} was not caught"
+    assert any(term in item for item in found)
+
+
+def test_an_empty_vocabulary_is_not_a_pass() -> None:
+    """A scan over nothing finds nothing, and that is not agreement."""
+    verdict, missing = check_vocabulary_claims_nothing(())
+    assert verdict == COULD_NOT_EVALUATE
+    assert missing
+
+
+def test_the_vocabulary_is_derived_rather_than_listed() -> None:
+    """The scan has to cover what an artifact can actually hold.
+
+    A hand-written list here would go stale the first time a member was added,
+    and it would go stale silently — the check would still pass, over the words
+    somebody remembered. So this asserts the derivation: every enum member's
+    value, and every key `reg.graph` writes, is in what gets scanned.
+    """
+    vocabulary = set(disclosure_vocabulary())
+    for member in (*WorkerNoticeStatus, *OperatorIdKind):
+        assert member.value in vocabulary, f"{member} is not scanned"
+    for key in META_DISCLOSURES:
+        assert key in vocabulary, f"{key} is not scanned"
+    assert DPIA_NONE in vocabulary

@@ -297,7 +297,15 @@ EXEMPT: dict[str, str] = {
 #         it did *not* need is a second statement of the finding, because the
 #         report `reg.bench` writes carries the argument and §8 carries the
 #         numbers a decision is taken from
-#   85.2  today, 2026-09-08, after #252 adopted the layer basis per edge.
+#   84.2  today, 2026-09-09, after #125 gave the artifact the three keys
+#         `docs/limitations.md` §8's obligations were disclosed in prose only.
+#         `reg.identity` gained four public symbols — the two enums, the notice
+#         and `Disclosures` — against no new code-coupled prose at all, so the
+#         denominator moved and the numerator did not. 27,349 / 325 = 84.15,
+#         rounded up to the next tenth. Lowered rather than left: a rate that
+#         falls because the surface grew under fixed prose is a rate that has
+#         fallen, and holding it would bank room no diff would show
+#   85.2  2026-09-08, after #252 adopted the layer basis per edge.
 #         `reg.store` gained thirteen public symbols and `reg.envelope` one,
 #         against the prose that closes `self-describing.md` §1 gap 1 and its
 #         §8 tier 4, `sensor-baseline.md`'s republished ladder and `README.md`'s
@@ -315,7 +323,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 85.2
+RATE = 84.2
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -430,7 +438,16 @@ RATE = 85.2
 #           its `## Why` provenance row +2 to record the retirement beside the
 #           condition. One word lower than the last ceiling rather than level
 #           with it, for the reason the #233 row gives — measured, no headroom
-ARGUMENT_MAX = 47131
+#   47,129  today, 2026-09-09, after #125. `docs/limitations.md` §8 gained the
+#           three `meta` keys the deployer now states, the vocabulary each takes
+#           and the sentence that recording is not discharging, and it gained
+#           the retention basis as a gap that stays open. Paid for inside the
+#           same section: the minimisation paragraph and *What a claim would
+#           need instead* stopped restating themselves, the bullet on the four
+#           retention rules folded into the paragraph about the basis it was
+#           half of, and three bullets lost a clause each. Two words below the
+#           last ceiling rather than level with it — measured, no headroom
+ARGUMENT_MAX = 47129
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -487,7 +504,12 @@ PARAGRAPH_MAX_WORDS = 120
 #        pointer at §1's gap 2 — cut to pay for §2's fifth state and Claim 4's
 #        two rows, not for this ceiling, and lowered here for the reason the
 #        #241 row gives
-LONG_PARAGRAPHS_MAX = 88
+#    87  today, 2026-09-09, after #125: `docs/limitations.md` went 2 -> 1. The
+#        paragraph that fell below the threshold is §8's *What a claim would
+#        need instead*, which stopped restating the caller-supplied-input
+#        argument `reg/identity.py` makes — cut for the word budget rather than
+#        for this ceiling, and lowered here for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 87
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

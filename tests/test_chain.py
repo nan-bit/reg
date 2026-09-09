@@ -84,7 +84,7 @@ from reg.chain import (
 )
 from reg.declare import Declaration, envelope_wkb, sign_declaration
 from reg.graph import AttestationRecords
-from reg.identity import RunIdentity
+from reg.identity import DPIA_NONE, Disclosures, RunIdentity
 from reg.scenarios import SCENARIOS
 from reg.sim import provenance
 from reg.stream import FLOAT_PRECISION, write_frames
@@ -705,6 +705,18 @@ TEST_IDENTITY = RunIdentity.declare(
     operator_id="op-test",
 )
 
+#: What every build in this file states about the obligations
+#: `docs/limitations.md` §8 names (issue #125). Required at build with no
+#: default, and declared once here for `TEST_IDENTITY`'s reason: a value that varied
+#: per call would make two artifacts in this file two different runs. These
+#: tests are not about the disclosure keys — `tests/test_personal_data.py` and
+#: `tests/test_graph.py` are — so they state one and move on.
+TEST_DISCLOSURES = Disclosures.declare(
+    worker_notice="not-given",
+    dpia_reference=DPIA_NONE,
+    operator_id_kind="pseudonym",
+)
+
 #: Envelope parameters coarse enough that the build is under a second. Nothing
 #: here is about envelope fidelity — `tests/test_envelope.py` owns that — and
 #: they are passed explicitly so no test here depends on a default staying put.
@@ -751,6 +763,7 @@ def _build(tmp_path: Path, name: str, records) -> Path:
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         records=records if records is not _PRODUCE else _records(csv, scn, tmp_path),
         **_FAST,
@@ -1099,6 +1112,7 @@ def acknowledged(tmp_path_factory) -> Path:
         out,
         scn.world.limits,
         identity=TEST_IDENTITY,
+        disclosures=TEST_DISCLOSURES,
         human_radius=scn.world.human_radius,
         records=records,
         **_FAST,

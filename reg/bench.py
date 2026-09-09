@@ -160,7 +160,7 @@ from shapely.ops import unary_union
 from reg import __version__, graph, store
 from reg.chain import KEY_BYTES, ROLES, Keyring, write_keyring
 from reg.envelope import SUBSTEP_DT, outer_envelope
-from reg.identity import RunIdentity
+from reg.identity import DPIA_NONE, Disclosures, RunIdentity
 from reg.kinematics import ORIGIN_FRAME, link_polygons
 
 # The query layer, imported by name rather than as a module (issue #37). Several
@@ -208,6 +208,7 @@ from reg.world import World
 __all__ = [
     "AGREE",
     "BASE_CONTROL_RATE_HZ",
+    "BENCH_DISCLOSURES",
     "BENCH_IDENTITY",
     "BYTES_PER_HOUR_EXTRAPOLATION",
     "CLAIM_1_SUCCESS_RATIO",
@@ -384,6 +385,26 @@ BENCH_IDENTITY = RunIdentity.declare(
     run_start="1970-01-01T00:00:00Z",
     unit_id="bench-not-a-unit",
     operator_id="bench-not-an-operator",
+)
+
+#: What a bench artifact states about the obligations `docs/limitations.md` §8
+#: names (issue #125). Required at build with no default, and stated here for
+#: `BENCH_IDENTITY`'s reason: a benchmark is not a deployment, so a caller
+#: asked to invent these at a call site would be inventing exactly what the
+#: requirement protects. Each value is the true one for a file produced by a
+#: simulator — no system entered service, so no Art. 26(7) notice was owed and
+#: the reason is stated rather than left as a bare negative; there is no DPIA;
+#: and `bench-not-an-operator` is the identifier itself rather than a pseudonym
+#: something outside the artifact resolves. It is recorded in every artifact
+#: this module produces, so a bench file that escapes into a pile of real ones
+#: says on its face that nothing about it is a deployment record.
+BENCH_DISCLOSURES = Disclosures.declare(
+    worker_notice=(
+        "not-applicable no system entered service: these artifacts are "
+        "benchmark output from a simulator"
+    ),
+    dpia_reference=DPIA_NONE,
+    operator_id_kind="direct-identifier",
 )
 
 #: Verdict vocabulary. Fixed and small, and the third never resolves to the
@@ -4183,6 +4204,7 @@ def _measure(
         sqlite_path,
         scn.world.limits,
         identity=BENCH_IDENTITY,
+        disclosures=BENCH_DISCLOSURES,
         human_radius=scn.world.human_radius,
         horizon=horizon,
         n_samples=n_samples,

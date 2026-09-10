@@ -42,7 +42,7 @@ document's statement of the same three, for the argument it goes on to make.*
 |---|---|---|---|
 | ~~1~~ | Check a `layer` tag | The tag was written and what it was computed **from** was not — **closed by issue #252**: `edge_layer_basis` carries one row per input per tagged edge, and the tag is the weakest of them | `sufficiency.md` §5.6, §5.9 |
 | 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **closed in the weaker form by issues #200 and #201**: it records them, and `envelope_at` refuses to recompute where they differ. What is left is that a refusal is not an attribution | `limitations.md` §1 |
-| 3 | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` are retained, not the boundary | `limitations.md` §2, §3 |
+| ~~3~~ | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` were retained, not the boundary — **narrowed by issue #257**: the boundary is now retained wherever the sampled polygon is, so the question is the region's where an edge anchors one and radial elsewhere | `limitations.md` §2, §3 |
 
 **Gap 1 — a tag that was asserted rather than checkable. Closed 2026-09-08
 (issue #252).** `envelope_layer` took `Limits` and nothing else. That was sound
@@ -92,10 +92,13 @@ and is stated rather than left to be discovered, because `numpy.cos` and
 The split into two issues was deliberate: writing the data and using it are
 different work, and only the second changes what a query answers.
 
-**Gap 3 — a radius where the question wants a region.** A stored envelope row
-answers *not at that distance*. It cannot answer *not at that point*, because the
-boundary is not there to test against. The region is recomputable, which routes
-the question straight back through gap 2.
+**Gap 3 — a radius where the question wants a region. Narrowed 2026-09-09.**
+A stored envelope row answered *not at that distance* and not
+*not at that point*, having no boundary to test against. `outer_wkb` is retained
+under `GEOMETRY_RETENTION`'s own rule — §8's tier 5, option C — so the rows
+keeping the sampled polygon answer pointwise. On the rest the answer stays radial
+and the region stays recomputable, which routes that remainder back through
+gap 2; `ENVELOPE_RETENTION` caps it, not this gap.
 
 ## 2. The test that decides all three
 
@@ -130,7 +133,7 @@ either neighbour would call a deliberate gate a shortcoming, or a shortcoming a
 gate. It is the one claim here whose verification is withheld on purpose.
 
 **It covers all four of [`plan.md`](plan.md)'s claims**, in six rows, on an
-artifact built from `main` at `schema_version` 13 with a record stream stored.
+artifact built from `main` at `schema_version` 14 with a record stream stored.
 Claim 4's two are **absent** on a build handed none — a fact about the build
 rather than about the schema:
 
@@ -139,7 +142,7 @@ rather than about the schema:
 | 4 | `chain-intact` | **checkable with a key it does not contain** — both chains are in the file, every record carries its link and its MAC, and `verify_chain(conn, keyring)` is what a key-holder runs |
 | 4 | `passivation-acknowledged` | **checkable** — `acknowledgments(conn)` needs no key; a passivation nobody cleared is a could-not-evaluate, never a *no* |
 | 3 | `layer-tag-basis` | **checkable** — gap 1, closed |
-| 2 | `reached-point` | **readable, not checkable**, radially only — gap 3 |
+| 2 | `reached-point` | **readable, not checkable** — the boundary is in the file where an edge anchors one; no query tests it against a point |
 | 1 | `recompute-discarded-polygon` | **checkable** — the discard contract retention rests on |
 | — | `recording-environment` | **checkable** — what the row above rests on |
 
@@ -155,7 +158,7 @@ The negatives ship with each — `env_*` keys stripped is *absent* and not
 a file with no chain in it is *absent* and not the fifth state, and a record whose
 MAC has been blanked is *readable, not checkable*, being unverifiable by anybody.
 
-**It closes no gap.** It makes them legible from the file, which is what lets
+**It closes no gap.** It makes them legible from the file, which is what let
 #228 be judged by more than a PR body.
 
 ## 3. What moves into the file
@@ -164,10 +167,10 @@ MAC has been blanked is *readable, not checkable*, being unverifiable by anybody
 |---|---|---|
 | **Environment** in `meta`: shapely and GEOS versions, platform, Python — **landed, issue #200**, as six keys: those four, plus numpy, plus the platform's system and machine separately; **acted on, issue #201**, by `envelope_at` over four of them | Gap 2, in the weaker form below. A recomputation that disagrees becomes a could-not-evaluate rather than an unresolvable one — and off the recording environment it is refused before it can disagree | six rows; schema bump to 11; **no published figure moved**; a recompute off the recording environment stops returning a polygon |
 | **Layer basis** per tagged edge: the inputs the tag was computed from, each with its provenance | Gap 1, and the tag becomes checkable rather than trusted | a row per input per tagged edge |
-| **The outer boundary**, retained rather than projected | Gap 3 | bytes, and the published figures move |
+| **The outer boundary**, retained rather than projected — **landed, issue #257**, where the sampled polygon already is | Gap 3, at the frames an edge anchors | +0.20% to +0.55%, every published figure; schema bump to 14 |
 
-The first is small and unblocks the honesty of the other two. The third is the
-expensive one and is a decision, not a task — see §8.
+The first is small and unblocks the honesty of the other two. The third was
+taken as a decision rather than a task — see §8.
 
 **What the sixth prior-art pass changed about the first row** ([`prior-art.md`](prior-art.md)
 §27, §28):
@@ -343,20 +346,12 @@ them buys less than it appears to: an auditor still ends at a disagreement they
 cannot resolve. Recording the environment is a few rows and it is what makes the
 other two worth doing.
 
-*It was six rows, and the estimate held* (issue #200). The measurement is in the
-PR: `python -m reg.bench --resolution --seed 0` and the four-rung control-rate
-ladder both produce reports identical in every measured number, before and after,
-because six short strings in one `meta` row each land inside pages the file was
-already paying for. That is the smallest a change to the artifact has come out
-at, and it is the reason this tier went first rather than an argument that it
-should have.
-
-**Why the boundary is a decision and not a task.** Retaining it costs bytes on
-every retained envelope, which moves the published figures — the same class of
-cost issue #166 paid and #191 avoided only by page alignment. It also interacts
-with issue #82: once the boundary is in the file, using it for containment stops
-being blocked on recomputation and becomes purely a question about what a fault in
-the nine-fault taxonomy means. That question needs a person.
+*It was six rows, and the estimate held* (issue #200). Both
+`python -m reg.bench --resolution --seed 0` and the four-rung control-rate ladder
+came out identical in every measured number, because six short strings in one
+`meta` row each land inside pages the file was already paying for. That is the
+smallest a change to the artifact has come out at, and it is why this tier went
+first.
 
 **What this borrows.** Nothing here is novel and the doc should not imply it is.
 Recording the toolchain that produced an artifact is ordinary build provenance,
@@ -441,13 +436,12 @@ is answered by the measurement below and question 2's `DERIVED` fixture
 the re-measurement, and it is the price of the tier.
 
 *Its own tier 2, the costing, landed first* (issue #249): `reg.bench
---layer-basis` priced both granularities and adopted neither. Measured with
-`python -m reg.bench --layer-basis --seed 0` on the fixture Claim 1 is priced
-on, `long_run` at 3,000 frames. **The table below is that measurement as it was
-reported, against the figures published then** — the artifact has since grown by
-what option A costs, so re-running the study today prices the same question
-against a larger baseline, and republishing these cells would describe neither
-run.
+--layer-basis` priced both granularities and adopted neither, measured with
+`python -m reg.bench --layer-basis --seed 0` on `long_run` at 3,000 frames.
+**Both costing tables below are measurements as reported, against the figures
+published then** — the artifact has since grown, so re-running either would
+price the same question against a larger baseline and republishing its cells
+would describe neither run.
 
 | level | option | artifact | vs today | basis rows | answers | 6 months | vs sensor |
 |---|---|---|---|---|---|---|---|
@@ -460,11 +454,11 @@ run.
 | `per-frame` | A | 4,857,856 B | +33.67% | 18,596 | 18,428 of 18,428 | 1,277 GB | ~143x |
 | `per-frame` | B | 3,655,680 B | +0.59% | 252 | 84 of 18,428 | 961 GB | ~190x |
 
-**The headline figures move here; under tier 5's options they did not.** A
-granularity adds a table rather than a column, and an empty table with its key
-costs SQLite pages at every level — so `265 GB` became 266 GB and `~689x`
-became ~687x even where no basis row is written. The totals and multiples are
-the published figures scaled by the measured ratio; the sensor side of the last
+**The headline figures move here, and tier 5 moved them again.** A granularity
+adds a table rather than a column, and an empty table with its key costs SQLite
+pages at every level — so `265 GB` became 266 GB and `~689x` became ~687x even
+where no basis row is written. In both tables the totals and multiples are the
+published figures scaled by the measured ratio, and the sensor side of the last
 column is a projection wherever it is quoted
 ([`sensor-baseline.md`](sensor-baseline.md)).
 
@@ -494,14 +488,18 @@ not a basis. The value is on the basis row itself, so a run whose base rates cam
 out of a perceiver and one whose came off its wheels produce different bases, and
 the tag follows.
 
-**Tier 5 — the boundary** (issue #228). A decision first, then bytes, then a
-re-measurement and republish of every figure that moves. Not to be started until
-tiers 2 and 3 make the argument for it concrete.
+**Tier 5 — the boundary. Landed** (issue #257, **option C** of #228):
+`envelope.outer_wkb` at `SCHEMA_VERSION` 14, retained where
+`reg.graph.GEOMETRY_RETENTION` keeps the inner polygon, refused on both sides of
+that rule. Every published retention figure moved —
+[`retention.md`](retention.md) is the re-measurement. #82's containment is no
+longer blocked on recomputation where a boundary is kept; what it needs is a
+person to say what a fault in the taxonomy means.
 
-*Its own tier 1, the costing, has landed* (issue #230): `reg.bench
---outer-boundary` prices all three options and adopts none. Measured with
-`python -m reg.bench --outer-boundary --seed 0` on the fixture Claim 1 is priced
-on, `long_run` at 3,000 frames. Nothing was retained and no figure republished.
+*Its own tier 1, the costing, landed first* (issue #230): `reg.bench
+--outer-boundary` priced all three options and adopted none, measured with
+`python -m reg.bench --outer-boundary --seed 0` on `long_run` at 3,000 frames.
+Nothing was retained and no figure republished.
 
 | level | option | artifact | vs A | 6 months | vs sensor |
 |---|---|---|---|---|---|
@@ -513,25 +511,27 @@ on, `long_run` at 3,000 frames. Nothing was retained and no figure republished.
 | `per-frame` | B | 3,746,816 B | +3.10% | 985 GB | ~185x |
 | `per-frame` | C | 3,649,536 B | +0.42% | 959 GB | ~190x |
 
-**The headline figures do not move at all.** `265 GB` and `~689x` were figures at
-occurrence resolution, and that level retains no envelope row, so no rule for the
-outer boundary reaches it. The totals and multiples above are the published
-figures scaled by the measured ratio; the sensor side of the last column is a
-projection wherever it is quoted ([`sensor-baseline.md`](sensor-baseline.md)).
+**The headline figures do not move at all** — the study's conclusion, and
+adopting C refuted half of it. That level retains no envelope row, so no
+*boundary* reached it: the 15,360 B below is exactly what the two finer levels
+grew by. What went unpriced is that C is a **rule** as well as a column, and
+stating it lengthened `GEOMETRY_RETENTION`'s text in `meta` and the schema text
+SQLite keeps verbatim. Those crossed a page everywhere, occurrence included —
+**+2,048 B**, `266 GB` became 267 and `~686x` became ~684.
 
-The build retains 86 envelope rows and 14 of them keep an inner polygon. Option B
-writes 84 boundaries — every `computed` envelope; the other two rows are a
-declared and a clamped region, which are not reachable sets and have no outer set
-to retain. Option C writes 12. So C is 14% of B's rows for 14% of its bytes:
-15,360 B against 112,640 B at the transition level.
+The build retains 86 envelope rows and 14 keep an inner polygon. Option B writes
+84 boundaries — every `computed` envelope; the other two rows are a declared and
+a clamped region, neither a reachable set with an outer set to retain. Option C
+writes 12. So C is 14% of B's rows for 14% of its bytes: 15,360 B against
+112,640 B at the transition level.
 
-**What either option buys is capped by a rule this decision does not touch.**
-Under B the pointwise question is answerable at 84 of the run's 3,000 frames,
-under C at 12, under A at none. `ENVELOPE_RETENTION` decides which frames get an
-envelope row at all, and it has already put that ceiling at 2.8% — so retaining a
-boundary *everywhere* does not make the artifact answer *everywhere*. It makes it
-answer at 84 frames rather than 12, for 7.3x the bytes. Whether that is worth
-4.50% of the transition figure is #228's to decide, and this tier does not.
+**What C buys is capped by a rule this decision did not touch.** The pointwise
+question is answerable at 12 of the run's 3,000 frames under C, 84 under B, none
+under A. `ENVELOPE_RETENTION` decides which frames get an envelope row at all and
+has already put that ceiling at 2.8%, so a boundary *everywhere* would not make
+the artifact answer *everywhere* — 84 frames rather than 12, for 7.3x the bytes.
+#257 judged that not worth 4.50% of the transition figure; the ceiling itself is
+a separate decision.
 
 ## See also
 

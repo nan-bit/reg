@@ -1,0 +1,248 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "257-1788997009742479160-758139",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "duration_s": 6963,
+      "harness": "wake-runner",
+      "harness_version": "v0.4.8 (6a04cc329)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "503977ca09480def5d58db88d5112c083c6a06bf1b902fd1e17c2a41496d5476",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "e44f75a0a7f786c97437ce8b2c0e9468e66d8554e15b7dc972dd11c3170677f3",
+        "authored_by": "f496a3c8e6d3be89d05e290a8cfa63e6a07bc348e1da8a7888503243d27e4398",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "5aa9ccf6ba45f42b29f62caef3a891e6b0e174057fb29395536403147485705a",
+        "concluded": "7f1629b4aa09518bc63ae234c56abd948ddc7b9fb5e992ceb5036fe925878d75",
+        "coverage": "28c579ae91030abc0b633a66b2dd3db2af6880aace634c700f8f697d31d69a6e",
+        "declared": "79a3f035e1d109e0801e7b2342c88ffe52142eacbd5b21b5ecd735f1122436e4",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "4c970004b0678d439f177e77d3cabdb7e9a44df770948ddc2467cbc76b7211c3",
+        "out_of_scope": "a822b74db0fd145da6aa6992a6691e234285457a74c71d1b0b1ea11af03fdafd",
+        "preceding": "f13ecd300fb12d16e710a691990136a943d7aaaf97d3b4819333af2266ef8a73",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "ab9abf14e6df0bd219afa0d9ee3f824c6def390747440d6c2ab3e89c43424631",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "a56b5c2deca41edc3a0e1837552e27efc8684db0",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "README.md",
+        "docs/README.md",
+        "docs/limitations.md",
+        "docs/lossiness.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "docs/self-describing.md",
+        "docs/sensor-baseline.md",
+        "docs/sufficiency.md",
+        "reg/bench.py",
+        "reg/graph.py",
+        "reg/query.py",
+        "reg/store.py",
+        "tests/test_derived_arithmetic.py",
+        "tests/test_doc_shape.py",
+        "tests/test_graph.py",
+        "tests/test_layer_boundary.py"
+      ],
+      "edge_kinds": [
+        "file-reference",
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "README.md",
+        "docs/README.md",
+        "docs/limitations.md",
+        "docs/lossiness.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "docs/self-describing.md",
+        "docs/sensor-baseline.md",
+        "docs/sufficiency.md",
+        "reg/bench.py",
+        "reg/chain.py",
+        "reg/commit.py",
+        "reg/declare.py",
+        "reg/enforce.py",
+        "reg/envelope.py",
+        "reg/graph.py",
+        "reg/query.py",
+        "reg/store.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_declare.py",
+        "tests/test_derived_arithmetic.py",
+        "tests/test_doc_shape.py",
+        "tests/test_doc_status_headers.py",
+        "tests/test_enforce.py",
+        "tests/test_envelope.py",
+        "tests/test_graph.py",
+        "tests/test_harness_pointer.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_layout.py",
+        "tests/test_personal_data.py",
+        "tests/test_prior_art.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_readme.py",
+        "tests/test_scenarios.py",
+        "tests/test_tolerances.py",
+        "tests/test_viz.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 50
+      },
+      "changed_unreadable": [
+        "README.md",
+        "docs/README.md",
+        "docs/limitations.md",
+        "docs/lossiness.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "docs/self-describing.md",
+        "docs/sensor-baseline.md",
+        "docs/sufficiency.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 10
+      },
+      "unresolved_edges": [
+        {
+          "at": "reg/chain.py:496",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "reg/commit.py:452",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "scripts/record_rosbag2.py:239",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1480",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1482",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "docs/limitations.md",
+        "docs/lossiness.md",
+        "docs/retention.md",
+        "docs/self-describing.md",
+        "reg/graph.py",
+        "reg/store.py",
+        "tests/test_doc_shape.py",
+        "tests/test_graph.py",
+        "tests/test_published_figures.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 257,
+    "out_of_scope": [
+      "README.md",
+      "docs/README.md",
+      "docs/plan.md",
+      "docs/prior-art.md",
+      "docs/sensor-baseline.md",
+      "docs/sufficiency.md",
+      "reg/bench.py",
+      "reg/chain.py",
+      "reg/commit.py",
+      "reg/declare.py",
+      "reg/enforce.py",
+      "reg/envelope.py",
+      "reg/query.py",
+      "scripts/check_bench_determinism.py",
+      "tests/test_air_gap_framing.py",
+      "tests/test_baseline_stream_description.py",
+      "tests/test_bench.py",
+      "tests/test_bench_determinism.py",
+      "tests/test_chain.py",
+      "tests/test_commit.py",
+      "tests/test_declare.py",
+      "tests/test_derived_arithmetic.py",
+      "tests/test_doc_status_headers.py",
+      "tests/test_enforce.py",
+      "tests/test_envelope.py",
+      "tests/test_harness_pointer.py",
+      "tests/test_incumbent_encoding.py",
+      "tests/test_layer_boundary.py",
+      "tests/test_layout.py",
+      "tests/test_personal_data.py",
+      "tests/test_prior_art.py",
+      "tests/test_query.py",
+      "tests/test_readme.py",
+      "tests/test_scenarios.py",
+      "tests/test_tolerances.py",
+      "tests/test_viz.py"
+    ],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 2,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "out-of-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "a56b5c2deca41edc3a0e1837552e27efc8684db0"
+      },
+      "name": "auto/issue-257"
+    }
+  ]
+}

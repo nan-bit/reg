@@ -447,7 +447,17 @@ RATE = 84.2
 #           retention rules folded into the paragraph about the basis it was
 #           half of, and three bullets lost a clause each. Two words below the
 #           last ceiling rather than level with it — measured, no headroom
-ARGUMENT_MAX = 47129
+#   47,127  today, 2026-09-09, after #257 retained the outer boundary and
+#           republished every figure that moved. The four documents this group
+#           holds that state the retention rule gained a clause each; it was
+#           paid for by the restatement those clauses made redundant —
+#           `limitations.md` §12's per-gap narratives of the two closed gaps
+#           folded into one paragraph pointing at §1 and §11, `lossiness.md`
+#           *Discarded* #9's outer-scalar clause became the rule it now shares
+#           with the inner polygon, and §2's two-directions bullet stopped
+#           saying the recomputation twice. Two words below the last ceiling
+#           rather than level with it — measured, no headroom
+ARGUMENT_MAX = 47127
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -509,7 +519,14 @@ PARAGRAPH_MAX_WORDS = 120
 #        need instead*, which stopped restating the caller-supplied-input
 #        argument `reg/identity.py` makes — cut for the word budget rather than
 #        for this ceiling, and lowered here for the reason the #241 row gives
-LONG_PARAGRAPHS_MAX = 87
+#    85  today, 2026-09-09, after #257: `docs/limitations.md` went 15 -> 13 and
+#        `docs/lossiness.md` 18 -> 17. Two of the three are §12's two closed-gap
+#        narratives, merged into one paragraph under the threshold, and the
+#        third is *Retained* #8's outer-scalar clause, which stopped restating
+#        *Discarded* #9's recomputation argument. All three were cut to pay for
+#        the boundary's own clauses, not for this ceiling, and are lowered here
+#        for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 85
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

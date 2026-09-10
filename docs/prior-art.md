@@ -1243,14 +1243,15 @@ than projected, **5.58x** the gzipped CSV, and against `zstd_small` 17.9%
 cheaper, **3.90x**. What this pass argued — the incumbent is dearer than the
 gzipped baseline this project chose to lose against — holds at both.
 
-**Corrected again 2026-09-07 (issue #247) and 2026-09-08 (issue #252).** Both
-times the artifact side moved and the bags did not. Schema 12 took the build this
-entry divides from 2,584,576 B to 2,587,648 B, 0.1%, where the composition read
-**40.02x** / 5.58x and the pair was 7.17x and 10.27x; schema 13 — a retained row
-per input per tagged edge, recording what every `layer` tag was computed from —
-took it to **3,268,608 B**, +26.32%. So `~40x` above is **~51x**, the composition
-reads **50.56x** / 5.58x and 50.56x / 3.90x, the pair is **9.06x** and
-**12.97x**, and the uncompressed comparison is **2.00x**. The `39.98x / 4.75x`
+**Corrected again 2026-09-07 (#247), 2026-09-08 (#252) and 2026-09-09 (#257).**
+Each time the artifact side moved and the bags did not. Schema 12 took the build
+this entry divides from 2,584,576 B to 2,587,648 B, 0.1%, the composition reading
+**40.02x** / 5.58x and the pair 7.17x and 10.27x; schema 13 took it to
+3,268,608 B, +26.32%, reading 50.56x / 5.58x with the pair 9.06x and 12.97x;
+schema 14 — the outer boundary retained where the sampled polygon already is —
+took it to **3,286,016 B**, +0.53%. So `~40x` above is **~51x**, the composition
+reads **50.83x** / 5.58x and 50.83x / 3.90x, the pair is **9.11x** and
+**13.04x**, and the uncompressed comparison is **2.01x**. The `39.98x / 4.75x`
 two paragraphs up stands as that pass's arithmetic. What this entry argues is
 unchanged in direction and larger in size.
 

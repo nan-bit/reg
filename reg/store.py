@@ -462,10 +462,12 @@ SCHEMA_CHANGES: dict[int, str] = {
     "checked against what it was computed from, and a base velocity out of a "
     "perceiver moves the tag it always reached the bound through",
     14: "envelope.outer_wkb arrived and the outer reachable set's boundary is "
-    "retained where the inner polygon already is — so the file answers "
-    "*could the robot have reached (x, y)* pointwise at every frame an "
-    "INTERSECTS or CONTACT edge anchors, where a v13 reader has a radius and "
-    "reports the question as one this artifact does not carry",
+    "retained where the inner polygon already is — so the file carries the "
+    "region *could the robot have reached (x, y)* is answered from at every "
+    "frame an INTERSECTS or CONTACT edge anchors, where a v13 reader has the "
+    "radius alone. Carrying it is not answering it: no query in this build "
+    "tests a point against that boundary, and the cold read reports the "
+    "question as readable and not checkable until one does",
 }
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever

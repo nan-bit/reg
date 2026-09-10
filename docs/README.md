@@ -37,7 +37,7 @@ edited.**
   [`sensor-baseline.md`](sensor-baseline.md) for what it is measured against.
   The `bytes/hour` tables are re-derived from the code on each CI run by
   `tests/test_published_figures.py`; the six-month totals computed from them —
-  `266 GB` among them — are **not**. That module's own
+  `267 GB` among them — are **not**. That module's own
   *What this does not cover* is the list, and it is worth reading before
   treating any figure here as machine-checked.
 - **To write code here:** [`CLAUDE.md`](../CLAUDE.md), then

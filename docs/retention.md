@@ -3,7 +3,7 @@
 **Status:** normative for every retention figure this project publishes ·
 re-measured 2026-08-20 (issue #60), with later work carrying its own issue
 number where it sits — #98's Layer-A comparison, #116's label and byte
-attribution · extracted from [`plan.md`](plan.md) Claim 1 on 2026-08-31, **with
+attribution, #257's outer boundary · extracted from [`plan.md`](plan.md) Claim 1 on 2026-08-31, **with
 no figure changed** · keep current
 
 **What is machine-checked here is less than the whole file.**
@@ -12,7 +12,7 @@ CI run: the control-rate ladder's **50 Hz row**, the coarsest level's **label**
 and the record and node counts behind it, the **byte attribution**, and the
 **Layer-A comparison** table.
 
-Everything else is prose or arithmetic over those, `266 GB` among them; that
+Everything else is prose or arithmetic over those, `267 GB` among them; that
 module's own *What this does not cover* is the authority on the boundary, and
 this line exists so that nothing here reads as guaranteed when it is not.
 
@@ -92,13 +92,13 @@ Per robot, from the measured resolution curve:
 
 | retained at | per robot, 6 months | fleet of 100 |
 |---|---|---|
-| **occurrence (±1 s) — 98.5% attestation records** | **266 GB** | 26.6 TB |
-| transition (10 ms) | 834 GB | 83.4 TB |
-| per-frame (10 ms) | 1,288 GB | 128.8 TB |
+| **occurrence (±1 s) — 98.5% attestation records** | **267 GB** | 26.7 TB |
+| transition (10 ms) | 838 GB | 83.8 TB |
+| per-frame (10 ms) | 1,293 GB | 129.3 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
-Each is the measured `bytes/hour` for that level — 60.72, 190.34 and
-294.09 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
+Each is the measured `bytes/hour` for that level — 60.85, 191.39 and
+295.13 MB/h — times the 4,380 hours in the 182.5-day retention floor. **Every
 one of those three figures is a figure at 50 Hz**, which is what
 `reg.scenarios.DEFAULT_DT` runs at, and every one of them **moves with that
 rate**: enforcement emits one verdict and one chain record per commanded action
@@ -120,7 +120,7 @@ frames` across run lengths and evaluating the fit, which is the extrapolation
 the control-rate ladder and the console summary — rather than in one of the
 three (issue #116).
 
-At occurrence resolution the artifact is **~686x smaller** than the sensor
+At occurrence resolution the artifact is **~684x smaller** than the sensor
 stream over the mandated retention period: inside the original criterion's
 two-order band, and **short of three**. The artifact side of that comparison is
 measured. The sensor side is an **assumption with a sourced range**, set out in
@@ -155,8 +155,8 @@ execution of the command in the blockquote above:
 | **total** | **3,166** | |
 
 A reader who took *DSSAD-shaped* at face value concluded that this is a
-DSSAD-equivalent event recorder priced at 266 GB. It is not. It is a **per-action
-attestation record** with an occurrence layer attached, and 266 GB is
+DSSAD-equivalent event recorder priced at 267 GB. It is not. It is a **per-action
+attestation record** with an occurrence layer attached, and 267 GB is
 overwhelmingly the price of the attestation. Nothing in the *measurement* was
 wrong — the figure reproduces to the byte — and nothing about it moved when the
 label did.
@@ -179,10 +179,10 @@ both stated rather than left to be discovered:
    contents.** UN R157's DSSAD is why ±1 s is the coarsest quantum this project
    prices (*The control rate* below, [`lossiness.md`](lossiness.md) *Level 1*);
    it is not a claim that `reg` at this level is a DSSAD, or that a DSSAD would
-   cost 266 GB. A recorder holding this level's 42 occurrence rows and none of
+   cost 267 GB. A recorder holding this level's 42 occurrence rows and none of
    its 3,120 records would be a far smaller file, and this project has not
    measured one.
-2. **The lever on the 266 GB is the attestation cadence**, not the occurrence
+2. **The lever on the 267 GB is the attestation cadence**, not the occurrence
    vocabulary. Declaring per behaviour segment rather than per control step
    would cut the term that dominates; it is a design change to what the artifact
    attests, it is held open, and *The control rate* below says so again where it
@@ -210,7 +210,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **60.72 MB/h → 266 GB → ~686x** | 190.34 MB/h → 834 GB → ~219x | 294.09 MB/h → 1,288 GB → ~142x |
+| **50 Hz (this simulator, published above)** | **60.85 MB/h → 267 GB → ~684x** | 191.39 MB/h → 838 GB → ~218x | 295.13 MB/h → 1,293 GB → ~141x |
 | 100 Hz | 106.88 MB/h → 468 GB → ~390x | 313.69 MB/h → 1.37 TB → ~133x | 562.18 MB/h → 2.46 TB → ~74x |
 | 250 Hz | 247.62 MB/h → 1.08 TB → ~169x | 674.90 MB/h → 2.96 TB → ~62x | 1.46 GB/h → 6.39 TB → ~29x |
 | **1 kHz (a real manipulator)** | **1.08 GB/h → 4.73 TB → ~39x** | 2.64 GB/h → 11.56 TB → ~16x | 6.51 GB/h → 28.51 TB → ~6x |
@@ -221,9 +221,10 @@ sensor log — an assumption, unchanged, at 1 TB/day
 ([`sensor-baseline.md`](sensor-baseline.md)).
 
 **The ratio is computed from the six-month size *as published here*, not from the
-unrounded product.** At 50 Hz that is `182.5 TB / 266 GB = ~686x`, and the
-unrounded 265.97 GB gives the same figure — but the two conventions do not always
-agree, and where they part the difference is inside the `~`. What is not
+unrounded product.** At 50 Hz that is `182.5 TB / 267 GB = ~684x`, and the
+unrounded 266.51 GB gives ~685x — the two conventions have parted, which the
+first version of this paragraph noted they would, and the difference is inside
+the `~`. What is not
 defensible is leaving the choice unstated, because nothing in the repository
 derives these ratios to check them. Stated here so a reader who recomputes and
 gets the other answer knows which step they took differently.
@@ -290,15 +291,15 @@ Claim 1 prices:
 
 | table, coarsest level at 50 Hz | bytes | share of the level |
 |---|---|---|
-| `verdict` | 551,936 | 54.6% |
+| `verdict` | 551,936 | 54.4% |
 | `declaration` | 185,344 | 18.3% |
-| `indexes + schema` | 133,120 | 13.2% |
+| `indexes + schema` | 134,144 | 13.2% |
 | `node` | 112,640 | 11.1% |
-| `meta` | 11,264 | 1.1% |
+| `meta` | 12,288 | 1.2% |
 | `occurrence` | 9,216 | 0.9% |
 | `entity` | 3,072 | 0.3% |
 | `envelope`, `robot_config`, `acknowledgment`, `edge`, `edge_layer_basis` — one empty page each | 5,120 | 0.5% |
-| **file** | **1,011,712** | |
+| **file** | **1,013,760** | |
 
 *`acknowledgment` arrives with schema 12 and `edge_layer_basis` with schema 13;
 `long_run` passivates never and this level holds no edge, so each is one empty
@@ -307,15 +308,15 @@ page.*
 1. **The scene rows are 5,120 B**, 0.5% of the level: `entity`, `envelope` and
    `robot_config` together, two of the three being a single empty page at this
    level. Half a percent of a file cannot account for a fifth of its growth.
-2. **`indexes + schema` is not the artifact's fixed cost.** It is 133,120 B
+2. **`indexes + schema` is not the artifact's fixed cost.** It is 134,144 B
    here and most of it is indexes *over rows*, which arrive with the rows and
    leave with them. `edge_layer_basis` is **named rather than swept into it**:
    at the transition level the basis is 553,984 B, and a cost arriving labelled
    as the schema's is attributed to the one line of this breakdown a reader
    takes for unavoidable. The genuinely fixed part is the schema: an artifact created
-   and never written to is **30,720 B** — `reg.store.create(path,
+   and never written to is **31,744 B** — `reg.store.create(path,
    record_tables=True)`, eleven tables and their indexes at `reg.store.PAGE_SIZE`
-   — which is 3.0% of this level.
+   — which is 3.1% of this level.
 3. **The mass the control rate does not move is the `declaration` table**, at
    185,344 B and 18.3% of the level. The fixture's policy replans on a
    **wall-clock** interval, so it emits the same 120 declarations at every rung
@@ -349,7 +350,7 @@ domain-of-validity limit arriving from the other side — a finding about the
 `reg.graph` and not a tolerance this measurement may widen
 ([`limitations.md`](limitations.md) §5, [`lossiness.md`](lossiness.md)).
 
-**This is a purchasing decision, not a slogan.** 266 GB buys *did contact
+**This is a purchasing decision, not a slogan.** 267 GB buys *did contact
 occur*, *how close did it come*, every refused action with its fault code and
 the declaration it was raised against, and both hash chains walked end to end.
 It also buys *when* — **for events sustained longer than its one-second
@@ -428,7 +429,7 @@ from it:
 | verdicts | 3,000 |
 | faults | 24 |
 | chain records | 3,120 |
-| artifact on disk | 3,268,608 B |
+| artifact on disk | 3,286,016 B |
 | gzipped CSV baseline | 64,652 B |
 | x gz CSV | 0.02x |
 | how much larger | ~51x |
@@ -448,29 +449,29 @@ projection computed from the MCAP specification, recorded in
 [`sensor-baseline.md`](sensor-baseline.md) and held to the byte by
 `tests/test_incumbent_encoding.py`; the 24-column rows are bags `ros2 bag record`
 wrote on 2026-09-06, whole files (`reg.bench.ROSBAG2_SIZE_MEASUREMENTS`), against
-the 3,268,608 B artifact above. Both put the Layer B half on `/tf`, the
+the 3,286,016 B artifact above. Both put the Layer B half on `/tf`, the
 arrangement most favourable to the incumbent of those that document prices.
 
 | MCAP against a gzipped CSV of the same content | bag | bag / gz CSV | artifact / bag |
 |---|---|---|---|
 | 5 columns / 251 frames, **projected**, vs 3,053 B — `none` | 35,893 B | **11.76x** | |
 | the same, one compressed projection for both zstd profiles | 11,685 B | **3.83x** | |
-| 24 columns / 3,000 frames, **measured**, vs 64,652 B — no profile passed | 1,637,963 B | **25.34x** | **2.00x** |
-| the same, `zstd_fast` | 360,798 B | **5.58x** | **9.06x** |
-| the same, `zstd_small` | 252,034 B | **3.90x** | **12.97x** |
+| 24 columns / 3,000 frames, **measured**, vs 64,652 B — no profile passed | 1,637,963 B | **25.34x** | **2.01x** |
+| the same, `zstd_fast` | 360,798 B | **5.58x** | **9.11x** |
+| the same, `zstd_small` | 252,034 B | **3.90x** | **13.04x** |
 
 The **2.51x** published here from 2026-08-26 is superseded: it priced
 compression as a default rosbag2 does not apply and left the message index out,
 and both made the incumbent look cheap.
 
 **Beside `~51x` the figure is a pair, and the pair is a range with its ends
-named**: the artifact is **9.06x** a `zstd_fast` bag and **12.97x** a
+named**: the artifact is **9.11x** a `zstd_fast` bag and **13.04x** a
 `zstd_small` one, of the same 24 columns of the same run, where `~51x` is against
-a gzipped CSV of those same columns. Each end composes — `50.56x / 5.58x` and
-`50.56x / 3.90x` — which a five-column ratio against a 24-column headline could
-never do. **If one number is wanted it is 9.06x**, because `zstd_fast` is the
+a gzipped CSV of those same columns. Each end composes — `50.83x / 5.58x` and
+`50.83x / 3.90x` — which a five-column ratio against a 24-column headline could
+never do. **If one number is wanted it is 9.11x**, because `zstd_fast` is the
 larger bag and so the smaller ratio: the end least flattering to this project.
-Quoting either alone is preset-shopping. 2.00x is the same comparison at the
+Quoting either alone is preset-shopping. 2.01x is the same comparison at the
 uncompressed default, beside them and not instead of them.
 
 **The answer to the original framing does not move.** The artifact is larger than

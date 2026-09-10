@@ -140,16 +140,10 @@ Each entry is a claim that the graph can be tested against.
    something computed.
 
    **And that region's boundary, wherever the sampled polygon is kept.**
-   `outer_wkb` is retained under #9's rule and no other — the two ends of the
-   run, every relationship transition, every posed frame — so at the frames this
-   artifact already says something happened at, *could the robot have reached
-   (x, y)* is answered by the region, and everywhere else by `outer_radius`,
-   which answers it about a disc. It is the room-frame polygon, on the same
-   terms as the sampled one. Retaining it on every row was priced first and
-   refused: it answers 84 frames of 3,000 rather than 12 for 7.3x the bytes,
-   because `ENVELOPE_RETENTION` caps both ([`self-describing.md`](self-describing.md)
-   §8). A row the rule covers and that carries no boundary is refused rather
-   than written, and so is a boundary on a row it excludes.
+   `outer_wkb` is retained under #9's rule and no other, so where this artifact
+   already says something happened, *could the robot have reached (x, y)* gets
+   the region's answer rather than a disc's. Both directions are refused: a
+   covered row with no boundary, and a boundary on an excluded row.
 
    **And a radius is retained with the frame it is measured from, or it is not
    retained.** `outer_radius` is a distance from the base, so it is a radius
@@ -163,9 +157,8 @@ Each entry is a claim that the graph can be tested against.
    under [`## Why`](#why).
 
    Two narrower clauses sit under this one and both are in *Discarded*: **which
-   frames get a row at all** is #10, and **which of those rows carry the polygon**
-   is #9. Neither narrows what a row *says* — every `envelope` row the artifact
-   holds carries every field above.
+   frames get a row at all** is #10, and **which rows carry a polygon**, inner
+   and outer alike, is #9.
 9. **The layer tag on every edge, and what it was computed from** — `A` or `B`,
    per Phase 9. Claim 3 is a query over these tags, so an untagged edge is an
    unusable edge, and an untagged **basis** is one too.
@@ -296,9 +289,9 @@ Deliberately not stored. Each is a thing the graph *could* have kept and does no
    [`sufficiency.md`](sufficiency.md) §5.8's table, followed rather than
    discovered.
 
-   **The same condition, and the same fix, for the two scalars in Retained #8.**
-   `outer_area` and `outer_radius` are kept instead of the outer polygon on the
-   identical recomputability argument, so everything above applies to them
+   **The same rule, and the same frame, for the outer set in Retained #8.** The
+   two scalars are kept on every retained row; the outer polygon is kept where
+   this rule keeps the inner one and nowhere else, so everything above applies
    unchanged — including the frame, which is why a retained `outer_radius`
    requires the `config_id` beside it.
 
@@ -444,8 +437,8 @@ though it were the only one. It is not, and saying so is the point.
 
 The question the levels answer is *how coarse can the evidence get before it stops
 answering the question?* — and they turn out to be **where the compression argument
-actually lives**: a measured **266 GB** per robot per six months at occurrence
-resolution against a projected 182.5 TB of sensor log, i.e. ~686x
+actually lives**: a measured **267 GB** per robot per six months at occurrence
+resolution against a projected 182.5 TB of sensor log, i.e. ~684x
 ([`retention.md`](retention.md); measured 2026-08-20 at seed 0, and the sensor rate
 is an assumption with a sourced range and a sensitivity table,
 [`sensor-baseline.md`](sensor-baseline.md)). It lives there **less comfortably than
@@ -984,6 +977,7 @@ discard is worth least once nobody remembers what it was weighed against.
 | *Discarded* #9, the buildinfo in `meta` | #200 | — |
 | *Discarded* #9, `envelope_at` refusing off-environment | #201 | — |
 | *Retained* #9, the layer basis per tagged edge | #252 | — |
+| *Retained* #8's outer boundary | #257 | — |
 
 ### The lists described one level, and said so only implicitly
 
@@ -1013,7 +1007,9 @@ reachable only by a join is one every reader of `robot_config` can forget to mak
 
 Filling those columns in (#191) and recording the environment (#200) cost no
 published figure between them — both are longer strings in `meta` rather than
-bytes on 2,560 rows — so the three artifact sizes are left where
+bytes on 2,560 rows. #257 is where that stopped holding: that rule text, restated
+to cover the outer boundary, crossed a page — +2,048 B at every level. The three
+artifact sizes are where
 [`sufficiency.md`](sufficiency.md) publishes them and
 `tests/test_published_figures.py` re-measures them, rather than restated here. The
 eleven fixed-base artifacts are nonetheless not byte-identical, because

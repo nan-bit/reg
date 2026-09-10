@@ -211,9 +211,9 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
 | **50 Hz (this simulator, published above)** | **60.85 MB/h → 267 GB → ~684x** | 191.39 MB/h → 838 GB → ~218x | 295.13 MB/h → 1,293 GB → ~141x |
-| 100 Hz | 106.88 MB/h → 468 GB → ~390x | 313.69 MB/h → 1.37 TB → ~133x | 562.18 MB/h → 2.46 TB → ~74x |
-| 250 Hz | 247.62 MB/h → 1.08 TB → ~169x | 674.90 MB/h → 2.96 TB → ~62x | 1.46 GB/h → 6.39 TB → ~29x |
-| **1 kHz (a real manipulator)** | **1.08 GB/h → 4.73 TB → ~39x** | 2.64 GB/h → 11.56 TB → ~16x | 6.51 GB/h → 28.51 TB → ~6x |
+| 100 Hz | 107.00 MB/h → 469 GB → ~389x | 314.74 MB/h → 1.38 TB → ~132x | 563.22 MB/h → 2.47 TB → ~74x |
+| 250 Hz | 247.75 MB/h → 1.09 TB → ~167x | 676.31 MB/h → 2.96 TB → ~62x | 1.47 GB/h → 6.42 TB → ~28x |
+| **1 kHz (a real manipulator)** | **1.08 GB/h → 4.72 TB → ~39x** | 2.64 GB/h → 11.57 TB → ~16x | 6.51 GB/h → 28.53 TB → ~6x |
 
 The `MB/h` column is measured. The six-month size is that figure times the 4,380
 hours in the retention floor, and the ratio is against the **assumed** 182.5 TB
@@ -250,11 +250,11 @@ option and it is the one this project keeps having to correct.
 
 **So the two-order claim is a claim about the control rate as well as about the
 sensor rate, and at 1 kHz it does not hold.** At occurrence resolution a 1 kHz
-robot retains **4.73 TB** for the mandated six months and the artifact is
+robot retains **4.72 TB** for the mandated six months and the artifact is
 **~39x** below the assumed sensor log — **one order of magnitude, not two**, and
 at a rate whose per-frame queries are outside the artifact's stated time base
 ([`limitations.md`](limitations.md) §5). The
-band survives at 250 Hz (~169x) and is gone by 1 kHz; where between those two it
+band survives at 250 Hz (~167x) and is gone by 1 kHz; where between those two it
 goes is not measured and is therefore not quoted. **The assumption was not
 touched to fix this** — the sensor multiplier is the same 1 TB/day it was, for
 the same sourced reasons, and moving it to keep a conclusion is the exact

@@ -166,7 +166,7 @@ which is why the occurrence level is 3,120 of 3,166 node rows at 50 Hz. The
 policy's declarations do *not* scale, since it replans on a wall-clock interval,
 so the verdict layer is the growth.
 
-**Measured** 2026-08-21 and re-measured 2026-09-08, from one execution of
+**Measured** 2026-08-21, re-measured 2026-09-08 and 2026-09-09, from one run of
 `python -m reg.bench --control-rate-hz 50,100,250,1000 --seed 0`: the resolution
 curve at four control rates over **one fixed run duration**, 59.98 s of robot
 time, at one seed and the parameter block [Sensitivity](#sensitivity) states. The
@@ -178,10 +178,10 @@ which is what makes the other three comparable to it.
 | control rate | frames | records retained | occurrence | transition | per-frame |
 |---|---|---|---|---|---|
 | **50 Hz (published above)** | 3,000 | 3,120 | **60.85 MB/h** | 191.39 MB/h | 295.13 MB/h |
-| 100 Hz | 5,999 | 6,119 | 106.88 MB/h | 313.69 MB/h | 562.18 MB/h |
-| 250 Hz | 14,996 | 15,116 | 247.62 MB/h | 674.90 MB/h | 1.46 GB/h |
+| 100 Hz | 5,999 | 6,119 | 107.00 MB/h | 314.74 MB/h | 563.22 MB/h |
+| 250 Hz | 14,996 | 15,116 | 247.75 MB/h | 676.31 MB/h | 1.47 GB/h |
 | **1 kHz (a real manipulator)** | 59,981 | 60,101 | **1.08 GB/h** | 2.64 GB/h | 6.51 GB/h |
-| *x, 50 Hz → 1 kHz* | *20.0x* | *19.3x* | *17.7x* | *13.9x* | *22.1x* |
+| *x, 50 Hz → 1 kHz* | *20.0x* | *19.3x* | *17.7x* | *13.8x* | *22.1x* |
 
 Those are measured points. **Nothing between them is interpolated and nothing
 beyond them is extrapolated** — a rate nobody ran is not in the table, however
@@ -208,13 +208,13 @@ in the retention floor, against the **unchanged** 182.5 TB assumption:
 | control rate | occurrence, 6 months | vs 182.5 TB | transition | vs | per-frame | vs |
 |---|---|---|---|---|---|---|
 | **50 Hz** | **267 GB** | **~684x** | 838 GB | ~218x | 1,293 GB | ~141x |
-| 100 Hz | 468 GB | ~390x | 1.37 TB | ~133x | 2.46 TB | ~74x |
-| 250 Hz | 1.08 TB | ~169x | 2.96 TB | ~62x | 6.39 TB | ~29x |
-| **1 kHz** | **4.73 TB** | **~39x** | 11.56 TB | ~16x | 28.51 TB | ~6x |
+| 100 Hz | 469 GB | ~389x | 1.38 TB | ~132x | 2.47 TB | ~74x |
+| 250 Hz | 1.09 TB | ~167x | 2.96 TB | ~62x | 6.42 TB | ~28x |
+| **1 kHz** | **4.72 TB** | **~39x** | 11.57 TB | ~16x | 28.53 TB | ~6x |
 
 **At 1 kHz the claim is below two orders of magnitude, and this document says so
 rather than repairing it.** ~39x at occurrence resolution is **one** order, not
-two. The two-order band is still occupied at 250 Hz (~169x) and is gone by 1 kHz;
+two. The two-order band is still occupied at 250 Hz (~167x) and is gone by 1 kHz;
 where between those two it goes is unmeasured and is not quoted. Every finer
 level is worse: transition ~16x and per-frame ~6x at 1 kHz. Both rows also sit
 above the 100 Hz the artifact's time base is declared valid at, so what they buy
@@ -661,7 +661,7 @@ worth least once nobody remembers what it was weighed against.
 The provisional figures measured an artifact holding no Layer A record at all
 (issue #59): occurrence went 18.9 GB → 263 GB, transition 229.7 → 655 GB,
 per-frame 589.3 → 952 GB. Today they are 267, 838 and 1,293 GB; #83, #82, #166,
-#252 and #257 account for the 1.5% between at the coarsest level, itemised in
+#252 and #257 account for the 1.5% at the coarsest level, itemised in
 [`lossiness.md`](lossiness.md), *Retained* #8.
 
 The attribution is to #59 because it moved the figures by an order of magnitude
@@ -680,7 +680,7 @@ at 50 Hz did not move.
 ### An outside estimate, checked
 
 Issue #68 arrived with a reviewer's estimate of ~5.1 TB per robot per six months
-at 1 kHz, ~36x, flagged as unverified. The measured figures are 4.73 TB and ~39x:
+at 1 kHz, ~36x, flagged as unverified. The measured figures are 4.72 TB and ~39x:
 directionally right and slightly pessimistic, for the reason *The control rate*
 gives — it assumed the whole level scales, and 1.5% of it does not.
 

@@ -465,9 +465,9 @@ SCHEMA_CHANGES: dict[int, str] = {
     "retained where the inner polygon already is — so the file carries the "
     "region *could the robot have reached (x, y)* is answered from at every "
     "frame an INTERSECTS or CONTACT edge anchors, where a v13 reader has the "
-    "radius alone. Carrying it is not answering it: no query in this build "
-    "tests a point against that boundary, and the cold read reports the "
-    "question as readable and not checkable until one does",
+    "radius alone. reg.query.reached_point is what tests a point against that "
+    "boundary (issue #258), and it refuses at every frame the rule kept none "
+    "for rather than substituting the radius",
 }
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever

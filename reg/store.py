@@ -194,6 +194,7 @@ import numpy
 import shapely
 from shapely.geometry.base import BaseGeometry
 
+from reg.kinematics import BaseFrame
 from reg.types import Layer, PoseSource
 
 __all__ = [
@@ -251,6 +252,7 @@ __all__ = [
     "insert_envelope",
     "attach_envelope_geometry",
     "envelope_row",
+    "envelope_base_frame",
     "insert_entity",
     "insert_occurrence",
     "insert_robot_config",
@@ -2588,6 +2590,115 @@ def envelope_row(
     return conn.execute(
         f"{_ENVELOPE_SELECT} WHERE n.node_id = ?", (str(envelope_id),)
     ).fetchone()
+
+
+def _frame_floats(text: str, what: str) -> tuple[float, float, float]:
+    """`x,y,theta` out of the text an artifact states a frame as.
+
+    Both refusals are could-not-evaluates and neither has a fallback: a frame
+    this parser cannot read places nothing, and a prefix of one places the wrong
+    thing. Two numbers are not a frame with `theta=0` — they are a frame whose
+    third number nobody wrote down.
+    """
+    try:
+        values = [float(part) for part in str(text).split(",")]
+    except ValueError as exc:
+        raise StoreError(
+            f"{what} is {text!r}, not a comma-separated list of numbers."
+        ) from exc
+    if len(values) != 3:
+        raise StoreError(
+            f"{what} is {text!r}, which is not the three numbers x,y,theta. "
+            "A frame this reader cannot place places nothing, and every "
+            "retained outer_radius in the file is about a point it names."
+        )
+    return (values[0], values[1], values[2])
+
+
+def envelope_base_frame(conn: sqlite3.Connection, envelope_id: str) -> BaseFrame:
+    """The frame this envelope's `outer_radius` is measured about (issue #166).
+
+    **The one implementation of the centre, and it is here because two modules
+    need it** (issue #265). `reg.graph.envelope_frame` is the reader an assessor
+    calls and it delegates to this; `reg.query.reached_point` needs the same
+    centre to check a retained boundary's radius against the row carrying it,
+    and `reg.query` may not import `reg.graph` — Claim 2's *from the graph
+    alone*. A second copy would be two readers of one fact, and this is the fact
+    that decides where every radius in the file is measured from.
+
+    `outer_radius` is a distance from the base to the furthest point the robot
+    can reach inside the horizon — a radius **about a centre**, and until the
+    schema could say where the base was, that centre was the origin by the fact
+    that there was no other possibility rather than by anything the artifact
+    said. This is the reader that makes it a measurement: the radius and the
+    point it is measured from, together, or a refusal.
+
+    Two ways an artifact states the frame, and they are exclusive:
+
+    * the configuration the envelope names states a `base_pose` — a room-frame
+      pose, **Layer B**, and everything measured about it inherits whatever
+      supplied it (docs/sufficiency.md §5.6);
+    * the artifact states `meta[base_frame]` — where the base was bolted for the
+      whole run, a mounting fact and Layer A, which is what every fixture in
+      this repository has.
+
+    Returns:
+        The centre as a `BaseFrame`. It is a *frame* and deliberately not a
+        `BasePose` even when it came from one: `reg.kinematics` is Layer A and
+        may not import a room-frame pose, and a caller that needs the provenance
+        reads it off `config_base_pose`, where it is still attached to the thing
+        it is a provenance of.
+
+    Raises:
+        StoreError: the artifact holds no such envelope; the row retains no
+            `outer_radius`, so there is no radius for a frame to belong to; or it
+            states neither a pose nor a base frame, which is a
+            could-not-evaluate. **The absence never resolves to the origin.** A
+            radius silently attributed to `(0, 0)` for a robot that was elsewhere
+            is the failure this whole reader exists to make impossible, and it is
+            worse than no answer because it is one.
+    """
+    row = envelope_row(conn, str(envelope_id))
+    if row is None:
+        raise StoreError(
+            f"this artifact holds no envelope {str(envelope_id)!r}, so there is "
+            "no radius here and no frame to measure one from."
+        )
+    if row["outer_radius"] is None:
+        raise StoreError(
+            f"envelope {str(envelope_id)!r} has source={str(row['source'])!r} "
+            "and retains no outer_radius. A declared region is the policy's "
+            "claim and a clamped bound is what a verdict applied; neither is a "
+            "reachable set, so neither has an outer radius and neither has a "
+            "frame one would be measured about."
+        )
+    if row["base_pose"] is not None:
+        pose, source = str(row["base_pose"]), str(row["base_pose_source"])
+        try:
+            x, y, theta = _frame_floats(
+                pose, f"robot_config[{str(row['config_id'])!r}].base_pose"
+            )
+        except StoreError as exc:
+            raise StoreError(
+                f"{exc} The radius on envelope {str(envelope_id)!r} is about a "
+                f"point that cannot be placed. Its provenance says {source!r}, "
+                "which does not help."
+            ) from exc
+        return BaseFrame(x=x, y=y, theta=theta)
+
+    frame = get_meta(conn, META_BASE_FRAME)
+    if frame is None:
+        raise StoreError(
+            f"envelope {str(envelope_id)!r} retains "
+            f"outer_radius={float(row['outer_radius'])!r}, and this artifact "
+            f"states neither a base_pose on config {str(row['config_id'])!r} nor "
+            f"meta[{META_BASE_FRAME!r}]. That radius is a length in metres "
+            "about a point nothing in the file names. Reading it as a radius "
+            "about the origin is exactly what an artifact that can hold a moving "
+            "base may not let a reader do, so it is a could-not-evaluate."
+        )
+    x, y, theta = _frame_floats(frame, f"meta[{META_BASE_FRAME!r}]")
+    return BaseFrame(x=x, y=y, theta=theta)
 
 
 def insert_entity(

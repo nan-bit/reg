@@ -47,9 +47,12 @@ depends on a default staying put.
 
 from __future__ import annotations
 
+import ast
 import getpass
+import inspect
 import platform
 import sqlite3
+import textwrap
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
@@ -3208,6 +3211,109 @@ def test_a_posed_configuration_states_its_own_frame(tmp_path: Path) -> None:
         assert store.config_base_pose(conn, "cfg_bolted") is None
     finally:
         conn.close()
+
+
+def _reads_the_centre_itself(source: str) -> bool:
+    """Whether a function's body goes to the artifact for the centre itself.
+
+    The two doors into it, named as the source names them: `META_BASE_FRAME` in
+    `meta`, and `base_pose` on the envelope's own row. A body touching either is
+    a second reader of the fact that decides where every radius in the file is
+    measured from, however faithfully it copies the first.
+
+    Docstrings are stripped before the check, because prose that *says* which
+    keys the one reader consults is the opposite of a second copy of it.
+    """
+    tree = ast.parse(textwrap.dedent(source))
+    function = tree.body[0]
+    body = function.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+    ):
+        body = body[1:]
+    return any(
+        "META_BASE_FRAME" in ast.unparse(node) or "base_pose" in ast.unparse(node)
+        for node in body
+    )
+
+
+def test_there_is_one_reader_of_the_frame_a_radius_is_measured_about(
+    tmp_path: Path,
+) -> None:
+    """`envelope_frame` delegates; it does not keep a copy (issue #265).
+
+    The reading moved to `reg.store.envelope_base_frame` when `reg.query` came to
+    need the same centre — to check a retained boundary's radius against the row
+    carrying it — and could not import this module, because this module imports
+    `reg.stream` and Claim 2 is *from the graph alone*. Two readers of one fact
+    drift, and the fact here decides where every radius in the file is measured
+    from: a drift between them is one number measured about two points, with
+    nothing in the file to say which.
+
+    Both halves. The structural one is that this function's body goes nowhere
+    near the keys; the behavioural one is that on a real artifact — bolted and
+    posed alike — the two functions return the same frame.
+    """
+    assert not _reads_the_centre_itself(inspect.getsource(graph.envelope_frame)), (
+        "reg.graph.envelope_frame reads the centre out of the artifact itself "
+        "again. There is one reader of it and reg.query depends on that, "
+        "because reg.query may not import this module at all."
+    )
+
+    csv = _held_stream(tmp_path / "held.csv", 6)
+    out = tmp_path / "held.sqlite"
+    _build(csv, out)
+    conn = store.connect(out)
+    try:
+        ids = [
+            str(row["id"])
+            for row in conn.execute(
+                "SELECT n.node_id AS id FROM envelope e "
+                "JOIN node n ON n.node_key = e.envelope_key "
+                "WHERE e.outer_radius IS NOT NULL ORDER BY e.envelope_key"
+            ).fetchall()
+        ]
+        assert ids, "precondition failed: this build retained no radius"
+        for envelope_id in ids:
+            assert graph.envelope_frame(conn, envelope_id) == ORIGIN_FRAME
+            assert store.envelope_base_frame(conn, envelope_id) == ORIGIN_FRAME
+    finally:
+        conn.close()
+
+    conn = _posed_artifact(tmp_path / "posed.sqlite")
+    try:
+        assert graph.envelope_frame(conn, "env_posed") == store.envelope_base_frame(
+            conn, "env_posed"
+        )
+    finally:
+        conn.close()
+
+
+def test_the_one_reader_check_can_say_no() -> None:
+    """**THE NEGATIVE.** Feed the checker the copy it exists to catch.
+
+    A delegation and a re-implementation both return a `BaseFrame` and both pass
+    every behavioural test above, so a check that cannot tell them apart is a
+    comment. This is the shape the reading had before issue #265, reduced to the
+    lines that make it a second reader.
+    """
+    delegating = (
+        "def envelope_frame(conn, envelope_id):\n"
+        '    """Reads meta[base_frame], or the row\'s base_pose."""\n'
+        "    return store.envelope_base_frame(conn, envelope_id)\n"
+    )
+    assert not _reads_the_centre_itself(delegating)
+
+    copied = (
+        "def envelope_frame(conn, envelope_id):\n"
+        "    row = store.envelope_row(conn, envelope_id)\n"
+        "    if row['base_pose'] is not None:\n"
+        "        return BaseFrame(0.0, 0.0, 0.0)\n"
+        "    return store.get_meta(conn, store.META_BASE_FRAME)\n"
+    )
+    assert _reads_the_centre_itself(copied)
 
 
 def test_a_radius_is_stored_with_its_frame_or_it_is_not_stored(seeded) -> None:

@@ -3421,88 +3421,34 @@ def _limits_from_meta(conn) -> Limits:
 def envelope_frame(conn, envelope_id: str) -> BaseFrame:
     """The frame this envelope's `outer_radius` is measured about (issue #166).
 
-    `outer_radius` is a distance from the base to the furthest point the robot
-    can reach inside the horizon — a radius **about a centre**, and until the
-    schema could say where the base was, that centre was the origin by the fact
-    that there was no other possibility rather than by anything the artifact
-    said. This is the reader that makes it a measurement: the radius and the
-    point it is measured from, together, or a refusal.
+    **A delegation, and the whole point of it is that there is one centre
+    reader** (issue #265). The reading moved to `reg.store.envelope_base_frame`
+    — the module both sides can import — when `reg.query.reached_point` came to
+    need the same centre to check a retained boundary against the row carrying
+    it. `reg.query` may not import this module, because this module imports
+    `reg.stream` and Claim 2 is that audit questions are answered *from the
+    graph alone*; giving it a copy of the centre logic instead would be two
+    readers of one fact, and this is the fact that decides where every radius in
+    the file is measured from. What that function returns and what it refuses is
+    documented there, in full.
 
-    Two ways an artifact states the frame, and they are exclusive:
-
-    * the configuration the envelope names states a `base_pose` — a room-frame
-      pose, **Layer B**, and everything measured about it inherits whatever
-      supplied it (docs/sufficiency.md §5.6);
-    * the artifact states `meta[base_frame]` — where the base was bolted for the
-      whole run, a mounting fact and Layer A, which is what every fixture in this
-      repository has.
+    This wrapper exists for the exception type and for nothing else: a caller
+    inside the graph layer meets a `GraphQueryError` like every other refusal
+    this module makes, and the message it carries is the store's, unedited.
 
     Returns:
-        The centre as a `BaseFrame`. It is a *frame* and deliberately not a
-        `BasePose` even when it came from one: `reg.kinematics` is Layer A and
-        may not import a room-frame pose, and a caller that needs the provenance
-        reads it off `reg.store.config_base_pose`, where it is still attached to
-        the thing it is a provenance of.
+        The centre as a `BaseFrame`, off the row's own `base_pose` or off
+        `meta[base_frame]`.
 
     Raises:
-        GraphQueryError: the artifact holds no such envelope; the row retains no
-            `outer_radius`, so there is no radius for a frame to belong to; or it
-            states neither a pose nor a base frame, which is a
-            could-not-evaluate. **The absence never resolves to the origin.** A
-            radius silently attributed to `(0, 0)` for a robot that was elsewhere
-            is the failure this whole reader exists to make impossible, and it is
-            worse than no answer because it is one.
+        GraphQueryError: whatever `reg.store.envelope_base_frame` refuses, with
+            its wording intact — no such envelope, no retained `outer_radius`, or
+            no stated frame. **The absence never resolves to the origin.**
     """
-    row = store.envelope_row(conn, str(envelope_id))
-    if row is None:
-        raise GraphQueryError(
-            f"this artifact holds no envelope {str(envelope_id)!r}, so there is "
-            "no radius here and no frame to measure one from."
-        )
-    if row["outer_radius"] is None:
-        raise GraphQueryError(
-            f"envelope {str(envelope_id)!r} has source={str(row['source'])!r} "
-            "and retains no outer_radius. A declared region is the policy's "
-            "claim and a clamped bound is what a verdict applied; neither is a "
-            "reachable set, so neither has an outer radius and neither has a "
-            "frame one would be measured about."
-        )
-    if row["base_pose"] is not None:
-        pose, source = str(row["base_pose"]), str(row["base_pose_source"])
-        values = _floats(
-            pose, f"robot_config[{str(row['config_id'])!r}].base_pose"
-        )
-        if len(values) != 3:
-            raise GraphQueryError(
-                f"robot_config {str(row['config_id'])!r} states "
-                f"base_pose={pose!r}, which is not the three numbers x,y,theta. "
-                "A pose this reader cannot parse is a frame nobody stated, and "
-                f"the radius on envelope {str(envelope_id)!r} is about a point "
-                "that cannot be placed. Its provenance says "
-                f"{source!r}, which does not help."
-            )
-        return BaseFrame(x=values[0], y=values[1], theta=values[2])
-
-    frame = store.get_meta(conn, store.META_BASE_FRAME)
-    if frame is None:
-        raise GraphQueryError(
-            f"envelope {str(envelope_id)!r} retains "
-            f"outer_radius={float(row['outer_radius'])!r}, and this artifact "
-            f"states neither a base_pose on config {str(row['config_id'])!r} nor "
-            f"meta[{store.META_BASE_FRAME!r}]. That radius is a length in metres "
-            "about a point nothing in the file names. Reading it as a radius "
-            "about the origin is exactly what an artifact that can hold a moving "
-            "base may not let a reader do, so it is a could-not-evaluate."
-        )
-    values = _floats(frame, f"meta[{store.META_BASE_FRAME!r}]")
-    if len(values) != 3:
-        raise GraphQueryError(
-            f"meta[{store.META_BASE_FRAME!r}] is {frame!r}, which is not the "
-            "three numbers x,y,theta. A base frame this reader cannot parse "
-            "places nothing, and every retained outer_radius in the file is "
-            "about a point it names."
-        )
-    return BaseFrame(x=values[0], y=values[1], theta=values[2])
+    try:
+        return store.envelope_base_frame(conn, str(envelope_id))
+    except store.StoreError as exc:
+        raise GraphQueryError(str(exc)) from exc
 
 
 def recorded_environment(conn) -> dict[str, str]:

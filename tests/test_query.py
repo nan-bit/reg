@@ -50,6 +50,7 @@ Envelope parameters are coarse throughout (`_FAST`), copied from
 from __future__ import annotations
 
 import ast
+import math
 import re
 import subprocess
 import sys
@@ -59,6 +60,7 @@ import pytest
 
 from reg import bench, chain, graph, identity, query, store
 from reg.bench import AGREE, COULD_NOT_EVALUATE, DISAGREE, run_scenario
+from reg.envelope import outer_radius
 from reg.identity import DPIA_NONE, Disclosures, RunIdentity
 from reg.query import ANSWERED, QueryError
 from reg.scenarios import scenario
@@ -1104,11 +1106,12 @@ def test_the_agreement_check_passes_every_boundary_the_builder_wrote(
 ) -> None:
     """The positive half of the tamper check: it does not cry wolf.
 
-    The row's `outer_area` is measured before the region is placed, so on a
-    posed frame the blob's area differs from it by a rigid transform's float
-    noise as well as the rounding. Both fixtures, every retained boundary — the
-    mobile one is the run whose frames are posed — and each must answer, or the
-    check would refuse clean files and be switched off within a week.
+    The row's `outer_area` and `outer_radius` are both measured before the
+    region is placed, so on a posed frame the blob disagrees with each of them
+    by a rigid transform's float noise as well as by the rounding. Both
+    fixtures, every retained boundary, **both halves of the check** — the mobile
+    one is the run whose frames are posed — and each must answer, or the check
+    would refuse clean files and be switched off within a week.
     """
     for path in (artifact, mobile_built[1]):
         conn = store.connect(path)
@@ -1129,8 +1132,267 @@ def test_the_agreement_check_passes_every_boundary_the_builder_wrote(
                     # Two transitions inside one quantum is a separate refusal
                     # with its own test; it is not this check speaking.
                     assert "outer_area" not in answer.reason, answer.reason
+                    # Nor the radius half of it (issue #265). The mobile run's
+                    # frames are posed, so the stored radius is measured about
+                    # the origin before `_place` and compared here about the
+                    # centre the row states — which is where the float noise is,
+                    # and the reason this loop covers both fixtures.
+                    assert "outer_radius" not in answer.reason, answer.reason
         finally:
             conn.close()
+
+
+def _moved_boundary(
+    source: Path, target: Path, *, repair_radius: bool
+) -> tuple[Path, float, str, object, object]:
+    """A copy whose first retained boundary is the same region, somewhere else.
+
+    `(path, t, envelope_id, original, moved)`. The translation is the region's
+    own bounding-box width plus half a metre, so the two are disjoint and every
+    point of the original is a point the replacement excludes — a false
+    accusation available at each one, and far past `DISTANCE_TOL_M`.
+
+    `repair_radius=True` also writes the moved region's radius into the row, and
+    that copy is not a tamper test: it is what the file would have said with no
+    radius check at all, which is the only way to show the accusation was
+    genuinely on offer.
+    """
+    from shapely.affinity import translate
+
+    conn = store.connect(source)
+    try:
+        t, envelope_id, original = _first_retained_boundary(conn)
+    finally:
+        conn.close()
+
+    minx, _, maxx, _ = original.bounds
+    moved = translate(original, xoff=(maxx - minx) + 0.5)
+    statements = [
+        "UPDATE envelope SET outer_wkb = x'" + store.to_wkb(moved).hex() + "' "
+        "WHERE envelope_key = (SELECT node_key FROM node WHERE node_id = "
+        f"'{envelope_id}')"
+    ]
+    if repair_radius:
+        conn = store.connect(source)
+        try:
+            centre = store.envelope_base_frame(conn, envelope_id)
+        finally:
+            conn.close()
+        statements.append(
+            f"UPDATE envelope SET outer_radius = {outer_radius(moved, centre)!r} "
+            "WHERE envelope_key = (SELECT node_key FROM node WHERE node_id = "
+            f"'{envelope_id}')"
+        )
+    return _copy(source, target, *statements), t, envelope_id, original, moved
+
+
+def test_a_boundary_moved_from_where_its_row_says_is_a_could_not_evaluate(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE MOVED-REGION NEGATIVE.** The area check alone lets this through.
+
+    A translation keeps the area exactly, so the comparison issue #258 shipped
+    passes the region without a word — and every point of it has shifted, so
+    points the robot could reach come back *excluded*. That is the one direction
+    this answer must not get wrong, and it is why the row's `outer_radius`, a
+    distance from the envelope's own centre, is the second half of the check.
+
+    The preconditions are the test. Without them this is a refusal with no
+    demonstration that anything was being refused: the first shows the area
+    comparison still passes the moved region, and the second shows what the file
+    says when only the radius check is missing — *excluded*, confidently, at a
+    point the original covers.
+    """
+    honest_path, t, envelope_id, original, moved = _moved_boundary(
+        artifact, tmp_path / "moved-consistent.sqlite", repair_radius=True
+    )
+    witness = original.representative_point()
+    assert not moved.covers(witness), (
+        "precondition failed: the translated region still covers the point, so "
+        "nothing below is an exclusion the move invented"
+    )
+
+    conn = store.connect(artifact)
+    try:
+        truthful = query.reached_point(conn, witness.x, witness.y, t)
+        stored_area = float(
+            conn.execute(
+                "SELECT outer_area AS a FROM envelope WHERE envelope_key = "
+                "(SELECT node_key FROM node WHERE node_id = ?)",
+                (envelope_id,),
+            ).fetchone()["a"]
+        )
+    finally:
+        conn.close()
+    assert truthful.verdict == ANSWERED and truthful.value.could_have_reached
+
+    # PRECONDITION 1: the area comparison, on its own, passes the moved region.
+    quantum = 10.0 ** (
+        math.floor(math.log10(stored_area)) - (query.AREA_QUANT_SIGFIGS - 1)
+    )
+    assert abs(moved.area - stored_area) <= quantum, (
+        "precondition failed: the translation changed the area past its "
+        "quantum, so issue #258's check would have caught this and the gap "
+        "this test is about is not the one being exercised"
+    )
+
+    # PRECONDITION 2: with the radius agreeing too, the file accuses.
+    conn = store.connect(honest_path)
+    try:
+        accusing = query.reached_point(conn, witness.x, witness.y, t)
+    finally:
+        conn.close()
+    assert accusing.verdict == ANSWERED, accusing.reason
+    assert not accusing.value.could_have_reached, (
+        "precondition failed: a copy whose row agrees with the moved region in "
+        "both figures must answer *excluded* here, or there is no false "
+        "accusation for the radius check to stop"
+    )
+
+    # AND THE CHECK: the row still states the original radius, and it refuses.
+    moved_path, *_ = _moved_boundary(
+        artifact, tmp_path / "moved.sqlite", repair_radius=False
+    )
+    conn = store.connect(moved_path)
+    try:
+        answer = query.reached_point(conn, witness.x, witness.y, t)
+    finally:
+        conn.close()
+
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None, (
+        "a refused answer must carry no verdict: False here is the accusation "
+        "the moved region would have produced"
+    )
+    assert "outer_radius" in answer.reason
+    assert envelope_id in answer.reason
+
+
+def test_the_moved_region_reaches_the_cold_read_as_a_could_not_evaluate(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """And the row an assessor reads carries the refusal, not a state around it.
+
+    `_reached_point_claim` probes the *first* retained boundary, which is the one
+    `_moved_boundary` moves, so the check the cold read runs is the check that
+    refuses — and the row reports what the query said rather than asserting a
+    state about a check nobody watched fail.
+    """
+    moved_path, _, envelope_id, _, _ = _moved_boundary(
+        artifact, tmp_path / "moved-cold.sqlite", repair_radius=False
+    )
+    assert _cold_read(artifact)[query.CLAIM_REACHED_POINT].state == query.CHECKABLE, (
+        "precondition failed: the untampered fixture must be CHECKABLE here, or "
+        "the state below says nothing about the move"
+    )
+    row = _cold_read(moved_path)[query.CLAIM_REACHED_POINT]
+    assert row.state == COULD_NOT_EVALUATE
+    assert not row.checkable
+    assert "refuses" in row.detail and "outer_radius" in row.detail
+    assert envelope_id in row.detail
+
+
+def test_a_boundary_no_radius_can_be_measured_from_refuses(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """A blob whose *row agrees with it* and whose extent is still not defined.
+
+    `reg.store.to_wkb` refuses an invalid geometry, so nothing this package
+    writes lands here — but the blob is uncovered by any digest, so a file
+    something else wrote can carry one, and with `outer_area` set to match it
+    the comparison above waves it through. `reg.envelope.outer_radius` then
+    raises rather than returning, and a caller asking about a point is owed an
+    answer or a reason: a traceback is neither.
+    """
+    import shapely
+
+    conn = store.connect(artifact)
+    try:
+        t, envelope_id, _ = _first_retained_boundary(conn)
+    finally:
+        conn.close()
+
+    # Self-intersecting and of positive area, so it survives the area check
+    # once the row is made to agree with it.
+    ill_formed = shapely.Polygon(
+        [(0, 0), (2, 0), (2, 2), (1, 2), (1, 1), (3, 1), (3, 3), (0, 3)]
+    )
+    assert not ill_formed.is_valid and ill_formed.area > 0, (
+        "precondition failed: this fixture geometry must be invalid and have "
+        "extent, or it is caught by a different arm than the one under test"
+    )
+    with pytest.raises(store.StoreError, match="invalid geometry"):
+        store.to_wkb(ill_formed)
+
+    broken = _copy(
+        artifact,
+        tmp_path / "ill-formed.sqlite",
+        "UPDATE envelope SET outer_wkb = x'"
+        + shapely.to_wkb(ill_formed).hex()
+        + f"', outer_area = {ill_formed.area!r} "
+        "WHERE envelope_key = (SELECT node_key FROM node WHERE node_id = "
+        f"'{envelope_id}')",
+    )
+    conn = store.connect(broken)
+    try:
+        answer = query.reached_point(conn, 0.5, 0.5, t)
+    finally:
+        conn.close()
+
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+    assert envelope_id in answer.reason
+    assert "outer_radius" in answer.reason
+
+
+def test_a_boundary_whose_centre_the_file_states_nowhere_refuses(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE NO-CENTRE NEGATIVE.** A check that could not run is not one that passed.
+
+    The containment test needs no centre — the retained region is already in the
+    room frame — but the agreement check does, and `outer_radius` is a length
+    about a point the artifact has to name. This fixture names the origin, so a
+    reader that resolved the absence to `(0, 0)` would answer *exactly* what the
+    honest file answers and nothing downstream could tell the two apart. That is
+    the reason the absence refuses instead, and it is the same rule
+    `reg.store.envelope_base_frame` states.
+    """
+    conn = store.connect(artifact)
+    try:
+        t, envelope_id, region = _first_retained_boundary(conn)
+        witness = region.representative_point()
+        honest = query.reached_point(conn, witness.x, witness.y, t)
+        stated = store.get_meta(conn, store.META_BASE_FRAME)
+    finally:
+        conn.close()
+    assert honest.verdict == ANSWERED and honest.value.could_have_reached
+    assert stated is not None, (
+        "precondition failed: this fixture must state a base frame, or "
+        "deleting it below changes nothing"
+    )
+
+    stripped = _copy(
+        artifact,
+        tmp_path / "no-centre.sqlite",
+        f"DELETE FROM meta WHERE key = '{store.META_BASE_FRAME}'",
+    )
+    conn = store.connect(stripped)
+    try:
+        answer = query.reached_point(conn, witness.x, witness.y, t)
+        posed = conn.execute(
+            "SELECT count(base_pose) AS posed FROM robot_config"
+        ).fetchone()["posed"]
+    finally:
+        conn.close()
+    assert int(posed) == 0, (
+        "precondition failed: a configuration in this copy still states a "
+        "pose, so the centre is readable and the deletion removed nothing"
+    )
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+    assert store.META_BASE_FRAME in answer.reason
+    assert envelope_id in answer.reason
 
 
 def test_an_artifact_written_before_the_boundary_column_refuses(

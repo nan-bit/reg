@@ -172,6 +172,7 @@ from pathlib import Path
 from shapely.geometry import Point
 
 from reg import store
+from reg.envelope import outer_radius
 from reg.tolerances import (
     AREA_QUANT_SIGFIGS,
     DISTANCE_TOL_M,
@@ -2270,10 +2271,23 @@ def reached_point(
     digest covers the blob, so a smaller region swapped in leaves the chain
     VERIFIED and turns a point the robot could reach into an exclusion — a
     false accusation, the direction this answer must not get wrong. What the
-    file can still check is itself: a blob whose area disagrees with the row's
-    `outer_area` by more than that figure's quantum is refused. A replacement
-    of equal area, or the right region moved, passes; this is the file agreeing
-    with itself, not the region shown to be the one the build computed.
+    file can still check is itself, against **both** figures the row carries: a
+    blob whose area disagrees with `outer_area` by more than that figure's
+    quantum is refused, and so is one whose furthest point from the envelope's
+    own centre disagrees with `outer_radius` by more than `DISTANCE_TOL_M`
+    (issue #265). The second is what catches the correct region *moved*, which
+    keeps its area and every point of which has shifted. The centre comes from
+    `reg.store.envelope_base_frame`; where the artifact states none, the check
+    cannot run and this answer refuses rather than skipping it.
+
+    **What the pair still does not catch, stated rather than implied.** A region
+    **rotated about its own centre** keeps both its area and its radius, and so
+    does any replacement matching both figures — a spiral, an annulus sector, a
+    region of the right size somewhere else about the same centre. Two scalars
+    constrain two numbers and not a shape. This is the file agreeing with
+    itself, and it is never the region shown to be the one the build computed;
+    a digest over `outer_wkb` is what that would take and this artifact has
+    none.
 
     The direction of the answer is `ReachedPoint.could_have_reached`'s: the
     outer set over-covers, so `False` excludes soundly and `True` says only that
@@ -2284,8 +2298,9 @@ def reached_point(
     Args:
         conn: an open artifact.
         x, y: the point, in the **room** frame — the frame the retained region
-            is already in, which is why this answer needs no centre where
-            `outer_radius` needs `reg.graph.envelope_frame` to supply one.
+            is already in, so the containment test itself spends no tolerance
+            and needs no centre. The *agreement check* does need one, which is
+            why a file stating no frame refuses here.
         t: seconds, quantized to `TIME_TOL_S` on the way in.
 
     Returns:
@@ -2409,6 +2424,69 @@ def reached_point(
             "rather than to envelope rows, so this is where the file stops "
             "agreeing with itself and not where it is shown to be wrong. "
             f"{_coverage_text(coverage)}",
+        )
+    # The second half of the same agreement check, and the half that catches
+    # the correct region *moved* (issue #265). A translation keeps the area, so
+    # everything above passes it, and every point of the region has shifted:
+    # points the robot could reach fall outside and come back **excluded**,
+    # which is the false accusation this answer must never make. The row's
+    # `outer_radius` is the furthest point of the region from the envelope's own
+    # centre, and a translation changes it.
+    #
+    # The centre comes from `reg.store.envelope_base_frame`, which is the one
+    # reader of it in this package — `reg.graph.envelope_frame` delegates to the
+    # same function. A copy here would be a second reader of the fact that
+    # decides where every radius in the file is measured from.
+    try:
+        centre = store.envelope_base_frame(conn, envelope_id)
+    except store.StoreError as exc:
+        return _refuse(
+            spec,
+            layers,
+            f"Envelope {envelope_id!r} retains a boundary, and this artifact "
+            "does not say where the radius beside it is measured from, so the "
+            "check that the two agree cannot be run: "
+            f"{exc} The containment test itself needs no centre — the retained "
+            "region is already in the room frame — but an answer given here "
+            "would be one whose integrity check was skipped rather than "
+            "passed, and a check that could not run must not resolve to one "
+            f"that did. {_coverage_text(coverage)}",
+        )
+    stored_radius = float(row["outer_radius"])
+    try:
+        measured_radius = outer_radius(region, centre)
+    except (TypeError, ValueError) as exc:
+        # A geometry `reg.store.to_wkb` refuses to write: empty, or invalid.
+        # It reaches here only on a file something else wrote, and only when
+        # its area happens to agree with the row above. Refused rather than
+        # raised, because a caller asking about a point is owed an answer or a
+        # reason and a traceback is neither.
+        return _refuse(
+            spec,
+            layers,
+            f"Envelope {envelope_id!r} retains a boundary no radius can be "
+            f"measured from: {exc} So the outer_radius on the row cannot be "
+            "checked against it, and the containment test would be run over a "
+            "region whose own extent is not well defined. "
+            "reg.store.to_wkb refuses to write such a geometry, so this file "
+            f"was not written by it. {_coverage_text(coverage)}",
+        )
+    if abs(measured_radius - stored_radius) > DISTANCE_TOL_M:
+        return _refuse(
+            spec,
+            layers,
+            f"Envelope {envelope_id!r} retains a boundary whose radius "
+            "disagrees with the row carrying it: the stored geometry reaches "
+            f"{measured_radius:.6g} m from the centre ({centre.x:g}, "
+            f"{centre.y:g}) this artifact states, and the row states "
+            f"outer_radius={stored_radius} m, a difference larger than the "
+            f"{DISTANCE_TOL_M:g} m the radius is quantized to. A region of the "
+            "right area in the wrong place passes the area comparison above and "
+            "turns points the robot could reach into exclusions, which is the "
+            "one direction this answer must not get wrong. The builder writes "
+            "the radius and the boundary from one region, so a file where they "
+            "differ has stopped giving one account of it, and nothing here can "
+            f"say which is the region this build computed. {_coverage_text(coverage)}",
         )
     inside = bool(region.covers(Point(x, y)))
     return Answer(

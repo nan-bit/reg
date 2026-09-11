@@ -4,7 +4,7 @@
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
 #201, the recompute path refuses off it), tier 3 as
 `reg.query.cold_read` (#231, #242, #262), tier 4 as the layer basis per edge
-(#252) and tier 5 as the retained boundary (#257, #258) · written
+(#252) and tier 5 as the retained boundary (#257, #258, #265) · written
 2026-09-05, tier 1 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07, tier 4
 2026-09-08, tier 5 2026-09-10 · normative
 over nothing yet; where it touches what the project may claim it defers to
@@ -42,7 +42,7 @@ document's statement of the same three, for the argument it goes on to make.*
 |---|---|---|---|
 | ~~1~~ | Check a `layer` tag | The tag was written and what it was computed **from** was not — **closed by issue #252**: `edge_layer_basis` carries one row per input per tagged edge, and the tag is the weakest of them | `sufficiency.md` §5.6, §5.9 |
 | 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **closed in the weaker form by issues #200 and #201**: it records them, and `envelope_at` refuses to recompute where they differ. What is left is that a refusal is not an attribution | `limitations.md` §1 |
-| ~~3~~ | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` were retained, not the boundary — **narrowed by issue #257** and **answered by #258**: the boundary is retained wherever the sampled polygon is, and `reached_point` tests a point against it. What is left is coverage, capped by `ENVELOPE_RETENTION` | `limitations.md` §2, §3 |
+| ~~3~~ | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` were retained, not the boundary — **narrowed by issue #257** and **answered by #258** and **#265**: the boundary is retained wherever the sampled polygon is, and `reached_point` tests a point against it, refusing one that contradicts either figure on its row. What is left is coverage, capped by `ENVELOPE_RETENTION` | `limitations.md` §2, §3 |
 
 **Gap 1 — a tag that was asserted rather than checkable. Closed 2026-09-08
 (issue #252).** `envelope_layer` took `Limits` and nothing else. That was sound
@@ -84,12 +84,12 @@ machine that has been updated, and a check that fires on the expected shape of
 the world is a check that gets switched off.
 
 **Gap 3 — a radius where the question wants a region. Narrowed 2026-09-09,
-answered 2026-09-10.** `outer_wkb` is retained under `GEOMETRY_RETENTION`'s own
+answered 2026-09-10, completed 2026-09-11.** `outer_wkb` is retained under `GEOMETRY_RETENTION`'s own
 rule — §8's tier 5, option C — so the rows keeping the sampled polygon carry the
 region, and `reg.query.reached_point(conn, x, y, t)` tests a point against it.
 Exact where it answers: the retained boundary is the one polygon here that is
 never simplified, and it is already in the room frame, so the test spends no
-tolerance and needs no centre.
+tolerance.
 
 **What it refuses is the load-bearing half.** At a frame the rule keeps no
 boundary for, `outer_radius` is one column away and would give the point a
@@ -100,8 +100,11 @@ without that number, *this artifact cannot answer at t* reads as *the robot coul
 not have been there*. Elsewhere the answer stays radial and the region stays
 recomputable, which routes that remainder back through gap 2.
 
-It also refuses a boundary its own row's `outer_area` contradicts: no digest
-covers the blob, so a swapped one would otherwise accuse.
+It also refuses a boundary its own row contradicts, on both figures the row
+carries: `outer_area`, and the radius about the centre
+`reg.store.envelope_base_frame` reads. The second catches the correct region
+*moved*, whose area is unchanged. Two scalars do not pin a shape: a region rotated
+about its own centre survives the pair, as does any replacement matching both. No centre stated, no check: the answer refuses rather than skipping it.
 
 ## 2. The test that decides all three
 
@@ -513,13 +516,15 @@ that rule. Every published retention figure moved —
 longer blocked on recomputation where a boundary is kept; what it needs is a
 person to say what a fault in the taxonomy means.
 
-The answering (issue #258): `reg.query.reached_point` and `--reached-point X_M
-Y_M T`, plus `pointwise_coverage`, so a caller learns how much of the run is
+The answering (issues #258 and #265): `reg.query.reached_point` and
+`--reached-point X_M Y_M T`, plus `pointwise_coverage`, so a caller learns how much of the run is
 covered without needing an answer to hang it on. Carrying a region was never
 answering with it — the cold read reported this row readable-not-checkable at
 schema 14 precisely because no query tested a point against one — and
 `cold_read` now reports `CHECKABLE`, running that query in both directions
-rather than asserting a state about it.
+rather than asserting a state about it. #265 added the radius half of its
+self-agreement check, which took moving the centre reader down to
+`reg.store.envelope_base_frame` — `reg.query` may not import `reg.graph`.
 
 *Its own tier 1, the costing, landed first* (issue #230): `reg.bench
 --outer-boundary` priced all three options and adopted none, measured with

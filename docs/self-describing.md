@@ -3,7 +3,7 @@
 **Status:** a design document; every tier of §8 has landed — tier 2 in two
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
 #201, the recompute path refuses off it), tier 3 as
-`reg.query.cold_read` (#231, #242), tier 4 as the layer basis per edge
+`reg.query.cold_read` (#231, #242, #262), tier 4 as the layer basis per edge
 (#252) and tier 5 as the retained boundary (#257, #258) · written
 2026-09-05, tier 1 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07, tier 4
 2026-09-08, tier 5 2026-09-10 · normative
@@ -71,11 +71,7 @@ the recording environment, comparing `reg.graph.RECOMPUTE_ENVIRONMENT_KEYS` —
 five of the six, the sixth being `reg.graph.RECORDED_ONLY_ENVIRONMENT_KEYS` — and
 naming the key that differs and both values. It **refuses
 rather than warning**, because a recomputed polygon that reaches a caller under a
-warning is a polygon that reaches a query result. Three states and the third
-never resolves to the first: the keys agree and the recomputation happens exactly
-as before; one differs and it is a could-not-evaluate; the artifact states no
-environment — everything built before #200 — and it is a *different*
-could-not-evaluate, because nothing was compared.
+warning is a polygon that reaches a query result.
 
 **What is not closed, and the sentence is load-bearing.** The refusal names the
 key and does not say which difference moved the geometry; nothing in that path
@@ -85,12 +81,7 @@ other half looks like ([`prior-art.md`](prior-art.md) §27). The interpreter and
 numpy are recorded and are not triggers, which is a decision taken in issue
 #201's grooming: a patch release would make every artifact unrecomputable on any
 machine that has been updated, and a check that fires on the expected shape of
-the world is a check that gets switched off. numpy is the weaker call of the two
-and is stated rather than left to be discovered, because `numpy.cos` and
-`numpy.sin` place every link endpoint.
-
-The split into two issues was deliberate: writing the data and using it are
-different work, and only the second changes what a query answers.
+the world is a check that gets switched off.
 
 **Gap 3 — a radius where the question wants a region. Narrowed 2026-09-09,
 answered 2026-09-10.** `outer_wkb` is retained under `GEOMETRY_RETENTION`'s own
@@ -144,7 +135,7 @@ nobody, so the gate **is** the design, and a report flattening that row into
 either neighbour would call a deliberate gate a shortcoming, or a shortcoming a
 gate. It is the one claim here whose verification is withheld on purpose.
 
-**It covers all four of [`plan.md`](plan.md)'s claims**, in six rows, on an
+**It covers all four of [`plan.md`](plan.md)'s claims**, in seven rows, on an
 artifact built from `main` at `schema_version` 14 with a record stream stored.
 Claim 4's two are **absent** on a build handed none — a fact about the build
 rather than about the schema:
@@ -157,10 +148,13 @@ rather than about the schema:
 | 2 | `reached-point` | **checkable** — the boundary is in the file where an edge anchors one, and this row runs `reached_point` against it in both directions |
 | 1 | `recompute-discarded-polygon` | **checkable** — the discard contract retention rests on |
 | — | `recording-environment` | **checkable** — what the row above rests on |
+| — | `disclosures-stated` | **checkable** — what the deployer states about §8's obligations, read back verbatim; none of it stated is **absent**, part of it **could-not-evaluate** |
 
 Claim 4's two rows are what the other four support. `tests/test_query.py` pins
 every row per shipped fixture, so closing a gap fails there and has to be updated
-on purpose.
+on purpose. The seventh is under none of them, and it is a claim rather than a
+state: what the file states about the obligations its existence creates lands in
+three of the five this report already had.
 
 **It reports and it re-verifies nothing.** `recompute_permitted` is held to agree
 with `reg.graph.envelope_at` on both sides; the chain row runs *nothing*, having
@@ -437,10 +431,12 @@ and using it are different work, and only the second changes what a query answer
 Tier 3 was unblocked by the first half; nothing else here was waiting on either.
 
 **Tier 3 — the cold read. Landed** (issue #231) **and extended to Claim 4** (issue
-#242): `reg.query.cold_read` and `--cold-read`, six claims in five states, pinned
-per shipped fixture in `tests/test_query.py` with its negatives. The fifth state
-is `chain-intact`'s, and §2 says why it is a state and not a shade of one of the
-four. It ships in the package rather than in `tests/`, and §2 says why.
+#242): `reg.query.cold_read` and `--cold-read`, seven claims in five states,
+pinned per shipped fixture in `tests/test_query.py` with its negatives. The fifth
+state is `chain-intact`'s, and §2 says why it is a state and not a shade of one of
+the four. The seventh row (issue #262) reads back the three `meta` keys issue
+#125 made the build write and nothing read. It ships in the package rather than
+in `tests/`, and §2 says why.
 
 **Tier 4 — the layer basis. Landed** (issue #252). **Option A, per edge**, is in
 the schema as `reg.store.EDGE_BASIS_TABLE` at `SCHEMA_VERSION` 13: one row per

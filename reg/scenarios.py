@@ -31,12 +31,13 @@ that track exercisable: `mobile_transit` that the room-frame answer is Layer B
 and the base pose reaches the artifact, `mobile_frozen_arm` that driving is not
 reaching, `mobile_overclaim` that for a robot with no workspace disc a VETO
 rests on the outer reachable set and on nothing else, and
-`mobile_derived_velocity` — the fourth, and the only one whose claim is about a
-*defect* — that a base velocity out of a perceiver reaches the artifact with the
-layer tags unmoved (issue #229, docs/limitations.md §11). They are in
-`MOBILE_SCENARIOS` rather than in `SCENARIOS`, and the block comment above
-`MOBILE_LIMITS` is where that split is argued — in one line, **Claim 1 stays a
-fixed-arm claim** and a mobile run is not priced beside the eleven.
+`mobile_derived_velocity` — the fourth, and the one whose claim was about a
+*defect* until issue #252 closed it — that a base velocity out of a perceiver
+reaches the artifact and the layer tag follows it there (issues #229 and #252,
+docs/limitations.md §11). They are in `MOBILE_SCENARIOS` rather than in
+`SCENARIOS`, and the block comment above `MOBILE_LIMITS` is where that split is
+argued — in one line, **Claim 1 stays a fixed-arm claim** and a mobile run is
+not priced beside the eleven.
 
 What a scenario is: a fixed set of joint waypoints and a fixed human path,
 linearly interpolated at a fixed timestep. **No planner, no controller, no
@@ -1732,34 +1733,37 @@ MOBILE_OVERCLAIM = Scenario(
     fault="envelope_overclaim",
 )
 
-# THE CLAIM, AND IT IS THE ONLY ONE IN THIS CATALOGUE THAT IS A DEFECT RATHER
-# THAN A CAPABILITY: a base velocity out of a perceiver reaches the artifact and
-# no layer tag moves (issue #229, docs/limitations.md §11,
+# THE CLAIM. It was the only one in this catalogue that was a defect rather than
+# a capability — a base velocity out of a perceiver reaches the artifact and no
+# layer tag moves — and issue #252 closed it, which is what this fixture now
+# demonstrates instead (issues #229 and #252, docs/limitations.md §11,
 # docs/self-describing.md §7 question 2).
 #
-# The three above all state `VelocitySource.PROPRIOCEPTIVE`, so the gap §11
-# records is real in the code and **unobservable in any run this repository
-# produces**: `reg.envelope.envelope_layer` decides the `HAS_ENVELOPE` tag from
-# `Limits.source` alone, nothing maps a `VelocitySource` member to a `Layer`,
-# and no fixture has ever handed it a member that would disagree. This one does.
+# The three above all state `VelocitySource.PROPRIOCEPTIVE`, so while the gap
+# §11 recorded was open it was real in the code and **unobservable in any run
+# this repository produced**: nothing mapped a `VelocitySource` member to a
+# `Layer`, and no fixture had ever handed one to the function that would have to.
 # `reg.envelope.base_motion_bounds` reads `state.base_vel` and integrates it
 # into the displacement term of the outer set — which for a vehicle is the only
 # bound a VETO rests on (issue #164) — so every envelope in this run inherits
-# whatever placed those rates, and `envelope_layer(MOBILE_LIMITS)` still answers
-# `A` for all of it.
+# whatever placed those rates. Since #252 `reg.envelope.envelope_layer` is the
+# weakest of its inputs and `base_vel_source` is one of them, so
+# `envelope_layer(MOBILE_LIMITS, VelocitySource.DERIVED, posed=False)` answers
+# `B` where it used to answer `A`, on the bounds alone and with no pose in the
+# question.
 #
-# AND THE TAG IT PRODUCES IS RIGHT ANYWAY, WHICH IS WHY THIS IS WORTH SHIPPING
-# RATHER THAN ARGUING. The `HAS_ENVELOPE` edges of the built artifact come out
-# `B` — because the base drove, and a posed configuration is Layer B whatever
-# the limits say (issue #191, `reg.graph.build`). So a `WHERE layer = 'B'` query
-# returns them, for the pose and not for the velocity, and this run and
-# `mobile_transit` build artifacts carrying the identical tag on every edge
-# while their streams disagree in the `base_vel_source` column. A reader cannot
-# tell from the file which of the two facts the tag followed, and on a robot
-# whose pose was not in the artifact — a body-frame-only build — the coincidence
-# would not be there to save it. Asserted in exactly those terms by
-# `tests/test_graph.py`, so that closing the gap turns the assertion red and
-# somebody has to change it deliberately.
+# AND THE TAG ON THE EDGES DOES NOT MOVE, WHICH IS WHY THE PAIR IS STILL WORTH
+# SHIPPING. The `HAS_ENVELOPE` edges of both built artifacts come out `B` —
+# because the base drove, and a posed configuration is Layer B whatever the
+# velocity or the limits say (issue #191, `reg.graph.build`). What separates the
+# two files is the *basis* under the tag: since schema 13 every tagged edge
+# carries one row per input in `edge_layer_basis`, and this run's say
+# `base_vel_source=derived → B` where `mobile_transit`'s say
+# `proprioceptive → A`. That row is the answer to *which of the two facts did
+# this tag follow*, which is the question the defect version of this fixture
+# existed to show a reader could not ask. Asserted in exactly those terms by
+# `tests/test_graph.py`, against both built artifacts, so that a regression in
+# either direction turns the assertion red.
 #
 # WHY IT IS `replace` AND NOT A FOURTH BLOCK OF WAYPOINTS. The comparison in the
 # paragraph above is the whole fixture, and it holds only while the two runs
@@ -1768,9 +1772,13 @@ MOBILE_OVERCLAIM = Scenario(
 # something else. `Scenario` is frozen and `replace` re-runs `__post_init__`, so
 # this is validated as its own fixture and not adopted as one.
 #
-# Nothing here closes the gap. The repair is an envelope layer that is the
-# weakest of its inputs rather than of one of them, decided together with the
-# posed-configuration case §11 holds open beside it, and it is the rest of #227.
+# WHAT IS STILL OPEN, SO THIS FIXTURE IS NOT READ AS CLOSING §11 ENTIRELY. The
+# repair was an envelope layer that is the weakest of its inputs rather than of
+# one of them, decided together with the posed-configuration case beside it
+# (#252, the rest of #227). What §11 still records is one level down and one
+# type over: `qd` carries no provenance at all, and `reg.bench.COLUMN_RULES`
+# still classifies `base_vel_source` per column and statically, so the stream's
+# column rule does not follow the value the edge tag now does.
 MOBILE_DERIVED_VELOCITY = replace(
     MOBILE_TRANSIT,
     name="mobile_derived_velocity",
@@ -1779,9 +1787,18 @@ MOBILE_DERIVED_VELOCITY = replace(
         "off its wheels. The run is `mobile_transit`'s frame for frame — the "
         "same drive, the same person, the same geometry — and the one thing "
         "that differs is the provenance the stream records for the velocity "
-        "block. Nothing in `reg` reads that provenance when it tags a layer, so "
-        "this is the fixture that makes docs/limitations.md §11 observable in "
-        "an artifact rather than only in the code."
+        "block. Since issue #252 the layer tag follows it: "
+        "`reg.envelope.envelope_layer` is the weakest of its inputs and a rate "
+        "assembled by looking at the room is not a Layer A one, so "
+        "`envelope_layer` answers `B` for this run on the bounds alone and with "
+        "no pose in the question. Both artifacts tag every `HAS_ENVELOPE` edge "
+        "`B` in the end — the base drove, and a posed configuration is Layer B "
+        "whatever the velocity says — so what separates them is the basis under "
+        "the tag: this run's `edge_layer_basis` rows say "
+        "`base_vel_source=derived → B` where `mobile_transit`'s say "
+        "`proprioceptive → A`. This is the fixture that makes the repair "
+        "docs/limitations.md §11 records observable in an artifact rather than "
+        "only in the code."
     ),
     # THE ONE FIELD. Visual odometry: a rate assembled by looking at the room,
     # arriving in a structure whose field names — `vx`, `vy`, `omega` — name

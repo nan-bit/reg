@@ -3734,9 +3734,17 @@ def incident_report(
 #   COULD-NOT-EVALUATE       the file was written against a schema these states
 #                            were not derived against
 #
-# `READABLE-NOT-CHECKABLE` is a distinct state and not a soft pass. It is the
-# honest verdict on `reached-point` today, and reporting it is the point: it is
-# what lets issue #228 be judged by something other than a PR body.
+# `READABLE-NOT-CHECKABLE` is a distinct state and not a soft pass. **No
+# artifact this repository builds reports it today**, and that is a fact about
+# these files rather than about the state: `reached-point` was the last row that
+# did, and issue #258 moved it to `CHECKABLE` when the outer boundary started
+# being retained. Every row below can still reach it, and each one is a file
+# that lost something an assessor would have needed — an artifact stating no
+# environment, a tagged edge with no basis row under it, a frame the retention
+# rule kept no outer boundary for, a record whose `mac` or `prev_hash` is blank.
+# Reporting it is the point: it is what lets a gap be judged by something other
+# than a PR body, and a report with no fixture reaching it is a report whose
+# negative lives in `tests/test_query.py` rather than in the catalogue.
 #
 # THE FIFTH STATE, AND WHY IT IS ONE (ISSUE #242).
 # `chain-intact` — *has this record been altered since it was written?* — is the
@@ -3776,7 +3784,7 @@ def incident_report(
 # sides — matching environment and mismatched — by another. A disagreement is a
 # bug in this report and it fails there rather than in an assessor's hands.
 #
-# WHAT IS PINNED TO SCHEMA 12, AND WHY THE WHOLE FILE IS.
+# WHAT IS PINNED TO SCHEMA 14, AND WHY THE WHOLE FILE IS.
 # Every state below is a property of a particular set of columns and `meta`
 # keys. Against another set they would be states about columns this reader
 # cannot place, so an artifact stating any other `schema_version` is a
@@ -3806,6 +3814,16 @@ def incident_report(
 # because a row was relabelled. The other three were re-derived against the new
 # table and came back where they were: the basis is not an environment, it is
 # not a polygon, and it is not a reachable-set boundary.
+#
+# Schema 14 is the second of that kind (issues #257 and #258). The outer
+# reachable set's boundary arrived as `envelope.outer_wkb`, retained wherever
+# `reg.graph.GEOMETRY_RETENTION` already keeps the inner polygon — so
+# `reached-point` moved from `READABLE-NOT-CHECKABLE` to `CHECKABLE` on a file
+# that retains one, and the row now reports *radially only* for a file that
+# retains none rather than for every file. That was the last row of the seven
+# reporting `READABLE-NOT-CHECKABLE` on a shipped fixture. The others were
+# re-derived against the new column and came back where they were: a boundary
+# is not an environment, it is not a basis, and it is not a record chain.
 # --------------------------------------------------------------------------
 
 #: The file carries what is needed to verify the claim.
@@ -5691,9 +5709,19 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--cold-read",
         action="store_true",
+        # THE FIVE STATES, ALL OF THEM, AND A TEST HOLDS THEM TO
+        # `COLD_READ_STATES` (issue #272). This string listed four for as long
+        # as there were five: `CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN`
+        # arrived with issue #242 and was never added here, so the one state
+        # whose name a reader could not guess was the one --help left out — and
+        # a help text that names four of five reads as a complete set rather
+        # than as a stale one. `tests/test_query.py::
+        # test_the_cold_read_help_names_every_state_the_report_can_report` is
+        # what makes the next one impossible to leave out quietly.
         help=(
             "what this artifact says about itself, with no document open "
             "(docs/self-describing.md §2): one row per claim, each CHECKABLE, "
+            "CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN, "
             "READABLE-NOT-CHECKABLE, ABSENT or COULD-NOT-EVALUATE (exit 0 "
             "unless a row could not be evaluated, which is exit 1)"
         ),

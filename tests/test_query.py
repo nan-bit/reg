@@ -4001,8 +4001,10 @@ def test_the_cold_read_says_the_same_things_about_every_shipped_fixture(
     **Closing a gap breaks this test**, which is the point of pinning it. Issue
     #252 put the basis in the file and `layer-tag-basis` moved to CHECKABLE;
     this expectation was edited by the change that closed it, which is the
-    sequence the pin exists to force. `reached-point` is #228's and is still
-    READABLE-NOT-CHECKABLE.
+    sequence the pin exists to force. `reached-point` was #228's and moved the
+    same way at schema 14 — #257 retained the boundary, #258 added the query
+    that tests a point against it — so no row in this table is
+    READABLE-NOT-CHECKABLE on any fixture this file builds.
     """
     value = request.getfixturevalue(fixture)
     artifact = value if index is None else value[index]
@@ -5512,3 +5514,84 @@ def test_the_cold_read_is_in_the_list_output(capsys) -> None:
             f"--list does not name the {state} state, so a reader meeting it in "
             "a report has nowhere to look it up"
         )
+
+
+# --------------------------------------------------------------------------
+# THE HELP TEXT NAMES THE STATES THE REPORT CAN PRODUCE (issue #272).
+#
+# `--help` listed four of them from issue #242 — which added the fifth — until
+# this check existed. That is the shape of staleness this repository is worst
+# at catching: the string is prose, it is printed at runtime, nothing computes
+# anything from it, and the one state it left out was the one whose name a
+# reader could not guess. Four names read as a complete set, so an assessor
+# meeting CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN in a report had been
+# told by --help that it was not a state.
+# --------------------------------------------------------------------------
+
+#: A state is one all-caps token. Matching on tokens rather than on substrings
+#: is what makes the check able to fail on the row it is most likely to miss:
+#: `CHECKABLE` is a prefix of two of the other four, so `state in text` would
+#: report the bare `CHECKABLE` as named by a help string that dropped it and
+#: kept `CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN`.
+_STATE_TOKEN = re.compile(r"[A-Z][A-Z-]*[A-Z]")
+
+
+def _states_missing_from(text: str) -> tuple[str, ...]:
+    """The states of `COLD_READ_STATES` this text does not name, in report order."""
+    named = {match.group(0) for match in _STATE_TOKEN.finditer(" ".join(text.split()))}
+    return tuple(state for state in query.COLD_READ_STATES if state not in named)
+
+
+def _cold_read_help() -> str:
+    """`--cold-read`'s help string, before argparse wraps it.
+
+    The string as written rather than as formatted: argparse hands it to
+    `textwrap`, which breaks on hyphens, so a state name is one token here and
+    may be several in `--help` output at a narrow terminal width. The stale
+    string this test exists for is stale in the source, which is where it is
+    read.
+    """
+    for action in query._parser()._actions:
+        if "--cold-read" in action.option_strings:
+            assert action.help, "--cold-read carries no help string at all"
+            return action.help
+    raise AssertionError(
+        "no --cold-read option in reg.query's parser. If the flag was renamed, "
+        "this check stopped checking anything rather than failing"
+    )
+
+
+def test_the_cold_read_help_names_every_state_the_report_can_report() -> None:
+    """Every member of `COLD_READ_STATES`, so the next one cannot be left out.
+
+    `--help` is where a reader meets the vocabulary, and a state the report can
+    print and the help does not name is a state that reads as an error when it
+    arrives. Held against the constant rather than against a list written here:
+    a sixth state is added by editing `COLD_READ_STATES`, and this fails at that
+    commit rather than at the one that ships a report nobody can read.
+    """
+    missing = _states_missing_from(_cold_read_help())
+    assert not missing, (
+        f"--cold-read's help does not name {list(missing)}. Every state the "
+        "report can print belongs in it; a help text naming four of five reads "
+        "as the complete set and tells a reader the fifth is not a state"
+    )
+
+
+def test_the_help_state_check_says_no_to_the_string_this_repo_shipped() -> None:
+    """THE NEGATIVE, and the doctored string is the real one (issue #272).
+
+    Deleting the fifth state from the current help reproduces exactly what
+    `--cold-read` printed from issue #242 until #272 — so this asserts the check
+    would have caught it, which is the only evidence that it can catch the next
+    one.
+    """
+    stale = _cold_read_help().replace(query.CHECKABLE_WITH_A_KEY + ", ", "")
+    assert query.CHECKABLE_WITH_A_KEY not in stale, (
+        "the fifth state is still in the doctored string, so this negative is "
+        "feeding the check the healthy input and proving nothing"
+    )
+    # Equality and not membership: the four states still named must come back
+    # present. A check that said no to everything once one row was gone would be
+    # no more useful than one that never said no.
+    assert _states_missing_from(stale) == (query.CHECKABLE_WITH_A_KEY,)

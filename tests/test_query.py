@@ -51,13 +51,14 @@ from __future__ import annotations
 
 import ast
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from reg import bench, chain, graph, query, store
+from reg import bench, chain, graph, identity, query, store
 from reg.bench import AGREE, COULD_NOT_EVALUATE, DISAGREE, run_scenario
 from reg.envelope import outer_radius
 from reg.identity import DPIA_NONE, Disclosures, RunIdentity
@@ -297,6 +298,9 @@ def test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes(
         query.META_OCCURRENCE_RESOLUTION,
         query.META_ATTESTATION_RECORDS,
         query.META_ATTESTATION_RETENTION,
+        query.META_WORKER_NOTICE,
+        query.META_DPIA_REFERENCE,
+        query.META_OPERATOR_ID_KIND,
         store.META_FRAME_PERIOD,
     ):
         assert key in meta, (
@@ -306,6 +310,15 @@ def test_the_meta_keys_this_module_reads_are_the_ones_the_builder_writes(
     assert query.META_OCCURRENCE_RESOLUTION == graph.META_OCCURRENCE_RESOLUTION
     assert query.META_ATTESTATION_RECORDS == graph.META_ATTESTATION_RECORDS
     assert query.META_ATTESTATION_RETENTION == graph.META_ATTESTATION_RETENTION
+    # The three disclosure keys (issues #125, #262). Asserted present as well as
+    # equal, unlike the two counts below: `graph.build` requires a `Disclosures`
+    # with no default, so every artifact this repository can build carries all
+    # three — and a rename on either side would turn the cold read's seventh row
+    # into a could-not-evaluate about a file that stated everything it was asked
+    # for.
+    assert query.META_WORKER_NOTICE == graph.META_WORKER_NOTICE
+    assert query.META_DPIA_REFERENCE == graph.META_DPIA_REFERENCE
+    assert query.META_OPERATOR_ID_KIND == graph.META_OPERATOR_ID_KIND
     # The two counts are written only where a record stream was supplied, so
     # they are not asserted present in this artifact — which was built without
     # one. Their *spelling* is still one contract with the builder, and with
@@ -3810,6 +3823,7 @@ COLD_READ_TODAY = {
     query.CLAIM_REACHED_POINT: query.CHECKABLE,
     query.CLAIM_CHAIN_INTACT: query.ABSENT,
     query.CLAIM_ACKNOWLEDGMENT: query.ABSENT,
+    query.CLAIM_DISCLOSURES: query.CHECKABLE,
 }
 
 #: The same four rows, on a build that **was** handed a record stream — plus
@@ -3842,6 +3856,10 @@ COLD_READ_OCCURRENCE_VIEW = {
     query.CLAIM_REACHED_POINT: query.ABSENT,
     query.CLAIM_CHAIN_INTACT: query.ABSENT,
     query.CLAIM_ACKNOWLEDGMENT: query.ABSENT,
+    # The view is a copy with rows deleted, so `meta` survives it whole and
+    # the seventh row reads the same three keys the build wrote. It is the one
+    # row here that is a property of neither the schema nor the scene layer.
+    query.CLAIM_DISCLOSURES: query.CHECKABLE,
 }
 
 #: Names of the cold read's implementation, for the structural check that it
@@ -3860,6 +3878,7 @@ COLD_READ_FUNCTIONS = (
     "_reached_point_claim",
     "_chain_intact_claim",
     "_acknowledgment_claim",
+    "_disclosures_claim",
     # Reached by `_reached_point_claim`, which answers by *running* the query in
     # both directions (issue #258) rather than asserting a state about a check
     # nobody invoked — the same rule `_acknowledgment_claim` follows, and here
@@ -4720,6 +4739,260 @@ def test_the_acknowledgment_row_is_absent_where_no_record_stream_was_given(
     row = _cold_read(artifact)[query.CLAIM_ACKNOWLEDGMENT]
     assert row.state == query.ABSENT
     assert query.META_ATTESTATION_RECORDS in row.detail
+
+
+# --------------------------------------------------------------------------
+# The seventh row: what the artifact states about §8's obligations (issue #262).
+#
+# Issue #125 made `graph.build` write three `meta` keys and refuse the build
+# without them. Nothing read them back, so two artifacts — one built before the
+# keys existed, one built by something that skipped them — cold-read
+# identically. The tests below are the four conditions that row reports on and
+# the two things it must never let collapse into each other: silence and a
+# stated negative.
+#
+# It is a **claim and not a state**. `test_a_sixth_state_is_refused` is
+# untouched on purpose: adding a state here would have routed around the
+# deliberate act that refusal exists to force.
+# --------------------------------------------------------------------------
+
+#: Words that would turn the row from a reading of three values into a verdict
+#: on the deployment. Scanned over the row's own detail, in both directions:
+#: a finding *of* compliance is the inversion issue #125 closed at the writing
+#: end, and a finding of non-compliance is this project adjudicating something
+#: `docs/limitations.md` §8 says it has no standing to adjudicate. Either one
+#: makes the report say more than it read.
+#:
+#: `discharging` is deliberately not matched and `discharged` is: the row has
+#: to be able to say *recording is not discharging*, which is the sentence #125
+#: required and the one that keeps the rest honest.
+ADJUDICATION_TERMS = re.compile(
+    r"(compliant|compliance|complies|unlawful|\bin breach\b|breach of|"
+    r"violat(?:es|ion)|\bdischarged\b|\bsatisfied\b|\bexempt\b)",
+    re.IGNORECASE,
+)
+
+
+def _adjudicates(text: str) -> list[str]:
+    """Every term in `text` that reads as a verdict on the deployment.
+
+    Empty is the pass. Factored out so the check can be fed the condition it
+    guards against — a scan only ever run over the shipped text has not been
+    shown able to say no.
+    """
+    return [match.group(0) for match in ADJUDICATION_TERMS.finditer(text)]
+
+
+def test_the_adjudication_scan_can_say_no() -> None:
+    """THE NEGATIVE TEST for the scan below, in both directions."""
+    assert _adjudicates("this deployment is GDPR-compliant")
+    assert _adjudicates("the operator was in breach and the notice was not given")
+    assert not _adjudicates(
+        "recording is not discharging: nothing here adjudicates what is stated"
+    )
+
+
+def test_the_cold_read_quotes_the_three_disclosures_verbatim(
+    artifact: Path,
+) -> None:
+    """CHECKABLE, and the values are the file's own text rather than a summary.
+
+    An assessor reads what was stated. A paraphrase would be this reader
+    interpreting a statement the deployer made, which is exactly what
+    `reg.identity` refuses to do at the writing end — so the values are taken
+    from `meta` here and required to appear in the detail as they are, which is
+    an invariant rather than a golden string.
+    """
+    conn = store.connect(artifact)
+    try:
+        meta = store.all_meta(conn)
+    finally:
+        conn.close()
+    row = _cold_read(artifact)[query.CLAIM_DISCLOSURES]
+    assert row.state == query.CHECKABLE
+    for key in query.COLD_READ_DISCLOSURE_KEYS:
+        assert key in row.detail, f"the row does not name meta[{key!r}]"
+        assert meta[key] in row.detail, (
+            f"meta[{key!r}] is {meta[key]!r} in the file and the row does not "
+            "quote it. A summary of a disclosure is this reader interpreting it."
+        )
+    assert not _adjudicates(row.detail), _adjudicates(row.detail)
+
+
+def test_the_row_keeps_the_retention_basis_as_a_gap(artifact: Path) -> None:
+    """The fourth fact §8 asks for is not a key, and the row says so.
+
+    Without that sentence a report listing three stated disclosures reads as
+    though §8 had closed. It has not: `docs/limitations.md` §8 keeps the
+    retention basis as an open gap, and the row that would otherwise imply
+    otherwise is the one that has to carry it.
+    """
+    row = _cold_read(artifact)[query.CLAIM_DISCLOSURES]
+    flat = row.detail.lower()
+    assert "retention basis" in flat, (
+        "the row does not name the fourth fact, so a reader takes three stated "
+        "keys for the whole of what §8 asks"
+    )
+    assert "gap" in flat
+    assert "recording is not discharging" in flat, (
+        "issue #125's sentence has to travel with the row: nothing here "
+        "adjudicates what is stated"
+    )
+
+
+def test_an_artifact_stating_no_disclosure_is_absent_and_not_checkable(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """THE NEGATIVE THIS ROW EXISTS FOR. No keys — **ABSENT**.
+
+    Not CHECKABLE, which is the assertion that matters: a report that read
+    silence as a pass would tell an assessor the file stated something it did
+    not. And **not a finding**: the detail says the file is silent, and silence
+    is neither a stated *no* nor compliance. A build predating issue #125 and a
+    build that skipped the keys leave the same absence, and this reader says so
+    rather than resolving it.
+    """
+    stripped = _copy(
+        artifact,
+        tmp_path / "no-disclosures.sqlite",
+        "DELETE FROM meta WHERE key IN "
+        f"({', '.join(repr(key) for key in query.COLD_READ_DISCLOSURE_KEYS)})",
+    )
+    row = _cold_read(stripped)[query.CLAIM_DISCLOSURES]
+    assert row.state == query.ABSENT
+    assert row.state != query.CHECKABLE
+    assert not row.checkable
+    for key in query.COLD_READ_DISCLOSURE_KEYS:
+        assert key in row.detail
+    assert not _adjudicates(row.detail), (
+        "the silence is reported as a finding about the deployment: "
+        f"{_adjudicates(row.detail)}"
+    )
+    assert "silence is not a *no*" in row.detail
+
+
+def test_silence_and_a_stated_negative_do_not_read_the_same(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """The distinction issue #125 built at the writing end, kept at the reading
+    end.
+
+    An artifact carrying the explicit negatives — `worker_notice = not-given`,
+    `dpia_reference = none` — has **made a statement**, and it reports
+    CHECKABLE with those words quoted back. An artifact carrying nothing
+    reports ABSENT. If the two details read the same, the key that separates
+    *no notice was given* from *nobody said* has stopped separating them one
+    layer up, and neither row is compliance.
+    """
+    negatives = _copy(
+        artifact,
+        tmp_path / "stated-negatives.sqlite",
+        "UPDATE meta SET value = "
+        f"'{query.WORKER_NOTICE_NOT_GIVEN}' WHERE key = "
+        f"'{query.META_WORKER_NOTICE}'",
+        f"UPDATE meta SET value = '{query.DPIA_NONE}' WHERE key = "
+        f"'{query.META_DPIA_REFERENCE}'",
+    )
+    silent = _copy(
+        artifact,
+        tmp_path / "silent.sqlite",
+        "DELETE FROM meta WHERE key IN "
+        f"({', '.join(repr(key) for key in query.COLD_READ_DISCLOSURE_KEYS)})",
+    )
+    stated = _cold_read(negatives)[query.CLAIM_DISCLOSURES]
+    absent = _cold_read(silent)[query.CLAIM_DISCLOSURES]
+
+    assert stated.state == query.CHECKABLE
+    assert absent.state == query.ABSENT
+    assert stated.detail != absent.detail
+    assert query.WORKER_NOTICE_NOT_GIVEN in stated.detail
+    assert query.DPIA_NONE in stated.detail
+    assert not _adjudicates(stated.detail), _adjudicates(stated.detail)
+
+
+@pytest.mark.parametrize(
+    "removed",
+    [
+        (query.META_WORKER_NOTICE,),
+        (query.META_DPIA_REFERENCE,),
+        (query.META_OPERATOR_ID_KIND,),
+        (query.META_WORKER_NOTICE, query.META_DPIA_REFERENCE),
+    ],
+)
+def test_a_partial_disclosure_block_is_could_not_evaluate(
+    artifact: Path, tmp_path: Path, removed: tuple[str, ...]
+) -> None:
+    """Some but not all — **COULD-NOT-EVALUATE**, naming what is missing.
+
+    Built the way an assessor would meet it: a `meta` row deleted from a good
+    artifact. It resolves to neither neighbour — not the silence of a file
+    carrying none of the block, because part of it is here, and not a statement
+    that can be read back, because part of it is not.
+    """
+    name = "-".join(removed)
+    partial = _copy(
+        artifact,
+        tmp_path / f"partial-{name}.sqlite",
+        "DELETE FROM meta WHERE key IN "
+        f"({', '.join(repr(key) for key in removed)})",
+    )
+    row = _cold_read(partial)[query.CLAIM_DISCLOSURES]
+    assert row.state == COULD_NOT_EVALUATE
+    assert row.state not in (query.CHECKABLE, query.ABSENT)
+    for key in removed:
+        assert key in row.detail, f"the refusal does not name the missing {key}"
+    assert not _adjudicates(row.detail), _adjudicates(row.detail)
+
+
+def test_a_disclosure_stated_as_empty_text_is_not_silence(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """A blank value is the third state and **not** ABSENT.
+
+    `reg.identity` refuses a blank at the writing end because it reads as
+    absent in every `meta` dump while having been supplied. Here the key is
+    present, so something wrote it: reporting that as *the file makes no
+    statement* would drop the one fact that is in the file, and quoting the
+    empty string back would present it as a statement. Neither, so the third
+    state — which is where this row parts company with `_environment_claim`,
+    and the reason is in its docstring.
+    """
+    blanked = _copy(
+        artifact,
+        tmp_path / "blank-disclosure.sqlite",
+        f"UPDATE meta SET value = '' WHERE key = '{query.META_OPERATOR_ID_KIND}'",
+    )
+    row = _cold_read(blanked)[query.CLAIM_DISCLOSURES]
+    assert row.state == COULD_NOT_EVALUATE
+    assert row.state != query.ABSENT
+    assert query.META_OPERATOR_ID_KIND in row.detail
+
+    all_blank = _copy(
+        artifact,
+        tmp_path / "all-blank.sqlite",
+        "UPDATE meta SET value = '' WHERE key IN "
+        f"({', '.join(repr(key) for key in query.COLD_READ_DISCLOSURE_KEYS)})",
+    )
+    assert _cold_read(all_blank).state(query.CLAIM_DISCLOSURES) == COULD_NOT_EVALUATE
+
+
+def test_the_stated_negatives_are_the_ones_reg_identity_writes() -> None:
+    """The copy, checked. `reg.query` names its own `not-given` and `none`.
+
+    It cannot import `reg.identity` without contradicting its own header, so
+    the two values a deployer states a negative with are spelled a second time
+    — the same bargain `PERMITTED_OUTCOME` and the `meta` keys are held to. The
+    failure this prevents is quiet: a rename on the writing side would leave the
+    row pointing an assessor at a value no artifact can carry, in the one
+    sentence that separates silence from a stated *no*.
+    """
+    assert query.WORKER_NOTICE_NOT_GIVEN == identity.WorkerNoticeStatus.NOT_GIVEN.value
+    assert query.DPIA_NONE == identity.DPIA_NONE
+    assert query.COLD_READ_DISCLOSURE_KEYS == (
+        graph.META_WORKER_NOTICE,
+        graph.META_DPIA_REFERENCE,
+        graph.META_OPERATOR_ID_KIND,
+    )
 
 
 # --------------------------------------------------------------------------

@@ -139,9 +139,12 @@ Claim 4 as well, in two rows: *has this record been altered since it was
 written* is checkable **with a key the file does not contain**, which is the
 fifth state and the only claim here whose verification is deliberately gated;
 *was the passivation acknowledged, and by whom* is checkable from the file
-alone. See the section above `cold_read` for the states, for why nothing here
-imports `reg.graph` or `reg.chain` to compute them, and for what is pinned to
-`schema_version` 14.
+alone. Since issue #262 a seventh row reads back what the artifact states about
+the obligations its own existence creates — the three keys issue #125 made the
+build write and nothing read — in the five states that already exist, because
+that is one more claim and not one more state. See the section above `cold_read`
+for the states, for why nothing here imports `reg.graph` or `reg.chain` to
+compute them, and for what is pinned to `schema_version` 14.
 
 LAYER
 -----
@@ -194,11 +197,13 @@ __all__ = [
     "CLAUSE_VIOLATION",
     "CLAIM_ACKNOWLEDGMENT",
     "CLAIM_CHAIN_INTACT",
+    "CLAIM_DISCLOSURES",
     "CLAIM_ENVIRONMENT",
     "CLAIM_LAYER_BASIS",
     "CLAIM_REACHED_POINT",
     "CLAIM_RECOMPUTE",
     "COLD_READ_CLAIMS",
+    "COLD_READ_DISCLOSURE_KEYS",
     "COLD_READ_QUESTIONS",
     "COLD_READ_RECOMPUTE_KEYS",
     "COLD_READ_RECORD_CHAINS",
@@ -206,6 +211,7 @@ __all__ = [
     "COLD_READ_SCHEMA_VERSION",
     "COLD_READ_STATES",
     "COULD_NOT_EVALUATE",
+    "DPIA_NONE",
     "EDGE_LAYER",
     "EXIT_BROKEN",
     "EXIT_COULD_NOT_EVALUATE",
@@ -218,6 +224,7 @@ __all__ = [
     "META_ATTESTATION_RECORDS",
     "META_ATTESTATION_RETENTION",
     "META_DECLARATION_COUNT",
+    "META_DPIA_REFERENCE",
     "META_ENVELOPE_RETENTION",
     "META_FRAME_COUNT",
     "META_GEOMETRY_RETENTION",
@@ -226,7 +233,9 @@ __all__ = [
     "META_T_FIRST",
     "META_T_LAST",
     "META_OPERATOR_ID",
+    "META_OPERATOR_ID_KIND",
     "META_VERDICT_COUNT",
+    "META_WORKER_NOTICE",
     "OCCURRENCE_LAYER",
     "OUTER_BOUNDARY_COLUMN",
     "PASSIVATING_OUTCOMES",
@@ -259,6 +268,7 @@ __all__ = [
     "SeparationTimeline",
     "ViolatingAction",
     "Violations",
+    "WORKER_NOTICE_NOT_GIVEN",
     "acknowledgments",
     "attestation_state",
     "available_layers",
@@ -438,6 +448,41 @@ META_ACKNOWLEDGMENT_COUNT = "acknowledgment_count"
 #: apart. Absent is `None` — an artifact that names no operator is not one whose
 #: operator this module may guess.
 META_OPERATOR_ID = "operator_id"
+
+#: This module's copy of the three keys a build writes from a `Disclosures`
+#: (issue #125): what the deployer states about the obligations
+#: `docs/limitations.md` §8 names. Spelled here rather than imported from
+#: `reg.graph` for the reason every `meta` key above is, and held to the writer
+#: by `tests/test_query.py::test_the_meta_keys_this_module_reads_are_the_ones_
+#: the_builder_writes`. Read only by `_disclosures_claim`, which reads them back
+#: verbatim and interprets none of them.
+META_WORKER_NOTICE = "worker_notice"
+META_DPIA_REFERENCE = "dpia_reference"
+META_OPERATOR_ID_KIND = "operator_id_kind"
+
+#: The three together, in the order the row reports them. A tuple because the
+#: claim is about the block and not about any one key: all three stated is a
+#: statement, none stated is silence, and some stated is neither — which is the
+#: distinction the row would lose if it read them one at a time.
+COLD_READ_DISCLOSURE_KEYS = (
+    META_WORKER_NOTICE,
+    META_DPIA_REFERENCE,
+    META_OPERATOR_ID_KIND,
+)
+
+#: The two values a deployer says *nothing was done* with:
+#: `reg.identity.WorkerNoticeStatus.NOT_GIVEN.value` and
+#: `reg.identity.DPIA_NONE`. Named here rather than imported for
+#: `PERMITTED_OUTCOME`'s reason — this module names its own copy of another
+#: module's vocabulary and pays for it with a test — and
+#: `tests/test_query.py::test_the_stated_negatives_are_the_ones_reg_identity_
+#: writes` compares the two sides. The row needs them to say what the ABSENT
+#: state is *not*: an artifact carrying either has stated a negative, and a
+#: report that could not point at the difference would leave silence and a
+#: stated *no* reading the same, which is the inversion issue #125 closed at
+#: the writing end.
+WORKER_NOTICE_NOT_GIVEN = "not-given"
+DPIA_NONE = "none"
 
 #: The party an acknowledgment is attributable to: the role whose key signed it,
 #: which is `reg.enforce.Acknowledgment.SIGNING_ROLE`. Spelled here rather than
@@ -3768,6 +3813,7 @@ CLAIM_LAYER_BASIS = "layer-tag-basis"
 CLAIM_REACHED_POINT = "reached-point"
 CLAIM_CHAIN_INTACT = "chain-intact"
 CLAIM_ACKNOWLEDGMENT = "passivation-acknowledged"
+CLAIM_DISCLOSURES = "disclosures-stated"
 
 #: The claims an artifact makes about itself, in the order the report lists
 #: them. One row each, and the set is closed: a claim nobody put here is a claim
@@ -3780,6 +3826,14 @@ CLAIM_ACKNOWLEDGMENT = "passivation-acknowledged"
 #: that would answer around the question. They are two rows rather than one
 #: because the two halves of Claim 4 land in different states — the first is
 #: gated on a key and the second is not.
+#:
+#: The seventh is about the artifact rather than about the run (issue #262). It
+#: is a **claim and not a state**: the file states what the deployer said about
+#: the obligations `docs/limitations.md` §8 names, and the row reads it back in
+#: the five states that already exist rather than earning a sixth. A state is a
+#: relationship between a claim and a pass; this is one more claim, and giving
+#: it a state of its own would route around the refusal in `ColdReadClaim` that
+#: makes adding one a deliberate act.
 COLD_READ_CLAIMS = (
     CLAIM_ENVIRONMENT,
     CLAIM_RECOMPUTE,
@@ -3787,6 +3841,7 @@ COLD_READ_CLAIMS = (
     CLAIM_REACHED_POINT,
     CLAIM_CHAIN_INTACT,
     CLAIM_ACKNOWLEDGMENT,
+    CLAIM_DISCLOSURES,
 )
 
 #: What each claim asks, in the words an assessor would ask it in. Carried
@@ -3798,6 +3853,10 @@ COLD_READ_QUESTIONS: Mapping[str, str] = {
     CLAIM_REACHED_POINT: "could the robot have reached (x, y)?",
     CLAIM_CHAIN_INTACT: "has this record been altered since it was written?",
     CLAIM_ACKNOWLEDGMENT: "was the passivation acknowledged, and by whom?",
+    CLAIM_DISCLOSURES: (
+        "what does this artifact state about the obligations its existence "
+        "creates?"
+    ),
 }
 
 #: This module's copy of `reg.chain.CHAINS` — the party each record chain is
@@ -4685,6 +4744,136 @@ def _acknowledgment_claim(conn: sqlite3.Connection) -> ColdReadClaim:
     )
 
 
+#: What the row says in every state, because it is true in every state. Two
+#: sentences, spelled once: the second fact §8 asks for and does not have a key
+#: for, and the limit on what reading three values can mean.
+_DISCLOSURE_CAVEAT = (
+    "The fourth fact docs/limitations.md §8 asks for — the retention basis, "
+    "the instrument a six-month window is claimed under — is not among these "
+    "keys and has no key anywhere in the file: naming it is a legal "
+    "determination this project has no standing to make, so §8 keeps it as an "
+    "open gap and this row does not read as though §8 closed. Recording is not "
+    "discharging: nothing in this module adjudicates what is stated, and this "
+    "row is a reading of a block of text rather than a finding about the "
+    "deployment it describes."
+)
+
+
+def _disclosures_claim(stated: Mapping[str, str]) -> ColdReadClaim:
+    """What does this artifact state about the obligations its existence creates?
+
+    Issue #125 gave the build three keys — `reg.graph.META_WORKER_NOTICE`,
+    `META_DPIA_REFERENCE` and `META_OPERATOR_ID_KIND` — each required with no
+    default, so a build that was told nothing fails rather than recording
+    something that reads like an answer. Nothing read them back, and a reader
+    holding the file still could not separate *built before the keys existed*
+    from *built by something that skipped them*. This row is that reader.
+
+    Three conditions and the third never resolves to the first:
+
+    * **all three stated — CHECKABLE.** The row quotes them verbatim. A
+      paraphrase would be this module interpreting a statement the deployer
+      made, which is exactly what `reg.identity` refuses to do at the writing
+      end.
+    * **none stated — ABSENT.** The file makes no statement. That is not a *no*
+      and it is not compliance: a build predating the keys and a build that
+      skipped them leave the same silence here, and the row says so rather than
+      resolving it. An artifact *can* state the negative — `worker_notice`
+      carries `not-given` and `dpia_reference` carries `none` — and an artifact
+      that did is in the state above, which is the whole difference issue #125
+      built at the writing end and this row keeps at the reading end.
+    * **some but not all — COULD-NOT-EVALUATE**, naming the ones that are
+      missing. A partial block is neither the silence of a file that states
+      nothing nor a statement that can be read back, and reporting it as either
+      would invent the half that is not there. This is the rule
+      `meta['limits_source']` is already held to one subject over.
+
+    **A key stated as empty text is neither.** `reg.identity` refuses a blank
+    value at the writing end, because it reads as absent in every `meta` dump
+    while having been supplied, and quoting an empty string back at an assessor
+    would present it as a statement. So a blank key is not read back — and it
+    is not counted as silence either, which is where this parts company with
+    `_environment_claim`: there a blank `env_*` key is ABSENT because the
+    consequence of taking it at face value is a *machine mismatch* against a
+    file that never said. Here the key is present, so something wrote it, and
+    reporting that as *the file makes no statement* would lose the one fact
+    that is in the file. A block with any blank in it is the third state.
+    """
+    absent = [key for key in COLD_READ_DISCLOSURE_KEYS if key not in stated]
+    blank = [
+        key
+        for key in COLD_READ_DISCLOSURE_KEYS
+        if key in stated and not stated[key].strip()
+    ]
+
+    if not absent and not blank:
+        quoted = "; ".join(
+            f"meta[{key!r}] = {stated[key]!r}" for key in COLD_READ_DISCLOSURE_KEYS
+        )
+        return ColdReadClaim(
+            claim=CLAIM_DISCLOSURES,
+            question=COLD_READ_QUESTIONS[CLAIM_DISCLOSURES],
+            state=CHECKABLE,
+            detail=(
+                f"all {len(COLD_READ_DISCLOSURE_KEYS)} disclosure keys are "
+                f"stated, and here they are as the file holds them — {quoted}. "
+                "Quoted rather than summarised: what the deployer stated is "
+                "what an assessor reads, and a paraphrase would be this "
+                "reader interpreting it. A value here can state that nothing "
+                f"was done — {META_WORKER_NOTICE}={WORKER_NOTICE_NOT_GIVEN!r} "
+                f"and {META_DPIA_REFERENCE}={DPIA_NONE!r} are the stated "
+                "negatives — so a file in this state has made a statement, "
+                "which is a different fact from the silence an artifact "
+                f"stating none of them reports as ABSENT. {_DISCLOSURE_CAVEAT}"
+            ),
+        )
+
+    if len(absent) == len(COLD_READ_DISCLOSURE_KEYS):
+        return ColdReadClaim(
+            claim=CLAIM_DISCLOSURES,
+            question=COLD_READ_QUESTIONS[CLAIM_DISCLOSURES],
+            state=ABSENT,
+            detail=(
+                "this file states none of "
+                f"{', '.join(COLD_READ_DISCLOSURE_KEYS)}, so it makes no "
+                "statement about the obligations its own identity block "
+                "creates. Silence, and silence is not a *no*: a build written "
+                "before these keys existed (issue #125) and a build that "
+                "skipped them leave the same absence here, and this reader "
+                "cannot tell them apart from the file. It is not the stated "
+                "negative either — a deployer states that with "
+                f"{META_WORKER_NOTICE}={WORKER_NOTICE_NOT_GIVEN!r} and "
+                f"{META_DPIA_REFERENCE}={DPIA_NONE!r}, and this file "
+                f"states neither. {_DISCLOSURE_CAVEAT}"
+            ),
+        )
+
+    faults = []
+    if absent:
+        faults.append(f"not stated at all: {', '.join(absent)}")
+    if blank:
+        faults.append(f"stated as empty text: {', '.join(blank)}")
+    readable = len(COLD_READ_DISCLOSURE_KEYS) - len(absent) - len(blank)
+    return ColdReadClaim(
+        claim=CLAIM_DISCLOSURES,
+        question=COLD_READ_QUESTIONS[CLAIM_DISCLOSURES],
+        state=COULD_NOT_EVALUATE,
+        detail=(
+            f"this file carries {readable} of the "
+            f"{len(COLD_READ_DISCLOSURE_KEYS)} disclosure keys in a form this "
+            f"reader can read back — {'; '.join(faults)}. A partial block is a "
+            "could-not-evaluate and it resolves to neither neighbour: it is "
+            "not the silence an artifact carrying none of the keys reports as "
+            "ABSENT, because part of the block is here, and it is not a "
+            "statement that can be read back, because part of it is not. "
+            f"reg.graph.build writes all {len(COLD_READ_DISCLOSURE_KEYS)} or "
+            "refuses the build (issue #125), so this file was written by "
+            "something else or has been edited since, and which of those it "
+            f"was is not in the file. {_DISCLOSURE_CAVEAT}"
+        ),
+    )
+
+
 def cold_read(conn: sqlite3.Connection) -> ColdRead:
     """What this artifact says about itself, checked against itself alone.
 
@@ -4765,6 +4954,7 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
             ),
             _chain_intact_claim(conn, stated),
             _acknowledgment_claim(conn),
+            _disclosures_claim(stated),
         ),
         recompute_permitted=permitted,
     )

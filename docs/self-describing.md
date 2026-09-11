@@ -1,12 +1,12 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
-**Status:** a design document; tiers 0-4 of §8 have landed — tier 2 in two
+**Status:** a design document; every tier of §8 has landed — tier 2 in two
 halves, the environment **recorded** (issue #200) and then **acted on** (issue
-#201, the recompute path refuses off the recording environment), tier 3 as
-`reg.query.cold_read` (issues #231, #242) and tier 4 as the layer basis per edge
-(issue #252); tier 5 has its costing (issue #230) and not its decision · written
+#201, the recompute path refuses off it), tier 3 as
+`reg.query.cold_read` (#231, #242), tier 4 as the layer basis per edge
+(#252) and tier 5 as the retained boundary (#257, #258) · written
 2026-09-05, tier 1 2026-09-05, tier 2 2026-09-05, tier 3 2026-09-07, tier 4
-2026-09-08 · normative
+2026-09-08, tier 5 2026-09-10 · normative
 over nothing yet; where it touches what the project may claim it defers to
 [`sufficiency.md`](sufficiency.md) and [`limitations.md`](limitations.md) until
 those files carry the change · the build order in §8 is the authority on what is
@@ -42,7 +42,7 @@ document's statement of the same three, for the argument it goes on to make.*
 |---|---|---|---|
 | ~~1~~ | Check a `layer` tag | The tag was written and what it was computed **from** was not — **closed by issue #252**: `edge_layer_basis` carries one row per input per tagged edge, and the tag is the weakest of them | `sufficiency.md` §5.6, §5.9 |
 | 2 | Recompute a discarded polygon and trust the result | The artifact records `reg_version` and an envelope-parameter digest, and **not** the shapely/GEOS version or the platform — **closed in the weaker form by issues #200 and #201**: it records them, and `envelope_at` refuses to recompute where they differ. What is left is that a refusal is not an attribution | `limitations.md` §1 |
-| ~~3~~ | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` were retained, not the boundary — **narrowed by issue #257**: the boundary is now retained wherever the sampled polygon is, so the question is the region's where an edge anchors one and radial elsewhere | `limitations.md` §2, §3 |
+| ~~3~~ | Ask *could the robot have reached (x, y)?* | Only `outer_radius_m` and `outer_area_m2` were retained, not the boundary — **narrowed by issue #257** and **answered by #258**: the boundary is retained wherever the sampled polygon is, and `reached_point` tests a point against it. What is left is coverage, capped by `ENVELOPE_RETENTION` | `limitations.md` §2, §3 |
 
 **Gap 1 — a tag that was asserted rather than checkable. Closed 2026-09-08
 (issue #252).** `envelope_layer` took `Limits` and nothing else. That was sound
@@ -92,13 +92,25 @@ and is stated rather than left to be discovered, because `numpy.cos` and
 The split into two issues was deliberate: writing the data and using it are
 different work, and only the second changes what a query answers.
 
-**Gap 3 — a radius where the question wants a region. Narrowed 2026-09-09.**
-A stored envelope row answered *not at that distance* and not
-*not at that point*, having no boundary to test against. `outer_wkb` is retained
-under `GEOMETRY_RETENTION`'s own rule — §8's tier 5, option C — so the rows
-keeping the sampled polygon answer pointwise. On the rest the answer stays radial
-and the region stays recomputable, which routes that remainder back through
-gap 2; `ENVELOPE_RETENTION` caps it, not this gap.
+**Gap 3 — a radius where the question wants a region. Narrowed 2026-09-09,
+answered 2026-09-10.** `outer_wkb` is retained under `GEOMETRY_RETENTION`'s own
+rule — §8's tier 5, option C — so the rows keeping the sampled polygon carry the
+region, and `reg.query.reached_point(conn, x, y, t)` tests a point against it.
+Exact where it answers: the retained boundary is the one polygon here that is
+never simplified, and it is already in the room frame, so the test spends no
+tolerance and needs no centre.
+
+**What it refuses is the load-bearing half.** At a frame the rule keeps no
+boundary for, `outer_radius` is one column away and would give the point a
+plausible verdict — an answer to *not at that distance* in *not at that point*'s
+shape, which nothing downstream can tell apart. So the query reports a
+could-not-evaluate naming the rule, and states its own coverage while doing it:
+without that number, *this artifact cannot answer at t* reads as *the robot could
+not have been there*. Elsewhere the answer stays radial and the region stays
+recomputable, which routes that remainder back through gap 2.
+
+It also refuses a boundary its own row's `outer_area` contradicts: no digest
+covers the blob, so a swapped one would otherwise accuse.
 
 ## 2. The test that decides all three
 
@@ -142,7 +154,7 @@ rather than about the schema:
 | 4 | `chain-intact` | **checkable with a key it does not contain** — both chains are in the file, every record carries its link and its MAC, and `verify_chain(conn, keyring)` is what a key-holder runs |
 | 4 | `passivation-acknowledged` | **checkable** — `acknowledgments(conn)` needs no key; a passivation nobody cleared is a could-not-evaluate, never a *no* |
 | 3 | `layer-tag-basis` | **checkable** — gap 1, closed |
-| 2 | `reached-point` | **readable, not checkable** — the boundary is in the file where an edge anchors one; no query tests it against a point |
+| 2 | `reached-point` | **checkable** — the boundary is in the file where an edge anchors one, and this row runs `reached_point` against it in both directions |
 | 1 | `recompute-discarded-polygon` | **checkable** — the discard contract retention rests on |
 | — | `recording-environment` | **checkable** — what the row above rests on |
 
@@ -155,8 +167,15 @@ with `reg.graph.envelope_at` on both sides; the chain row runs *nothing*, having
 no keyring, `reg.chain.verify_chain` being the one implementation of that walk.
 The negatives ship with each — `env_*` keys stripped is *absent* and not
 *checkable*, a file predating schema 11 is *could-not-evaluate* and not *absent*,
-a file with no chain in it is *absent* and not the fifth state, and a record whose
-MAC has been blanked is *readable, not checkable*, being unverifiable by anybody.
+a file with no chain in it is *absent* and not the fifth state, a record whose
+MAC has been blanked is *readable, not checkable*, being unverifiable by anybody,
+and a file stripped of its boundaries falls back to *readable, not checkable*
+while one whose retained region has no extent is *could-not-evaluate*, a
+containment test that cannot disagree with itself being no check at all.
+
+**No shipped fixture reports `READABLE-NOT-CHECKABLE`**, `reached-point` being
+the last row to leave it. The state is reached by the negatives above, which is
+where one no healthy artifact produces has to be kept honest.
 
 **It closes no gap.** It makes them legible from the file, which is what let
 #228 be judged by more than a PR body.
@@ -488,13 +507,23 @@ not a basis. The value is on the basis row itself, so a run whose base rates cam
 out of a perceiver and one whose came off its wheels produce different bases, and
 the tag follows.
 
-**Tier 5 — the boundary. Landed** (issue #257, **option C** of #228):
+**Tier 5 — the boundary. Landed in two halves**, on the seam tier 2 was cut
+along: writing the data and using it are different work, and only the second
+changes what a query answers. The retention (issue #257, **option C** of #228):
 `envelope.outer_wkb` at `SCHEMA_VERSION` 14, retained where
 `reg.graph.GEOMETRY_RETENTION` keeps the inner polygon, refused on both sides of
 that rule. Every published retention figure moved —
 [`retention.md`](retention.md) is the re-measurement. #82's containment is no
 longer blocked on recomputation where a boundary is kept; what it needs is a
 person to say what a fault in the taxonomy means.
+
+The answering (issue #258): `reg.query.reached_point` and `--reached-point X_M
+Y_M T`, plus `pointwise_coverage`, so a caller learns how much of the run is
+covered without needing an answer to hang it on. Carrying a region was never
+answering with it — the cold read reported this row readable-not-checkable at
+schema 14 precisely because no query tested a point against one — and
+`cold_read` now reports `CHECKABLE`, running that query in both directions
+rather than asserting a state about it.
 
 *Its own tier 1, the costing, landed first* (issue #230): `reg.bench
 --outer-boundary` priced all three options and adopted none, measured with

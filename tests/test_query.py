@@ -752,6 +752,456 @@ def test_an_artifact_with_no_rows_at_all_refuses_every_query(
 
 
 # --------------------------------------------------------------------------
+# THE POINTWISE REACHABILITY QUESTION (issue #258).
+#
+# #257 retained the outer boundary where `GEOMETRY_RETENTION` already keeps the
+# inner polygon; this is the query that tests a point against it. The property
+# every test below is arranged around is the one the issue names:
+#
+#   **A RADIAL ANSWER MUST NEVER BE RETURNED WEARING A POINTWISE ONE'S CLOTHES.**
+#
+# `outer_radius` is on every retained row, so at a frame with no boundary a
+# plausible True/False is one column away. `test_a_frame_with_no_boundary_is_a_
+# could_not_evaluate` is the test that would catch it being reached for, and
+# `test_the_radius_still_answers_where_the_region_would_not` is what shows the
+# two answers genuinely differ — a point inside the radius and outside the
+# region, on the shipped fixture, which is the substitution made visible.
+# --------------------------------------------------------------------------
+
+
+def _first_retained_boundary(conn) -> tuple[float, str, object]:
+    """`(t, envelope_id, region)` for the first frame that keeps an outer one.
+
+    Read off the artifact rather than listed, because which frames
+    `GEOMETRY_RETENTION` covers is a property of the run and a hard-coded `t`
+    would pin this file to one scenario's transitions.
+    """
+    row = conn.execute(
+        "SELECT e.t_start AS t, n.node_id AS id, v.outer_wkb AS wkb FROM edge e "
+        "JOIN node n ON n.node_key = e.dst_key "
+        "JOIN envelope v ON v.envelope_key = e.dst_key "
+        "WHERE e.type = 'HAS_ENVELOPE' AND v.outer_wkb IS NOT NULL "
+        "ORDER BY e.t_start, e.edge_id LIMIT 1"
+    ).fetchone()
+    assert row is not None, (
+        "precondition failed: this artifact retains no outer boundary at any "
+        "frame, so nothing below is exercised"
+    )
+    return float(row["t"]), str(row["id"]), store.from_wkb(row["wkb"])
+
+
+def _uncovered_frame(conn) -> float:
+    """A frame time this artifact retains no outer boundary at. There are many."""
+    covered = {
+        float(row["t_start"])
+        for row in conn.execute(
+            "SELECT e.t_start FROM edge e "
+            "JOIN envelope v ON v.envelope_key = e.dst_key "
+            "WHERE e.type = 'HAS_ENVELOPE' AND v.outer_wkb IS NOT NULL"
+        ).fetchall()
+    }
+    for row in conn.execute(
+        "SELECT e.t_start AS t FROM edge e "
+        "JOIN envelope v ON v.envelope_key = e.dst_key "
+        "WHERE e.type = 'HAS_ENVELOPE' AND v.outer_wkb IS NULL "
+        "ORDER BY e.t_start"
+    ).fetchall():
+        if float(row["t"]) not in covered:
+            return float(row["t"])
+    raise AssertionError(
+        "precondition failed: every frame with an envelope keeps a boundary, "
+        "so the could-not-evaluate arm cannot be reached on this fixture"
+    )
+
+
+def test_a_point_inside_the_retained_boundary_answers_reachable(
+    artifact: Path,
+) -> None:
+    """The positive half. A point the region contains comes back *not excluded*.
+
+    The point is the region's own `representative_point()`, which shapely
+    guarantees lies inside it, so this asserts the query reads the retained
+    polygon rather than that a particular coordinate happens to be covered.
+    """
+    conn = store.connect(artifact)
+    try:
+        t, envelope_id, region = _first_retained_boundary(conn)
+        inside = region.representative_point()
+        answer = query.reached_point(conn, inside.x, inside.y, t)
+    finally:
+        conn.close()
+
+    assert answer.verdict == ANSWERED
+    assert answer.layer == query.EDGE_LAYER
+    assert answer.value.could_have_reached is True
+    assert answer.value.envelope_id == envelope_id
+    assert answer.value.t == t
+    assert answer.tolerances == {"time_s": TIME_TOL_S}
+
+
+def test_a_point_outside_the_retained_boundary_answers_not_reachable(
+    artifact: Path,
+) -> None:
+    """The negative half, and the direction that carries the safety claim.
+
+    The outer set over-covers, so *outside* is a sound exclusion — the robot
+    could not have been there. The point is the region's bounding box translated
+    by its own width and height, which is outside it by construction and is
+    derived from the file rather than invented.
+    """
+    conn = store.connect(artifact)
+    try:
+        t, _, region = _first_retained_boundary(conn)
+        minx, miny, maxx, maxy = region.bounds
+        answer = query.reached_point(
+            conn, maxx + (maxx - minx), maxy + (maxy - miny), t
+        )
+    finally:
+        conn.close()
+
+    assert answer.verdict == ANSWERED
+    assert answer.value.could_have_reached is False
+    assert "outside" in answer.reason
+
+
+def test_a_frame_with_no_boundary_is_a_could_not_evaluate(artifact: Path) -> None:
+    """**THE TEST THIS ISSUE EXISTS FOR.** No boundary, no pointwise answer.
+
+    The row at such a frame still carries `outer_radius`, and a radial verdict
+    computed from it would be a plausible True/False in this answer's shape that
+    nothing downstream could tell from a real one. So the verdict is
+    COULD-NOT-EVALUATE, the value is `None` — not `False`, which reads as *the
+    robot could not have reached it* — and the reason names the retention rule
+    that decided it.
+    """
+    conn = store.connect(artifact)
+    try:
+        t = _uncovered_frame(conn)
+        answer = query.reached_point(conn, 0.0, 0.0, t)
+        radial = conn.execute(
+            "SELECT count(outer_radius) AS n FROM envelope"
+        ).fetchone()["n"]
+    finally:
+        conn.close()
+
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+    assert query.OUTER_BOUNDARY_COLUMN in answer.reason
+    assert query.META_GEOMETRY_RETENTION in answer.reason
+    assert int(radial) > 0, (
+        "precondition: the radius has to be present at that frame, or this test "
+        "is not about a substitution that was available"
+    )
+
+
+def test_the_radius_still_answers_where_the_region_would_not(
+    artifact: Path,
+) -> None:
+    """The substitution, made visible — and the reason the two are not one query.
+
+    There are points inside `outer_radius` of the base and outside the retained
+    region: the outer set is a union of sectors, not a disc. At such a point the
+    exact answer is *excluded* and a radial one would have been *not excluded*,
+    which is the whole distinction between *not at that distance* and *not at
+    that point*. Issue #258 added a question and removed none, so the radius is
+    still on the row and still travels on the answer.
+    """
+    import math
+
+    import shapely
+
+    conn = store.connect(artifact)
+    try:
+        t, envelope_id, region = _first_retained_boundary(conn)
+        centre = graph.envelope_frame(conn, envelope_id)
+        radius = float(
+            store.envelope_row(conn, envelope_id)["outer_radius"]
+        )
+        witness = None
+        for i in range(360):
+            angle = math.radians(i)
+            x = centre.x + 0.99 * radius * math.cos(angle)
+            y = centre.y + 0.99 * radius * math.sin(angle)
+            if not region.covers(shapely.Point(x, y)):
+                witness = (x, y)
+                break
+        assert witness is not None, (
+            "precondition failed: every point inside outer_radius is inside the "
+            "retained region on this fixture, so the two answers cannot differ "
+            "and this test is measuring nothing"
+        )
+        answer = query.reached_point(conn, witness[0], witness[1], t)
+    finally:
+        conn.close()
+
+    assert answer.verdict == ANSWERED
+    assert answer.value.could_have_reached is False, (
+        "the region excludes this point; a radial answer would not"
+    )
+    assert answer.value.outer_radius_m == radius
+    assert math.hypot(witness[0] - centre.x, witness[1] - centre.y) < radius
+
+
+def test_the_answer_states_how_much_of_the_run_it_covers(artifact: Path) -> None:
+    """Coverage on the answer **and** on the refusal, so a *no* cannot be misread.
+
+    A caller has to be able to learn that a handful of the run's frames are
+    pointwise-answerable, or *this artifact cannot answer at t* reads as *the
+    robot could not have been there*. `pointwise_coverage` is public for the
+    same reason: the number that makes a refusal readable must be reachable
+    without an answer to hang it on.
+    """
+    conn = store.connect(artifact)
+    try:
+        coverage = query.pointwise_coverage(conn)
+        t, _, region = _first_retained_boundary(conn)
+        inside = region.representative_point()
+        answered = query.reached_point(conn, inside.x, inside.y, t)
+        refused = query.reached_point(conn, inside.x, inside.y, _uncovered_frame(conn))
+        rows = conn.execute(
+            "SELECT count(*) AS total, count(outer_wkb) AS stored, "
+            "count(outer_radius) AS radial FROM envelope"
+        ).fetchone()
+        frames = int(float(store.get_meta(conn, query.META_FRAME_COUNT)))
+    finally:
+        conn.close()
+
+    assert coverage == query.PointwiseCoverage(
+        frames=frames,
+        envelope_rows=int(rows["total"]),
+        pointwise_rows=int(rows["stored"]),
+        radial_rows=int(rows["radial"]),
+    )
+    assert 0 < coverage.pointwise_rows < coverage.frames
+    assert answered.value.coverage == coverage
+    for text in (answered.reason, refused.reason):
+        assert f"{coverage.pointwise_rows} of this run's {frames} frame(s)" in text
+
+
+def test_the_answer_carries_the_layer_tag_the_file_holds(
+    artifact: Path, mobile_built: tuple[Path, Path]
+) -> None:
+    """The letter comes off the `HAS_ENVELOPE` edge, and is never inferred.
+
+    The spec's own `layer_tag` is the **weaker** of the two the question can
+    have, because a static letter cannot carry docs/sufficiency.md §5.1's
+    condition — the `(x, y)` is a room coordinate, so the answer is only as
+    strong as whatever put the robot in the room. The per-answer tag is the
+    file's, and the two fixtures here are the two cases: a bolted arm whose
+    bound came off its own limits, and a run whose base velocity came out of a
+    perceiver.
+    """
+    assert query.QUERIES["reached_point"].layer_tag == query.LAYER_B
+
+    seen = {}
+    for path in (artifact, mobile_built[1]):
+        conn = store.connect(path)
+        try:
+            t, envelope_id, region = _first_retained_boundary(conn)
+            inside = region.representative_point()
+            answer = query.reached_point(conn, inside.x, inside.y, t)
+            edge = conn.execute(
+                "SELECT e.layer AS layer FROM edge e "
+                "JOIN node n ON n.node_key = e.dst_key "
+                f"WHERE e.type = 'HAS_ENVELOPE' AND n.node_id = '{envelope_id}' "
+                "ORDER BY e.edge_id LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert answer.verdict == ANSWERED, answer.reason
+        assert answer.value.envelope_layer == str(edge["layer"])
+        seen[path] = answer.value.envelope_layer
+
+    assert set(seen.values()) == {query.LAYER_A, query.LAYER_B}, (
+        "one fixture must tag its HAS_ENVELOPE edge A and the other B, or this "
+        "test cannot tell a tag that is read from one that is assumed: "
+        f"{seen}"
+    )
+
+
+def test_a_boundary_its_own_row_contradicts_is_a_could_not_evaluate(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE TAMPER NEGATIVE.** An exclusion must not rest on bytes the row denies.
+
+    No digest covers `outer_wkb` — `envelope_hash` is over the inner geometry
+    and the chain commits to records — so a boundary replaced by a smaller one
+    leaves `verify-chain` VERIFIED, and before this check the query then
+    answered *excluded* for a point the robot could have reached: a confident
+    false accusation, the one direction this query must never get wrong. The
+    file still contradicts itself, because `outer_area` beside the blob is the
+    original region's, and that disagreement is the only thing the reader can
+    check with nothing but the file.
+
+    The replacement is a 2 cm square about the region's own inside point, and
+    the queried point is inside the original region and outside the square, so
+    the preconditions below show the false accusation was genuinely available.
+    """
+    import shapely
+
+    conn = store.connect(artifact)
+    try:
+        t, envelope_id, region = _first_retained_boundary(conn)
+        inside = region.representative_point()
+        minx, miny, maxx, maxy = region.bounds
+        witness = None
+        for i in range(1, 100):
+            candidate = shapely.Point(
+                minx + (maxx - minx) * i / 100.0, inside.y
+            )
+            if region.covers(candidate) and candidate.distance(inside) > 0.05:
+                witness = candidate
+                break
+        assert witness is not None, (
+            "precondition failed: no point of the retained region lies 5 cm "
+            "from its inside point along that line, so nothing below is a "
+            "point the replacement excludes and the original does not"
+        )
+        honest = query.reached_point(conn, witness.x, witness.y, t)
+    finally:
+        conn.close()
+    assert honest.verdict == ANSWERED and honest.value.could_have_reached
+
+    shrunk = shapely.box(inside.x - 0.01, inside.y - 0.01, inside.x + 0.01, inside.y + 0.01)
+    assert not shrunk.covers(witness)
+    tampered = _copy(
+        artifact,
+        tmp_path / "shrunk.sqlite",
+        "UPDATE envelope SET outer_wkb = x'" + store.to_wkb(shrunk).hex() + "' "
+        "WHERE envelope_key = (SELECT node_key FROM node WHERE node_id = "
+        f"'{envelope_id}')",
+    )
+    conn = store.connect(tampered)
+    try:
+        answer = query.reached_point(conn, witness.x, witness.y, t)
+    finally:
+        conn.close()
+
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None, (
+        "a refused answer must carry no verdict: False here is the accusation "
+        "the tampered bytes would have produced"
+    )
+    assert "outer_area" in answer.reason
+    assert envelope_id in answer.reason
+
+
+def test_the_agreement_check_passes_every_boundary_the_builder_wrote(
+    artifact: Path, mobile_built: tuple[Path, Path]
+) -> None:
+    """The positive half of the tamper check: it does not cry wolf.
+
+    The row's `outer_area` is measured before the region is placed, so on a
+    posed frame the blob's area differs from it by a rigid transform's float
+    noise as well as the rounding. Both fixtures, every retained boundary — the
+    mobile one is the run whose frames are posed — and each must answer, or the
+    check would refuse clean files and be switched off within a week.
+    """
+    for path in (artifact, mobile_built[1]):
+        conn = store.connect(path)
+        try:
+            rows = conn.execute(
+                "SELECT e.t_start AS t, v.outer_wkb AS wkb FROM edge e "
+                "JOIN envelope v ON v.envelope_key = e.dst_key "
+                "WHERE e.type = 'HAS_ENVELOPE' AND v.outer_wkb IS NOT NULL "
+                "ORDER BY e.t_start, e.edge_id"
+            ).fetchall()
+            assert rows, f"precondition failed: {path} retains no boundary"
+            for row in rows:
+                inside = store.from_wkb(row["wkb"]).representative_point()
+                answer = query.reached_point(
+                    conn, inside.x, inside.y, float(row["t"])
+                )
+                if answer.verdict != ANSWERED:
+                    # Two transitions inside one quantum is a separate refusal
+                    # with its own test; it is not this check speaking.
+                    assert "outer_area" not in answer.reason, answer.reason
+        finally:
+            conn.close()
+
+
+def test_an_artifact_written_before_the_boundary_column_refuses(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE PRE-SCHEMA NEGATIVE.** No column is not *no region was retained*.
+
+    A file written against schema 13 had nowhere to put a boundary. Reporting
+    zero covered frames would say this build chose to retain none, which is a
+    decision somebody would have had to take. `pointwise_coverage` refuses and
+    the query reports a could-not-evaluate naming the schema; the arm is reached
+    through raw `sqlite3` because `store.connect` refuses such a file, which is
+    exactly how an assessor with an archive meets it.
+    """
+    import sqlite3 as _sqlite3
+
+    older = _copy(artifact, tmp_path / "no-column.sqlite")
+    conn = _sqlite3.connect(older)
+    conn.row_factory = _sqlite3.Row
+    try:
+        # The column is named in a CHECK, so `ALTER TABLE ... DROP COLUMN`
+        # refuses it. The table is rebuilt without it instead, which is the
+        # shape a schema-13 file actually has.
+        conn.execute(
+            "CREATE TABLE envelope_13 AS SELECT envelope_key, envelope_hash, "
+            "area, geometry_wkb, config_key, horizon, source, outer_area, "
+            "outer_radius FROM envelope"
+        )
+        conn.execute("DROP TABLE envelope")
+        conn.execute("ALTER TABLE envelope_13 RENAME TO envelope")
+        conn.commit()
+        answer = query.reached_point(conn, 0.0, 0.0, 0.0)
+        with pytest.raises(QueryError) as caught:
+            query.pointwise_coverage(conn)
+    finally:
+        conn.close()
+
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None
+    assert query.OUTER_BOUNDARY_COLUMN in answer.reason
+    assert str(store.SCHEMA_VERSION) in answer.reason
+    assert query.OUTER_BOUNDARY_COLUMN in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        (float("nan"), 0.0, 0.0),
+        (0.0, float("inf"), 0.0),
+        (0.0, 0.0, float("nan")),
+        ("0.0", 0.0, 0.0),
+    ],
+)
+def test_a_point_that_is_not_a_point_is_a_caller_error(artifact: Path, args) -> None:
+    """A `QueryError` and not a refusal: the artifact would answer some other
+    point, so this is the asker's mistake and not the file's silence."""
+    conn = store.connect(artifact)
+    try:
+        with pytest.raises(QueryError):
+            query.reached_point(conn, *args)
+    finally:
+        conn.close()
+
+
+def test_the_cli_answers_the_point_question(artifact: Path, capsys) -> None:
+    """`--reached-point X Y T`, and the three arguments are required together."""
+    conn = store.connect(artifact)
+    try:
+        t, _, region = _first_retained_boundary(conn)
+        inside = region.representative_point()
+    finally:
+        conn.close()
+
+    code = query.main(
+        [str(artifact), "--reached-point", str(inside.x), str(inside.y), str(t)]
+    )
+    out = capsys.readouterr().out
+    assert code == query.EXIT_OK
+    assert "verdict:    ANSWERED" in out
+    assert "NOT EXCLUDED" in out
+    assert "pointwise coverage:" in out
+
+
+# --------------------------------------------------------------------------
 # NEGATIVE: arguments the queries refuse, each naming what is available.
 # --------------------------------------------------------------------------
 
@@ -2370,6 +2820,11 @@ def _every_query(conn, *, declaration_id: str = "any-declaration-id") -> tuple:
         "min_separation": (graph.HUMAN_ENTITY_ID,),
         "time_of_closest_approach": (graph.HUMAN_ENTITY_ID,),
         "did_contact_occur": (graph.HUMAN_ENTITY_ID,),
+        # The base's own origin at the run's first instant, which every build
+        # here retains a boundary for (`GEOMETRY_RETENTION` keeps both ends of
+        # the run). Two coordinates and a time, so the answer is the same one
+        # under either encoding or neither is.
+        "reached_point": (0.0, 0.0, 0.0),
         "declared_bound": (1.0,),
         "violations": ((0.0, 5.0),),
         "verdicts": (declaration_id,),
@@ -3073,13 +3528,24 @@ def test_the_separation_a_mobile_artifact_reports_is_measured_from_where_it_drov
 #: `edge_layer_basis` puts the basis in the file and `reg.store.open_edge`
 #: refuses a tag that disagrees with it, so a reader recomputes the tag from the
 #: rows rather than trusting it. Editing this line was the deliberate act the
-#: pin exists to force; #228 is the remaining open gap and `reached-point` is
-#: still where it was.
+#: pin exists to force.
+#:
+#: **`reached-point` moved to CHECKABLE with issue #258**, and it is the second
+#: — the last of the four to leave READABLE-NOT-CHECKABLE, so no row in this
+#: table is in that state any more. #257 put the outer boundary in the file and
+#: made the region readable; #258 added `reg.query.reached_point`, which tests a
+#: point against it, and the cold read now runs that query in both directions
+#: rather than reporting a state about a check nobody invoked. The gap that
+#: remains is **coverage** and not checkability: 12 frames of 3,000 on the
+#: published run, capped by `ENVELOPE_RETENTION` rather than by this row, and
+#: the answer states its own coverage so that a refusal elsewhere cannot be read
+#: as a *no*. This line was edited by the change that closed it, which is the
+#: sequence the pin exists to force.
 COLD_READ_TODAY = {
     query.CLAIM_ENVIRONMENT: query.CHECKABLE,
     query.CLAIM_RECOMPUTE: query.CHECKABLE,
     query.CLAIM_LAYER_BASIS: query.CHECKABLE,
-    query.CLAIM_REACHED_POINT: query.READABLE_NOT_CHECKABLE,
+    query.CLAIM_REACHED_POINT: query.CHECKABLE,
     query.CLAIM_CHAIN_INTACT: query.ABSENT,
     query.CLAIM_ACKNOWLEDGMENT: query.ABSENT,
 }
@@ -3132,6 +3598,20 @@ COLD_READ_FUNCTIONS = (
     "_reached_point_claim",
     "_chain_intact_claim",
     "_acknowledgment_claim",
+    # Reached by `_reached_point_claim`, which answers by *running* the query in
+    # both directions (issue #258) rather than asserting a state about a check
+    # nobody invoked — the same rule `_acknowledgment_claim` follows, and here
+    # too the promise is about what the cold read reaches rather than which
+    # functions it is spelled in.
+    "reached_point",
+    "pointwise_coverage",
+    "_has_outer_boundary_column",
+    "_coverage_text",
+    "available_layers",
+    "_layer_for",
+    "_no_layer",
+    "_refuse",
+    "_finite",
     # Reached by `_acknowledgment_claim`, which answers by running the query
     # rather than re-deriving the passivation walk (issue #242). Listed because
     # the promise is about what the cold read *reaches*, not about which
@@ -3290,7 +3770,10 @@ def test_the_last_four_states_are_not_a_pass(attested: tuple[Path, Path]) -> Non
     assert not set(report.checkable) & set(report.not_checkable)
     assert query.CLAIM_LAYER_BASIS in report.checkable
     assert query.CLAIM_ACKNOWLEDGMENT in report.checkable
-    assert query.CLAIM_REACHED_POINT in report.not_checkable
+    assert query.CLAIM_REACHED_POINT in report.checkable, (
+        "issue #258 moved this row: the boundary was already readable and the "
+        "query that tests a point against it now exists, so the report runs it"
+    )
     assert query.CLAIM_CHAIN_INTACT in report.not_checkable, (
         "the chain row is checkable with a key and not from the file, so it "
         "belongs in `not_checkable` — a report that promoted it would tell an "
@@ -3565,13 +4048,18 @@ def test_a_tag_that_disagrees_with_its_basis_is_could_not_evaluate(
     assert "admits" in row.detail
 
 
-def test_the_radius_answers_radially_and_says_so(artifact: Path) -> None:
-    """THE FOURTH ROW. `outer_radius` is a scalar and no boundary is stored, so
-    *could the robot have reached (x, y)* is answerable radially only.
+def test_the_retained_boundary_makes_the_point_question_checkable(
+    artifact: Path,
+) -> None:
+    """THE FOURTH ROW, and it moved with issue #258.
 
-    Asserted against the schema rather than against the prose: the envelope
-    table's columns are read out of the file, and none of them is a boundary
-    (docs/limitations.md §2 and §3, issue #228).
+    The boundary arrived at schema 14 (#257) and made the region *readable*;
+    this row is CHECKABLE because `reg.query.reached_point` tests a point
+    against it and the report **runs** that query rather than asserting a state
+    about it. Held to the file and to the query rather than to the prose: the
+    counts come out of the envelope table, and the detail has to quote both the
+    radial count and the smaller pointwise one — a row that reported the two as
+    one number would have hidden the coverage the answer exists to state.
     """
     conn = store.connect(artifact)
     try:
@@ -3579,19 +4067,159 @@ def test_the_radius_answers_radially_and_says_so(artifact: Path) -> None:
             str(r["name"])
             for r in conn.execute("PRAGMA table_info(envelope)").fetchall()
         }
-        radial = int(
+        radial, stored = conn.execute(
+            "SELECT count(outer_radius) AS radial, count(outer_wkb) AS stored "
+            "FROM envelope"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert query.OUTER_BOUNDARY_COLUMN in columns
+    assert 0 < stored < radial, (
+        "precondition: this fixture must retain a boundary at some frames and "
+        "not at others, or neither half of the row below is exercised"
+    )
+
+    row = _cold_read(artifact)[query.CLAIM_REACHED_POINT]
+    assert row.state == query.CHECKABLE
+    assert row.checkable
+    assert "radially" in row.detail
+    assert str(radial) in row.detail and str(stored) in row.detail
+
+
+def test_a_file_that_kept_no_boundary_is_readable_and_not_checkable(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE NEGATIVE.** Take the boundaries out and the row must stop passing.
+
+    Without this, CHECKABLE above asserts a state the report has never been
+    shown able to leave, and a `_reached_point_claim` that returned CHECKABLE on
+    sight of an `outer_wkb` column would pass it. This feeds it the file the
+    claim is about: the radii intact, every region gone, which is what every
+    artifact this project built before schema 14 looks like.
+
+    The inner polygon goes with the outer one, and not to be tidy — the schema's
+    own CHECK ties them together (issue #257), so a copy that dropped only the
+    boundary is a file `store.connect` would refuse to write and no assessor
+    would ever meet.
+    """
+    stripped = _copy(
+        artifact,
+        tmp_path / "no-boundary.sqlite",
+        "UPDATE envelope SET outer_wkb = NULL, geometry_wkb = NULL",
+    )
+    row = _cold_read(stripped)[query.CLAIM_REACHED_POINT]
+    assert row.state == query.READABLE_NOT_CHECKABLE
+    assert not row.checkable
+    assert "radially only" in row.detail
+
+
+def test_a_boundary_whose_containment_cannot_fail_is_could_not_evaluate(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE SECOND NEGATIVE**, and the state is deliberately the fourth one.
+
+    A row that answers *not excluded* to a point inside the region **and** to
+    one outside its bounding box has a containment test that has not been seen
+    to say both things. That is not a missing boundary and it is not a pass:
+    reporting it READABLE-NOT-CHECKABLE would say the file carries no region
+    when it carries one, and reporting it CHECKABLE would credit the file with a
+    check nothing has shown can fail.
+
+    The condition is fed in by replacing one retained boundary with a region of
+    **no extent** — the two probe points are derived from the region's own
+    bounds, so a degenerate one collapses them onto each other and the check
+    stops being able to disagree with itself. `reg.graph` cannot produce this
+    file and the schema's `outer_area > 0` says why an outer bound of no extent
+    is always a failed computation; what is being tested is that the *reader*
+    says no when handed one anyway.
+
+    It says no one step earlier than that argument: a region of no extent
+    contradicts its row's `outer_area`, so `reached_point` refuses before any
+    containment runs, and the row carries that refusal. The same-verdict arm
+    is reached by the test after this one.
+    """
+    import shapely
+
+    conn = store.connect(artifact)
+    try:
+        envelope_id = str(
             conn.execute(
-                "SELECT count(outer_radius) AS n FROM envelope"
-            ).fetchone()["n"]
+                "SELECT n.node_id AS id FROM edge e "
+                "JOIN node n ON n.node_key = e.dst_key "
+                "JOIN envelope v ON v.envelope_key = e.dst_key "
+                "WHERE e.type = 'HAS_ENVELOPE' AND v.outer_wkb IS NOT NULL "
+                "ORDER BY e.t_start, e.edge_id LIMIT 1"
+            ).fetchone()["id"]
         )
     finally:
         conn.close()
-    assert radial > 0 and "outer_radius" in columns
 
+    degenerate = store.to_wkb(shapely.Point(0.0, 0.0)).hex()
+    flattened = _copy(
+        artifact,
+        tmp_path / "no-extent.sqlite",
+        "UPDATE envelope SET outer_wkb = x'" + degenerate + "' "
+        "WHERE envelope_key = (SELECT node_key FROM node WHERE node_id = "
+        f"'{envelope_id}')",
+    )
+    row = _cold_read(flattened)[query.CLAIM_REACHED_POINT]
+    assert row.state == COULD_NOT_EVALUATE
+    assert not row.checkable
+    assert "refuses" in row.detail and "outer_area" in row.detail
+
+
+def test_a_containment_that_says_one_thing_twice_is_could_not_evaluate(
+    artifact: Path, monkeypatch
+) -> None:
+    """The same-verdict arm, which no schema-valid file can now reach.
+
+    The agreement check refuses a region of no extent before containment runs,
+    so the only way left to feed this arm its condition is a `reached_point`
+    that answers *not excluded* to everything. The arm stays because the
+    cold read must not credit a check it has not seen fail, whatever made it
+    unable to.
+    """
+    import dataclasses
+
+    real = query.reached_point
+
+    def agrees_with_everything(conn, x, y, t):
+        answer = real(conn, x, y, t)
+        return dataclasses.replace(
+            answer,
+            value=dataclasses.replace(answer.value, could_have_reached=True),
+        )
+
+    monkeypatch.setattr(query, "reached_point", agrees_with_everything)
     row = _cold_read(artifact)[query.CLAIM_REACHED_POINT]
-    assert row.state == query.READABLE_NOT_CHECKABLE
-    assert "radially" in row.detail
-    assert str(radial) in row.detail
+    assert row.state == COULD_NOT_EVALUATE
+    assert not row.checkable
+    assert "same verdict" in row.detail
+
+
+def test_a_schema_before_the_boundary_is_could_not_evaluate_not_absent(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """THE THIRD NEGATIVE, and it is issue #257's own distinction one level up.
+
+    An artifact written against schema 13 retained no boundary because there was
+    nowhere to put one. Reporting that as ABSENT would be a finding about a
+    build that chose to retain nothing, which nobody chose here — so it goes the
+    way every pre-schema file goes in this report, and the arm is reached
+    through raw `sqlite3` because `store.connect` refuses the file.
+    """
+    older = _copy(
+        artifact,
+        tmp_path / "schema-13.sqlite",
+        f"UPDATE meta SET value = '13' WHERE key = '{store.META_SCHEMA_VERSION}'",
+    )
+    with pytest.raises(store.StoreError):
+        store.connect(older)
+
+    row = _raw_cold_read(older)[query.CLAIM_REACHED_POINT]
+    assert row.state == COULD_NOT_EVALUATE
+    assert row.state != query.ABSENT
+    assert "13" in row.detail and str(query.COLD_READ_SCHEMA_VERSION) in row.detail
 
 
 def test_a_chain_in_the_file_is_checkable_with_a_key_the_file_does_not_contain(
@@ -4067,15 +4695,21 @@ def test_a_partial_report_is_refused(artifact: Path) -> None:
 
 def test_the_cli_prints_the_cold_read(artifact: Path, capsys) -> None:
     """`--cold-read` on an artifact from `main`: exit 0 and one row per claim,
-    each with its state and its detail. `READABLE-NOT-CHECKABLE` is not a
-    failure of the run — an exit code that treated it as one would be red on
-    every artifact this project has ever built."""
+    each with its state and its detail. Exit 0 is not a claim that every row
+    passed — four of the six are CHECKABLE here and two are ABSENT, and a state
+    short of CHECKABLE is the report working rather than the run failing; only a
+    row that could not be *evaluated* is exit 1."""
     code = query.main([str(artifact), "--cold-read"])
     out = capsys.readouterr().out
     assert code == query.EXIT_OK
     for claim, state in COLD_READ_TODAY.items():
         assert f"{claim}: {state}" in out
-    assert query.READABLE_NOT_CHECKABLE in out
+    # `READABLE-NOT-CHECKABLE` was asserted present here until issue #258 moved
+    # the last row out of it. It is not gone from the vocabulary — the negatives
+    # above reach it — but no shipped fixture reports it any more, and an
+    # assertion that a state appears on a *healthy* artifact could only be kept
+    # true by leaving a gap open.
+    assert f"{query.CLAIM_REACHED_POINT}: {query.CHECKABLE}" in out
     assert "recompute permitted: yes" in out
 
 

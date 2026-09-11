@@ -149,6 +149,11 @@ Split, and it says so per query. Every *scene* question names an entity, and
 where an entity is comes from perception in any real system (docs/plan.md Phase
 9), so those are Layer B. Every *attestation* question is Layer A. The layer tag
 travels on every edge and this module never invents one.
+
+`reached_point` is the one question in neither half: it names no entity and
+reads no signed record, only the outer boundary the artifact retains. Its spec
+carries the **weaker** of the two letters that question can have and the answer
+carries the one this file actually holds — see `_ROOM_FRAME_LAYER`.
 """
 
 from __future__ import annotations
@@ -160,6 +165,8 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from shapely.geometry import Point
 
 from reg import store
 from reg.tolerances import (
@@ -210,7 +217,9 @@ __all__ = [
     "META_ATTESTATION_RECORDS",
     "META_ATTESTATION_RETENTION",
     "META_DECLARATION_COUNT",
+    "META_ENVELOPE_RETENTION",
     "META_FRAME_COUNT",
+    "META_GEOMETRY_RETENTION",
     "META_OCCURRENCE_RESOLUTION",
     "META_OCCURRENCE_RETENTION",
     "META_T_FIRST",
@@ -218,6 +227,7 @@ __all__ = [
     "META_OPERATOR_ID",
     "META_VERDICT_COUNT",
     "OCCURRENCE_LAYER",
+    "OUTER_BOUNDARY_COLUMN",
     "PASSIVATING_OUTCOMES",
     "PERMITTED_OUTCOME",
     "QUERIES",
@@ -238,9 +248,11 @@ __all__ = [
     "OverlapInterval",
     "Passivation",
     "Passivations",
+    "PointwiseCoverage",
     "QueryError",
     "QuerySpec",
     "ReachableEntities",
+    "ReachedPoint",
     "RiskInterval",
     "SceneVisit",
     "SeparationTimeline",
@@ -261,7 +273,9 @@ __all__ = [
     "incident_report",
     "main",
     "min_separation",
+    "pointwise_coverage",
     "reachable_entities",
+    "reached_point",
     "render",
     "render_chain_report",
     "render_cold_read",
@@ -361,6 +375,19 @@ META_T_LAST = "t_last"
 #: every frame with a row (docs/lossiness.md *Discarded* #10), so a row count
 #: would answer a different and smaller question.
 META_FRAME_COUNT = "frame_count"
+
+#: Which frames get an envelope row at all, in prose, in the artifact. It is
+#: what makes a *no envelope in force at t* refusal legible: the instant belongs
+#: either between two frames or to a frame this rule retained no configuration
+#: for, and the file says which rule that is rather than leaving a reader to
+#: infer it from the pattern of gaps.
+META_ENVELOPE_RETENTION = "envelope_row_retention"
+
+#: Which of those rows keep a polygon — and, since issue #257, which keep the
+#: **outer** boundary, that being the same rule and not a second one. It is the
+#: rule `reached_point` refuses under, so the refusal quotes the key rather than
+#: describing the rule in prose the file cannot be checked against.
+META_GEOMETRY_RETENTION = "envelope_geometry_retention"
 
 #: The occurrence layer's retention rule, in prose. Its presence is what makes
 #: the closed-world reading of that layer legible: "no `contact_began` row"
@@ -511,6 +538,25 @@ _SCENE_LAYER = LAYER_B
 #: names an entity (docs/sufficiency.md §2).
 _RECORD_LAYER = LAYER_A
 
+#: `reached_point`'s evidence layer, and it is deliberately *not* `_SCENE_LAYER`
+#: under a second name — that constant means "this question names an entity",
+#: and this one names none (issue #258).
+#:
+#: **It is the weaker of the two letters the question can have, and the reason
+#: is that a spec cannot carry a condition.** docs/sufficiency.md §5.1 classifies
+#: *could the robot have reached (x, y) at t* as **Layer A** — `HAS_ENVELOPE` is
+#: the one Layer A edge type naming no `Entity` — and states a condition in the
+#: same breath: the `(x, y)` is a **room** coordinate, so the answer is only as
+#: strong as whatever put the robot in the room (§5.6). The retained boundary is
+#: the placed, room-frame region, so on a run whose base drove it inherits the
+#: localizer that supplied the pose, and `reg.store.open_edge` tags that edge `B`.
+#: A static `A` here would print "evidence layer A" over an answer the file
+#: itself tags `B`, which is the one direction that must not happen: under-
+#: claiming never turns a Layer B answer into a certifiable one, over-claiming
+#: does the reverse. The letter the *file* holds travels on the answer, as
+#: `ReachedPoint.envelope_layer`, read off the covering edge and never inferred.
+_ROOM_FRAME_LAYER = LAYER_B
+
 QUERIES: dict[str, QuerySpec] = {
     "separation_timeline": QuerySpec(
         name="separation_timeline",
@@ -617,6 +663,35 @@ QUERIES: dict[str, QuerySpec] = {
         tolerance="exact — a missed or invented contact is a failure",
         why_not="",
         layer_tag=_SCENE_LAYER,
+    ),
+    # The pointwise reachability question (issue #258), and the reason it sits
+    # between the two halves rather than in either: it names no entity, so it is
+    # not a scene question, and it reads no signed record, so it is not an
+    # attestation one. What it reads is the retained *outer* boundary — the one
+    # thing in this artifact that is a region the robot could not leave.
+    "reached_point": QuerySpec(
+        name="reached_point",
+        question=(
+            "whether the robot could have reached the room-frame point (x, y) "
+            "at time t, tested against the outer boundary the file retains"
+        ),
+        answerable_from=frozenset({EDGE_LAYER}),
+        arguments=("X_M", "Y_M", "T"),
+        tolerance=(
+            "t is quantized to TIME_TOL_S, because that is the resolution the "
+            "HAS_ENVELOPE endpoints were recorded at; the containment test "
+            "itself is exact and has no tolerance at all. The retained outer "
+            "boundary is the one polygon in this artifact that is **not** "
+            "simplified (reg.graph, issue #257), so no length in this answer "
+            "has been rounded and DISTANCE_TOL_M is not spent here"
+        ),
+        why_not=(
+            "The occurrence layer holds events at instants. It retains no "
+            "envelope row, so there is no boundary in it to test a point "
+            "against, and no robot_config row either, so there is nothing to "
+            "recompute one from (docs/lossiness.md, Level 1)."
+        ),
+        layer_tag=_ROOM_FRAME_LAYER,
     ),
     # The attestation half (docs/plan.md Phase 7, queries 5-7; issue #50). No
     # numeric tolerance on any of the three, and that is docs/lossiness.md's
@@ -840,6 +915,70 @@ class ReachableEntities:
     t_end: float
     entity_ids: tuple[str, ...]
     declared: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PointwiseCoverage:
+    """How much of a run *could the robot have reached (x, y)* can be put to.
+
+    **The answer states its own coverage because a `no` here is worthless
+    without it** (issue #258). `reg.graph.GEOMETRY_RETENTION` keeps the outer
+    boundary at the frames the artifact already says something happened at — the
+    two ends of the run, every relationship transition, every posed frame — and
+    at no others, so most frames have no region to test a point against. A
+    caller who reads *this artifact cannot answer at t* as *the robot could not
+    have been there* has drawn the one conclusion the retention rule does not
+    support, and the numbers below are what stops that reading being available.
+
+    `pointwise_rows` is envelope rows carrying `outer_wkb`; `radial_rows` is
+    rows carrying `outer_radius`, which is every computed one. `frames` is the
+    run's frame count from `meta`, not a row count: the ratio a reader wants is
+    *answerable frames over frames*, and a row count would quietly answer a
+    smaller question with a larger-looking number.
+    """
+
+    frames: int
+    envelope_rows: int
+    pointwise_rows: int
+    radial_rows: int
+
+
+@dataclass(frozen=True)
+class ReachedPoint:
+    """Whether one room-frame point was inside the retained outer set at `t`.
+
+    **`could_have_reached` is not symmetric, and the asymmetry is the answer.**
+    `reg.envelope.outer_envelope` over-approximates: every configuration the
+    robot can reach within the horizon has its body inside that region, and
+    there are points inside it the robot cannot reach. So `False` is a **sound
+    exclusion** — the robot could not have been there — and `True` is *this
+    artifact does not exclude it*, which is what the word "could" in the
+    question is doing. A reader who inverts the two has turned an outer bound
+    into an inner one.
+
+    `envelope_layer` is the `layer` column on the `HAS_ENVELOPE` edge that put
+    this envelope in force, read off the row and never inferred. It is `A` for
+    the fixed-base runs in this repository and `B` for a run whose bound or base
+    velocity came out of a perceiver, or whose configuration states a pose
+    (`reg.store.open_edge`, docs/sufficiency.md §5.6) — see `_ROOM_FRAME_LAYER`
+    for why the spec's own letter is the weaker one.
+
+    `outer_radius_m` travels beside the exact answer rather than instead of it.
+    Issue #258 added a question and removed none: the radius is still on the row
+    and still answers *not at that distance*, about the centre
+    `reg.graph.envelope_frame` names. The boundary answers *not at that point*,
+    and needs no centre to do it, being already placed in the room.
+    """
+
+    x: float
+    y: float
+    t: float
+    could_have_reached: bool
+    envelope_id: str
+    envelope_layer: str
+    outer_area_m2: float
+    outer_radius_m: float
+    coverage: PointwiseCoverage
 
 
 # --------------------------------------------------------------------------
@@ -1976,6 +2115,282 @@ def did_contact_occur(conn: sqlite3.Connection, entity_id: str) -> Answer:
         reason=(
             f"{len(rows)} contact_began occurrence(s), read closed-world under "
             f"meta[{META_OCCURRENCE_RETENTION!r}]"
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
+# The pointwise reachability question (issue #258, option C of #228).
+#
+# `outer_wkb` arrived at `SCHEMA_VERSION` 14 and this is what reads it. The one
+# rule everything below is arranged around:
+#
+#   **A RADIAL ANSWER MUST NEVER BE RETURNED WEARING A POINTWISE ONE'S CLOTHES.**
+#
+# At a frame the retention rule kept no boundary for, `outer_radius` is right
+# there on the row and would produce a plausible `True`/`False` for the point.
+# It would be an answer to a different question — *not at that distance* rather
+# than *not at that point* — arriving in the shape of this one, and nothing
+# downstream could tell the two apart. So a frame with no boundary is a
+# could-not-evaluate that names the rule, and the radius is reported as a datum
+# beside an answer and never as one.
+# --------------------------------------------------------------------------
+
+#: The column the whole question rests on. Named once, because it is quoted in
+#: three refusals and a constant is what keeps them saying the same thing.
+OUTER_BOUNDARY_COLUMN = "outer_wkb"
+
+
+def _has_outer_boundary_column(conn: sqlite3.Connection) -> bool:
+    """Whether the `envelope` table has an `outer_wkb` column at all.
+
+    The pre-#257 arm, and it is reachable for the reason `cold_read`'s
+    older-schema arm is: `reg.store.connect` refuses a `schema_version` this
+    build does not understand, so an assessor holding an archived artifact meets
+    this through whatever `sqlite3` they have. A file written against schema 13
+    is not a file that retained no boundary — it is one written before the rule
+    existed, and the two must not report the same way.
+    """
+    return any(
+        str(row["name"]) == OUTER_BOUNDARY_COLUMN
+        for row in conn.execute("PRAGMA table_info(envelope)").fetchall()
+    )
+
+
+def pointwise_coverage(conn: sqlite3.Connection) -> PointwiseCoverage:
+    """How many of this run's frames `reached_point` can be asked about.
+
+    Public, and not merely a field on the answer, because a caller has to be
+    able to learn it **before** and **without** asking about a point — a refusal
+    at one instant says nothing about how much of the run is covered, and the
+    number that makes the refusal readable must not be reachable only through an
+    answer that exists.
+
+    Raises:
+        QueryError: the `envelope` table has no `outer_wkb` column, so this file
+            predates the retention rule the numbers would be about. Returning
+            zero would report an archive as an artifact that chose to retain
+            nothing, which is the distinction issue #257 put in the schema.
+    """
+    if not _has_outer_boundary_column(conn):
+        raise QueryError(
+            f"this artifact's envelope table has no {OUTER_BOUNDARY_COLUMN!r} "
+            f"column, so it was written against a schema older than "
+            f"{store.SCHEMA_VERSION} and the outer boundary had nowhere to go "
+            "(issue #257). Reporting zero covered frames would say this build "
+            "retained no boundary, which is a decision somebody would have had "
+            "to take; nobody took it here."
+        )
+    row = conn.execute(
+        "SELECT count(*)             AS envelope_rows, "
+        f"      count({OUTER_BOUNDARY_COLUMN}) AS pointwise, "
+        "       count(outer_radius)  AS radial "
+        "FROM envelope"
+    ).fetchone()
+    return PointwiseCoverage(
+        frames=int(_meta_float(conn, META_FRAME_COUNT)),
+        envelope_rows=int(row["envelope_rows"]),
+        pointwise_rows=int(row["pointwise"]),
+        radial_rows=int(row["radial"]),
+    )
+
+
+def _coverage_text(coverage: PointwiseCoverage) -> str:
+    """The coverage sentence, on every answer and on every refusal alike."""
+    return (
+        f"{coverage.pointwise_rows} of this run's {coverage.frames} frame(s) "
+        "are pointwise-answerable: of the "
+        f"{coverage.envelope_rows} envelope row(s) retained, "
+        f"{coverage.radial_rows} carry an outer_radius and "
+        f"{coverage.pointwise_rows} carry the boundary that radius projects "
+        f"(the rule meta[{META_GEOMETRY_RETENTION!r}] states in this "
+        "artifact's own words). A frame with no answer here is a frame no "
+        "region was retained "
+        "at, and never a point the robot could not have reached."
+    )
+
+
+def reached_point(
+    conn: sqlite3.Connection, x: float, y: float, t: float
+) -> Answer:
+    """Could the robot have reached the room-frame point `(x, y)` at `t`?
+
+    **Answered exactly where it is answered at all**: the point is tested
+    against the outer boundary the row retains, which is the placed, room-frame
+    region and is not simplified. Where the row retains none the answer is a
+    could-not-evaluate that names the retention rule — never the radius, and
+    never a bare *no*.
+
+    **A boundary its own row contradicts is a could-not-evaluate too.** No
+    digest covers the blob, so a smaller region swapped in leaves the chain
+    VERIFIED and turns a point the robot could reach into an exclusion — a
+    false accusation, the direction this answer must not get wrong. What the
+    file can still check is itself: a blob whose area disagrees with the row's
+    `outer_area` by more than that figure's quantum is refused. A replacement
+    of equal area, or the right region moved, passes; this is the file agreeing
+    with itself, not the region shown to be the one the build computed.
+
+    The direction of the answer is `ReachedPoint.could_have_reached`'s: the
+    outer set over-covers, so `False` excludes soundly and `True` says only that
+    this artifact does not exclude it. `covers` rather than `contains`, so a
+    point exactly on the boundary answers *not excluded*; an over-approximation
+    that refused its own edge would be reporting an exclusion it has not earned.
+
+    Args:
+        conn: an open artifact.
+        x, y: the point, in the **room** frame — the frame the retained region
+            is already in, which is why this answer needs no centre where
+            `outer_radius` needs `reg.graph.envelope_frame` to supply one.
+        t: seconds, quantized to `TIME_TOL_S` on the way in.
+
+    Returns:
+        An `Answer` whose `value` is a `ReachedPoint`, or a `COULD-NOT-EVALUATE`
+        with `value=None`. Every refusal carries `_coverage_text`, so a reader
+        who meets one learns how much of the run is covered at the same moment
+        they learn this instant is not.
+
+    Raises:
+        QueryError: `x`, `y` or `t` is not a finite number. A caller error, and
+            distinct from every refusal above it.
+    """
+    spec = QUERIES["reached_point"]
+    x = _finite(x, "x")
+    y = _finite(y, "y")
+    t = quantize_time(_finite(t, "t"))
+
+    layers = available_layers(conn)
+    if _layer_for(spec, layers) is None:
+        return _no_layer(spec, layers)
+    if not _has_outer_boundary_column(conn):
+        return _refuse(
+            spec,
+            layers,
+            f"Its envelope table has no {OUTER_BOUNDARY_COLUMN!r} column, so it "
+            f"was written against a schema older than {store.SCHEMA_VERSION} "
+            "and the outer boundary had nowhere to go (issue #257). That is a "
+            "fact about when this file was built and not an absence anybody "
+            "chose, so it is reported as one and not as *no region was "
+            "retained*.",
+        )
+
+    coverage = pointwise_coverage(conn)
+    edges = store.read_edges(conn, edge_type="HAS_ENVELOPE")
+    covering = [row for row in edges if row["t_start"] <= t <= row["t_end"]]
+    if not covering:
+        span = (
+            f" spanning [{min(r['t_start'] for r in edges)}, "
+            f"{max(r['t_end'] for r in edges)}]"
+            if edges
+            else ""
+        )
+        return _refuse(
+            spec,
+            layers,
+            f"No envelope is recorded as being in force at t={t}. It holds "
+            f"{len(edges)} HAS_ENVELOPE interval(s){span}, and an instant "
+            "outside them belongs either between two frames or to a frame "
+            f"meta[{META_ENVELOPE_RETENTION!r}] retained no configuration "
+            "for. The neighbouring frame's region is a region the robot could "
+            f"reach at a different instant. {_coverage_text(coverage)}",
+        )
+    if len(covering) > 1:
+        return _refuse(
+            spec,
+            layers,
+            f"{len(covering)} envelopes are recorded as in force at t={t}. Two "
+            "transitions inside one TIME_TOL_S quantum have no retained order "
+            "(docs/lossiness.md Unanswerable #5), so there is no way to say "
+            "which region this instant belongs to — and testing the point "
+            f"against either would pick one. {_coverage_text(coverage)}",
+        )
+
+    edge = covering[0]
+    envelope_id = str(edge["dst_id"])
+    row = store.envelope_row(conn, envelope_id)
+    if row is None:  # pragma: no cover - open_edge refuses a dangling endpoint
+        return _refuse(
+            spec,
+            layers,
+            f"The HAS_ENVELOPE edge covering t={t} points at envelope "
+            f"{envelope_id!r}, which is not in this artifact. "
+            f"{_coverage_text(coverage)}",
+        )
+    if row[OUTER_BOUNDARY_COLUMN] is None:
+        return _refuse(
+            spec,
+            layers,
+            f"Envelope {envelope_id!r} is in force at t={t} and retains no "
+            f"{OUTER_BOUNDARY_COLUMN}: meta[{META_GEOMETRY_RETENTION!r}] keeps "
+            "the outer boundary wherever it keeps the inner polygon and nowhere "
+            "else, and this is a frame that rule excludes. The row's "
+            f"outer_radius={row['outer_radius']!r} m is still there and still "
+            "answers *not at that distance*, about the centre "
+            "reg.graph.envelope_frame reads off the row — but that is a "
+            "different question, and returning its answer here would put a "
+            "radial verdict in a pointwise answer's shape, where nothing "
+            f"downstream could tell them apart. {_coverage_text(coverage)}",
+        )
+
+    region = store.from_wkb(row[OUTER_BOUNDARY_COLUMN])
+    # The row's area was quantized before the region was placed, so the two can
+    # differ by the rounding and by a rigid transform's float noise and by
+    # nothing else. One quantum of the stored figure covers both — half of it is
+    # the rounding — and is the builder's own tolerance rather than a new one.
+    # Re-quantizing the blob and demanding equality would flag a clean file
+    # whose area sits on a rounding edge. What this catches is a boundary that
+    # disagrees with its row by more than the row's precision; a replacement of
+    # equal area, or the right region moved, passes it.
+    stored_area = float(row["outer_area"])
+    quantum = 10.0 ** (
+        math.floor(math.log10(stored_area)) - (AREA_QUANT_SIGFIGS - 1)
+    )
+    if abs(region.area - stored_area) > quantum:
+        return _refuse(
+            spec,
+            layers,
+            f"Envelope {envelope_id!r} retains a boundary that disagrees with "
+            f"the row carrying it: the stored geometry has area "
+            f"{region.area:.6g} m2 and the row states outer_area={stored_area} "
+            f"m2, a difference larger than that figure's {quantum:g} m2 "
+            "quantum. "
+            "The builder writes the two from one region, so a file where they "
+            "differ is one whose account of that region has stopped being "
+            "self-consistent, and nothing here can say which of them is the "
+            "region this build computed. Answering anyway would rest an "
+            "exclusion — the strongest claim this query makes, and the one "
+            "that accuses — on bytes the row itself contradicts. No digest "
+            "covers the boundary: reg.envelope.envelope_hash is over the inner "
+            "geometry and is not a MAC, and the chain commits to records "
+            "rather than to envelope rows, so this is where the file stops "
+            "agreeing with itself and not where it is shown to be wrong. "
+            f"{_coverage_text(coverage)}",
+        )
+    inside = bool(region.covers(Point(x, y)))
+    return Answer(
+        query=spec.name,
+        verdict=ANSWERED,
+        layer=EDGE_LAYER,
+        value=ReachedPoint(
+            x=x,
+            y=y,
+            t=t,
+            could_have_reached=inside,
+            envelope_id=envelope_id,
+            # Off the edge, never inferred: the tag is what this artifact says
+            # its own answer rests on, and this module invents no layer.
+            envelope_layer=str(edge["layer"]),
+            outer_area_m2=float(row["outer_area"]),
+            outer_radius_m=float(row["outer_radius"]),
+            coverage=coverage,
+        ),
+        tolerances={"time_s": TIME_TOL_S},
+        reason=(
+            f"({x}, {y}) is "
+            + ("inside" if inside else "outside")
+            + f" the outer reachable set envelope {envelope_id} retains for "
+            f"t={t}, tested against the stored boundary itself. That set "
+            "over-covers, so *outside* excludes soundly and *inside* is *not "
+            f"excluded* rather than *reached*. {_coverage_text(coverage)}"
         ),
     )
 
@@ -3834,25 +4249,44 @@ def _layer_basis_claim(conn: sqlite3.Connection) -> ColdReadClaim:
 
 
 def _reached_point_claim(
-    conn: sqlite3.Connection, radial: int, total: int
+    conn: sqlite3.Connection, radial: int, total: int, stored: int
 ) -> ColdReadClaim:
     """Can the file answer *could the robot have reached (x, y)?*
 
-    **Still READABLE-NOT-CHECKABLE at schema 14, and the reason moved** (issue
-    #257). Until this schema the answer was radial everywhere: `outer_radius` is
-    a scalar about the base frame and the boundary it projects was retained
-    nowhere, so the file said *not at that distance* and could not say *not at
-    that point*. The boundary is now in the file wherever the inner polygon is —
-    the two ends of the run, every `INTERSECTS` or `CONTACT` transition, every
-    posed frame — so at those rows the region itself is readable and the answer
-    is the region's.
+    **CHECKABLE at schema 14 since issue #258, and the row moved because a
+    check arrived rather than because the file changed.** #257 put the outer
+    boundary in the artifact wherever the inner polygon is — the two ends of the
+    run, every `INTERSECTS` or `CONTACT` transition, every posed frame — which
+    made the region *readable*. What was missing was a query that took a point
+    and tested it against one, so an assessor's only route was to read the WKB
+    and run their own containment. `reached_point` is that query, and this row
+    **runs it**, twice, for `_acknowledgment_claim`'s reason: a state asserted
+    about a check nobody invoked is the same assertion this whole report exists
+    to replace.
 
-    What has not arrived is a **check**: no query in this build takes a point and
-    tests it against a retained boundary, so what an assessor can do is read the
-    WKB and run their own containment. That is the difference between this state
-    and CHECKABLE, and moving the state is the issue that depends on this one.
-    Reporting it as checkable here would credit the file with a check nothing
-    runs. docs/limitations.md §2 and §3, issues #228 and #257.
+    Twice, and in opposite directions, because *it answered* is not the property
+    worth reporting. The two points come out of the retained region itself and
+    neither is invented: `representative_point()` is inside it by construction,
+    and the region's bounding box translated by its own width and height is
+    outside it by construction. A file whose check says *not excluded* to the
+    first and *excluded* to the second has been shown able to say both things;
+    one that agrees with itself on both has a containment test that cannot fail,
+    and that is a could-not-evaluate rather than a pass.
+
+    Four states, and the last three never resolve to the first:
+
+    * no row carries an `outer_radius` — **ABSENT**. The file states no
+      reachable-set bound at all, radial or pointwise.
+    * rows carry a radius and none carries a boundary — **READABLE-NOT-
+      CHECKABLE**. That is every artifact this project built before schema 14,
+      and it is the state this row spent its whole life in: the radius is
+      readable and answers *not at that distance*, and no region in the file
+      answers *not at that point*.
+    * the boundary is there and the check says both things — **CHECKABLE**.
+    * the boundary is there and the check refuses, or agrees with itself in both
+      directions — **COULD-NOT-EVALUATE**, carrying what the query said.
+
+    docs/limitations.md §2 and §3, issues #228, #257 and #258.
     """
     if not radial:
         return ColdReadClaim(
@@ -3867,33 +4301,109 @@ def _reached_point_claim(
             ),
         )
     frame = store.get_meta(conn, store.META_BASE_FRAME)
-    stored = int(
-        conn.execute("SELECT count(outer_wkb) AS n FROM envelope").fetchone()["n"]
+    about = (
+        f"meta[{store.META_BASE_FRAME}]={frame}"
+        if frame is not None
+        else f"a base frame this file does not state in meta[{store.META_BASE_FRAME}]"
     )
+    preamble = (
+        f"{radial} of {total} envelope row(s) carry outer_radius — a scalar "
+        f"about {about} — and {stored} of them also carry "
+        f"{OUTER_BOUNDARY_COLUMN}, the boundary that scalar projects, retained "
+        f"wherever the inner polygon is, on the rule "
+        f"meta[{META_GEOMETRY_RETENTION!r}] states in this file's own words. "
+    )
+    if not stored:
+        return ColdReadClaim(
+            claim=CLAIM_REACHED_POINT,
+            question=COLD_READ_QUESTIONS[CLAIM_REACHED_POINT],
+            state=READABLE_NOT_CHECKABLE,
+            detail=(
+                preamble + "So the question is answerable **radially only**: "
+                "this file says *not at that distance* and holds no region to "
+                "say *not at that point*, and the region that would answer it "
+                "is recomputable, which routes the question straight back "
+                "through the recompute claim above (issue #228)."
+            ),
+        )
+
+    probe = conn.execute(
+        "SELECT e.t_start AS t, n.node_id AS envelope_id, "
+        f"       v.{OUTER_BOUNDARY_COLUMN} AS boundary "  # noqa: S608
+        "FROM edge e "
+        "JOIN node n ON n.node_key = e.dst_key "
+        "JOIN envelope v ON v.envelope_key = e.dst_key "
+        f"WHERE e.type = 'HAS_ENVELOPE' AND v.{OUTER_BOUNDARY_COLUMN} IS NOT NULL "  # noqa: S608
+        "ORDER BY e.t_start, e.edge_id LIMIT 1"
+    ).fetchone()
+    if probe is None:
+        return ColdReadClaim(
+            claim=CLAIM_REACHED_POINT,
+            question=COLD_READ_QUESTIONS[CLAIM_REACHED_POINT],
+            state=COULD_NOT_EVALUATE,
+            detail=(
+                preamble + f"But no HAS_ENVELOPE edge in this file points at a "
+                f"row carrying one, so there is no instant at which the check "
+                "could be put to the region — the boundaries are in the file "
+                "and nothing says when any of them was in force."
+            ),
+        )
+
+    region = store.from_wkb(probe["boundary"])
+    minx, miny, maxx, maxy = region.bounds
+    inside = region.representative_point()
+    at = float(probe["t"])
+    yes = reached_point(conn, inside.x, inside.y, at)
+    no = reached_point(
+        conn, maxx + (maxx - minx), maxy + (maxy - miny), at
+    )
+    refused = [answer for answer in (yes, no) if answer.verdict != ANSWERED]
+    if refused:
+        return ColdReadClaim(
+            claim=CLAIM_REACHED_POINT,
+            question=COLD_READ_QUESTIONS[CLAIM_REACHED_POINT],
+            state=COULD_NOT_EVALUATE,
+            detail=(
+                preamble + "reg.query.reached_point refuses at t="
+                f"{at}, where {str(probe['envelope_id'])!r} is in force and "
+                f"retains a boundary: {refused[0].reason}"
+            ),
+        )
+    if not (yes.value.could_have_reached and not no.value.could_have_reached):
+        return ColdReadClaim(
+            claim=CLAIM_REACHED_POINT,
+            question=COLD_READ_QUESTIONS[CLAIM_REACHED_POINT],
+            state=COULD_NOT_EVALUATE,
+            detail=(
+                preamble + "reg.query.reached_point answers at t="
+                f"{at} and gives the same verdict to a point inside the "
+                "retained region and to one outside its bounding box "
+                f"({yes.value.could_have_reached} and "
+                f"{no.value.could_have_reached}). A containment test that has "
+                "not been seen to say both things is not a check, and reporting "
+                "it as one would credit this file with an answer nothing has "
+                "shown can fail."
+            ),
+        )
+    cover = yes.value.coverage
     return ColdReadClaim(
         claim=CLAIM_REACHED_POINT,
         question=COLD_READ_QUESTIONS[CLAIM_REACHED_POINT],
-        state=READABLE_NOT_CHECKABLE,
+        state=CHECKABLE,
         detail=(
-            f"{radial} of {total} envelope row(s) carry outer_radius — a scalar "
-            "about "
-            + (
-                f"meta[{store.META_BASE_FRAME}]={frame}"
-                if frame is not None
-                else f"a base frame this file does not state in meta[{store.META_BASE_FRAME}]"
-            )
-            + f" — and {stored} of them also carry outer_wkb, the boundary that "
-            "scalar projects, retained wherever the inner polygon is, on the "
-            "geometry-retention rule this file states in its own meta table. "
-            "So the question is "
-            "answerable from the region at those rows and **radially only** at "
-            f"the other {radial - stored}: there this file says *not at that "
-            "distance* and cannot say *not at that point*, and the region that "
-            "would answer it is recomputable, which routes the question "
-            "straight back through the recompute claim above. What no query in "
-            "this build does is *test a point against a retained boundary*, "
-            "which is why this is readable rather than checkable (issues #228 "
-            "and #257)."
+            preamble + "So reg.query.reached_point answers it from the region "
+            f"at those rows, and it was run here to say so: at t={at}, with "
+            f"envelope {str(probe['envelope_id'])!r} in force, a point inside "
+            "the retained boundary comes back *not excluded* and one outside it "
+            "comes back *excluded* — the check said both things, with no "
+            f"document open and no keyring. Coverage travels on the answer: "
+            f"{cover.pointwise_rows} of this run's {cover.frames} frame(s) are "
+            f"pointwise-answerable and the other {radial - stored} envelope "
+            "row(s) answer **radially only**, where the file says *not at that "
+            "distance*, cannot say *not at that point*, and refuses rather than "
+            "substituting the radius. The region that would answer those is "
+            "recomputable, which routes that remainder back through the "
+            "recompute claim above (issues #228, #257, #258)."
         ),
     )
 
@@ -4106,9 +4616,13 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
     one of `COLD_READ_STATES`.
 
     **It closes no gap.** It makes the gaps legible from the file, which is what
-    lets issue #228 be judged by something other than a PR body. One of the six
-    rows is `READABLE-NOT-CHECKABLE` today and that is the report working, not
-    failing.
+    lets issue #228 be judged by something other than a PR body. Rows leave
+    `READABLE-NOT-CHECKABLE` when the work that closes them lands and never
+    because this function was edited — `reached-point` was the last of the four
+    still in that state and moved with issue #258, which added the query that
+    tests a point against the retained boundary. The state is still one this
+    report reaches on its own evidence: strip the boundaries out of a file and
+    the row goes back.
 
     **It reports and does not re-verify.** The environment comparison is issue
     #201's, spelled over `COLD_READ_RECOMPUTE_KEYS`, and `recompute_permitted`
@@ -4117,6 +4631,12 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
     keyring, and `reg.chain.verify_chain` is the one implementation of that walk
     (issue #242). If any of them disagrees with its reader that is a bug here,
     not a second opinion.
+
+    *Two rows do run a query, and it is the same rule rather than an exception
+    to it.* `passivation-acknowledged` runs `acknowledgments` and `reached-point`
+    runs `reached_point`, in both directions, because for those two the check is
+    **in this module** — running it is reading the one implementation rather than
+    writing a second one, which is exactly what the chain row refuses to do.
 
     Args:
         conn: an open artifact. `reg.store.connect` refuses a `schema_version`
@@ -4143,7 +4663,8 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
     envelopes = conn.execute(
         "SELECT count(*) AS total, "
         "       count(*) - count(geometry_wkb) AS discarded, "
-        "       count(outer_radius) AS radial "
+        "       count(outer_radius) AS radial, "
+        f"      count({OUTER_BOUNDARY_COLUMN}) AS stored "  # noqa: S608
         "FROM envelope"
     ).fetchone()
     recompute, permitted = _recompute_claim(
@@ -4159,7 +4680,10 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
             recompute,
             _layer_basis_claim(conn),
             _reached_point_claim(
-                conn, int(envelopes["radial"]), int(envelopes["total"])
+                conn,
+                int(envelopes["radial"]),
+                int(envelopes["total"]),
+                int(envelopes["stored"]),
             ),
             _chain_intact_claim(conn, stated),
             _acknowledgment_claim(conn),
@@ -4406,6 +4930,25 @@ def _render_value(value: object) -> list[str]:
             else "inside the envelope: none of them"
         )
         return out
+    if isinstance(value, ReachedPoint):
+        cover = value.coverage
+        return [
+            f"({value.x:g}, {value.y:g}) at t={value.t:.4f} s: "
+            + (
+                "NOT EXCLUDED — the point is inside the outer reachable set, "
+                "which over-covers, so this is not *the robot was there*"
+                if value.could_have_reached
+                else "EXCLUDED — the point is outside the outer reachable set, "
+                "so the robot could not have reached it"
+            ),
+            f"tested against the retained boundary of envelope "
+            f"{value.envelope_id} (outer_area {value.outer_area_m2:g} m2, "
+            f"outer_radius {value.outer_radius_m:g} m, HAS_ENVELOPE tagged "
+            f"layer {value.envelope_layer})",
+            f"pointwise coverage: {cover.pointwise_rows:,} of "
+            f"{cover.frames:,} frame(s); {cover.envelope_rows:,} envelope "
+            f"row(s) retained, {cover.radial_rows:,} of them with a radius",
+        ]
     if isinstance(value, DeclaredBounds):
         width = _column_width("declaration", (b.declaration_id for b in value.bounds))
         out = [
@@ -4653,6 +5196,16 @@ def _parser() -> argparse.ArgumentParser:
         help=QUERIES["did_contact_occur"].question,
     )
     group.add_argument(
+        "--reached-point",
+        nargs=3,
+        metavar=("X_M", "Y_M", "T"),
+        help=(
+            QUERIES["reached_point"].question
+            + " — a frame the file retains no boundary at is a "
+            "could-not-evaluate, never the radius in this answer's place"
+        ),
+    )
+    group.add_argument(
         "--declared-bound",
         metavar="T",
         help=QUERIES["declared_bound"].question,
@@ -4756,7 +5309,7 @@ def _number(raw: str, name: str) -> float:
     except ValueError:
         raise QueryError(
             f"{name} is {raw!r}, which is not a number. It is a "
-            + ("distance in metres." if "THRESHOLD" in name else "time in seconds.")
+            + ("distance in metres." if name.endswith("_M") else "time in seconds.")
         ) from None
 
 
@@ -4780,6 +5333,11 @@ def _dispatch(conn: sqlite3.Connection, args: argparse.Namespace) -> Answer:
         return time_of_closest_approach(conn, args.time_of_closest_approach)
     if args.did_contact_occur is not None:
         return did_contact_occur(conn, args.did_contact_occur)
+    if args.reached_point is not None:
+        x, y, t = args.reached_point
+        return reached_point(
+            conn, _number(x, "X_M"), _number(y, "Y_M"), _number(t, "T")
+        )
     if args.declared_bound is not None:
         return declared_bound(conn, _number(args.declared_bound, "T"))
     if args.violations is not None:

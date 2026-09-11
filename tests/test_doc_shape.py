@@ -313,6 +313,16 @@ EXEMPT: dict[str, str] = {
 #         tenth. The symbols are what the file now carries — a table, a row
 #         type, the arithmetic over it and the four input names — so the
 #         denominator moved for the same reason the prose did
+#   84.1  today, 2026-09-10, after #258 answered the pointwise reachability
+#         question from the boundary #257 retained. `reg.query` gained four
+#         public symbols — `reached_point`, `pointwise_coverage` and the two
+#         answer shapes `ReachedPoint` and `PointwiseCoverage` — against 281
+#         words in `docs/self-describing.md`, split between §1's gap 3, §2's
+#         table and negatives, and §8's tier 5. 27,646 / 329 = 84.02, rounded
+#         up to the next tenth. This is the #220 case a third time: the prose
+#         describes the symbols, so the denominator moved with it. Most of the
+#         new words sit below that file's rationale line, in §8, which is why
+#         the narration ceiling did not move
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -323,7 +333,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 84.2
+RATE = 84.1
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #

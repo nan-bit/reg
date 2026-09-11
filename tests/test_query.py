@@ -4996,6 +4996,225 @@ def test_the_stated_negatives_are_the_ones_reg_identity_writes() -> None:
 
 
 # --------------------------------------------------------------------------
+# The writer's grammar, held at the reading end (issue #268).
+# --------------------------------------------------------------------------
+
+
+#: One table of candidate `meta` values, driven through both `reg.identity` and
+#: this module's copy of its grammar. **Behaviour, not constants**: copying the
+#: two enums and asserting them equal would pin the vocabularies and leave the
+#: date rule, the reason rule and the nothing-after-`not-given` rule free to
+#: drift apart in silence. Every valid form is here, and beside each the ways
+#: the same value is got wrong — an unknown status, a `given` with no date and
+#: with a date in the wrong spelling, a `not-applicable` with no reason, a
+#: `not-given` carrying a detail, an unknown kind, and a case variant.
+DISCLOSURE_GRAMMAR_TABLE: tuple[tuple[str, str], ...] = (
+    (graph.META_WORKER_NOTICE, "given 2026/08/01"),
+    (graph.META_WORKER_NOTICE, "not-given"),
+    (graph.META_WORKER_NOTICE, "not-applicable no workers are at the cell"),
+    (graph.META_WORKER_NOTICE, "  given 2026/08/01  "),
+    (graph.META_WORKER_NOTICE, "yes probably"),
+    (graph.META_WORKER_NOTICE, "given"),
+    (graph.META_WORKER_NOTICE, "given yesterday"),
+    (graph.META_WORKER_NOTICE, "given 2026-08-01"),
+    (graph.META_WORKER_NOTICE, "given 2026/8/1"),
+    (graph.META_WORKER_NOTICE, "not-applicable"),
+    (graph.META_WORKER_NOTICE, "not-given 2026/08/01"),
+    (graph.META_WORKER_NOTICE, "Given 2026/08/01"),
+    (graph.META_WORKER_NOTICE, "not-applicable a reason\nsplit over two lines"),
+    (graph.META_WORKER_NOTICE, ""),
+    (graph.META_OPERATOR_ID_KIND, "pseudonym"),
+    (graph.META_OPERATOR_ID_KIND, "direct-identifier"),
+    (graph.META_OPERATOR_ID_KIND, "unknown"),
+    (graph.META_OPERATOR_ID_KIND, "Pseudonym"),
+    (graph.META_OPERATOR_ID_KIND, "direct identifier"),
+    (graph.META_OPERATOR_ID_KIND, " pseudonym"),
+    (graph.META_OPERATOR_ID_KIND, ""),
+)
+
+
+def _identity_accepts(key: str, value: str) -> bool:
+    """Would `reg.graph.build` have written `value` under `key`?
+
+    The writing side, asked the only way it can be asked: by handing it the
+    value. `IdentityError` is a `ValueError`, and `OperatorIdKind(...)` raises
+    the bare one, so one `except` covers both refusals.
+    """
+    try:
+        if key == graph.META_WORKER_NOTICE:
+            identity.WorkerNotice.parse(value)
+        else:
+            identity.OperatorIdKind(value)
+    except ValueError:
+        return False
+    return True
+
+
+def test_the_disclosure_grammar_table_exercises_both_answers() -> None:
+    """THE NEGATIVE FOR THE TABLE. It has to contain both kinds of value.
+
+    A table the writer accepted in full would make the comparison below pass
+    against a reader that never refuses anything, which is the failure a copy of
+    someone else's grammar has.
+    """
+    verdicts = {_identity_accepts(key, value) for key, value in DISCLOSURE_GRAMMAR_TABLE}
+    assert verdicts == {True, False}, (
+        "the table no longer contains both a value reg.identity accepts and one "
+        "it refuses, so the equality test below cannot fail"
+    )
+
+
+def test_the_disclosure_grammar_is_the_one_reg_identity_enforces() -> None:
+    """The copy, checked by behaviour (issue #268).
+
+    `reg.query` cannot import `reg.identity` without contradicting its own
+    header, so the grammar `reg.identity` holds `worker_notice` and
+    `operator_id_kind` to is spelled a second time here — the same bargain the
+    `meta` keys and the two stated negatives are held to, and the same failure
+    it prevents: a rule that moved on the writing side would leave this reader
+    crediting a value no artifact can carry, or refusing one every artifact
+    does.
+    """
+    for key, value in DISCLOSURE_GRAMMAR_TABLE:
+        refusal = query._disclosure_grammar_refusal(key, value)
+        assert (refusal is None) == _identity_accepts(key, value), (
+            f"reg.identity and reg.query disagree about meta[{key!r}] = "
+            f"{value!r}: the writer "
+            f"{'accepts' if _identity_accepts(key, value) else 'refuses'} it "
+            f"and the reader {'accepts' if refusal is None else 'refuses'} it"
+        )
+        if refusal is not None:
+            assert refusal.strip(), (
+                f"the refusal of meta[{key!r}] = {value!r} states no reason, "
+                "which is what the row would print at an assessor"
+            )
+
+
+def test_the_grammar_leaves_dpia_reference_alone() -> None:
+    """`dpia_reference` is free text and this reader gives it no vocabulary.
+
+    The direction that matters: a reader that invented one would refuse
+    artifacts `reg.graph.build` accepts, turning a check on the file into a
+    check on the deployer's prose.
+    """
+    for value in ("anything at all", DPIA_NONE, "DPIA-2026-014", "see the ROPA"):
+        assert query._disclosure_grammar_refusal(query.META_DPIA_REFERENCE, value) is None
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        (query.META_WORKER_NOTICE, "yes probably"),
+        (query.META_WORKER_NOTICE, "given yesterday"),
+        (query.META_OPERATOR_ID_KIND, "unknown"),
+    ],
+)
+def test_a_disclosure_outside_the_writers_grammar_is_could_not_evaluate(
+    artifact: Path, tmp_path: Path, key: str, value: str
+) -> None:
+    """A value `reg.identity` would refuse — **COULD-NOT-EVALUATE**, not either
+    neighbour.
+
+    Built the way an assessor meets it: one `meta` value edited on an otherwise
+    good artifact. `'yes probably'` is the measured case; `'given yesterday'` is
+    the one that shows the check is on the whole grammar and not on the first
+    word, the status being known and the date beside it not being
+    `DATE_FORMAT`. Not CHECKABLE, which is the assertion that matters — that
+    state tells an assessor the block reads back as the deployer's statement —
+    and not ABSENT either, the key being present.
+    """
+    slug = f"{key}-{value.replace(' ', '-')}"
+    edited = _copy(
+        artifact,
+        tmp_path / f"refused-{slug}.sqlite",
+        f"UPDATE meta SET value = '{value}' WHERE key = '{key}'",
+    )
+    row = _cold_read(edited)[query.CLAIM_DISCLOSURES]
+    assert row.state == COULD_NOT_EVALUATE
+    assert row.state not in (query.CHECKABLE, query.ABSENT)
+    assert not row.checkable
+    assert key in row.detail, f"the refusal does not name meta[{key!r}]"
+    assert repr(value) in row.detail, (
+        "the refusal does not quote the value the file holds, so an assessor "
+        "cannot see what was refused"
+    )
+    assert "refuse" in row.detail.lower(), (
+        "the refusal does not say the writer's grammar would not have produced "
+        "this value, which is the whole of why the row is not CHECKABLE"
+    )
+    assert not _adjudicates(row.detail), _adjudicates(row.detail)
+
+
+def test_a_missing_key_and_a_malformed_one_are_both_named(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """Two faults in one block, and the detail carries both.
+
+    A report naming one of them would send an assessor to fix half the file and
+    meet the same state again.
+    """
+    edited = _copy(
+        artifact,
+        tmp_path / "missing-and-malformed.sqlite",
+        f"DELETE FROM meta WHERE key = '{query.META_DPIA_REFERENCE}'",
+        "UPDATE meta SET value = 'yes probably' WHERE key = "
+        f"'{query.META_WORKER_NOTICE}'",
+    )
+    row = _cold_read(edited)[query.CLAIM_DISCLOSURES]
+    assert row.state == COULD_NOT_EVALUATE
+    assert "not stated at all" in row.detail
+    assert query.META_DPIA_REFERENCE in row.detail
+    assert "'yes probably'" in row.detail
+    assert not _adjudicates(row.detail), _adjudicates(row.detail)
+
+
+@pytest.mark.parametrize(
+    "notice",
+    ["given 2026/08/01", "not-given", "not-applicable no workers are at the cell"],
+)
+def test_every_worker_notice_the_writer_accepts_still_reads_back(
+    artifact: Path, tmp_path: Path, notice: str
+) -> None:
+    """The existing state does not move. Well-formed is still CHECKABLE.
+
+    All three members, including the two that state a negative: the check added
+    for issue #268 refuses what `reg.identity` refuses and nothing else, and a
+    row that had started refusing a stated `not-given` would have re-opened the
+    silence-versus-negative confusion issue #125 closed.
+    """
+    edited = _copy(
+        artifact,
+        tmp_path / f"notice-{notice.split()[0]}.sqlite",
+        f"UPDATE meta SET value = '{notice}' WHERE key = "
+        f"'{query.META_WORKER_NOTICE}'",
+    )
+    row = _cold_read(edited)[query.CLAIM_DISCLOSURES]
+    assert row.state == query.CHECKABLE
+    assert notice in row.detail
+    assert not _adjudicates(row.detail), _adjudicates(row.detail)
+
+
+def test_free_text_in_dpia_reference_stays_checkable(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """A free-text field must not gain a vocabulary by accident.
+
+    The other two keys well-formed, `dpia_reference` holding a sentence
+    `reg.identity` neither knows nor checks: still CHECKABLE, and the sentence
+    quoted back.
+    """
+    edited = _copy(
+        artifact,
+        tmp_path / "free-text-dpia.sqlite",
+        "UPDATE meta SET value = 'anything at all' WHERE key = "
+        f"'{query.META_DPIA_REFERENCE}'",
+    )
+    row = _cold_read(edited)[query.CLAIM_DISCLOSURES]
+    assert row.state == query.CHECKABLE
+    assert "anything at all" in row.detail
+
+
+# --------------------------------------------------------------------------
 # Held to `reg.graph` and to `reg.chain`. The copies, and the behaviour behind
 # them.
 # --------------------------------------------------------------------------

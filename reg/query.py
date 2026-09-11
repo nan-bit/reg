@@ -162,6 +162,7 @@ carries the one this file actually holds — see `_ROOM_FRAME_LAYER`.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import math
 import sqlite3
 import sys
@@ -237,6 +238,7 @@ __all__ = [
     "META_VERDICT_COUNT",
     "META_WORKER_NOTICE",
     "OCCURRENCE_LAYER",
+    "OPERATOR_ID_KINDS",
     "OUTER_BOUNDARY_COLUMN",
     "PASSIVATING_OUTCOMES",
     "PERMITTED_OUTCOME",
@@ -268,7 +270,11 @@ __all__ = [
     "SeparationTimeline",
     "ViolatingAction",
     "Violations",
+    "WORKER_NOTICE_DATE_FORMAT",
+    "WORKER_NOTICE_GIVEN",
+    "WORKER_NOTICE_NOT_APPLICABLE",
     "WORKER_NOTICE_NOT_GIVEN",
+    "WORKER_NOTICE_STATUSES",
     "acknowledgments",
     "attestation_state",
     "available_layers",
@@ -483,6 +489,45 @@ COLD_READ_DISCLOSURE_KEYS = (
 #: the writing end.
 WORKER_NOTICE_NOT_GIVEN = "not-given"
 DPIA_NONE = "none"
+
+#: The rest of the writer's grammar for two of the three keys (issue #268), on
+#: the same terms as the two negatives above: spelled a second time because this
+#: module cannot import `reg.identity` without contradicting its own header, and
+#: held to the writer by
+#: `tests/test_query.py::test_the_disclosure_grammar_is_the_one_reg_identity_
+#: enforces` — which compares **behaviour** over a table of candidate values
+#: rather than constants, because equal enum values would leave the date and
+#: reason rules free to drift apart in silence.
+#:
+#: `reg.identity` refuses a build on anything outside this, so a `meta` value
+#: outside it was written by something else or edited since. The row reports
+#: that as a could-not-evaluate rather than reading it back as the deployer's
+#: statement.
+#:
+#: **`dpia_reference` is not here and gets no grammar.** It is free text by
+#: design — any text that locates the assessment, or `DPIA_NONE` — and a
+#: vocabulary acquired by accident on the reading side would refuse artifacts
+#: the writer accepts, which is the inversion of what this check is for.
+WORKER_NOTICE_GIVEN = "given"
+WORKER_NOTICE_NOT_APPLICABLE = "not-applicable"
+WORKER_NOTICE_STATUSES = (
+    WORKER_NOTICE_GIVEN,
+    WORKER_NOTICE_NOT_GIVEN,
+    WORKER_NOTICE_NOT_APPLICABLE,
+)
+WORKER_NOTICE_DATE_FORMAT = "%Y/%m/%d"
+OPERATOR_ID_KINDS = ("pseudonym", "direct-identifier")
+
+#: `reg.identity._NOTICE_SEPARATOR`: one space between a worker-notice status
+#: and whatever the status requires beside it, so the value splits in one
+#: partition and the status is the first thing a reader's eye lands on.
+_NOTICE_SEPARATOR = " "
+
+#: `reg.identity._FORBIDDEN_ID_CHARS`, applied where the writer applies it — the
+#: reason a `not-applicable` carries. `meta` is text, and a newline splits one
+#: value across lines while a NUL truncates it, so a value carrying either is
+#: not one the writer would have stored.
+_FORBIDDEN_DISCLOSURE_CHARS = ("\n", "\r", "\t", "\x00")
 
 #: The party an acknowledgment is attributable to: the role whose key signed it,
 #: which is `reg.enforce.Acknowledgment.SIGNING_ROLE`. Spelled here rather than
@@ -4759,6 +4804,102 @@ _DISCLOSURE_CAVEAT = (
 )
 
 
+def _stated_text_refusal(value: str) -> str | None:
+    """`reg.identity._stated_text`, minus the blank rule the caller has run.
+
+    A reason or an identifier is text the deployer states and this project
+    records without interpreting, so the only thing refused about it is that it
+    would be unreadable where it is stored.
+    """
+    for char in _FORBIDDEN_DISCLOSURE_CHARS:
+        if char in value:
+            return f"it contains {char!r}, which `meta` cannot hold readably"
+    return None
+
+
+def _worker_notice_refusal(value: str) -> str | None:
+    """Why `reg.identity.WorkerNotice.parse` would refuse `value`, or `None`.
+
+    The reader's copy of the writer's grammar, in the order `parse` and
+    `WorkerNotice.__post_init__` apply it: a status from a closed vocabulary,
+    then whatever that status requires beside it — a `WORKER_NOTICE_DATE_FORMAT`
+    date after `given`, a stated reason after `not-applicable`, and nothing at
+    all after `not-given`.
+
+    It returns a reason rather than a bool because the row quotes what it
+    refuses: *the value is not readable* tells an assessor nothing they can act
+    on, and *the status is known but the date beside it is not the format this
+    artifact writes dates in* tells them where to look.
+    """
+    head, _, rest = value.strip().partition(_NOTICE_SEPARATOR)
+    detail = rest.strip()
+    if head not in WORKER_NOTICE_STATUSES:
+        return (
+            f"{head!r} is not a worker-notice status; the vocabulary is "
+            f"{list(WORKER_NOTICE_STATUSES)} and it is closed"
+        )
+    if head == WORKER_NOTICE_GIVEN:
+        if not detail:
+            return (
+                f"{head!r} carries no date, and the writer requires one in "
+                f"{WORKER_NOTICE_DATE_FORMAT}"
+            )
+        try:
+            parsed = _dt.datetime.strptime(detail, WORKER_NOTICE_DATE_FORMAT)
+        except ValueError:
+            return f"the date {detail!r} is not {WORKER_NOTICE_DATE_FORMAT}"
+        if parsed.strftime(WORKER_NOTICE_DATE_FORMAT) != detail:
+            return (
+                f"the date {detail!r} does not round-trip through "
+                f"{WORKER_NOTICE_DATE_FORMAT}"
+            )
+        return None
+    if head == WORKER_NOTICE_NOT_APPLICABLE:
+        if not detail:
+            return f"{head!r} carries no stated reason, and the writer requires one"
+        return _stated_text_refusal(detail)
+    if detail:
+        return (
+            f"{head!r} carries {detail!r} beside it, and the writer allows "
+            "nothing there"
+        )
+    return None
+
+
+def _operator_id_kind_refusal(value: str) -> str | None:
+    """Why `reg.identity.OperatorIdKind(value)` would refuse, or `None`.
+
+    A closed two-member vocabulary, matched exactly: the writer takes the value
+    straight to the enum, so neither surrounding space nor a case variant is a
+    value any artifact can carry.
+    """
+    if value not in OPERATOR_ID_KINDS:
+        return (
+            f"{value!r} is not an operator-id kind; the vocabulary is "
+            f"{list(OPERATOR_ID_KINDS)} and it is closed"
+        )
+    return None
+
+
+#: Which of the three keys this module holds a grammar for, and which it does
+#: not. `META_DPIA_REFERENCE` is absent on purpose — see `OPERATOR_ID_KINDS`.
+_DISCLOSURE_GRAMMARS = {
+    META_WORKER_NOTICE: _worker_notice_refusal,
+    META_OPERATOR_ID_KIND: _operator_id_kind_refusal,
+}
+
+
+def _disclosure_grammar_refusal(key: str, value: str) -> str | None:
+    """Why `reg.graph.build` would not have written `value` under `key`, or `None`.
+
+    `None` is *this reader can read it back*, and it is also what a key with no
+    grammar gets: `META_DPIA_REFERENCE` is free text, and a reader that invented
+    a vocabulary for it would refuse artifacts the writer accepts.
+    """
+    check = _DISCLOSURE_GRAMMARS.get(key)
+    return None if check is None else check(value)
+
+
 def _disclosures_claim(stated: Mapping[str, str]) -> ColdReadClaim:
     """What does this artifact state about the obligations its existence creates?
 
@@ -4788,6 +4929,18 @@ def _disclosures_claim(stated: Mapping[str, str]) -> ColdReadClaim:
       would invent the half that is not there. This is the rule
       `meta['limits_source']` is already held to one subject over.
 
+    **A value the writer's grammar would refuse is the third state too** (issue
+    #268). `reg.identity` holds `worker_notice` and `operator_id_kind` to closed
+    vocabularies and refuses the build on anything else, so `worker_notice =
+    'yes probably'` is the same evidence a missing key is: written by something
+    else, or edited since, and which of those is not in the file. It is not
+    ABSENT — the key is here, so the file is not silent — and it is not
+    CHECKABLE either, because CHECKABLE tells an assessor the block reads back
+    as the deployer's statement, and a value the deployer's tooling cannot
+    produce is not that. The value is still quoted exactly, so nothing about it
+    is restated; it is read no further. `_disclosure_grammar_refusal` is where
+    the reader's copy of that grammar lives, and `dpia_reference` is not in it.
+
     **A key stated as empty text is neither.** `reg.identity` refuses a blank
     value at the writing end, because it reads as absent in every `meta` dump
     while having been supplied, and quoting an empty string back at an assessor
@@ -4805,8 +4958,15 @@ def _disclosures_claim(stated: Mapping[str, str]) -> ColdReadClaim:
         for key in COLD_READ_DISCLOSURE_KEYS
         if key in stated and not stated[key].strip()
     ]
+    refused: list[tuple[str, str, str]] = []
+    for key in COLD_READ_DISCLOSURE_KEYS:
+        if key in absent or key in blank:
+            continue
+        why = _disclosure_grammar_refusal(key, stated[key])
+        if why is not None:
+            refused.append((key, stated[key], why))
 
-    if not absent and not blank:
+    if not absent and not blank and not refused:
         quoted = "; ".join(
             f"meta[{key!r}] = {stated[key]!r}" for key in COLD_READ_DISCLOSURE_KEYS
         )
@@ -4853,7 +5013,26 @@ def _disclosures_claim(stated: Mapping[str, str]) -> ColdReadClaim:
         faults.append(f"not stated at all: {', '.join(absent)}")
     if blank:
         faults.append(f"stated as empty text: {', '.join(blank)}")
-    readable = len(COLD_READ_DISCLOSURE_KEYS) - len(absent) - len(blank)
+    if refused:
+        faults.append(
+            "stated in a form reg.identity would refuse: "
+            + "; ".join(
+                f"meta[{key!r}] = {value!r} ({why})" for key, value, why in refused
+            )
+        )
+    grammar_note = (
+        (
+            " A value outside that grammar is quoted above exactly as the file "
+            "holds it and is read no further: what the deployer's own tooling "
+            "cannot produce is not a statement this reader can hand back as "
+            "the deployer's."
+        )
+        if refused
+        else ""
+    )
+    readable = (
+        len(COLD_READ_DISCLOSURE_KEYS) - len(absent) - len(blank) - len(refused)
+    )
     return ColdReadClaim(
         claim=CLAIM_DISCLOSURES,
         question=COLD_READ_QUESTIONS[CLAIM_DISCLOSURES],
@@ -4861,15 +5040,16 @@ def _disclosures_claim(stated: Mapping[str, str]) -> ColdReadClaim:
         detail=(
             f"this file carries {readable} of the "
             f"{len(COLD_READ_DISCLOSURE_KEYS)} disclosure keys in a form this "
-            f"reader can read back — {'; '.join(faults)}. A partial block is a "
+            f"reader can read back — {'; '.join(faults)}. That is a "
             "could-not-evaluate and it resolves to neither neighbour: it is "
             "not the silence an artifact carrying none of the keys reports as "
             "ABSENT, because part of the block is here, and it is not a "
             "statement that can be read back, because part of it is not. "
-            f"reg.graph.build writes all {len(COLD_READ_DISCLOSURE_KEYS)} or "
-            "refuses the build (issue #125), so this file was written by "
-            "something else or has been edited since, and which of those it "
-            f"was is not in the file. {_DISCLOSURE_CAVEAT}"
+            f"reg.graph.build writes all {len(COLD_READ_DISCLOSURE_KEYS)}, each "
+            "one inside the grammar reg.identity holds it to, or refuses the "
+            "build (issues #125, #268), so this file was written by something "
+            "else or has been edited since, and which of those it was is not "
+            f"in the file.{grammar_note} {_DISCLOSURE_CAVEAT}"
         ),
     )
 

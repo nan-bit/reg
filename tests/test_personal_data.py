@@ -742,7 +742,7 @@ def test_the_vocabulary_is_derived_rather_than_listed() -> None:
 
 
 def disclosure_details() -> dict[str, str]:
-    """The seventh cold-read row's detail in each of its three conditions.
+    """The seventh cold-read row's detail in each of its four conditions.
 
     Built from `reg.query._disclosures_claim` over a `meta` mapping rather than
     from an artifact: the row is a function of three keys and nothing else, so
@@ -750,11 +750,14 @@ def disclosure_details() -> dict[str, str]:
     file has no artifact fixture, because everything else in it is about a
     document and a schema.
 
-    All three conditions and not just the one a healthy build produces. The
+    Every condition and not just the one a healthy build produces. The
     CHECKABLE detail here is built from the **stated negatives**, which is the
-    condition most likely to be written as reassurance; the other two are a
-    file that states nothing and a file that states part of the block, and a
-    scan run over one detail would say nothing about the other two.
+    condition most likely to be written as reassurance; the others are a file
+    that states nothing, a file that states part of the block, and a file whose
+    `worker_notice` is outside the grammar `reg.identity` holds it to (issue
+    #268) — the condition where the report is closest to saying something about
+    the deployer rather than about the file. A scan run over one detail would
+    say nothing about the rest.
     """
     stated = {
         graph.META_WORKER_NOTICE: WorkerNoticeStatus.NOT_GIVEN.value,
@@ -762,19 +765,26 @@ def disclosure_details() -> dict[str, str]:
         graph.META_OPERATOR_ID_KIND: OperatorIdKind.PSEUDONYM.value,
     }
     partial = {graph.META_WORKER_NOTICE: stated[graph.META_WORKER_NOTICE]}
+    refused = {**stated, graph.META_WORKER_NOTICE: "yes probably"}
     return {
         condition: query._disclosures_claim(meta).detail
         for condition, meta in (
             ("the stated negatives", stated),
             ("no statement at all", {}),
             ("a partial block", partial),
+            ("a value the writer's grammar refuses", refused),
         )
     }
 
 
 @pytest.mark.parametrize(
     "condition",
-    ["the stated negatives", "no statement at all", "a partial block"],
+    [
+        "the stated negatives",
+        "no statement at all",
+        "a partial block",
+        "a value the writer's grammar refuses",
+    ],
 )
 def test_the_cold_read_row_claims_no_compliance(condition: str) -> None:
     """The row is a reading of three values and never a finding about them.

@@ -66,7 +66,7 @@ from pathlib import Path
 
 import pytest
 
-from reg import graph, store
+from reg import graph, query, store
 from reg.identity import (
     DPIA_NONE,
     OperatorIdKind,
@@ -733,3 +733,76 @@ def test_the_vocabulary_is_derived_rather_than_listed() -> None:
     for key in META_DISCLOSURES:
         assert key in vocabulary, f"{key} is not scanned"
     assert DPIA_NONE in vocabulary
+
+
+# --------------------------------------------------------------------------
+# What the report says about those keys, held to the same rule as the document
+# (issue #262).
+# --------------------------------------------------------------------------
+
+
+def disclosure_details() -> dict[str, str]:
+    """The seventh cold-read row's detail in each of its three conditions.
+
+    Built from `reg.query._disclosures_claim` over a `meta` mapping rather than
+    from an artifact: the row is a function of three keys and nothing else, so
+    a build here would be a slower way of asking the same question — and this
+    file has no artifact fixture, because everything else in it is about a
+    document and a schema.
+
+    All three conditions and not just the one a healthy build produces. The
+    CHECKABLE detail here is built from the **stated negatives**, which is the
+    condition most likely to be written as reassurance; the other two are a
+    file that states nothing and a file that states part of the block, and a
+    scan run over one detail would say nothing about the other two.
+    """
+    stated = {
+        graph.META_WORKER_NOTICE: WorkerNoticeStatus.NOT_GIVEN.value,
+        graph.META_DPIA_REFERENCE: DPIA_NONE,
+        graph.META_OPERATOR_ID_KIND: OperatorIdKind.PSEUDONYM.value,
+    }
+    partial = {graph.META_WORKER_NOTICE: stated[graph.META_WORKER_NOTICE]}
+    return {
+        condition: query._disclosures_claim(meta).detail
+        for condition, meta in (
+            ("the stated negatives", stated),
+            ("no statement at all", {}),
+            ("a partial block", partial),
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ["the stated negatives", "no statement at all", "a partial block"],
+)
+def test_the_cold_read_row_claims_no_compliance(condition: str) -> None:
+    """The row is a reading of three values and never a finding about them.
+
+    Held to the check `test_a_compliance_claim_is_caught` already proves can
+    say no, applied to the report instead of to the document. It is the same
+    failure one layer over: §8 states an obligation and says it is not
+    discharged here, and a row that read three stated keys back as reassurance
+    would undo that for every assessor who opens the file rather than the
+    document.
+    """
+    detail = disclosure_details()[condition]
+    verdict, found = check_no_compliance_claim(detail)
+    assert verdict == AGREE, f"the {condition} row reads as a claim: {found}"
+
+
+def test_the_cold_read_row_still_says_recording_is_not_discharging() -> None:
+    """#125's sentence travels with the row, in every condition.
+
+    `RECORDS_AND_STILL_OWES` requires it of `docs/limitations.md` §8. The row
+    is where an assessor meets the same three keys without the document open,
+    so it owes the same sentence — and the retention basis, the fourth fact §8
+    asks for and no key carries, stated as the gap it still is.
+    """
+    for condition, detail in disclosure_details().items():
+        flat = normalise(detail).lower()
+        assert "recording is not discharging" in flat, condition
+        assert "retention basis" in flat, condition
+        assert "gap" in flat, condition
+        assert "legal determination" in flat, condition
+

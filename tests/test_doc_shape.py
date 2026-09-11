@@ -323,6 +323,18 @@ EXEMPT: dict[str, str] = {
 #         describes the symbols, so the denominator moved with it. Most of the
 #         new words sit below that file's rationale line, in §8, which is why
 #         the narration ceiling did not move
+#   84.1  today, 2026-09-11, after #262 gave the cold read its seventh row.
+#         Unchanged and re-measured: `reg/query.py` gained no top-level
+#         definition — the row is a claim id, three `meta` keys and a private
+#         builder — so the denominator held at 329 while
+#         `docs/self-describing.md` went 6,066 -> 6,053. §2's table row, its
+#         sentence on why this is a claim and not a state, and §8 tier 3's
+#         provenance were paid for inside the same file and thirteen words
+#         over: §1 gap 2 stopped restating `limitations.md` §1's three states
+#         and §3's own numpy bullet, and its restatement of §8 tier 2's split
+#         went with them. 27,655 / 329 = 84.05, and 84.0 is not available — it
+#         would put the ceiling at 27,636, under the corpus — so 84.1 is the
+#         tightest tenth and the thirteen words are not banked headroom
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -536,7 +548,12 @@ PARAGRAPH_MAX_WORDS = 120
 #        *Discarded* #9's recomputation argument. All three were cut to pay for
 #        the boundary's own clauses, not for this ceiling, and are lowered here
 #        for the reason the #241 row gives
-LONG_PARAGRAPHS_MAX = 85
+#    83  today, 2026-09-11, after #262: `docs/self-describing.md` went 5 -> 3.
+#        Both are §1 gap 2's — the three states `limitations.md` §1 is normative
+#        on, and the numpy sentence §3's minimise-rule bullet states in full one
+#        screen below. Both were cut to pay for §2's seventh row, not for this
+#        ceiling, and are lowered here for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 83
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

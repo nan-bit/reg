@@ -151,7 +151,7 @@ rather than about the schema:
 | 2 | `reached-point` | **checkable** — the boundary is in the file where an edge anchors one, and this row runs `reached_point` against it in both directions |
 | 1 | `recompute-discarded-polygon` | **checkable** — the discard contract retention rests on |
 | — | `recording-environment` | **checkable** — what the row above rests on |
-| — | `disclosures-stated` | **checkable** — what the deployer states about §8's obligations, read back verbatim; none of it stated is **absent**, part of it **could-not-evaluate** |
+| — | `disclosures-stated` | **checkable** — what the deployer states about §8's obligations, read back verbatim; none of it stated is **absent**; part of it, or a value `reg.identity` would refuse, is **could-not-evaluate** |
 
 Claim 4's two rows are what the other four support. `tests/test_query.py` pins
 every row per shipped fixture, so closing a gap fails there and has to be updated

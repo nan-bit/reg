@@ -2221,6 +2221,15 @@ def reached_point(
     could-not-evaluate that names the retention rule — never the radius, and
     never a bare *no*.
 
+    **A boundary its own row contradicts is a could-not-evaluate too.** No
+    digest covers the blob, so a smaller region swapped in leaves the chain
+    VERIFIED and turns a point the robot could reach into an exclusion — a
+    false accusation, the direction this answer must not get wrong. What the
+    file can still check is itself: a blob whose area disagrees with the row's
+    `outer_area` by more than that figure's quantum is refused. A replacement
+    of equal area, or the right region moved, passes; this is the file agreeing
+    with itself, not the region shown to be the one the build computed.
+
     The direction of the answer is `ReachedPoint.could_have_reached`'s: the
     outer set over-covers, so `False` excludes soundly and `True` says only that
     this artifact does not exclude it. `covers` rather than `contains`, so a
@@ -2323,6 +2332,39 @@ def reached_point(
         )
 
     region = store.from_wkb(row[OUTER_BOUNDARY_COLUMN])
+    # The row's area was quantized before the region was placed, so the two can
+    # differ by the rounding and by a rigid transform's float noise and by
+    # nothing else. One quantum of the stored figure covers both — half of it is
+    # the rounding — and is the builder's own tolerance rather than a new one.
+    # Re-quantizing the blob and demanding equality would flag a clean file
+    # whose area sits on a rounding edge. What this catches is a boundary that
+    # disagrees with its row by more than the row's precision; a replacement of
+    # equal area, or the right region moved, passes it.
+    stored_area = float(row["outer_area"])
+    quantum = 10.0 ** (
+        math.floor(math.log10(stored_area)) - (AREA_QUANT_SIGFIGS - 1)
+    )
+    if abs(region.area - stored_area) > quantum:
+        return _refuse(
+            spec,
+            layers,
+            f"Envelope {envelope_id!r} retains a boundary that disagrees with "
+            f"the row carrying it: the stored geometry has area "
+            f"{region.area:.6g} m2 and the row states outer_area={stored_area} "
+            f"m2, a difference larger than that figure's {quantum:g} m2 "
+            "quantum. "
+            "The builder writes the two from one region, so a file where they "
+            "differ is one whose account of that region has stopped being "
+            "self-consistent, and nothing here can say which of them is the "
+            "region this build computed. Answering anyway would rest an "
+            "exclusion — the strongest claim this query makes, and the one "
+            "that accuses — on bytes the row itself contradicts. No digest "
+            "covers the boundary: reg.envelope.envelope_hash is over the inner "
+            "geometry and is not a MAC, and the chain commits to records "
+            "rather than to envelope rows, so this is where the file stops "
+            "agreeing with itself and not where it is shown to be wrong. "
+            f"{_coverage_text(coverage)}",
+        )
     inside = bool(region.covers(Point(x, y)))
     return Answer(
         query=spec.name,

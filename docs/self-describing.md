@@ -109,6 +109,9 @@ without that number, *this artifact cannot answer at t* reads as *the robot coul
 not have been there*. Elsewhere the answer stays radial and the region stays
 recomputable, which routes that remainder back through gap 2.
 
+It also refuses a boundary its own row's `outer_area` contradicts: no digest
+covers the blob, so a swapped one would otherwise accuse.
+
 ## 2. The test that decides all three
 
 **The cold read.** Open an artifact with the code that reads artifacts and **no

@@ -1019,6 +1019,107 @@ def test_the_answer_carries_the_layer_tag_the_file_holds(
     )
 
 
+def test_a_boundary_its_own_row_contradicts_is_a_could_not_evaluate(
+    artifact: Path, tmp_path: Path
+) -> None:
+    """**THE TAMPER NEGATIVE.** An exclusion must not rest on bytes the row denies.
+
+    No digest covers `outer_wkb` — `envelope_hash` is over the inner geometry
+    and the chain commits to records — so a boundary replaced by a smaller one
+    leaves `verify-chain` VERIFIED, and before this check the query then
+    answered *excluded* for a point the robot could have reached: a confident
+    false accusation, the one direction this query must never get wrong. The
+    file still contradicts itself, because `outer_area` beside the blob is the
+    original region's, and that disagreement is the only thing the reader can
+    check with nothing but the file.
+
+    The replacement is a 2 cm square about the region's own inside point, and
+    the queried point is inside the original region and outside the square, so
+    the preconditions below show the false accusation was genuinely available.
+    """
+    import shapely
+
+    conn = store.connect(artifact)
+    try:
+        t, envelope_id, region = _first_retained_boundary(conn)
+        inside = region.representative_point()
+        minx, miny, maxx, maxy = region.bounds
+        witness = None
+        for i in range(1, 100):
+            candidate = shapely.Point(
+                minx + (maxx - minx) * i / 100.0, inside.y
+            )
+            if region.covers(candidate) and candidate.distance(inside) > 0.05:
+                witness = candidate
+                break
+        assert witness is not None, (
+            "precondition failed: no point of the retained region lies 5 cm "
+            "from its inside point along that line, so nothing below is a "
+            "point the replacement excludes and the original does not"
+        )
+        honest = query.reached_point(conn, witness.x, witness.y, t)
+    finally:
+        conn.close()
+    assert honest.verdict == ANSWERED and honest.value.could_have_reached
+
+    shrunk = shapely.box(inside.x - 0.01, inside.y - 0.01, inside.x + 0.01, inside.y + 0.01)
+    assert not shrunk.covers(witness)
+    tampered = _copy(
+        artifact,
+        tmp_path / "shrunk.sqlite",
+        "UPDATE envelope SET outer_wkb = x'" + store.to_wkb(shrunk).hex() + "' "
+        "WHERE envelope_key = (SELECT node_key FROM node WHERE node_id = "
+        f"'{envelope_id}')",
+    )
+    conn = store.connect(tampered)
+    try:
+        answer = query.reached_point(conn, witness.x, witness.y, t)
+    finally:
+        conn.close()
+
+    assert answer.verdict == COULD_NOT_EVALUATE
+    assert answer.value is None, (
+        "a refused answer must carry no verdict: False here is the accusation "
+        "the tampered bytes would have produced"
+    )
+    assert "outer_area" in answer.reason
+    assert envelope_id in answer.reason
+
+
+def test_the_agreement_check_passes_every_boundary_the_builder_wrote(
+    artifact: Path, mobile_built: tuple[Path, Path]
+) -> None:
+    """The positive half of the tamper check: it does not cry wolf.
+
+    The row's `outer_area` is measured before the region is placed, so on a
+    posed frame the blob's area differs from it by a rigid transform's float
+    noise as well as the rounding. Both fixtures, every retained boundary — the
+    mobile one is the run whose frames are posed — and each must answer, or the
+    check would refuse clean files and be switched off within a week.
+    """
+    for path in (artifact, mobile_built[1]):
+        conn = store.connect(path)
+        try:
+            rows = conn.execute(
+                "SELECT e.t_start AS t, v.outer_wkb AS wkb FROM edge e "
+                "JOIN envelope v ON v.envelope_key = e.dst_key "
+                "WHERE e.type = 'HAS_ENVELOPE' AND v.outer_wkb IS NOT NULL "
+                "ORDER BY e.t_start, e.edge_id"
+            ).fetchall()
+            assert rows, f"precondition failed: {path} retains no boundary"
+            for row in rows:
+                inside = store.from_wkb(row["wkb"]).representative_point()
+                answer = query.reached_point(
+                    conn, inside.x, inside.y, float(row["t"])
+                )
+                if answer.verdict != ANSWERED:
+                    # Two transitions inside one quantum is a separate refusal
+                    # with its own test; it is not this check speaking.
+                    assert "outer_area" not in answer.reason, answer.reason
+        finally:
+            conn.close()
+
+
 def test_an_artifact_written_before_the_boundary_column_refuses(
     artifact: Path, tmp_path: Path
 ) -> None:
@@ -4031,6 +4132,11 @@ def test_a_boundary_whose_containment_cannot_fail_is_could_not_evaluate(
     file and the schema's `outer_area > 0` says why an outer bound of no extent
     is always a failed computation; what is being tested is that the *reader*
     says no when handed one anyway.
+
+    It says no one step earlier than that argument: a region of no extent
+    contradicts its row's `outer_area`, so `reached_point` refuses before any
+    containment runs, and the row carries that refusal. The same-verdict arm
+    is reached by the test after this one.
     """
     import shapely
 
@@ -4057,6 +4163,35 @@ def test_a_boundary_whose_containment_cannot_fail_is_could_not_evaluate(
         f"'{envelope_id}')",
     )
     row = _cold_read(flattened)[query.CLAIM_REACHED_POINT]
+    assert row.state == COULD_NOT_EVALUATE
+    assert not row.checkable
+    assert "refuses" in row.detail and "outer_area" in row.detail
+
+
+def test_a_containment_that_says_one_thing_twice_is_could_not_evaluate(
+    artifact: Path, monkeypatch
+) -> None:
+    """The same-verdict arm, which no schema-valid file can now reach.
+
+    The agreement check refuses a region of no extent before containment runs,
+    so the only way left to feed this arm its condition is a `reached_point`
+    that answers *not excluded* to everything. The arm stays because the
+    cold read must not credit a check it has not seen fail, whatever made it
+    unable to.
+    """
+    import dataclasses
+
+    real = query.reached_point
+
+    def agrees_with_everything(conn, x, y, t):
+        answer = real(conn, x, y, t)
+        return dataclasses.replace(
+            answer,
+            value=dataclasses.replace(answer.value, could_have_reached=True),
+        )
+
+    monkeypatch.setattr(query, "reached_point", agrees_with_everything)
+    row = _cold_read(artifact)[query.CLAIM_REACHED_POINT]
     assert row.state == COULD_NOT_EVALUATE
     assert not row.checkable
     assert "same verdict" in row.detail

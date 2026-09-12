@@ -344,6 +344,17 @@ EXEMPT: dict[str, str] = {
 #         84.0 is not available — it would put the ceiling at 27,720, under the
 #         corpus — so 84.1 is the tightest tenth and the twenty-seven words are
 #         not banked headroom
+#   83.9  today, 2026-09-12, after #273 retired the no-Layer-A ratio and
+#         re-measured the scaling ladder. `README.md` went 3,556 -> 3,524, the
+#         Claim 1 row losing the sentence that carried the retired figure and
+#         its condition, and `docs/sensor-baseline.md` went 6,163 -> 6,152: the
+#         corrected cause of the sublinear growth and the corrected pointer at
+#         `lossiness.md` cost 44 words and were paid for and eleven over, by
+#         three restatements — *What is actually published* restating the table
+#         row directly above it, *Sensitivity* restating the linearity that
+#         paragraph states, and a third telling of `limitations.md` §5 inside
+#         one section. 27,682 / 330 = 83.89, rounded up to the next tenth. The
+#         denominator did not move: this change is documents and tests only
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -354,7 +365,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 84.1
+RATE = 83.9
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -496,7 +507,18 @@ RATE = 84.1
 #           it replaces and the sentence under it gained one naming the
 #           disclosure flags beside the identity ones, so the section went -2.
 #           Two words below the last ceiling — measured, no headroom
-ARGUMENT_MAX = 47125
+#   47,096  today, 2026-09-12, after #273 retired the no-Layer-A ratio and
+#           re-measured the scaling ladder. `docs/retention.md` went 6,070 ->
+#           6,034 and `docs/plan.md` 8,484 -> 8,491. The ladder lost a rung and
+#           the figures derived from it, and the retired figure's condition —
+#           stated at both ends of one subsection, which is the restatement the
+#           #233 row named and did not finish — became one sentence in the
+#           paragraph that already carries the ladder's provenance. `plan.md`
+#           pays seven for stating the Layer-A condition where the retired
+#           figure stood. Twenty-nine words below the last ceiling rather than
+#           level with it, for the reason the #233 row gives — measured, no
+#           headroom
+ARGUMENT_MAX = 47096
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -570,7 +592,14 @@ PARAGRAPH_MAX_WORDS = 120
 #        on, and the numpy sentence §3's minimise-rule bullet states in full one
 #        screen below. Both were cut to pay for §2's seventh row, not for this
 #        ceiling, and are lowered here for the reason the #241 row gives
-LONG_PARAGRAPHS_MAX = 83
+#    80  today, 2026-09-12, after #273: `docs/retention.md` went 8 -> 5. All
+#        three fell out of retiring a figure and re-measuring a ladder — the
+#        ratio paragraph, the *Why it lost* item that priced a 30,000-frame rung
+#        and the subsection opener that stated the retired figure's condition
+#        were each rewritten around what is measured now, and each came out
+#        under the threshold. Cut for the word budget rather than for this
+#        ceiling, and lowered here for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 80
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.

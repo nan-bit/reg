@@ -3,7 +3,7 @@
 **Status:** normative for every retention figure this project publishes ·
 re-measured 2026-08-20 (issue #60), with later work carrying its own issue
 number where it sits — #98's Layer-A comparison, #116's label and byte
-attribution, #257's outer boundary · extracted from [`plan.md`](plan.md) Claim 1 on 2026-08-31, **with
+attribution, #257's outer boundary, #273's re-measured ladder · extracted from [`plan.md`](plan.md) Claim 1 on 2026-08-31, **with
 no figure changed** · keep current
 
 **What is machine-checked here is less than the whole file.**
@@ -328,10 +328,10 @@ page.*
    An 18.3% share at 50 Hz is a share of about 1% at 1 kHz, and that dilution is
    where the difference between 20x and 17.7x goes.
 
-**The two terms it named come to 35,840 B, 3.5% of the level; the
+**The two terms it named come to 36,864 B, 3.6% of the level; the
 term it did not name is 185,344 B, 18.3%.** The stated cause is smaller than the
-one that carries the effect by a factor of **5.2**. Issue #116 estimated the miss
-at ~15x, reading it off *row* counts; measured in bytes it is 5.2x against the
+one that carries the effect by a factor of **5.0**. Issue #116 estimated the miss
+at ~15x, reading it off *row* counts; measured in bytes it is 5.0x against the
 term that actually carries it. Same direction, same conclusion, and now an
 arithmetic anybody can re-run.
 
@@ -355,7 +355,7 @@ occur*, *how close did it come*, every refused action with its fault code and
 the declaration it was raised against, and both hash chains walked end to end.
 It also buys *when* — **for events sustained longer than its one-second
 quantum**; a brief minimum it refuses rather than misplaces, and whether a
-coarse timestamp is enough is a property of the event, not of the recorder. 655
+coarse timestamp is enough is a property of the event, not of the recorder. 838
 GB buys *when exactly* for an event of any length, the full separation timeline,
 and the region each declaration claimed and each clamp actually applied — which
 ±1 s does not hold, so `declared_bound` and `verdicts` come back
@@ -365,26 +365,26 @@ question, and that is the commercial argument in its useful form.
 ## The measured result against the wrong baseline, kept because it bounds the design
 
 
-**What was measured** (`python -m reg.bench --scaling --seed 0`, re-run
-2026-08-20 for issue #60; long-run fixture, 16 envelope samples, 200 ms
-horizon, no record stream at any rung — this ladder is a size comparison
-against the raw stream and holds no Layer A):
+**What was measured** (`python -m reg.bench --scaling --scaling-frames
+300,3000 --seed 0 --out <path>`, re-measured 2026-09-12 for issue #273;
+long-run fixture, 16 envelope samples, 200 ms horizon, no record stream at
+either rung — a size comparison against the raw stream, holding no Layer A).
+**A ratio was published from it until 2026-09-12 and is retired**: guarded on
+the wording of its condition and never on its value, which is how it went stale
+— the same measurement on schema 14 is 17.1x, 1,105,920 B against 64,652 B. The
+Layer-A **~51x** below carries the claim instead, being the harsher comparison
+and the one `tests/test_published_figures.py` re-measures every run. A
+30,000-frame rung was retired with it.
 
 | frames | robot time | x gz CSV |
 |---|---|---|
-| 300 | 6 s | 0.06x |
-| 3,000 | 60 s | 0.08x |
-| 30,000 | 600 s | 0.08x |
+| 300 | 6.0 s | 0.05x |
+| 3,000 | 60.0 s | 0.06x |
 
-The ratio *does* improve with run length — the fixed schema cost amortises — and
-then flattens. **It does not reach 1.0 anywhere in the measured range.** The
-marginal cost of one more frame is constant across every measured interval:
-~21 B of gzipped CSV against ~263 B of SQLite. **With no record stream in it —
-which is what every rung above holds** — the artifact is roughly 13x *larger*
-than a gzipped copy of the stream it replaces, and no amount of run length
-changes that, because it is the per-frame cost that dominates, not the fixed one.
-That condition travels with the number: the artifact Claim 1 actually prices
-carries Layer A and is **~51x** larger, measured immediately below.
+The ratio *does* improve with run length — the fixed schema cost amortises.
+**It does not reach 1.0 anywhere in the measured range.** The marginal cost of
+one more frame over the interval between the two rungs is 21.5 B of gzipped CSV
+against 354.6 B of SQLite. Measured points only: the ladder holds what was run.
 
 **Why, and it is structural rather than an encoding detail:** the incremental
 rule compresses relationships that hold still. An arm in motion changes its
@@ -393,7 +393,7 @@ rate set by how fast the arm moves, and a row in SQLite with its indexes costs
 an order of magnitude more than a line of gzipped CSV.
 
 That result stands and is worth publishing, as a bounded engineering finding
-rather than a verdict: **the graph costs ~263 B/frame, which is expensive next to
+rather than a verdict: **the graph costs ~355 B/frame, which is expensive next to
 a float codec and negligible next to anything with a camera in it.** Reporting it
 openly is what makes the sensor-log projection credible rather than promotional —
 a paper that only reports the flattering comparison has told you which
@@ -406,13 +406,13 @@ be undertaken expecting it to.** The variable that moves it is resolution.
 
 ### The same comparison, measured on the artifact that carries Layer A
 
-**13x is the figure for an artifact holding no declaration, no verdict, no fault
-and no chain record.** The ladder above sets `records=None` at every rung, for the
+**The ladder above prices an artifact holding no declaration, no verdict, no
+fault and no chain record.** It sets `records=None` at every rung, for the
 reason the blockquote gives: a record stream adds a term that scales with the
 replan interval rather than with the run, and the study's variable is the run.
-That is the right parameterization for a study about *length* and the wrong number
-to quote as the cost of the artifact this project ships — issue #59's error,
-surviving in the front page until issue #98. The baseline is the same 64,652 B on
+That is the right parameterization for a study about *length* and the wrong one
+to price the shipped artifact from — issue #59's error, surviving in the front
+page until issue #98. The baseline is the same 64,652 B on
 both sides, so the whole of the distance to **~51x** is the Layer A this build
 carries: 3,120 chain records of it.
 
@@ -534,16 +534,13 @@ Gorilla's **1.37 bytes per point**; [`prior-art.md`](prior-art.md) §8 carries t
 like-for-like slice and what is still unlike about it.
 
 **2. The number that is actually about retention is absolute, and we have it.**
-At 30,000 frames / 600 s **at 50 Hz** the artifact is 7.89 MB, i.e. **47.3
-MB/hour, 1.14
-GB/day** (355 MB/day gzipped) — re-measured 2026-08-20, and still an artifact
-at transition resolution with no Layer A in it, which is what makes it
-comparable to the 8.59 MB this line used to quote. That is a measured property
-of this simulator's output, quotable without a ratio, and it is comfortably
-retainable and exportable.
-Whether it is three orders of magnitude below a real sensor log is
-**imported context, not a result** — this simulator has no sensors and cannot
-measure it. Say so wherever the figure appears.
+It is the resolution curve this document leads with: **60.85 MB/h** at
+occurrence resolution at a **50 Hz** control rate, and **267 GB** per robot for
+the mandated six months. This point was derived from the ladder's 30,000-frame
+rung until 2026-09-12 and was retired with it. Whether the figure is three
+orders of magnitude below a real sensor log is **imported context, not a
+result** — this simulator has no sensors and cannot measure it. Say so wherever
+it appears.
 
 **3. `reg` chose a resolution no standard asks for.** UN R157's DSSAD — the
 closest precedent this project has, its data model in

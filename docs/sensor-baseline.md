@@ -27,9 +27,7 @@ so the multiplier stays at 1 TB/day and the claim drawn from it is restated
 whenever the artifact side is re-measured ([Sensitivity](#sensitivity)).
 
 **Every artifact size here is linear in that control rate**, because enforcement
-emits a verdict and a chain record per commanded action. Every size above
-[The control rate](#the-control-rate) is at 50 Hz; that section measures the rest
-of the ladder and states what the rungs above 100 Hz can and cannot be asked.
+emits a verdict and a chain record per commanded action.
 
 ## What the projection is measured against
 
@@ -103,8 +101,7 @@ The artifact sizes below are **measured**, from one execution of
 50 Hz control rate**, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
 resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. Each
 size is that level's measured `bytes/hour` — 60.85, 191.39 and 295.13 MB/h —
-times the 4,380 hours in the retention floor, and all three are **linear in the
-control rate**, which [The control rate](#the-control-rate) measures. The
+times the 4,380 hours in the retention floor. The
 sensitivity establishes *the shape of the dependence*; the conclusion drawn from
 it is the two paragraphs after the crossover table.
 
@@ -194,9 +191,13 @@ above `reg.tolerances.TIME_BASE_MAX_RATE_HZ` = 100 Hz, so their artifacts cannot
 address every frame they price ([`limitations.md`](limitations.md) §5).
 
 The growth is **sublinear**: 17.7x at the occurrence level for a 20x rate
-increase, because the scene rows and the fixed schema-and-index cost do not scale
-with the rate. Only the record layer does, and by 1 kHz it is 60,101 of that
-level's 61,826 node rows — 97.2%, against 98.5% at 50 Hz. That level is almost
+increase, and the term that does not scale is the **`declaration` table**, 18.3%
+of the coarsest level at 50 Hz: the policy replans on a wall-clock interval, so
+it emits the same declarations at every rung.
+[`retention.md`](retention.md), *Why the growth is sublinear*, measures that
+level per table and is where the attribution is established. Only the record
+layer scales, and by 1 kHz it is 60,101 of that level's 61,826 node rows —
+97.2%, against 98.5% at 50 Hz. That level is almost
 entirely a per-action attestation stream at either rate, which is what the rate
 buys and what a cadence change would cut.
 
@@ -216,20 +217,13 @@ in the retention floor, against the **unchanged** 182.5 TB assumption:
 rather than repairing it.** ~39x at occurrence resolution is **one** order, not
 two. The two-order band is still occupied at 250 Hz (~167x) and is gone by 1 kHz;
 where between those two it goes is unmeasured and is not quoted. Every finer
-level is worse: transition ~16x and per-frame ~6x at 1 kHz. Both rows also sit
-above the 100 Hz the artifact's time base is declared valid at, so what they buy
-is bounded by [`limitations.md`](limitations.md) §5 as well as by the price.
+level is worse: transition ~16x and per-frame ~6x at 1 kHz.
 
 **The sensor assumption is not adjusted to compensate.** It is the same
 1 TB/day it has been since this document was written, for the same sourced
 reasons, and it has stood through both re-measurements that moved the artifact
 side (both are in the [Why](#why) table). The input has a range and the
 conclusion is what moves.
-
-**What is out of scope here.** Declaring per behaviour segment rather than per
-control step would cut the term that scales, and this measurement shows it is the
-dominant lever. It changes the attestation cadence and is held pending its own
-decision.
 
 **One caveat that is not about cost.** At 250 Hz and 1 kHz the transition and
 per-frame levels return `DISAGREE` on `separation_timeline`: the edge layer's
@@ -655,14 +649,18 @@ worth least once nobody remembers what it was weighed against.
 | The priced stream, as 24 columns and 19 Layer B | #123 | 2026-08-27 |
 | Three sensitivity rows recomputed from the sizes | — | 2026-08-28 |
 | The base pose on `robot_config`; the ladder re-measured, three rungs of it stale | #166 | 2026-09-02 |
+| The cause of the sublinear growth, and the *Retained* #8 pointer below, both corrected | #273 | 2026-09-12 |
 
 ### The sizes the Layer A re-measurement replaced
 
 The provisional figures measured an artifact holding no Layer A record at all
 (issue #59): occurrence went 18.9 GB → 263 GB, transition 229.7 → 655 GB,
 per-frame 589.3 → 952 GB. Today they are 267, 838 and 1,293 GB; #83, #82, #166,
-#252 and #257 account for the 1.5% at the coarsest level, itemised in
-[`lossiness.md`](lossiness.md), *Retained* #8.
+#252 and #257 account for the 1.5% at the coarsest level; **two of the five are
+itemised in bytes and three are not** — #166 and #257 at +2,048 B each here,
+under [`lossiness.md`](lossiness.md)'s `## Why`, *Retained #8 — what the base
+frame cost*. This pointer named *Retained* #8 itself until 2026-09-12, which
+carries no arithmetic.
 
 The attribution is to #59 because it moved the figures by an order of magnitude
 and established that no resolution level coarsens a record — which put the
@@ -682,7 +680,8 @@ at 50 Hz did not move.
 Issue #68 arrived with a reviewer's estimate of ~5.1 TB per robot per six months
 at 1 kHz, ~36x, flagged as unverified. The measured figures are 4.72 TB and ~39x:
 directionally right and slightly pessimistic, for the reason *The control rate*
-gives — it assumed the whole level scales, and 1.5% of it does not.
+gives — it assumed the whole level scales with the rate, and the
+`declaration` table, 18.3% of it at 50 Hz, does not.
 
 ### Whose work the incumbent ratio was waiting on
 

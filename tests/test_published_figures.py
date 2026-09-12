@@ -25,7 +25,7 @@ quotes as a fact.
 
 The three retention figures are the other case. `docs/retention.md` publishes
 them and `docs/plan.md` Claim 1 quotes the headline as a purchasing decision
-(264 GB per robot per six months), `docs/sufficiency.md` prices its question set
+(267 GB per robot per six months), `docs/sufficiency.md` prices its question set
 against them and
 `docs/sensor-baseline.md` derives a sensitivity table from them. **A figure whose
 entire claim is that it is reproducible is a figure for which the pin is the
@@ -67,13 +67,16 @@ repeats to 1 removes two replays of a 3,000-frame CSV and moves no byte.
 WHAT THIS DOES NOT COVER
 ------------------------
 * **Prose restatements.** The figures also appear in sentences —
-  "60.05, 149.47 and 217.32 MB/h" — where nothing mechanically attributes a
+  "60.85, 191.39 and 295.13 MB/h" — where nothing mechanically attributes a
   number to a level, and where a neighbouring figure may belong to an entirely
-  different fixture (`docs/prior-art.md` quotes 47.3 MB/hour, which is the 30,000
-  frame scaling run). Only the three **tables** are parsed, and the roster below
-  pins which they are. A document whose table is right and whose prose is wrong
-  is an internal inconsistency this cannot see.
-* **The derived six-month totals** (263 GB, 26.3 TB) and the ratios against the
+  different fixture (`docs/prior-art.md` quotes 47.3 MB/hour, which is a
+  30,000-frame scaling run `docs/retention.md` no longer publishes and that file
+  keeps as dated history). **Tables** are parsed and prose is not — the
+  level-per-row and level-per-column curves, the coarsest level's label, the byte
+  attribution and the Layer-A comparison — and the rosters below pin which they
+  are. A document whose table is right and whose prose is wrong is an internal
+  inconsistency this cannot see.
+* **The derived six-month totals** (267 GB, 26.7 TB) and the ratios against the
   assumed sensor log. They are arithmetic over a retention floor stated in prose;
   pinning the `MB/h` they are computed from is what stops them drifting silently,
   and re-deriving them here would be a second definition of that arithmetic.
@@ -88,23 +91,25 @@ WHAT THIS DOES NOT COVER
   so where they quote it — `docs/retention.md`, *The control rate*, carries the
   decision, and the front page no longer leads with an unpinned figure.
 
-WHAT ISSUE #98 ADDED
---------------------
+WHAT ISSUE #98 ADDED, AND WHAT ISSUE #273 DID WITH IT
+-----------------------------------------------------
 Two things, both at the bottom of this module and both free of any new build:
 
 * **The Layer-A-carrying comparison against the stream.** The documents published
   `~13x larger than a gzipped copy of the stream` measured with `records=None` —
   the scaling ladder's parameterization — and `README.md` repeated it with no
   qualifier at all. The artifact the retention claim actually prices carries the
-  record stream and is `~41x`. That figure is now published in
+  record stream and is `~51x`. That figure is published in
   `docs/retention.md` and pinned here against `curve.source`, which the fixture
   below already builds: the comparison costs nothing to check and was wrong by a
   factor of three.
-* **The condition on the `13x`.** A figure a reader can take away without its
-  condition is the defect, not the arithmetic. Every table row and every paragraph
-  in every document that quotes `13x` has to name the absence of
-  Layer A in that same unit of text — checked mechanically, three-valued, with the
-  documents that quote it pinned so deleting the figure is not a way to pass.
+* **The condition on the `13x`** — and that guard is now inverted. It required
+  every quotation of the figure to name the absence of Layer A beside it, which
+  is a check on the wording and never on the value, so the value drifted under
+  it: the same measurement on schema 14 is 17.1x. Decision D1 (issue #273)
+  retires the figure, and the check is that **no** document publishes it. The
+  Layer-A `~51x` above is what carries the claim, and unlike the 13x it is
+  re-measured on every run.
 """
 
 from __future__ import annotations
@@ -710,13 +715,14 @@ def test_prose_that_is_not_a_table_yields_nothing() -> None:
 # THE LAYER-A-CARRYING COMPARISON AGAINST THE STREAM (issue #98).
 #
 # `docs/retention.md`'s scaling ladder answers "is the graph smaller than the stream
-# it replaces" with `0.08x`, i.e. ~13x larger — and it answers it for an artifact
-# built with `records=None`. That is the correct parameterization for a study
-# whose variable is run length, and the wrong number to quote as the cost of the
-# artifact this project ships: with the record stream in it the same fixture at
-# the same length is ~41x larger. `README.md` quoted the 13x with no qualifier at
-# all, on the front page, months after issue #59 corrected the same error in the
-# resolution curve.
+# it replaces" for an artifact built with `records=None`. That is the correct
+# parameterization for a study whose variable is run length, and the wrong number
+# to quote as the cost of the artifact this project ships: with the record stream
+# in it the same fixture at the same length is ~51x larger. `README.md` quoted
+# the ladder's ratio with no qualifier at all, on the front page, months after
+# issue #59 corrected the same error in the resolution curve. Issue #273 retired
+# that ratio from the documents; this comparison is what stands in its place, and
+# it is re-measured below rather than transcribed.
 #
 # WHY IT IS PINNED HERE AND NOT SOMEWHERE CHEAPER. The build it is measured on is
 # the one the fixture above already makes — `curve.source` is the artifact
@@ -780,8 +786,8 @@ def measured_layer_a_comparison(curve: bench.ResolutionCurve) -> dict[str, str]:
 
     `how much larger` is the one quantity `reg.bench` has no renderer for — it
     publishes the ratio, not its reciprocal — so the arithmetic is here, once, and
-    the document states what this produces. It is not a tolerance: `~41x` is
-    `f"~{40.68:.0f}x"`, and a measurement that moved far enough to round
+    the document states what this produces. It is not a tolerance: `~51x` is
+    `f"~{50.83:.0f}x"`, and a measurement that moved far enough to round
     differently is a measurement the document has to be re-measured for.
     """
     sizes = curve.source.sizes
@@ -813,7 +819,8 @@ def _as_layer_a_figures(doc: str, published: Mapping[str, str]) -> tuple[Figure,
 def test_the_layer_a_comparison_is_the_one_the_code_measures(
     curve: bench.ResolutionCurve,
 ) -> None:
-    """**THE PIN ISSUE #98 ADDED.** `~41x`, not `13x`, and re-measured every run.
+    """**THE PIN ISSUE #98 ADDED.** `~51x`, not the ladder's ratio, and
+    re-measured every run — which is what the retired 13x never was.
 
     Fails in both directions for the same reason the curve's pin does: the
     expected values are the document.
@@ -836,7 +843,7 @@ def test_the_layer_a_comparison_publishes_every_row() -> None:
     """A table that lost a row is not a table that never had one.
 
     Without this, deleting `how much larger` would leave the pin above green over
-    seven rows and the `~41x` unpublished.
+    seven rows and the `~51x` unpublished.
     """
     published = set(layer_a_comparison(plan_text()))
     assert published == set(LAYER_A_COMPARISON_ROWS), (
@@ -851,10 +858,10 @@ def test_the_layer_a_comparison_publishes_every_row() -> None:
 # --- the negatives for the pin above ---
 
 #: The published table and the measurement it came from, in agreement.
-_LAYER_A_HEALTHY = {"artifact on disk": "2,580,480 B", "how much larger": "~41x"}
+_LAYER_A_HEALTHY = {"artifact on disk": "3,286,016 B", "how much larger": "~51x"}
 _LAYER_A_MEASURED = {
-    ("artifact on disk", LAYER_A_BUILD): "2,580,480 B",
-    ("how much larger", LAYER_A_BUILD): "~41x",
+    ("artifact on disk", LAYER_A_BUILD): "3,286,016 B",
+    ("how much larger", LAYER_A_BUILD): "~51x",
 }
 
 
@@ -864,16 +871,18 @@ def test_a_layer_a_comparison_that_agrees_is_not_reported() -> None:
     assert divergences(healthy, _LAYER_A_MEASURED) == []
 
 
-def test_the_13x_republished_as_the_layer_a_figure_is_caught() -> None:
+def test_the_no_record_build_republished_as_the_layer_a_figure_is_caught() -> None:
     """**THE NEGATIVE THIS SECTION EXISTS FOR**, and it is issue #98's own defect:
-    the `records=None` ladder's number standing where the Layer-A one belongs."""
+    the `records=None` ladder's number standing where the Layer-A one belongs.
+    The published value here is that ladder's 3,000-frame size on schema 14 —
+    the artifact behind the figure issue #273 retired."""
     problems = divergences(
-        _as_layer_a_figures("plan.md", {"artifact on disk": "818,176 B"}),
-        {("artifact on disk", LAYER_A_BUILD): "2,580,480 B"},
+        _as_layer_a_figures("plan.md", {"artifact on disk": "1,105,920 B"}),
+        {("artifact on disk", LAYER_A_BUILD): "3,286,016 B"},
     )
     assert len(problems) == 2  # the finding, and what to do about it
-    assert "818,176 B" in problems[0] and "2,580,480 B" in problems[0]
-    assert "+1,762,304" in problems[0]
+    assert "1,105,920 B" in problems[0] and "3,286,016 B" in problems[0]
+    assert "+2,180,096" in problems[0]
 
 
 def test_a_layer_a_figure_the_build_does_not_measure_is_a_refusal() -> None:
@@ -890,9 +899,9 @@ def test_the_layer_a_parser_reads_the_table_by_its_header() -> None:
     assert layer_a_comparison(
         f"| {LAYER_A_BUILD}, at 3,000 frames | measured |\n"
         "|---|---|\n"
-        "| artifact on disk | 2,580,480 B |\n"
-        "| how much larger | **~41x** |\n"
-    ) == {"artifact on disk": "2,580,480 B", "how much larger": "~41x"}
+        "| artifact on disk | 3,286,016 B |\n"
+        "| how much larger | **~51x** |\n"
+    ) == {"artifact on disk": "3,286,016 B", "how much larger": "~51x"}
 
 
 def test_the_layer_a_parser_ignores_every_other_table() -> None:
@@ -909,36 +918,43 @@ def test_the_layer_a_parser_ignores_every_other_table() -> None:
 
 
 # --------------------------------------------------------------------------
-# THE CONDITION ON THE `13x` (issue #98).
+# THE `13x` IS RETIRED, SO THE GUARD IS INVERTED (issue #98, then #273).
 #
-# The arithmetic was never the defect. The documents measured 13x correctly and
-# said, three sentences away, that the ladder holds no Layer A; `README.md` then
-# quoted the number with the condition left behind. **A figure a reader can take
-# away without its condition is the figure being wrong**, and no amount of
-# correctness elsewhere in the document repairs it.
+# Issue #98 required every `13x` to carry its condition — that it was measured
+# on a build holding no Layer A. That guard was on the *wording* and never on
+# the *value*, which is how the figure went stale under it: the same
+# measurement on schema 14 is 0.06x, 1,105,920 B against 64,652 B, or 17.1x,
+# and the documents still said 13x. Decision D1 (2026-09-11) retires it rather
+# than republishing ~17x, because `~51x` is the figure the artifact Claim 1
+# actually prices, `test_the_layer_a_comparison_is_the_one_the_code_measures`
+# above re-measures it every run, and it is the harsher comparison.
 #
-# So this checks proximity, mechanically, in the unit a reader actually takes a
-# number away in: a markdown table row on its own, and a paragraph otherwise. It
-# cannot check that the wording is honest — a reviewer still has to — but it can
-# check that the words are there.
+# So the check is now that **no document in the corpus publishes `13x` at all**.
+# It keeps the unit a reader takes a number away in — a markdown table row on
+# its own, a paragraph otherwise — because that is what the failure message has
+# to quote back. What moved is which verdict the figure's presence earns.
+#
+# **Where silence is not a pass has moved with it.** A retirement check is
+# satisfied by silence *about the figure*, by construction; what would defeat it
+# is silence about the *corpus*, so the roster below pins the three documents
+# that quoted it, and an empty text is a could-not-evaluate rather than a pass.
 # --------------------------------------------------------------------------
 
 AGREE = "AGREE"
 DISAGREE = "DISAGREE"
 COULD_NOT_EVALUATE = "COULD-NOT-EVALUATE"
 
-#: The figure whose condition may not be dropped. `13.0x` in
-#: `docs/sensor-baseline.md`'s rate-comparison row is a different number and is
-#: deliberately not matched.
+#: The retired figure. `13.0x` in `docs/sensor-baseline.md`'s rate-comparison
+#: row and `13.04x` in the `zstd_small` comparison are different numbers and are
+#: deliberately not matched; `13.9x` in `docs/retention.md` is another.
 THIRTEEN_X = re.compile(r"~?13x\b")
 
-#: The condition, in any of the forms the documents state it in. Every one of
-#: them names an *absence*, which is what the reader has to be told.
-NO_LAYER_A = re.compile(r"no (?:record stream|layer\s+a|declaration)", re.IGNORECASE)
-
-#: The documents that quote the figure today. Pinned because deleting it is the
-#: one way a check of this shape goes green without the condition being stated.
-DOCS_QUOTING_THE_13X: frozenset[str] = frozenset(
+#: The documents that quoted it until 2026-09-11. The check below is satisfied
+#: by a corpus that does not hold them at all — a glob that stopped matching, a
+#: file renamed — so this names the three that have to be in it. It is the same
+#: job `DOCS_QUOTING_THE_13X` did before the inversion, pointed at the corpus
+#: instead of at the figure.
+DOCS_THAT_QUOTED_THE_13X: frozenset[str] = frozenset(
     {"README.md", "plan.md", "retention.md"}
 )
 
@@ -948,8 +964,9 @@ def _quotation_units(text: str) -> list[str]:
 
     A markdown table row is its own unit because a reader takes a row away whole
     and leaves the rest of the table behind — `README.md`'s Claim 1 row is one
-    such row and is where this defect lived. Everything else is a paragraph,
-    joined into one line so a condition split across a line break still counts.
+    such row and is where this figure last lived. Everything else is a
+    paragraph, joined into one line so a figure split across a line break is
+    still found.
     """
     units: list[str] = []
     paragraph: list[str] = []
@@ -970,24 +987,19 @@ def _quotation_units(text: str) -> list[str]:
     return units
 
 
-def condition_travels_with_the_13x(text: str) -> tuple[str, list[str]]:
-    """Verdict on whether every `13x` in `text` names the condition beside it.
+def the_13x_is_retired(text: str) -> tuple[str, list[str]]:
+    """Verdict on whether `text` still publishes the retired `13x`.
 
-    Three-valued, and the third does not resolve to the first: a document that
-    quotes the figure nowhere is `COULD-NOT-EVALUATE`, because deleting the figure
-    is otherwise a way to pass. Returns the verdict and the offending spans.
+    Three-valued, and the third does not resolve to the first: a text with
+    nothing in it to read is `COULD-NOT-EVALUATE`, because a document that
+    failed to load is not a document the figure has been retired from. Returns
+    the verdict and the spans that quote it.
     """
-    checked = 0
-    missing: list[str] = []
-    for unit in _quotation_units(text):
-        if not THIRTEEN_X.search(unit):
-            continue
-        checked += 1
-        if not NO_LAYER_A.search(unit):
-            missing.append(unit)
-    if not checked:
+    units = _quotation_units(text)
+    if not units:
         return COULD_NOT_EVALUATE, []
-    return (DISAGREE if missing else AGREE), missing
+    quoting = [unit for unit in units if THIRTEEN_X.search(unit)]
+    return (DISAGREE if quoting else AGREE), quoting
 
 
 #: `docs/README.md` is labelled distinctly from the front page. Both are
@@ -1005,41 +1017,39 @@ CORPUS_QUOTING_FIGURES: tuple[tuple[str, Path], ...] = (
 
 
 @pytest.mark.parametrize("doc,path", CORPUS_QUOTING_FIGURES)
-def test_the_13x_is_never_quoted_without_its_condition(doc: str, path: Path) -> None:
-    """**THE DOCUMENT CHECK ISSUE #98 EXISTS FOR.**
+def test_no_document_publishes_the_retired_13x(doc: str, path: Path) -> None:
+    """**THE DOCUMENT CHECK, INVERTED (issue #273).**
 
-    `README.md:77` carried `roughly 13x larger per frame than a gzipped copy of
-    the nine-float stream` with nothing attached, in the file most readers open
-    first, while `docs/plan.md` stated the condition for the same number.
+    `docs/prior-art.md` §8 is in this corpus and passes: it quotes 47.3 MB/hour
+    as part of a dated log, which is a different figure and stays true as
+    history. What may not come back is `13x` itself.
     """
-    verdict, missing = condition_travels_with_the_13x(
-        path.read_text(encoding="utf-8")
-    )
-    assert verdict != DISAGREE, (
-        f"{doc} quotes 13x in {len(missing)} place(s) that never say the "
-        "artifact it was measured on holds no Layer A:\n"
-        + "\n".join(f"  - {unit[:160]}" for unit in missing)
-        + "\nThat figure is ~41x for the artifact Claim 1 prices. Either quote "
-        "~41x, or state the condition in the same paragraph or table row."
+    verdict, quoting = the_13x_is_retired(path.read_text(encoding="utf-8"))
+    assert verdict == AGREE, (
+        f"{doc} publishes the retired 13x in {len(quoting)} place(s):\n"
+        + "\n".join(f"  - {unit[:160]}" for unit in quoting)
+        + "\nThat figure was measured on a build holding no Layer A and is "
+        "stale: the same measurement on schema 14 is 17.1x. It is retired "
+        "rather than republished — quote ~51x, the Layer-A figure "
+        "`docs/retention.md` publishes and this module re-measures."
     )
 
 
-def test_the_documents_that_quote_the_13x_are_the_ones_expected() -> None:
-    """**SILENCE IS NOT A PASS.** The check above passes on a document with the
-    figure removed, so this names where it is quoted. A loss is worth a look: the
-    number is a bounded engineering finding this project deliberately publishes."""
-    quoting = {
-        doc
-        for doc, path in CORPUS_QUOTING_FIGURES
-        if condition_travels_with_the_13x(path.read_text(encoding="utf-8"))[0]
-        != COULD_NOT_EVALUATE
-    }
-    assert quoting == set(DOCS_QUOTING_THE_13X), (
-        "the set of documents quoting the 13x has moved: gained "
-        f"{sorted(quoting - DOCS_QUOTING_THE_13X)}, lost "
-        f"{sorted(DOCS_QUOTING_THE_13X - quoting)}. A gain needs adding here — it "
-        "is a new place a conditional figure is published; a loss means the "
-        "finding stopped being published where this check was guarding it."
+def test_the_documents_that_quoted_the_13x_are_still_in_the_corpus() -> None:
+    """**SILENCE IS NOT A PASS**, pointed at the corpus rather than the figure.
+
+    The check above is satisfied by a document that is not scanned at all, so a
+    glob that stopped matching `docs/*.md` — or a front page that moved — would
+    retire the figure by losing sight of it. This names the three documents that
+    quoted it, which are the three that have to be read to say it is gone.
+    """
+    scanned = {doc for doc, _ in CORPUS_QUOTING_FIGURES}
+    assert DOCS_THAT_QUOTED_THE_13X <= scanned, (
+        "the corpus no longer holds "
+        f"{sorted(DOCS_THAT_QUOTED_THE_13X - scanned)}, which quoted the 13x "
+        "until 2026-09-11. A retirement check that stopped reading the "
+        "documents the figure was retired from reports nothing, and reports it "
+        "as a pass."
     )
 
 
@@ -1047,68 +1057,65 @@ def test_the_documents_that_quote_the_13x_are_the_ones_expected() -> None:
 
 
 def test_a_bare_13x_is_caught() -> None:
-    """**The negative this check exists for**, and it is the README's own sentence
-    as it stood before this change."""
-    verdict, missing = condition_travels_with_the_13x(
+    """**The negative this check exists for**, and it is the README's own
+    sentence as it stood before issue #98."""
+    verdict, quoting = the_13x_is_retired(
         "roughly 13x *larger* per frame than a gzipped copy of the nine-float\n"
         "stream, published beside it because that is the comparison a skeptic runs.\n"
     )
     assert verdict == DISAGREE
-    assert len(missing) == 1
+    assert len(quoting) == 1
 
 
-def test_the_condition_three_paragraphs_away_does_not_cover_the_figure() -> None:
-    """The exact defect: correct elsewhere in the document, absent here."""
-    verdict, missing = condition_travels_with_the_13x(
-        "This ladder holds no Layer A at any rung.\n"
-        "\n"
-        "Some other paragraph entirely.\n"
-        "\n"
-        "The artifact is roughly 13x larger than the stream it replaces.\n"
-    )
-    assert verdict == DISAGREE
-    assert missing == [
-        "The artifact is roughly 13x larger than the stream it replaces."
-    ]
-
-
-def test_the_condition_in_the_same_paragraph_passes() -> None:
-    """The positive control, across a line break, since the documents wrap."""
-    verdict, missing = condition_travels_with_the_13x(
+def test_a_13x_carrying_its_condition_is_caught_too() -> None:
+    """**THE NEGATIVE THE INVERSION EXISTS FOR.** This text passed the #98 guard:
+    it names the absence of Layer A in the same paragraph. The figure is stale
+    whatever travels with it, so it fails now, and a green run on this string is
+    what would say the guard had not actually been inverted."""
+    verdict, quoting = the_13x_is_retired(
         "**With no record stream in it** — the artifact is roughly 13x\n"
         "*larger* than a gzipped copy of the stream it replaces.\n"
     )
-    assert (verdict, missing) == (AGREE, [])
+    assert verdict == DISAGREE
+    assert len(quoting) == 1
 
 
 def test_a_table_row_is_its_own_unit() -> None:
-    """`README.md`'s Claim 1 row is one row of a table whose other rows say
-    nothing about Layer A. A condition in a neighbouring row is not a condition a
-    reader of this row sees."""
-    verdict, missing = condition_travels_with_the_13x(
+    """`README.md`'s Claim 1 row was one row of a table whose other rows say
+    nothing about this figure. The failure message quotes the row, not the
+    table."""
+    verdict, quoting = the_13x_is_retired(
         "| claim | status |\n"
         "|---|---|\n"
         "| **3** | the build carries no record stream |\n"
         "| **1** | the artifact is roughly 13x larger |\n"
     )
     assert verdict == DISAGREE
-    assert missing == ["| **1** | the artifact is roughly 13x larger |"]
+    assert quoting == ["| **1** | the artifact is roughly 13x larger |"]
 
 
-def test_a_document_that_never_quotes_the_figure_is_not_a_pass() -> None:
-    """Three-valued: nothing to check is could-not-evaluate, and the roster test
+def test_a_document_that_never_quotes_the_figure_passes() -> None:
+    """The positive control, and the state the corpus is in after issue #273: a
+    document with something in it to read and no `13x` in it agrees."""
+    assert the_13x_is_retired("no figures here at all\n") == (AGREE, [])
+
+
+def test_a_document_with_nothing_to_read_is_a_refusal() -> None:
+    """Three-valued: an empty text is could-not-evaluate, and the roster test
     above is what stops that from becoming a hiding place."""
-    verdict, missing = condition_travels_with_the_13x("no figures here at all\n")
-    assert (verdict, missing) == (COULD_NOT_EVALUATE, [])
+    assert the_13x_is_retired("   \n\n") == (COULD_NOT_EVALUATE, [])
 
 
 def test_the_rate_comparison_row_is_not_this_figure() -> None:
-    """`docs/sensor-baseline.md` publishes `13.0x` — the transition level's growth
-    from 50 Hz to 1 kHz. Demanding a Layer A condition beside it would be noise."""
-    verdict, _ = condition_travels_with_the_13x(
+    """`docs/sensor-baseline.md` publishes `13.0x` — the transition level's
+    growth from 50 Hz to 1 kHz — and `docs/retention.md` publishes `13.04x` for
+    a `zstd_small` bag. Retiring those with the 13x would be a real loss."""
+    verdict, quoting = the_13x_is_retired(
         "| *x, 50 Hz → 1 kHz* | *15.8x* | *13.0x* | *19.6x* |\n"
+        "\n"
+        "the artifact is 13.04x a `zstd_small` bag and 13.9x what it was.\n"
     )
-    assert verdict == COULD_NOT_EVALUATE
+    assert (verdict, quoting) == (AGREE, [])
 
 
 # ==========================================================================
@@ -1428,7 +1435,7 @@ def test_a_document_with_no_attribution_table_is_not_a_pass() -> None:
 # re-derives *every* published figure. It does not, and this module has said so
 # since it was written — `WHAT THIS DOES NOT COVER`, above, names three
 # exclusions, of which the derived six-month totals are the ones a reader most
-# wants guaranteed. `264 GB` is not re-derived by anything.
+# wants guaranteed. `267 GB` is not re-derived by anything.
 #
 # The figures have a pin. The sentence describing what that pin covers did not,
 # so it drifted the way the figures would have without one — and it drifted
@@ -1546,7 +1553,7 @@ def test_no_document_claims_this_module_covers_every_figure(
         "figure:\n  "
         + "\n  ".join(problems)
         + "\nIt does not. `WHAT THIS DOES NOT COVER` at the top of this module "
-        "names three exclusions, and the derived six-month totals — `264 GB`, "
+        "names three exclusions, and the derived six-month totals — `267 GB`, "
         "the figure the front page leads with — are among them. Name the subset "
         "that is re-derived, or name what is not."
     )

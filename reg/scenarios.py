@@ -1736,8 +1736,8 @@ MOBILE_OVERCLAIM = Scenario(
 # THE CLAIM. It was the only one in this catalogue that was a defect rather than
 # a capability — a base velocity out of a perceiver reaches the artifact and no
 # layer tag moves — and issue #252 closed it, which is what this fixture now
-# demonstrates instead (issues #229 and #252, docs/limitations.md §11,
-# docs/self-describing.md §7 question 2).
+# demonstrates instead (issues #229 and #252; docs/limitations.md §11's
+# amendment records the answer).
 #
 # The three above all state `VelocitySource.PROPRIOCEPTIVE`, so while the gap
 # §11 recorded was open it was real in the code and **unobservable in any run

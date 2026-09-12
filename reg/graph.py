@@ -1339,7 +1339,7 @@ class _FrameNodes:
         #: rows `GEOMETRY_RETENTION` already keeps a polygon for (issue #257).
         #: A boundary on every row would undo the retention work the incremental
         #: rule exists for — it was measured at 7.3x the bytes of this rule for
-        #: 84 answerable frames of 3,000 against 12 (docs/self-describing.md §8).
+        #: 84 answerable frames of 3,000 against 12 (docs/limitations.md §12).
         #: Placed, like the inner polygon and for the same reason: a region
         #: about the origin retained for a robot that was elsewhere is an answer
         #: about a different robot.

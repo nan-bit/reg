@@ -368,7 +368,7 @@ __all__ = [
 #:
 #: 11: `meta` gained the six environment keys — the interpreter, numpy, shapely,
 #: GEOS and the platform's system and machine (issue #200,
-#: docs/self-describing.md gap 2). No table and no column changed, and the bump
+#: docs/limitations.md §12 gap 2). No table and no column changed, and the bump
 #: is not for the keys: it is for what a reader does with a NULL
 #: `geometry_wkb`. A v10 reader recomputes a discarded polygon and returns it as
 #: the region in force, on an argument — *it is a deterministic function of the
@@ -382,7 +382,7 @@ __all__ = [
 #: file cannot tell an artifact built on its own platform from one built
 #: somewhere else, and `connect` refusing it is that could-not-evaluate rather
 #: than this machine assumed on the file's behalf.
-#: 13: `edge_layer_basis` arrived (issue #252, docs/self-describing.md gap 1)
+#: 13: `edge_layer_basis` arrived (issue #252, docs/limitations.md §12 gap 1)
 #: and `reg.envelope.envelope_layer` became the weakest of its inputs rather
 #: than of one of them. Every tagged edge now records **what its tag was
 #: computed from** — one row per input, each naming the input, the value it had
@@ -792,7 +792,8 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
 
 
 # --------------------------------------------------------------------------
-# THE LAYER BASIS (issue #252, tier 4 of docs/self-describing.md §8; gap 1).
+# THE LAYER BASIS (issue #252, tier 4 of docs/self-describing.md §8, closing
+# docs/limitations.md §12 gap 1).
 #
 # WHAT A `layer` TAG SAID BEFORE THIS. `A` or `B`, and nothing in the file said
 # what it was computed **from**. A reader could read it and not check it, which
@@ -809,7 +810,7 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
 # off the *edge's own endpoint* below, so two `HAS_ENVELOPE` edges over one
 # envelope row whose bases differ get one basis between them and one of them is
 # misstated. A reader who consults a misstatement is worse off than one who
-# consults silence. docs/self-describing.md §8 tier 4 carries the table.
+# consults silence. Issue #249 carries the table.
 #
 # EACH ROW CARRIES THE LAYER THAT INPUT ALONE ADMITS, AND THAT IS NOT
 # REDUNDANT. It is what makes the tag checkable *from the file* rather than from
@@ -957,7 +958,7 @@ def layer_from_basis(inputs: Sequence[LayerInput]) -> Layer:
     if not items:
         raise StoreError(
             "a layer tag cannot be derived from an empty basis. A tag with no "
-            "input under it is the assertion docs/self-describing.md gap 1 is "
+            "input under it is the assertion docs/limitations.md §12 gap 1 is "
             "about, and 'A' is not what an absence resolves to."
         )
     for item in items:
@@ -1233,7 +1234,7 @@ CREATE TABLE robot_config (
 -- answerable from a stored row rather than radially; everywhere else the two
 -- scalars are what survives. Measured before it was adopted: +0.61% of the
 -- transition figure and +0.42% of the per-frame one, against +4.50% and +3.10%
--- for a boundary on every computed row (docs/self-describing.md §8 tier 5).
+-- for a boundary on every computed row (issue #230 carries the table).
 --
 -- The last CHECK below is that rule in the schema rather than a convention on
 -- top of it: `outer_wkb` is present exactly where `geometry_wkb` and
@@ -1409,7 +1410,7 @@ CREATE TABLE occurrence (
     CHECK ((type IN ({_SQL_OCCURRENCE_VALUED_TYPES})) = (value IS NOT NULL))
 );
 
--- THE LAYER BASIS (issue #252, docs/self-describing.md gap 1). One row per
+-- THE LAYER BASIS (issue #252, docs/limitations.md §12 gap 1). One row per
 -- input per tagged edge: what the `layer` one row up was computed from, what
 -- that input said in this build, where it was read, and the layer that input
 -- alone admits. `open_edge` writes it and refuses to write an edge whose tag

@@ -955,7 +955,7 @@ def test_a_stream_with_no_provenance_leaves_the_key_absent(tmp_path: Path) -> No
 # --------------------------------------------------------------------------
 # The environment that produced the artifact (issue #200)
 #
-# docs/self-describing.md gap 2, and it is a **buildinfo** in the Reproducible
+# docs/limitations.md §12 gap 2, and it is a **buildinfo** in the Reproducible
 # Builds sense (docs/prior-art.md §27): a discarded polygon is retained as "a
 # deterministic function of the row and four numbers in meta", and issue #175
 # measured that the function is the platform's. These tests are about the
@@ -2613,7 +2613,7 @@ def test_envelope_at_refuses_when_the_config_it_names_is_gone(tmp_path: Path) ->
 # --------------------------------------------------------------------------
 # THE RECOMPUTATION IS CONDITIONAL ON THE ENVIRONMENT (issue #201)
 #
-# The acting half of issue #200's recording, and docs/self-describing.md gap 2.
+# The acting half of issue #200's recording, and docs/limitations.md §12 gap 2.
 # A discarded polygon is retained as "a deterministic function of the row and
 # four numbers in meta"; issue #175 measured that the function is the
 # platform's, so recomputing somewhere else answers a question the file cannot
@@ -7769,7 +7769,7 @@ def test_two_builds_of_a_mobile_fixture_are_byte_identical(tmp_path: Path) -> No
 # rows that record what each tag was computed from**. Neither the tags nor the
 # geometry moves, because the base drove in both and a posed configuration was
 # already Layer B; what moves is that a reader can now tell which fact the tag
-# followed, which is the whole of docs/self-describing.md gap 1.
+# followed, which is the whole of docs/limitations.md §12 gap 1.
 # --------------------------------------------------------------------------
 
 
@@ -7865,7 +7865,7 @@ def test_the_artifact_now_records_what_each_tag_was_computed_from(
     The defect version of this test asserted that the two builds differ *only* in
     `meta[source_provenance]` — that the `derived` in the stream reached the
     artifact nowhere, so a reader could not tell which of two facts a `B` tag
-    followed. That was docs/self-describing.md gap 1 against a real file.
+    followed. That was docs/limitations.md §12 gap 1 against a real file.
 
     Now they differ in `edge_layer_basis` as well, and in nothing else: same
     nodes, same edges, same envelopes, same configurations, same tags — and one

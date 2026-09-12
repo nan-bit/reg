@@ -6291,16 +6291,17 @@ def run_outer_boundary_study(
 #
 # WHAT A `layer` TAG SAYS TODAY. `edge.layer` is `A` or `B` and no column says
 # what that tag was computed from, so it can be read and not checked
-# (docs/self-describing.md gap 1). Issue #227 has to put the basis in the file
-# and §7 question 1 asks at what granularity: **per edge**, or **per computed
-# envelope** with every edge over one inheriting by reference. Per edge is
-# precise and multiplies rows; per envelope is cheaper and coarser — and on a
+# (docs/limitations.md §12 gap 1). Issue #227 has to put the basis in the file
+# and the open question was at what granularity: **per edge**, or **per
+# computed envelope** with every edge over one inheriting by reference. Per edge
+# is precise and multiplies rows; per envelope is cheaper and coarser — and on a
 # project whose headline claim is a row count, neither description settles it.
 #
 # THE DECISION WAS TAKEN ON THESE NUMBERS, AND THIS IS NOW THE RECORD OF IT
-# (issue #252). Per edge is adopted: `reg.store.EDGE_BASIS_TABLE` is in the
-# schema, `reg.store.open_edge` writes a basis for every tagged edge and refuses
-# a tag that disagrees with it, and `reg.query.cold_read` reports
+# (issue #252, recorded one level up in docs/limitations.md §11's amendment).
+# Per edge is adopted: `reg.store.EDGE_BASIS_TABLE` is in the schema,
+# `reg.store.open_edge` writes a basis for every tagged edge and refuses a tag
+# that disagrees with it, and `reg.query.cold_read` reports
 # `layer-tag-basis` as `CHECKABLE`. What is below still prices *the question*,
 # which means pricing it against the schema as it stood while the question was
 # open: `cost_layer_basis` drops the adopted table from its copy before it
@@ -6349,9 +6350,9 @@ def run_outer_boundary_study(
 #: movement is measured against, and the row the report's benefit column is read
 #: against. Since issue #252 it is reconstructed rather than found — the adopted
 #: `reg.store.EDGE_BASIS_TABLE` is dropped from the copy — because the movement
-#: this study reports is the movement a reader finds in
-#: `docs/self-describing.md` §8 tier 4, and a baseline that quietly became the
-#: adopted schema would report zero for the thing that was adopted.
+#: this study reports is the movement a reader finds in issue #249's table, and
+#: a baseline that quietly became the adopted schema would report zero for the
+#: thing that was adopted.
 LAYER_BASIS_TODAY = "today"
 
 #: Option A — per edge. Every tagged edge records what its tag was computed
@@ -8262,8 +8263,9 @@ def _layer_basis_section(study: LayerBasisStudy) -> list[str]:
         "",
         "Before the adoption an edge carried `layer='A'` or `'B'` and no column",
         "said what that tag was computed from, so it could be read and not checked",
-        "(`docs/self-describing.md` gap 1). The two options below are the two",
-        "granularities §7 question 1 asked between.",
+        "(`docs/limitations.md` §12 gap 1). The two options below are the two",
+        "granularities the basis could have been recorded at; issue #252 took",
+        "per edge, and `docs/limitations.md` §11's amendment records that.",
         "",
     ]
     lines += _table(
@@ -8408,8 +8410,8 @@ def _cost_per_answer_text(
     """Each option's bytes over today's, divided by the edges it answers.
 
     The comparison a bytes column and an answers column do not make on their
-    own, and the one the word *cheaper* in §7 question 1 is actually about. An
-    option that answers nothing has no cost per answer — that is a
+    own, and the one the word *cheaper* in the granularity question is actually
+    about. An option that answers nothing has no cost per answer — that is a
     could-not-evaluate and it is stated rather than divided by zero, because the
     number it would produce is exactly the one that makes an option look free.
     """
@@ -8446,7 +8448,8 @@ def _cost_per_answer_text(
     return (
         lead + f"At the `{level}` level, " + "; ".join(parts) + ". A granularity "
         "that answers less does not thereby cost less per answer, and that is "
-        "the comparison the word *cheaper* in §7 question 1 has to survive."
+        "the comparison the word *cheaper* in the granularity question has to "
+        "survive."
     )
 
 
@@ -8510,9 +8513,9 @@ def _layer_basis_finding(study: LayerBasisStudy) -> list[str]:
         f"({_int_text(today.tagged_edges)} edges, no posed configuration in the "
         "fixture), and `tests/test_bench.py` feeds the study a view where two "
         "edges over one envelope disagree and asserts it reports them. **So the "
-        "answer to #227 §7 question 1's second half is that B cannot express it** "
-        "— it can only be right where every edge over an envelope shares a basis, "
-        "and nothing in the schema makes that true.",
+        "answer to #227's granularity question, second half, is that B cannot "
+        "express it** — it can only be right where every edge over an envelope "
+        "shares a basis, and nothing in the schema makes that true.",
         "",
         "**What adoption did to `reg.query.cold_read`.** Under A the claim became "
         "`CHECKABLE`, and it is (issue #252): the basis is per edge, so every "

@@ -16,12 +16,14 @@ The tests that matter most here are not about argparse. They are:
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 
 import numpy as np
 import pytest
 
+from reg.envelope import envelope_layer
 from reg.scenarios import MOBILE_SCENARIOS, MOBILE_WORLD, SCENARIOS, scenario
 from reg.sim import (
     DEFAULT_SEED,
@@ -579,6 +581,106 @@ def test_list_names_the_mobile_fixtures_and_says_they_are_a_second_group(
         # The description is what says which claim the fixture is for, so the
         # listing has to carry it rather than the name alone.
         assert scn.description.split(".")[0][:40] in " ".join(out.split())
+
+
+# --------------------------------------------------------------------------
+# WHAT `--list` SAYS `mobile_derived_velocity` IS FOR (issue #272).
+#
+# This fixture's claim was a defect — *a base velocity out of a perceiver
+# reaches the artifact and no layer tag moves* — and issue #252 closed it. The
+# description went on stating the defect for as long as nothing read it, which
+# is how prose in a fixture goes stale: it is printed rather than executed, and
+# `--list` is a reader's first contact with what a fixture demonstrates. So the
+# words and the function are held together here. Neither of these tests is
+# about argparse; both are about the listing describing this build.
+# --------------------------------------------------------------------------
+
+#: The layer the listing states this fixture's envelopes are tagged at, read
+#: back out of the printed text. One capture group, and the sentence it matches
+#: is in `reg.scenarios.MOBILE_DERIVED_VELOCITY.description`.
+_DESCRIBED_LAYER = re.compile(r"`envelope_layer` answers `([AB])` for this run")
+
+
+def _layer_the_listing_states(text: str) -> str | None:
+    """The letter the listing states, or `None` — which is not `A`.
+
+    A description that states no layer at all is a could-not-evaluate for this
+    check and must never read as agreement: it is exactly the shape of the text
+    that shipped before #272, which described the tag by saying nothing moved
+    it.
+    """
+    match = _DESCRIBED_LAYER.search(" ".join(text.split()))
+    return match.group(1) if match else None
+
+
+def test_the_derived_velocity_listing_states_the_layer_this_build_computes(
+    capsys,
+) -> None:
+    """The printed description and `reg.envelope.envelope_layer` agree.
+
+    `--list` is the only consumer of a `description`, so nothing else would
+    fail if this one described a different build. What makes the assertion
+    worth more than a string compare is the right-hand side: the letter comes
+    out of the function the builder calls, on this fixture's own `Limits` and
+    its own `base_vel_source`, so reverting issue #252 turns this red with the
+    description untouched.
+    """
+    assert main(["--list"]) == EXIT_OK
+    out = capsys.readouterr().out
+    scn = scenario("mobile_derived_velocity")
+
+    stated = _layer_the_listing_states(out)
+    assert stated is not None, (
+        "--list no longer states which layer this fixture's envelopes come out "
+        "at. The description is what says which claim the fixture is for; a "
+        "rewrite that drops the letter leaves the check with nothing to compare"
+    )
+    computed = envelope_layer(scn.world.limits, scn.base_vel_source, posed=False)
+    assert stated == computed, (
+        f"--list says this fixture's envelopes are tagged {stated!r} and "
+        f"envelope_layer answers {computed!r} for its own limits and its own "
+        "base_vel_source. One of the two is describing a different build"
+    )
+    # The control: the letter is about the *velocity*, not about a fixture that
+    # would come out `B` whatever its stream said.
+    transit = scenario("mobile_transit")
+    assert (
+        envelope_layer(transit.world.limits, transit.base_vel_source, posed=False)
+        == "A"
+    ), (
+        "mobile_transit's envelopes are `B` too now, so the description above "
+        "no longer distinguishes a perceived base rate from a measured one"
+    )
+
+
+def test_the_listed_layer_check_says_no_to_a_description_of_another_build() -> None:
+    """THE NEGATIVE. Two ways the description can stop matching, both caught.
+
+    A letter that disagrees with the function, and a description that states no
+    letter at all — the second being the text this fixture shipped with until
+    issue #272, which said `reg` read the provenance nowhere. Neither may read
+    as agreement.
+    """
+    scn = scenario("mobile_derived_velocity")
+    computed = envelope_layer(scn.world.limits, scn.base_vel_source, posed=False)
+
+    flipped = _DESCRIBED_LAYER.sub(
+        "`envelope_layer` answers `A` for this run", scn.description
+    )
+    assert _layer_the_listing_states(flipped) == "A"
+    assert _layer_the_listing_states(flipped) != computed, (
+        "the doctored description still agrees with the build, so this negative "
+        "is feeding the check healthy input and proving nothing"
+    )
+
+    silent = (
+        "Nothing in `reg` reads that provenance when it tags a layer, so this "
+        "is the fixture that makes docs/limitations.md §11 observable."
+    )
+    assert _layer_the_listing_states(silent) is None, (
+        "a description stating no layer must not resolve to one; that is the "
+        "could-not-evaluate this check is not allowed to pass"
+    )
 
 
 def test_an_unknown_mobile_name_names_the_mobile_fixtures_in_its_refusal(

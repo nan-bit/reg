@@ -1181,9 +1181,16 @@ CREATE TABLE robot_config (
 -- would come back looking exactly like a right one. `reg.graph.envelope_at`
 -- refuses a posed configuration for that reason rather than recomputing it, and
 -- the discard rule above therefore reads: the polygon is recomputable **for a
--- base that did not move**, and a mobile run must retain it. Nothing in this
--- repository writes a posed configuration yet (docs/mobile-base.md §7, Tier 4),
--- so nothing here is currently discarding a polygon it cannot recover.
+-- base that did not move**, and a mobile run must retain it. The four mobile
+-- fixtures do write posed configurations (issue #178, docs/mobile-base.md §7
+-- Tier 4), so what keeps this from being a polygon nobody can recover is the
+-- rule and not the absence of the case: `GEOMETRY_RETENTION` carries a posed
+-- clause — the geometry is kept on *every* frame whose robot_config states a
+-- base_pose — and a build that produced such a row with a NULL geometry_wkb is
+-- refused rather than written
+-- (`reg.graph._refuse_a_posed_envelope_row_with_no_geometry`). So nothing here
+-- discards a polygon it cannot recover, and the reason that holds is checked
+-- rather than incidental.
 --
 -- `config_key` is what makes that recoverable, so the CHECK requires one or the
 -- other: a row with neither stores no region and names nothing to recompute one

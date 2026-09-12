@@ -217,12 +217,13 @@ python -c "from reg.chain import generate_keyring, write_keyring; write_keyring(
 python -m reg.sim   --scenario declared_violation --seed 0 --out dv.csv
 python -m reg.graph build dv.csv --out dv.sqlite --keyring keyring.json \
     --replan-interval 0.5 --declaration-horizon 0.5 --watchdog-period 1.0 \
-    --run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift
+    --run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift \
+    --worker-notice not-given --dpia-reference none --operator-id-kind pseudonym
 python -m reg.query dv.sqlite --incident 3.5 --keyring keyring.json
 ```
 
-which prints, on the run above. **Abridged**: `…` marks an elided line, and the
-`[scene]` clause and the whole GSN block follow what is shown.
+which prints, on the run above. **Abridged**: `…` marks an elided line; the
+`[scene]` clause precedes `[integrity]`, and the GSN block follows what is shown.
 
 ```
 incident report: t=3.5000 s
@@ -265,7 +266,7 @@ copy and watch it —
 
 ```bash
 python -m reg.query dv.sqlite --verify-chain --keyring keyring.json \
-    --tamper declaration:first:horizon=9.5 --tamper-out tampered.sqlite
+    --tamper declaration:first:horizon=9.5 --tamper-out tampered.sqlite  # exit 3
 python -m reg.query tampered.sqlite --incident 3.5 --keyring keyring.json  # exit 3
 ```
 
@@ -280,7 +281,8 @@ python -c "from reg.commit import generate_witness, write_witness; write_witness
 python -m reg.graph build dv.csv --out dv.sqlite --keyring keyring.json \
     --witness witness.json \
     --replan-interval 0.5 --declaration-horizon 0.5 --watchdog-period 1.0 \
-    --run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift
+    --run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift \
+    --worker-notice not-given --dpia-reference none --operator-id-kind pseudonym
 python -m reg.query dv.sqlite --verify-chain --keyring keyring.json --witness witness.json
 ```
 
@@ -292,11 +294,6 @@ moved even with no `--keyring` and no `--witness` on the command line. The
 witness signature is what stops the recorded heads being rewritten to match.
 
 ## Status
-
-**Built.** Everything the four claims above name, plus what carries them: the
-shared record types (`reg/types.py`), the simulator and its eleven scenario
-fixtures, the proprioception-only envelope, the evidence graph and its SQLite
-store, the benchmarks and the viz.
 
 **Published.** The write-up — [`docs/plan.md`](docs/plan.md) Phase 10 — is at
 [ernan.dev/projects/reg](https://ernan.dev/projects/reg). The GIF that phase also

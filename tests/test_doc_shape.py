@@ -335,6 +335,15 @@ EXEMPT: dict[str, str] = {
 #         went with them. 27,655 / 329 = 84.05, and 84.0 is not available — it
 #         would put the ceiling at 27,636, under the corpus — so 84.1 is the
 #         tightest tenth and the thirteen words are not banked headroom
+#   84.1  today, 2026-09-11, after #271 made the front page's demo run. Unchanged
+#         and re-measured: `README.md` went 3,577 -> 3,556 while the denominator
+#         held at 330. The three disclosure flags `reg.graph build` has required
+#         since #125 were added to both of its builds, and paid for inside the
+#         same file by the Status section's *Built.* paragraph, which listed
+#         what the four claims above it already name. 27,725 / 330 = 84.02, and
+#         84.0 is not available — it would put the ceiling at 27,720, under the
+#         corpus — so 84.1 is the tightest tenth and the twenty-seven words are
+#         not banked headroom
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -479,7 +488,15 @@ RATE = 84.1
 #           with the inner polygon, and §2's two-directions bullet stopped
 #           saying the recomputation twice. Two words below the last ceiling
 #           rather than level with it — measured, no headroom
-ARGUMENT_MAX = 47127
+#   47,125  today, 2026-09-11, after #271 replaced `plan.md` Phase 5's copy of
+#           the build command with a pointer at the README's *Reading an
+#           incident*, which is now run by `tests/test_readme.py`. A copy is how
+#           that command went stale — it had been missing the three flags #125
+#           made required. The pointer is three words shorter than the command
+#           it replaces and the sentence under it gained one naming the
+#           disclosure flags beside the identity ones, so the section went -2.
+#           Two words below the last ceiling — measured, no headroom
+ARGUMENT_MAX = 47125
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.

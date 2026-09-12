@@ -754,12 +754,12 @@ compression ratio comes almost entirely from this.
 Same discipline as reachability pruning in AIC — not compressing, discarding what's
 provably irrelevant to the supported question set.
 
-**Deliverable:** `python -m reg.graph build runs/contact.csv --out runs/contact.sqlite
---run-start 2026-08-21T09:00:00Z --unit-id arm-07 --operator-id op-day-shift`
+**Deliverable:** the build in [`README.md`](../README.md)'s *Reading an
+incident*, run by `tests/test_readme.py`.
 
-The three identity flags are required and have no default (issue #83); the start
-is declared rather than read from a clock, so the deliverable stays
-byte-reproducible.
+Its identity and disclosure flags are required with no default (issues #83,
+#125); the start is declared rather than read from a clock, so the deliverable
+stays byte-reproducible.
 
 ---
 

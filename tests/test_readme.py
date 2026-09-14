@@ -20,16 +20,16 @@ record was extracted into `docs/retention.md`. Containment against `plan.md`
 alone stopped being enough that day: `plan.md` became a document that *restates*
 figures measured elsewhere, so `README.md` ⊆ `plan.md` could hold while both
 drifted away from the measurement together. That was demonstrated, not assumed —
-setting both to `999 GB` while `retention.md` and `reg.bench` still said 264 left
-the whole suite green. So the second link closes it: **Claim 1's own figures must
+setting both to `999 GB` while `retention.md` and `reg.bench` still said the
+measured figure of the day left the whole suite green. So the second link closes it: **Claim 1's own figures must
 appear in `docs/retention.md`**, the document that publishes them.
 
 **What that does and does not buy, stated precisely, because the first version of
 this paragraph overstated it.** It said `README ⊆ plan ⊆ retention == code`. The
 last equality is false: `tests/test_published_figures.py` re-derives the
-`bytes/hour` tables and `sufficiency.md`'s counts, and nothing else — of Claim 1's
-eight figures, `265 GB`, `~689x`, `182.5 TB`, `1 TB`, `13x` and `~40x` are not
-re-derived by anything. So this chain keeps the three documents *consistent with
+`bytes/hour` tables, `sufficiency.md`'s counts, the coarsest level's label, the
+byte attribution and the Layer-A comparison — and of the figures Claim 1 quotes,
+`267 GB`, `~684x`, `182.5 TB` and `1 TB` are still not re-derived by anything. So this chain keeps the three documents *consistent with
 each other*, which is what stops the drift demonstrated above; it does not anchor
 them to a measurement. The anchor is one table, and the totals are arithmetic
 over it stated in prose.
@@ -67,7 +67,7 @@ PLAN = REPO / "docs" / "plan.md"
 RETENTION = REPO / "docs" / "retention.md"
 LOSSINESS = REPO / "docs" / "lossiness.md"
 
-# A retention size (`263 GB`) or a ratio (`694x`, `13x`). The tilde, the
+# A retention size (`263 GB`) or a ratio (`694x`, `51x`). The tilde, the
 # asterisks and the surrounding markdown are stripped before matching, so
 # `**~694x**` and `~694x smaller` normalise to the same token.
 FIGURE = re.compile(r"(?<![\d.])(\d[\d,]*(?:\.\d+)?)\s*(MB|GB|TB|PB|x)\b")
@@ -171,7 +171,7 @@ def test_a_claim_1_that_cannot_be_located_is_not_a_pass() -> None:
 # ==========================================================================
 # THE DOCS INDEX QUOTES A FIGURE TOO, AND NOTHING HELD IT (issue #217)
 #
-# `docs/README.md` names `265 GB` where it tells a reader which of this
+# `docs/README.md` names `267 GB` where it tells a reader which of this
 # repository's figures are re-derived and which are arithmetic in prose. Issue
 # #217 cut the entry points by mutation rather than by a green run, and this is
 # what that method found: setting that figure to `999 GB` left the whole suite

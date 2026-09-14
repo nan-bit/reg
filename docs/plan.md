@@ -70,11 +70,11 @@ representation you can retain, export, and hand to an assessor or insurer.
 
 > **Amended twice on 2026-08-19; read the second amendment. Re-measured
 > 2026-08-20.** The clause "orders of magnitude smaller" was struck that morning,
-> because the benchmark showed the graph is ~13x *larger* per frame than a
-> gzipped copy of the simulator's raw state stream, 24 columns and 19 of them
-> Layer B — **measured on an artifact holding no Layer A**;
-> the artifact this project ships carries the record stream and is ~51x larger,
-> which is the figure Claim 1 publishes. It was restored the same day, because that
+> because the benchmark showed the graph *larger* per frame than a gzipped copy
+> of the simulator's raw state stream, 24 columns and 19 of them Layer B —
+> measured then on an artifact holding no Layer A, and that figure is retired.
+> The artifact this project ships carries the record stream and is **~51x**
+> larger, which is what Claim 1 publishes. It was restored the same day, because that
 > stream was never what the claim was about — it is ~90 MB/day gzipped and
 > answers no audit question. Against a *sensor* log the artifact is **~684x**
 > smaller over a six-month retention period at occurrence resolution (267 GB vs
@@ -253,10 +253,10 @@ quoted.** The original framing — is the graph smaller than the stream it
 replaces — is answered **no**, and every number that answers it carries a
 condition that is part of the number:
 
-- A **13x** figure appears in that comparison measured on a build holding **no
-  declaration, verdict, fault or chain record at all** — no Layer A. The current
-  build carries all of it and the figure is **~51x**. Quoting 13x without the
-  condition quotes a different artifact.
+- The **~51x** is measured on the build carrying **Layer A** — every
+  declaration, verdict, fault and chain record. A build holding none of them is
+  a different artifact and a smaller figure; that comparison is retired rather
+  than republished, ~51x being the harsher one and the one Claim 1 prices.
 - The gzipped state CSV is **not what practitioners retain**. Against
   **rosbag2/MCAP**, the incumbent, the same proprioceptive content costs
   **11.76x** what the gzipped CSV does at rosbag2's default preset and **3.83x**

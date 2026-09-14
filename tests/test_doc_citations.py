@@ -116,8 +116,8 @@ RETIRED_PLACES: tuple[Retired, ...] = (
         # this repository numbers questions under a section.
         pattern=re.compile(r"§\s*7\s+question\s+[12]\b"),
         instead=(
-            "`docs/limitations.md` §11's amendment, which records the answers "
-            "(issue #252 for the granularity, issue #229 for the fixture)"
+            "`docs/limitations.md` §11's amendment, which records issue #252's "
+            "answer; the fixture that settled question 2 is issue #229's"
         ),
     ),
 )

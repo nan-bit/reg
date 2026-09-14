@@ -810,7 +810,7 @@ EDGE_SPECS: dict[str, EdgeSpec] = {
 # off the *edge's own endpoint* below, so two `HAS_ENVELOPE` edges over one
 # envelope row whose bases differ get one basis between them and one of them is
 # misstated. A reader who consults a misstatement is worse off than one who
-# consults silence. Issue #249 carries the table.
+# consults silence. PR #251 carries the table.
 #
 # EACH ROW CARRIES THE LAYER THAT INPUT ALONE ADMITS, AND THAT IS NOT
 # REDUNDANT. It is what makes the tag checkable *from the file* rather than from
@@ -1234,7 +1234,7 @@ CREATE TABLE robot_config (
 -- answerable from a stored row rather than radially; everywhere else the two
 -- scalars are what survives. Measured before it was adopted: +0.61% of the
 -- transition figure and +0.42% of the per-frame one, against +4.50% and +3.10%
--- for a boundary on every computed row (issue #230 carries the table).
+-- for a boundary on every computed row (PR #250 carries the table).
 --
 -- The last CHECK below is that rule in the schema rather than a convention on
 -- top of it: `outer_wkb` is present exactly where `geometry_wkb` and

@@ -6350,7 +6350,7 @@ def run_outer_boundary_study(
 #: movement is measured against, and the row the report's benefit column is read
 #: against. Since issue #252 it is reconstructed rather than found — the adopted
 #: `reg.store.EDGE_BASIS_TABLE` is dropped from the copy — because the movement
-#: this study reports is the movement a reader finds in issue #249's table, and
+#: this study reports is the movement a reader finds in PR #251's table, and
 #: a baseline that quietly became the adopted schema would report zero for the
 #: thing that was adopted.
 LAYER_BASIS_TODAY = "today"

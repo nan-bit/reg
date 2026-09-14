@@ -4242,7 +4242,7 @@ def test_an_intact_layer_column_is_checkable_against_its_basis(
     runs — the report recomputes each tag as the weakest of its own inputs and
     compares — and the healthy case comes back CHECKABLE with the count it
     checked and the inputs it checked over, which is what separates a pass from
-    an assertion (docs/self-describing.md gap 1).
+    an assertion (docs/limitations.md §12 gap 1).
 
     The two negatives are next door: a basis removed from the file, and a tag
     edited to disagree with the basis under it.

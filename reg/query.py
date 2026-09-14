@@ -4336,7 +4336,7 @@ def _layer_basis_claim(conn: sqlite3.Connection) -> ColdReadClaim:
 
     Since schema 13, yes — and this row is the one place in the report that
     reports the *result* of running the check rather than only the file's
-    ability to support it (issue #252, docs/self-describing.md gap 1). Every
+    ability to support it (issue #252, docs/limitations.md §12 gap 1). Every
     tagged edge carries a basis in `edge_layer_basis`: one row per input, each
     naming what that input said and the layer it alone admits. The tag is the
     weakest of them, `reg.store.layer_from_basis` is that arithmetic, and this

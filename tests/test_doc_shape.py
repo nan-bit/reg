@@ -355,6 +355,16 @@ EXEMPT: dict[str, str] = {
 #         paragraph states, and a third telling of `limitations.md` §5 inside
 #         one section. 27,670 / 330 = 83.85, rounded up to the next tenth. The
 #         denominator did not move: this change is documents and tests only
+#   72.6  today, 2026-09-14, after #275 cut `docs/self-describing.md` to what
+#         the file still needs a document for: 6,144 -> 2,416, every tier of its
+#         §8 having landed. §1's gap table and narrative, §2's two restated
+#         tables and its list of the negatives, §3's cost table, §5, the
+#         sixth-pass summary and §7's two answered questions are pointers or
+#         gone, and §8's two costing tables are their findings beside a pointer
+#         at the PRs that carry them dated. 23,942 / 330 = 72.55, rounded up to
+#         the next tenth. This is the largest step this ratchet has taken and it
+#         is the cheapest kind: the prose describes a build that finished, so
+#         the denominator did not move and nothing it described was removed
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -365,7 +375,7 @@ EXEMPT: dict[str, str] = {
 # **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 83.9
+RATE = 72.6
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -599,7 +609,13 @@ PARAGRAPH_MAX_WORDS = 120
 #        were each rewritten around what is measured now, and each came out
 #        under the threshold. Cut for the word budget rather than for this
 #        ceiling, and lowered here for the reason the #241 row gives
-LONG_PARAGRAPHS_MAX = 80
+#    79  today, 2026-09-14, after #275: `docs/self-describing.md` went 1 -> 0.
+#        The paragraph that fell is §3's account of what the minimise rule
+#        settled when it was applied — the corpus's one over-long paragraph from
+#        this document, and it went with the table it qualified rather than
+#        being split. Cut for the word budget rather than for this ceiling, and
+#        lowered here for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 79
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -671,7 +687,15 @@ LONG_PARAGRAPHS_MAX = 80
 #        *Why it lost* item 2 had gained a sentence dating when its point was
 #        retired, and it was cut rather than reworded — the issue carries that
 #        history. Lowered for the reason the #241 row gives
-NARRATION_MAX = 135
+#   128  today, 2026-09-14, after #275: `docs/self-describing.md` went 11 -> 4.
+#        Six went with the prose that carried them — the three gap narratives,
+#        §2's account of the negatives, §5's relation to #170 and the sixth-pass
+#        summary — and the seventh is the status header, which stopped
+#        enumerating what landed tier by tier once §8 carried one line each.
+#        None was reworded for this ceiling and none moved below the line: a
+#        document whose tiers have all landed narrates less by carrying less.
+#        Lowered for the reason the #241 row gives
+NARRATION_MAX = 128
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

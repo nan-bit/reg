@@ -369,12 +369,9 @@ question, and that is the commercial argument in its useful form.
 300,3000 --seed 0 --out <path>`, re-measured 2026-09-12 for issue #273;
 long-run fixture, 16 envelope samples, 200 ms horizon, no record stream at
 either rung — a size comparison against the raw stream, holding no Layer A).
-**A ratio was published from it until 2026-09-12 and is retired**: guarded on
-the wording of its condition and never on its value, which is how it went stale
-— the same measurement on schema 14 is 17.1x, 1,105,920 B against 64,652 B. The
-Layer-A **~51x** below carries the claim instead, being the harsher comparison
-and the one `tests/test_published_figures.py` re-measures every run. A
-30,000-frame rung was retired with it.
+No ratio is published from it: the Layer-A **~51x** below carries the claim,
+being the harsher comparison and the one `tests/test_published_figures.py`
+re-measures every run.
 
 | frames | robot time | x gz CSV |
 |---|---|---|
@@ -536,8 +533,7 @@ like-for-like slice and what is still unlike about it.
 **2. The number that is actually about retention is absolute, and we have it.**
 It is the resolution curve this document leads with: **60.85 MB/h** at
 occurrence resolution at a **50 Hz** control rate, and **267 GB** per robot for
-the mandated six months. This point was derived from the ladder's 30,000-frame
-rung until 2026-09-12 and was retired with it. Whether the figure is three
+the mandated six months. Whether the figure is three
 orders of magnitude below a real sensor log is **imported context, not a
 result** — this simulator has no sensors and cannot measure it. Say so wherever
 it appears.

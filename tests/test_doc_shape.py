@@ -347,13 +347,13 @@ EXEMPT: dict[str, str] = {
 #   83.9  today, 2026-09-12, after #273 retired the no-Layer-A ratio and
 #         re-measured the scaling ladder. `README.md` went 3,556 -> 3,524, the
 #         Claim 1 row losing the sentence that carried the retired figure and
-#         its condition, and `docs/sensor-baseline.md` went 6,163 -> 6,152: the
+#         its condition, and `docs/sensor-baseline.md` went 6,163 -> 6,140: the
 #         corrected cause of the sublinear growth and the corrected pointer at
-#         `lossiness.md` cost 44 words and were paid for and eleven over, by
+#         `lossiness.md` cost 32 words and were paid for and twenty-three over, by
 #         three restatements — *What is actually published* restating the table
 #         row directly above it, *Sensitivity* restating the linearity that
 #         paragraph states, and a third telling of `limitations.md` §5 inside
-#         one section. 27,682 / 330 = 83.89, rounded up to the next tenth. The
+#         one section. 27,670 / 330 = 83.85, rounded up to the next tenth. The
 #         denominator did not move: this change is documents and tests only
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
@@ -507,18 +507,18 @@ RATE = 83.9
 #           it replaces and the sentence under it gained one naming the
 #           disclosure flags beside the identity ones, so the section went -2.
 #           Two words below the last ceiling — measured, no headroom
-#   47,096  today, 2026-09-12, after #273 retired the no-Layer-A ratio and
+#   47,035  today, 2026-09-12, after #273 retired the no-Layer-A ratio and
 #           re-measured the scaling ladder. `docs/retention.md` went 6,070 ->
-#           6,034 and `docs/plan.md` 8,484 -> 8,491. The ladder lost a rung and
+#           5,973 and `docs/plan.md` 8,484 -> 8,491. The ladder lost a rung and
 #           the figures derived from it, and the retired figure's condition —
 #           stated at both ends of one subsection, which is the restatement the
-#           #233 row named and did not finish — became one sentence in the
-#           paragraph that already carries the ladder's provenance. `plan.md`
+#           #233 row named and did not finish — became one sentence saying no
+#           ratio is published from the ladder. The dated account of the
+#           retirement was cut rather than kept: issue #273 carries it. `plan.md`
 #           pays seven for stating the Layer-A condition where the retired
-#           figure stood. Twenty-nine words below the last ceiling rather than
-#           level with it, for the reason the #233 row gives — measured, no
-#           headroom
-ARGUMENT_MAX = 47096
+#           figure stood. Ninety words below the last ceiling rather than level
+#           with it, for the reason the #233 row gives — measured, no headroom
+ARGUMENT_MAX = 47035
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -667,7 +667,11 @@ LONG_PARAGRAPHS_MAX = 80
 #        narrated. A claim that states what the artifact does needs no issue
 #        number to say when it will, so nothing was reworded for this ceiling;
 #        it is lowered for the reason the #241 row gives
-NARRATION_MAX = 136
+#    135  today, 2026-09-12, after #273: `docs/retention.md` went 21 -> 20.
+#        *Why it lost* item 2 had gained a sentence dating when its point was
+#        retired, and it was cut rather than reworded — the issue carries that
+#        history. Lowered for the reason the #241 row gives
+NARRATION_MAX = 135
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

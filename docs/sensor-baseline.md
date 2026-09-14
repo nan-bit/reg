@@ -659,8 +659,7 @@ per-frame 589.3 → 952 GB. Today they are 267, 838 and 1,293 GB; #83, #82, #166
 #252 and #257 account for the 1.5% at the coarsest level; **two of the five are
 itemised in bytes and three are not** — #166 and #257 at +2,048 B each here,
 under [`lossiness.md`](lossiness.md)'s `## Why`, *Retained #8 — what the base
-frame cost*. This pointer named *Retained* #8 itself until 2026-09-12, which
-carries no arithmetic.
+frame cost*.
 
 The attribution is to #59 because it moved the figures by an order of magnitude
 and established that no resolution level coarsens a record — which put the

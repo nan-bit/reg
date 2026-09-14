@@ -1029,7 +1029,7 @@ def test_no_document_publishes_the_retired_13x(doc: str, path: Path) -> None:
         f"{doc} publishes the retired 13x in {len(quoting)} place(s):\n"
         + "\n".join(f"  - {unit[:160]}" for unit in quoting)
         + "\nThat figure was measured on a build holding no Layer A and is "
-        "stale: the same measurement on schema 14 is 17.1x. It is retired "
+        "stale, and nothing re-measured it. It is retired "
         "rather than republished — quote ~51x, the Layer-A figure "
         "`docs/retention.md` publishes and this module re-measures."
     )

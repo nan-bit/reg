@@ -1,8 +1,8 @@
 # The self-describing artifact — what the file must carry so the prose does not
 
 **Status:** a design document; **every tier of §8 has landed** · written
-2026-09-05, tiers 0 to 2 2026-09-05, tier 3 2026-09-07, tier 4 2026-09-08, tier
-5 2026-09-10 · normative over nothing yet; where it touches what the project may
+2026-09-05, tiers 0 to 2 2026-09-05, tier 3 2026-09-07 to 2026-09-11, tier 4
+2026-09-08, tier 5 2026-09-10 to 2026-09-11 · normative over nothing yet; where it touches what the project may
 claim it defers to [`sufficiency.md`](sufficiency.md) and
 [`limitations.md`](limitations.md) until those files carry the change · §8 is
 the authority on what landed and carries the issue numbers per tier
@@ -170,9 +170,11 @@ line — is the shape this document is written in.
   other open decision here and is one no longer: issue #252 adopted it, and
   [`limitations.md`](limitations.md) §11's amendment is where that is recorded.
 
-**What the sixth prior-art pass changed** is [`prior-art.md`](prior-art.md)
-§26–§29, which carries its own table of the changes it ordered and where each
-one landed. It did not end the track: §29 strengthens the case for tier 2,
+**What the sixth prior-art pass changed** ([`prior-art.md`](prior-art.md)
+§26–§29) now lives in §3, the buildinfo deviation and *attributable* qualified;
+§4, the reader; §7 question 3; and *What this borrows*, the SLSA correction. That
+file's table names the sections each change first landed in, which this one no
+longer carries. It did not end the track: §29 strengthens the case for tier 2,
 because an environment record is Representation Information on any reading.
 
 ---
@@ -235,13 +237,13 @@ landed.
   from `reg.store.build_environment` at `SCHEMA_VERSION` 11, and
   `reg.graph.envelope_at` refusing to recompute off the recording environment.
   No published figure moved.
-- **Tier 3 — the cold read.** #231, #242 and #262, 2026-09-07:
+- **Tier 3 — the cold read.** #231, #242 and #262, 2026-09-07 to 2026-09-11:
   `reg.query.cold_read` and `--cold-read`, seven claims in five states.
 - **Tier 4 — the layer basis.** #252, 2026-09-08: option A, per edge, as
   `reg.store.EDGE_BASIS_TABLE` at `SCHEMA_VERSION` 13, with `envelope_layer` the
   weakest of its inputs and `open_edge` refusing an edge whose tag disagrees
   with it. Every published retention figure moved.
-- **Tier 5 — the boundary.** #257, #258 and #265, 2026-09-10:
+- **Tier 5 — the boundary.** #257, #258 and #265, 2026-09-10 to 2026-09-11:
   `envelope.outer_wkb` at `SCHEMA_VERSION` 14 under option C, plus
   `reg.query.reached_point`, `pointwise_coverage` and `--reached-point`. Every
   published retention figure moved again.
@@ -262,10 +264,9 @@ row whose bases differ get one basis between them.
 do not move at all** — the occurrence level retains no envelope row, so
 no boundary reaches the figure Claim 1 is quoted on. C writes 12 boundaries
 where B writes 84, and `ENVELOPE_RETENTION` has already capped the pointwise
-question at 2.8% of frames, so B buys 84 answerable frames rather than 12 — a
-re-run on 2026-09-11 prices that at about **7.8x the file bytes** and **6.8x the
-boundary bytes**. Which coverage is right is a question about what an incident
-report cites, and the ceiling is a separate decision.
+question at 2.8% of frames, so B buys 84 answerable frames rather than 12. Which
+coverage is right is a question about what an incident report cites, and the
+ceiling is a separate decision.
 
 ## See also
 

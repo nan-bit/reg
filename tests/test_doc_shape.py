@@ -356,12 +356,12 @@ EXEMPT: dict[str, str] = {
 #         one section. 27,670 / 330 = 83.85, rounded up to the next tenth. The
 #         denominator did not move: this change is documents and tests only
 #   72.6  today, 2026-09-14, after #275 cut `docs/self-describing.md` to what
-#         the file still needs a document for: 6,144 -> 2,416, every tier of its
+#         the file still needs a document for: 6,144 -> 2,430, every tier of its
 #         §8 having landed. §1's gap table and narrative, §2's two restated
 #         tables and its list of the negatives, §3's cost table, §5, the
 #         sixth-pass summary and §7's two answered questions are pointers or
 #         gone, and §8's two costing tables are their findings beside a pointer
-#         at the PRs that carry them dated. 23,942 / 330 = 72.55, rounded up to
+#         at the PRs that carry them dated. 23,956 / 330 = 72.59, rounded up to
 #         the next tenth. This is the largest step this ratchet has taken and it
 #         is the cheapest kind: the prose describes a build that finished, so
 #         the denominator did not move and nothing it described was removed

@@ -211,7 +211,7 @@ not omitted, and it is not softened into a claim.
 
 | # | Question (query) | Layer, and the evidence for it | Minimum resolution, and the evidence for it | Claim strength |
 |---|---|---|---|---|
-| 1 | Could the robot have reached (x, y) at t? (`reg.graph.envelope_at`) | **A** — `HAS_ENVELOPE` is `EdgeSpec("A", "RobotConfig", "Envelope", …)`; it is the only Layer A edge type, and the only one naming no `Entity` | **transition** — the occurrence view holds **0 edges** (curve above) and, by the projection's own rule, no `envelope` and no `robot_config` rows either, so the question has no substrate there. Agreement at the transition level is **unmeasured, deliberately**: the only available ground truth is `reg.envelope` itself, and a check whose ground truth reruns the code under test cannot fail | **certifiable**, in the positive direction only, and **for a fixed base**: the `(x, y)` is a room coordinate, which is a condition and not a notation (§5.6) |
+| 1 | Could the robot have reached (x, y) at t? (`reg.query.reached_point`) | **A** — `HAS_ENVELOPE` is `EdgeSpec("A", "RobotConfig", "Envelope", …)`; it is the only Layer A edge type, and the only one naming no `Entity` | **transition** — the occurrence view holds **0 edges** (curve above) and, by the projection's own rule, no `envelope` and no `robot_config` rows either, so the question has no substrate there. Agreement at the transition level is **unmeasured, deliberately**: the only available ground truth is `reg.envelope` itself, and a check whose ground truth reruns the code under test cannot fail | **certifiable**, in the positive direction only, and **for a fixed base**: the `(x, y)` is a room coordinate, which is a condition and not a notation (§5.6) |
 | 2 | Did the policy exceed its declared bound? (`violations(window)`) | **A** — [`docs/lossiness.md`](lossiness.md) supported-question set, query 6. No entity is named by a declaration or a verdict | **occurrence** — AGREE at every level. The record tables survive all three views intact, so this is the rare question the coarsest artifact answers in full | **certifiable**, and measured |
 | 3 | What did the policy declare at t? (`declared_bound(t)`) | **A** — same, query 5 | **transition** — occurrence: **COULD-NOT-EVALUATE** ("this level states no declaration in force at t=30.0"), because the region a declaration names lives in the `edge` and `envelope` tables the occurrence view empties; transition and per-frame: AGREE | **certifiable**, and measured |
 | 4 | Was the record tampered with? (`verify_chain()`) | **A** — same, query 8. A hash chain and a MAC over records that name no entity | **occurrence** — AGREE at every level, walked under `measurement_keyring` over 3,120 chain records. Negative tests feed it a truncated chain, an altered record and a missing key | **certifiable**, and measured |
@@ -482,8 +482,7 @@ level* — and this is the file that says what may be claimed
 re-measured, no layer tag moves, and §5.1's verdict is correct for the artifact
 this document is normative over. What changes here is what that verdict is
 understood to **rest on**, which is this document's job and not
-[`docs/mobile-base.md`](mobile-base.md)'s — a design document with nothing built
-behind it.
+[`docs/mobile-base.md`](mobile-base.md)'s.
 
 ### 5.7 The widening: what Layer A gained, and what it did not
 
@@ -599,13 +598,12 @@ the `A`:
 attestation edges are Layer A and not one of them names an `Entity`* — is the
 half of this document worth the trouble, and relabelling those edges is a change
 to what the project claims rather than a tag on a row. Nothing forces that
-decision: no fixture is mobile, `reg.enforce.Enforcer` refuses to construct for a
-driven base, and a run whose base moved can retain its regions rather than bounds
-over a base that moved.
+decision: the four mobile fixtures build and adjudicate, and `reg.graph.build`
+writes no attestation edge over a posed configuration.
 
 So the refusal is a could-not-evaluate held open on purpose, and the decision
-stays available to whoever brings the first mobile fixture — which is the right
-place to take it, with something in hand that the answer would be about.
+stays available to whoever first needs one — which is the right place to take
+it, with something in hand that the answer would be about.
 
 **`reg.graph.build` writes a posed configuration, on the terms the table above
 sets.** A stream whose frames state a base pose builds; every `robot_config` row
@@ -620,9 +618,9 @@ no decision about §2's asymmetry has been taken.
 Beside the write is the retention that makes it honest: `GEOMETRY_RETENTION`
 keeps the polygon on every posed configuration, because `envelope_at` cannot
 recompute one — [`lossiness.md`](lossiness.md) *Discarded* #9 and
-[`mobile-base.md`](mobile-base.md) §7 Tier 4. The eleven fixtures in this
-repository are bolted down, so `meta[base_frame]` on every artifact it builds is
-the origin written out and no layer tag in any of them is a posed one.
+[`mobile-base.md`](mobile-base.md) §7 Tier 4. The eleven priced fixtures are
+bolted down, so `meta[base_frame]` on every artifact built from one is the origin
+written out and no layer tag in any of them is a posed one.
 
 ### 5.9 The provenance on the velocity
 

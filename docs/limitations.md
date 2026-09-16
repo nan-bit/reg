@@ -889,8 +889,8 @@ is no provenance on a joint rate for them to follow.**
 
 ## 12. The artifact is not self-describing: one question still needs this document
 
-Added 2026-09-05 (issue #198). [`self-describing.md`](self-describing.md) §1 is
-the design document; this entry is its tier 0. The three gaps it named were each
+Added 2026-09-05 (issue #198). [`self-describing.md`](self-describing.md) is the
+design document; this entry is its §8 tier 0. The three gaps it named were each
 already priced somewhere in this file — §1 for the platform, §2 and §3 for the
 radius, §11 for the tag — and **that was the finding**: a reader who wants to know
 what an auditor can do with the file alone had to assemble it from three entries
@@ -925,7 +925,7 @@ answered by the region. Elsewhere it stays radial in whichever direction it is
 asked (§2's bullets; §3 is what that costs the overclaim check) and the region is
 recomputable, which is gap 2. **The ceiling on the rest is `ENVELOPE_RETENTION`,
 not this gap**: a boundary on every retained row would answer 84 of those frames
-for 7.3x the bytes.
+rather than 12. **PR #250** prices that; no ratio is restated here.
 
 **The cost.** What is left is a fact a reader must take from a markdown file that
 no test holds against the artifact. That is the cost this project has already
@@ -941,14 +941,12 @@ figure** — [`retention.md`](retention.md) is the re-measurement, +0.20% to
 containment re-labels three of five fault fixtures.
 
 **What a claim would need in order not to inherit this.** That the file carry
-what the prose carries, which is [`self-describing.md`](self-describing.md) §3 and
-its build order in §8. Tiers 2 to 5 have landed. What is left is tier 1's
-[`prior-art.md`](prior-art.md) pass on build provenance, in-toto and SLSA,
-because recording the toolchain that produced an artifact is ordinary practice
-this project does not get to discover. Until then the supportable claim is
-exactly: **this artifact lets a reader check a layer tag and an environment from
-the graph alone; the reachable region behind an edge is a region where an edge
-anchors one and a radius everywhere else.**
+what the prose carries. Every tier of [`self-describing.md`](self-describing.md)
+§8 has landed, and its tier lines are where what moved into the file is named;
+§3 is why the environment record sits inside the artifact rather than beside it.
+The supportable claim is exactly: **this artifact lets a reader check a layer
+tag and an environment from the graph alone; the reachable region behind an edge
+is a region where an edge anchors one and a radius everywhere else.**
 
 ---
 

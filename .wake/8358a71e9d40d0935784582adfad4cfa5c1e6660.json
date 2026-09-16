@@ -1,0 +1,163 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "286-1789537484221995085-758139",
+    "authored_by": {
+      "agent": "claude",
+      "agent_args": "",
+      "agent_version": "2.1.241 (Claude Code)",
+      "duration_s": 5490,
+      "harness": "wake-runner",
+      "harness_version": "v0.4.8 (6a04cc329)",
+      "instruction_sources": [
+        "CLAUDE.md"
+      ],
+      "instructions": "503977ca09480def5d58db88d5112c083c6a06bf1b902fd1e17c2a41496d5476",
+      "model": "claude-opus-5",
+      "model_source": "claude:session-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "d91e23e675d89e21b78672efda2f163951551ad7eb694959b37777d1e167a2d6",
+        "authored_by": "a804f970a734edc553c5902450526caa4d1c98d2dd5eb86ce2a373ed6278ca4f",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "5e884fdc1f207c92ed61154e80f2368df759e4609720c58032744143ada25799",
+        "concluded": "ea02f43bd884f5bb2f4cb9bab48d7688c51d17c5573800fc9da1d8e574c1998f",
+        "coverage": "9b1067a93450f0dd9dd1c400b016a58fe1924dc51deae5f0a0a099220ac15bf7",
+        "declared": "ff4e6940ac7b75bd5d05f860cb9cd72bb68ea881f81ae9b39c745a671d990183",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "00328ce57bbc14b33bd6695bc8eb32cdf2fb5f3a7d89ec14a42825e15d39df60",
+        "out_of_scope": "12110a613427de0ff32a59897dd97766ec609703053f0992aedac84a4abf19ac",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "a3fae90de2ef0f719c0f232e41474a69b24a11ba4affaf9628dbf9b759061676",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "8a2fa6acf28ccb5d0da03a8580d466bddab75c3498721b8315a596bd362fab8e",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "8358a71e9d40d0935784582adfad4cfa5c1e6660",
+    "concluded": {
+      "analyzer": "pyreach/builtin@1",
+      "changed": [
+        "docs/limitations.md",
+        "reg/graph.py",
+        "tests/test_doc_shape.py",
+        "tests/test_published_figures.py"
+      ],
+      "edge_kinds": [
+        "file-reference",
+        "import"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/limitations.md",
+        "reg/bench.py",
+        "reg/graph.py",
+        "scripts/check_bench_determinism.py",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_bench_determinism.py",
+        "tests/test_chain.py",
+        "tests/test_commit.py",
+        "tests/test_doc_citations.py",
+        "tests/test_doc_shape.py",
+        "tests/test_enforce.py",
+        "tests/test_graph.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_layer_boundary.py",
+        "tests/test_layout.py",
+        "tests/test_personal_data.py",
+        "tests/test_prior_art.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_scenarios.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 51
+      },
+      "changed_unreadable": [
+        "docs/limitations.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 1
+      },
+      "unresolved_edges": [
+        {
+          "at": "reg/chain.py:496",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "reg/commit.py:452",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "scripts/record_rosbag2.py:239",
+          "call": "open",
+          "kind": "computed-file-reference"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1480",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        },
+        {
+          "at": "tests/test_layer_boundary.py:1482",
+          "call": "import_module",
+          "kind": "dynamic-import"
+        }
+      ]
+    },
+    "declared": {
+      "patterns": [
+        "docs/limitations.md",
+        "reg/graph.py",
+        "tests/",
+        "tests/test_doc_shape.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 286,
+    "out_of_scope": [
+      "reg/bench.py",
+      "scripts/check_bench_determinism.py"
+    ],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "out-of-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "8358a71e9d40d0935784582adfad4cfa5c1e6660"
+      },
+      "name": "auto/issue-286"
+    }
+  ]
+}

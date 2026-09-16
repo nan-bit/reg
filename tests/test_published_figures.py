@@ -1880,3 +1880,244 @@ def test_one_half_of_the_claim_is_not_the_claim() -> None:
         "publishing.\n"
     )
     assert verdict == COULD_NOT_EVALUATE
+
+
+# ==========================================================================
+# THE BOUNDARY-COVERAGE RATIO IS RETIRED TOO, AND THE GUARD IS INVERTED THE
+# SAME WAY (issue #286).
+#
+# Tier 5's costing priced option B — a boundary on every retained envelope row
+# — against option C, the one that shipped. `docs/limitations.md` §12 and the
+# comment on `reg.graph`'s `_outer` both quoted a byte ratio out of it, and it
+# went stale the way the `13x` did and for the same reason: no test held the
+# value, so a re-run on 2026-09-11 disagreed with the figure and nothing said
+# so. It is retired rather than republished. What stays is the **frame
+# counts** — 84 answerable frames against 12 — because those are what the
+# coverage decision is actually about, and the dated costing is cited as PR
+# #250 rather than restated.
+#
+# So the check is that **neither place quotes a ratio between the two options**.
+# Two shapes are caught, and they are the two the retirements in this file have
+# actually had to remove: a multiplier (the retired one, `7.8 times the bytes`)
+# and a ratio spelled as the byte counts it was taken from (`1,105,920 B against
+# 64,652 B`, which is how the 17.1x came back after the 13x went). What is not
+# caught is a ratio written in words with no figure in it at all; a check that
+# tried to read that would be reading intent, and the span is small enough that
+# the two numeric shapes are the ones a copy-paste brings back.
+#
+# **Where silence is not a pass.** This check is satisfied by a span that is not
+# found — a renumbered section, a comment reworded away from its citation — so
+# the roster test below pins both spans, requires each to be non-empty, and
+# requires each to still carry the two frame counts. Retiring the ratio by
+# losing sight of the paragraph is the failure it exists to catch.
+# --------------------------------------------------------------------------
+
+#: A multiplier a reader takes away as a ratio: `7.8x`, `~8x`, `7.8 times`.
+BOUNDARY_RATIO_MULTIPLIER = re.compile(r"(?<![\w.])~?\d+(?:\.\d+)?\s*(?:x\b|times\b)")
+
+#: The same ratio spelled as the byte counts behind it. Neither span prices
+#: anything in bytes today — both price it in frames — so any byte figure in one
+#: is the costing being restated rather than cited.
+BOUNDARY_RATIO_BYTES = re.compile(
+    r"(?<![\w.])\d[\d,]*(?:\.\d+)?\s*(?:B|kB|KB|MB|GB|bytes)\b"
+)
+
+#: What both spans must still say, per issue #286: 84 answerable frames against
+#: 12. The roster test reads these off the spans, so a rewrite that drops the
+#: counts fails there rather than passing the retirement check by silence.
+BOUNDARY_FRAME_COUNTS: tuple[str, ...] = ("84", "12")
+
+#: The retired multiplier, split so this file's own source stays out of issue
+#: #286's acceptance grep — the same load-bearing split
+#: `tests/test_doc_citations.py` makes for issue #274's. A module that quotes
+#: the figure it retires is a module the retirement's own grep finds.
+RETIRED_MULTIPLIER = "7.3" "x"
+
+#: The `reg/graph.py` comment that prices the same decision. Anchored on its
+#: citation rather than on its wording: the citation is what
+#: `tests/test_doc_citations.py` already holds in place, and a comment that
+#: stopped carrying it would be caught there.
+GRAPH_COMMENT_ANCHOR = "docs/limitations.md §12"
+
+
+def _limitations_section_12(text: str) -> str:
+    """`docs/limitations.md` §12, from its heading to the next `## ` heading.
+
+    Empty string if the section is not there — which the roster test below
+    turns into a failure rather than letting it read as a retirement.
+    """
+    lines = text.splitlines()
+    for start, line in enumerate(lines):
+        if line.startswith("## 12."):
+            for end in range(start + 1, len(lines)):
+                if lines[end].startswith("## "):
+                    return "\n".join(lines[start:end])
+            return "\n".join(lines[start:])
+    return ""
+
+
+def _graph_outer_comment(source: str) -> str:
+    """The one contiguous `#:` block in `reg/graph.py` citing §12.
+
+    Empty string if there is not exactly one, so a comment that lost its
+    citation — or a second block that gained one — is a could-not-evaluate
+    rather than a pass by the block having gone quiet.
+    """
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in source.splitlines():
+        if line.strip().startswith("#:"):
+            current.append(line.strip())
+        else:
+            if current:
+                blocks.append(current)
+            current = []
+    if current:
+        blocks.append(current)
+    citing = [block for block in blocks if GRAPH_COMMENT_ANCHOR in " ".join(block)]
+    return "\n".join(citing[0]) if len(citing) == 1 else ""
+
+
+def boundary_spans() -> dict[str, str]:
+    """The two places option B was priced against option C, by name."""
+    return {
+        "docs/limitations.md §12": _limitations_section_12(
+            (DOCS / "limitations.md").read_text(encoding="utf-8")
+        ),
+        "reg/graph.py, the comment on `_outer`": _graph_outer_comment(
+            (REPO / "reg" / "graph.py").read_text(encoding="utf-8")
+        ),
+    }
+
+
+def the_boundary_ratio_is_retired(text: str) -> tuple[str, list[str]]:
+    """Verdict on whether `text` still prices option B against option C.
+
+    Three-valued, and the third does not resolve to the first: a span with
+    nothing in it to read is COULD-NOT-EVALUATE, because a paragraph this
+    check could not find is not a paragraph the ratio has been retired from.
+    Returns the verdict and the units that quote a figure.
+    """
+    units = _quotation_units(text)
+    if not units:
+        return COULD_NOT_EVALUATE, []
+    quoting = [
+        unit
+        for unit in units
+        if BOUNDARY_RATIO_MULTIPLIER.search(unit) or BOUNDARY_RATIO_BYTES.search(unit)
+    ]
+    return (DISAGREE if quoting else AGREE), quoting
+
+
+@pytest.mark.parametrize("place", sorted(boundary_spans()))
+def test_no_ratio_between_option_b_and_option_c_is_published(place: str) -> None:
+    """**THE CHECK ISSUE #286 ASKS FOR.** The multiplier this replaces was
+    guarded by nothing at all, which is how it drifted from the measurement
+    while both places went on quoting it."""
+    verdict, quoting = the_boundary_ratio_is_retired(boundary_spans()[place])
+    assert verdict == AGREE, (
+        f"{place} prices option B against option C in {len(quoting)} place(s):\n"
+        + "\n".join(f"  - {unit[:160]}" for unit in quoting)
+        + "\nThat ratio is retired, not republished: no test held its value and "
+        "it went stale where it stood. Keep the frame counts — 84 answerable "
+        "frames against 12 — and cite PR #250 for the dated costing."
+    )
+
+
+def test_both_places_that_priced_the_options_are_still_readable() -> None:
+    """**SILENCE IS NOT A PASS**, pointed at the spans rather than the ratio.
+
+    The check above is satisfied by a span this module can no longer find. Both
+    have to be locatable, non-empty, and still carrying the two frame counts the
+    coverage decision is made on — which is also issue #286's *nothing is
+    renumbered* criterion, read from the side that would notice.
+    """
+    spans = boundary_spans()
+    unreadable = [place for place, text in spans.items() if not text.strip()]
+    assert not unreadable, (
+        f"{unreadable} could not be read, so the retirement check above reports "
+        "nothing and reports it as a pass. §12 keeps its number because `reg/` "
+        "and `tests/` cite it; the comment keeps its citation for the same "
+        "reason."
+    )
+    for place, text in spans.items():
+        missing = [count for count in BOUNDARY_FRAME_COUNTS if count not in text]
+        assert not missing, (
+            f"{place} no longer states {missing} — the frame counts issue #286 "
+            "keeps. A span that drops them passes the retirement check by "
+            "saying nothing about the decision at all."
+        )
+
+
+# --- the negatives for the check above ---
+
+
+def test_the_retired_multiplier_is_caught() -> None:
+    """**The negative this check exists for**, and it is §12's own sentence as
+    it stood before issue #286."""
+    verdict, quoting = the_boundary_ratio_is_retired(
+        "**The ceiling on the rest is `ENVELOPE_RETENTION`, not this gap**: a\n"
+        "boundary on every retained row would answer 84 of those frames for "
+        f"{RETIRED_MULTIPLIER}\nthe bytes.\n"
+    )
+    assert verdict == DISAGREE
+    assert len(quoting) == 1
+
+
+def test_a_re_measured_multiplier_is_caught_too() -> None:
+    """**THE NEGATIVE THE RETIREMENT EXISTS FOR.** Republishing the 2026-09-11
+    re-run instead of retiring the figure is the outcome issue #286 declined,
+    and a fresh number must fail exactly as the stale one does — otherwise this
+    guard is on one literal string and the next drift is invisible again."""
+    verdict, quoting = the_boundary_ratio_is_retired(
+        "a boundary on every retained row would answer 84 of those frames for\n"
+        "7.8 times the file bytes and 6.8x the boundary bytes.\n"
+    )
+    assert verdict == DISAGREE
+    assert len(quoting) == 1
+
+
+def test_the_ratio_spelled_as_byte_counts_is_caught() -> None:
+    """The shape the `13x` came back in after it was retired once. A ratio is a
+    ratio whether or not the division is performed for the reader."""
+    verdict, quoting = the_boundary_ratio_is_retired(
+        "option B writes 1,105,920 B where option C writes 64,652 B.\n"
+    )
+    assert verdict == DISAGREE
+    assert len(quoting) == 1
+
+
+def test_the_frame_counts_alone_pass() -> None:
+    """The positive control, and the state both spans are in after issue #286:
+    the counts the decision is about, and a pointer at where it was priced."""
+    assert the_boundary_ratio_is_retired(
+        "a boundary on every retained row would answer 84 of those frames\n"
+        "rather than 12, at a cost PR #250 dates and no ratio here restates.\n"
+    ) == (AGREE, [])
+
+
+def test_a_span_with_nothing_to_read_is_a_refusal() -> None:
+    """Three-valued: an empty span is could-not-evaluate, and the roster test
+    above is what stops that from becoming a hiding place."""
+    assert the_boundary_ratio_is_retired("   \n\n") == (COULD_NOT_EVALUATE, [])
+
+
+def test_a_comment_without_its_citation_is_not_read_as_retired() -> None:
+    """The locator's own negative. A `#:` block that stopped citing §12 is not
+    found, which the roster test turns into a failure — silently reading it as
+    a span with no ratio in it is the failure mode this asserts against."""
+    assert _graph_outer_comment("        #: no citation here at all\n") == ""
+    assert (
+        _graph_outer_comment(
+            "        #: one (docs/limitations.md §12)\n"
+            "        x = 1\n"
+            "        #: two (docs/limitations.md §12)\n"
+        )
+        == ""
+    )
+
+
+def test_a_renumbered_section_12_is_not_read_as_retired() -> None:
+    """The other locator's negative: §12 renumbered out of the shape this reads
+    is a span that cannot be found, not a span with no ratio in it."""
+    assert _limitations_section_12("## 13. something else\n\n7.8x the bytes\n") == ""

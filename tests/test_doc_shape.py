@@ -528,7 +528,16 @@ RATE = 72.6
 #           pays seven for stating the Layer-A condition where the retired
 #           figure stood. Ninety words below the last ceiling rather than level
 #           with it, for the reason the #233 row gives — measured, no headroom
-ARGUMENT_MAX = 47035
+#   47,027  today, 2026-09-16, after #286 retired the boundary-coverage ratio.
+#           `docs/limitations.md` went 10,224 -> 10,216, and it is the only
+#           file in this group the change touches. §12's last paragraph stopped
+#           naming a tier that had landed and stopped restating
+#           `self-describing.md`'s build order; both are one pointer now, at §8's
+#           tier lines and at §3. The gap-3 sentence pays for its pointer at PR
+#           #250 out of the retired ratio's own words. Eight words lower than
+#           the last ceiling rather than level with it, for the reason the #233
+#           row gives — measured, no headroom
+ARGUMENT_MAX = 47027
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.

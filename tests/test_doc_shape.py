@@ -365,6 +365,19 @@ EXEMPT: dict[str, str] = {
 #         the next tenth. This is the largest step this ratchet has taken and it
 #         is the cheapest kind: the prose describes a build that finished, so
 #         the denominator did not move and nothing it described was removed
+#   61.1  today, 2026-09-16, after #276 cut `docs/mobile-base.md` to what the
+#         file still needs a document for: 8,171 -> 4,382, every tier of its §7
+#         having landed. §7's *State* column and its narration, §7.1's account of
+#         what Tier 4 ships, §7.2's fixture descriptions (`python -m reg.sim
+#         --list` prints them), §6's table, §3's construction and literature
+#         paragraphs, §2's restatement of `sufficiency.md` §5.6 and §4's ten
+#         prose items are pointers, one line each, or gone. `docs/README.md`'s
+#         row for the file went -4 with them, because it described the same track
+#         as half-built. 20,163 / 330 = 61.10 exactly — measured, no headroom,
+#         and the tenth below would put the ceiling at 20,130, under the corpus.
+#         Second-largest step this ratchet has taken and the same cheap
+#         kind as #275's: the denominator did not move, because a design
+#         document's tiers landing removes no symbol
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -372,10 +385,12 @@ EXEMPT: dict[str, str] = {
 # second raise in density — it is the same corpus counted with
 # `docs/self-describing.md` in the group the regroom put it in.
 #
-# **62.7 is the number to get back under.** It is separate from ARGUMENT_MAX
+# **62.7 was the number to get back under, and 61.1 is under it** — reached by
+# the two design documents whose build orders finished, #275 and #276, not by a
+# cut to the prose that describes the package. It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 72.6
+RATE = 61.1
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -537,7 +552,19 @@ RATE = 72.6
 #           #250 out of the retired ratio's own words. Eight words lower than
 #           the last ceiling rather than level with it, for the reason the #233
 #           row gives — measured, no headroom
-ARGUMENT_MAX = 47027
+#   46,936  today, 2026-09-16, after #276 corrected the stale mobile-base status
+#           in the two normative documents. `docs/limitations.md` went 10,216 ->
+#           10,150 and `docs/sufficiency.md` 11,532 -> 11,507. This group has no
+#           headroom, so each correction states the current fact in fewer words
+#           than the stale one: §9's *What* stopped saying the tree models no
+#           pose and stopped calling the design document unbuilt, §9's *What this
+#           half is* stopped holding Tier 1 pending, §11's `## Why` stopped
+#           holding open a decision #252 took, and `sufficiency.md` §5.8 stopped
+#           resting on *no fixture is mobile* and on an `Enforcer` that refuses a
+#           driven base. Ninety-one words lower than the last ceiling rather than
+#           level with it, for the reason the #233 row gives — measured, no
+#           headroom
+ARGUMENT_MAX = 46936
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -624,7 +651,14 @@ PARAGRAPH_MAX_WORDS = 120
 #        this document, and it went with the table it qualified rather than
 #        being split. Cut for the word budget rather than for this ceiling, and
 #        lowered here for the reason the #241 row gives
-LONG_PARAGRAPHS_MAX = 79
+#    78  today, 2026-09-16, after #276: `docs/limitations.md` went 13 -> 12 and
+#        `docs/mobile-base.md` held at 0. The paragraph that fell is §9's *What*,
+#        which stopped saying that nothing in the tree models a robot pose — cut
+#        because it was false, not for this ceiling, and lowered here for the
+#        reason the #241 row gives. The cut file contributed nothing to this
+#        count before or after: #214 took it to zero and the prose that replaced
+#        §2's opening was split rather than left at 121 words
+LONG_PARAGRAPHS_MAX = 78
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -704,6 +738,15 @@ LONG_PARAGRAPHS_MAX = 79
 #        None was reworded for this ceiling and none moved below the line: a
 #        document whose tiers have all landed narrates less by carrying less.
 #        Lowered for the reason the #241 row gives
+#   128  today, 2026-09-16, after #276. Unchanged and re-measured, which is the
+#        point: `docs/mobile-base.md` was already at 0 above its rationale line,
+#        #214 having put its archaeology below one, so cutting 3,789 words of it
+#        moved nothing here — the ~1,450 words of narration that went were below
+#        the line to begin with. `docs/limitations.md` held at 13, its two
+#        corrected §9 paragraphs and its rewritten §11 `## Why` sitting where
+#        they sat. What this row records is that the replacement prose narrates
+#        nothing new: §3's construction paragraph was reworded off `was not
+#        raised` rather than rewrapped around it, which is the #217 caveat
 NARRATION_MAX = 128
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE

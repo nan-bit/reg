@@ -674,13 +674,11 @@ in full. This entry states the two that are load-bearing *now*, because until
 they are stated, two things this project says read as properties of the method
 when they are properties of the mounting.
 
-**What.** `reg.kinematics` fixes the base at the origin — the explicit leading
-`0.0` in its cumulative sums *is* the base — and nothing in `reg/` or `tests/`
-models a robot pose at all: no transform, no pose field, no frame to carry one.
-[`docs/mobile-base.md`](mobile-base.md) discusses a pose at length and models
-none, being a design document for work that is not built. Every envelope, every
-published figure and the bound `reg/enforce.py` VETOes on is computed for a
-planar arm bolted down at the origin.
+**What.** `reg.kinematics` takes the base as an argument, and every priced
+fixture passes `ORIGIN_FRAME`: every envelope, every published figure and the
+bound `reg/enforce.py` VETOes on is computed for a planar arm bolted down at the
+origin. [`docs/mobile-base.md`](mobile-base.md) works the mobile track through
+and every tier of it is built, unpriced.
 
 **The cost, first half: `computed_bound` is finite only because the base is
 bolted down, and it says so.** `reg.enforce.computed_bound(limits)` is
@@ -718,16 +716,15 @@ ahead-left of its own base at t?* [`docs/mobile-base.md`](mobile-base.md) §2 an
 artifact**: the question is Layer A for the robot this repository models, and
 `sufficiency.md` §5.1 is correct as written. This entry does not reclassify it,
 does not move a layer tag, and changes no behaviour, no figure and no line of
-`docs/sufficiency.md`. Carrying §2.1's shrink of the certifiable question set
-into `sufficiency.md` is a separate decision, tracked separately — see
-[`docs/mobile-base.md`](mobile-base.md) §7, where it is Tier 1 and where
-everything downstream of it waits. What is recorded here is the narrower and
-immediately checkable thing: the Layer A status of world-frame reachability is
-**conditional on the base being fixed**, and nothing in the code says so, because
-there is no base-pose field for a condition to attach to.
+`docs/sufficiency.md`. §2.1's shrink of the certifiable question set is carried
+by `sufficiency.md` §5.6, which was Tier 1 of
+[`docs/mobile-base.md`](mobile-base.md) §7. What is recorded here is the narrower
+and immediately checkable thing: the Layer A status of world-frame reachability
+is **conditional on the base being fixed**, and the artifact now says so — a
+`robot_config` row states its `base_pose` and every edge over one is `B`.
 
-**What a claim would need in order not to inherit this.** Three things. The
-first exists; the other two do not.
+**What a claim would need in order not to inherit this.** Three things. Two
+exist; the third is half of one.
 
 1. **A bound that refuses.** An unbounded workspace is a could-not-evaluate
    under `CLAUDE.md`'s *a check must be able to fail*, and `computed_bound` must
@@ -738,9 +735,11 @@ first exists; the other two do not.
    repository can run.
 2. **A base pose carried as an explicit Layer B input**, with its provenance
    declared and no default, on the precedent `Limits.source` set (§4), so that a
-   room-frame envelope is visibly a perception-dependent object and a body-frame
-   one is visibly not.
-3. **The fixtures and figures to go with it.** Claim 1 stays a fixed-arm claim,
+   room-frame envelope is visibly a perception-dependent object. That is built:
+   `robot_config` carries the pose and its `PoseSource`, and `reg.store.open_edge`
+   refuses a Layer A tag on an edge over one.
+3. **The fixtures and figures to go with it.** The fixtures exist and none of
+   them is priced. Claim 1 stays a fixed-arm claim and
    [`docs/retention.md`](retention.md) says in its own header that the artifact
    side of every figure in it is measured on the fixed-base arm — and that the
    control rate is *not* a blanket condition in the same way, since its ladder
@@ -1032,23 +1031,21 @@ wrote it down; issues #163 and #164 then rewrote §3's description of the bound
 rather than amending it, because the soundness of the workspace-disc term is a
 trivial argument only while the disc is centred on something that stays put.
 
-### §11 — why the mapping is left open, and a belt that was removed
+### §11 — the mapping, and a belt that was removed
 
-The `VelocitySource`-to-`Layer` mapping is three lines and the test for it is
-not: a `velocity_layer` written now would be exercised against no mobile
-fixture, and the decision it forces — whether an envelope's layer is the
-*minimum* over its inputs, and what that does to the four attestation edges §2's
-asymmetry rests on — is the same decision [`sufficiency.md`](sufficiency.md) §5.8
-holds open for a posed configuration, on purpose, until there is something in
-hand the answer would be about. Writing it twice, separately, in advance of that
-fixture is how the two answers end up disagreeing.
+The `VelocitySource`-to-`Layer` mapping was held open until a mobile fixture
+existed to exercise it, because the decision it forces — whether an envelope's
+layer is the *minimum* over its inputs — could not be taken twice, separately,
+without the two answers disagreeing. Issue #252 took it once: `envelope_layer`
+is the weakest of `Limits.source`, the base velocity's provenance and whether the
+configuration states a pose, so the posed-configuration input
+[`sufficiency.md`](sufficiency.md) §5.8 names went into the same minimum.
 
 The entry used to give a second reason why nothing here carries a mistagged base
 velocity: that `reg.enforce.Enforcer` refused to construct for a driven base at
 all (issue #164). Issue #189 made that false — an enforcer now constructs for one
 and adjudicates it. The entry is unaffected, because the reason was always the
-fixtures; what changed is that the first mobile fixture will now produce
-artifacts this entry is about rather than failing to build.
+fixtures.
 
 ### §12 — why it restates three entries rather than adding one
 

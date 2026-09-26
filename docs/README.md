@@ -24,7 +24,7 @@ edited.**
 | [`limitations.md`](limitations.md) | Each thing the artifact cannot do, what it costs, and what a claim would need in order not to inherit it. | **Normative for what this project may claim.** |
 | [`lossiness.md`](lossiness.md) | What the graph keeps, what it discards, what becomes unanswerable, and the three resolution levels. | **Normative.** A design constraint on the graph, not a description of it. |
 | [`sensor-baseline.md`](sensor-baseline.md) | Where the sensor-log figure every ratio is computed against comes from. | An **assumption with a sourced range**, never a measurement. |
-| [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | **A design document, and no longer entirely one** — its Tiers 1-3 are built and Tier 4 has started, and its own status line is the authority on which parts. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
+| [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | **A design document whose track is built** — every tier of its §7 has landed, and its §7.3 is the authority on what the track supports. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`CLAUDE.md`](../CLAUDE.md) for the conventions code must follow. |
 
 ## Reading order

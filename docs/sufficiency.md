@@ -658,18 +658,12 @@ two members; `base_vel_source` in the raw stream's optional velocity block, so a
 recorded provenance survives the round trip; and a `reg.bench.COLUMN_RULES`
 entry, a column with no rule being a could-not-evaluate.
 
-**What remains unbuilt, and it is the part a reader should hold this section to.**
-Nothing maps a `VelocitySource` to a `Layer`. `reg.envelope.envelope_layer`
-decides the `HAS_ENVELOPE` tag from `Limits.source` alone, so an outer envelope
-computed from a `DERIVED` base velocity — and `reg.envelope.base_motion_bounds`
-reads `state.base_vel` into the bound every VETO for a mobile robot rests on — is
-tagged from its bounds only. **What the artifact gained is that it records the
-case; what it has yet to gain is the tag following it.**
-
-It is an entry in [`limitations.md`](limitations.md) §11 rather than a line of
-code because no fixture here is mobile and `reg.enforce.Enforcer` refuses to
-construct for a driven base, so the mapping would be written and tested against
-nothing — the same could-not-evaluate held open on purpose that §5.8 describes.
+**The mapping, taken once.** Since #252 `reg.envelope.envelope_layer` is the
+weakest of `Limits.source`, the base velocity's provenance and whether the
+configuration states a pose — the two cases this section and §5.8 held open,
+decided together rather than twice, separately. An outer envelope computed from
+a `DERIVED` base velocity is tagged `B` on that input, and `edge_layer_basis`
+records which of the three decided the tag.
 
 ### 5.10 The acknowledgment, and why a person being involved decides nothing
 
@@ -930,8 +924,8 @@ occurrence resolution 1.0 s.
   data elements, which the occurrence level is shaped from.
 - [`docs/mobile-base.md`](mobile-base.md) — **the design behind §5.6**: what a
   driven base does to the bound, to the layer boundary and to the geometry. A
-  design document with nothing built behind it; where it and this file touch what
-  may be claimed, this file is the normative one.
+  design document whose track is built; where it and this file touch what may be
+  claimed, this file is the normative one.
 - [`docs/plan.md`](plan.md) — **Phase 9**, the single-axis taxonomy this document
   supersedes with two; **Phases 3, 4 and 6**, which built the attestation records
   rows 2–4 rest on.

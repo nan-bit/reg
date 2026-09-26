@@ -564,7 +564,17 @@ RATE = 61.1
 #           driven base. Ninety-one words lower than the last ceiling rather than
 #           level with it, for the reason the #233 row gives — measured, no
 #           headroom
-ARGUMENT_MAX = 46936
+#   46,866  today, 2026-09-26, finishing #276's correction pass: the Sep 16
+#           commit missed two stale sentences in `docs/sufficiency.md`, and both
+#           said the same false thing the pass had already corrected elsewhere.
+#           §5.9's *What remains unbuilt* still claimed nothing maps a
+#           `VelocitySource` to a `Layer` and rested on *no fixture is mobile* —
+#           #252 took the mapping and the four fixtures build — and the *See
+#           also* entry still called `docs/mobile-base.md` a design document
+#           with nothing built behind it. `docs/sufficiency.md` went 11,507 ->
+#           11,437. Seventy words lower than the last ceiling rather than level
+#           with it, for the reason the #233 row gives — measured, no headroom
+ARGUMENT_MAX = 46866
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.

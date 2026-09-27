@@ -1,0 +1,122 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "277-1790469827541260544-4d685a",
+    "authored_by": {
+      "agent": "muse-spark",
+      "agent_args": "",
+      "agent_version": "",
+      "harness": "none",
+      "harness_version": "",
+      "instruction_sources": [
+        "issue-body"
+      ],
+      "model": "muse-spark",
+      "model_source": "subagent-transcript"
+    },
+    "base": "origin/main",
+    "chain": {
+      "field_digests": {
+        "attempt_id": "ab692ce6eb45c33415baea7dc2bdd30c8aa79819a1c1048d7efc57f03320d8f9",
+        "authored_by": "322b52102259e6d81782caf2dd41d1abda0321b12973594c198d0a35d5f41801",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "4a27d1515170034fbd4310a6311ed627509b8de0dfae70921ea7e7428ac9e141",
+        "concluded": "22ebca1302d08d6e031cf3d01cf091a01e9380f4b73d900e18be4952ece3e6a3",
+        "coverage": "1653348812378be4fcfbdd5c8adfc778da2b0fa5372a46c132520db2958cd91f",
+        "declared": "2619b14a88d48b831034d30425acfb8daa96f94943b28c8bdac0c777f1eacb63",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "27d719c754aacd492a6dc8a1b76619355abcf5ef473cbec02018d3c57ebbf0d5",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "286e06199ea2870d49fe46d4cc3c4e738b587756cb2a00372d0eb7aff1df0f9f",
+        "verification": "92f858cc960b258174757c57a8b5d323d4f9b8f9ad0b4bd407e98628f7b8e07d"
+      },
+      "head": "a4650574bb39a69eb68c261c8d2363937daca2f7",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    },
+    "commit": "9ffe8bad96beb3b6713f0051c24305d7cdd8ebb8",
+    "concluded": {
+      "analyzer": "manual",
+      "changed": [
+        "docs/plan.md",
+        "tests/test_doc_shape.py"
+      ],
+      "edge_kinds": [
+        "file-reference"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/plan.md",
+        "tests/test_air_gap_framing.py",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_bench.py",
+        "tests/test_doc_shape.py",
+        "tests/test_doc_status_headers.py",
+        "tests/test_enforce.py",
+        "tests/test_graph.py",
+        "tests/test_harness_pointer.py",
+        "tests/test_incumbent_encoding.py",
+        "tests/test_personal_data.py",
+        "tests/test_prior_art.py",
+        "tests/test_published_figures.py",
+        "tests/test_query.py",
+        "tests/test_readme.py",
+        "tests/test_stream.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 1
+      },
+      "changed_unreadable": [
+        "docs/plan.md"
+      ],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {
+        "md": 1
+      },
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [
+        "docs/plan.md",
+        "tests/",
+        "tests/test_doc_shape.py"
+      ],
+      "source": "issue-body:Affected areas",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 277,
+    "out_of_scope": [],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "in-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Verification",
+      "state": "declared"
+    }
+  },
+  "predicateType": "https://wake-runner.dev/Reach/v4",
+  "subject": [
+    {
+      "digest": {
+        "sha1": "9ffe8bad96beb3b6713f0051c24305d7cdd8ebb8"
+      },
+      "name": "auto/issue-277"
+    }
+  ]
+}

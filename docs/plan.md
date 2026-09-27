@@ -117,7 +117,7 @@ The evidence demand arrives before the standard does.
 | Accurate physics | Nobody evaluating this cares about the dynamics. |
 | A real-time system | Offline batch is fine. |
 | A learned policy | Scripted trajectories. The policy being a black box is the *premise*, not something to implement. |
-| A real PKI | Two keys in a keyring file. See the honesty note in Phase 6. |
+| A real PKI | Two keys in a keyring file. See the honesty note in the README. |
 | A UI beyond matplotlib | Static plots and a CLI. |
 
 If a task doesn't serve one of the four claims, cut it.

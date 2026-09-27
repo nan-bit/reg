@@ -79,8 +79,8 @@ repository as it stands, not the plan.
 
 | | Claim | Status |
 |---|---|---|
-| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no, all exercisable end to end from a shipped fixture to a query. What the chain binds is the *party that made each record*, not the build of the policy under investigation — DSSAD's `R157SWIN` element is **not implemented**, because nothing here has a policy version to bind ([`docs/prior-art.md` §9](docs/prior-art.md)). **Passivation and reintegration are exercisable since issue #247.** The `Acknowledgment` reaches the artifact — a table, an `ACKNOWLEDGED` edge, the enforcement chain over both record kinds, and `reg.query.acknowledgments` — and the `stale_declaration` fixture produces one, so **"was the passivation acknowledged, and by whom" is a question this artifact answers**. It answers *by whom* with the signing **party** and not a person, no field of the record holding one, and a passivation the file holds no acknowledgment of is a **could-not-evaluate** rather than a *no* ([`docs/lossiness.md`](docs/lossiness.md) *Retained* #7; the layer argument is [`docs/sufficiency.md`](docs/sufficiency.md) §5.10) |
-| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim. The rule is not name-based alone, because a taint can arrive in a *value*: `Limits.source` is required with no default, and an artifact carrying none is a **could-not-evaluate** rather than a clean Layer A one ([`docs/limitations.md` §4](docs/limitations.md)). **The tag is checkable and not merely readable**: each tagged edge records what its tag was computed from in `edge_layer_basis`, and `reg.query.cold_read` reports `layer-tag-basis` as `CHECKABLE` |
+| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact, and `verify_chain` with the `--tamper` demonstration that it can say no. Passivation and reintegration are exercisable since issue #247: the `Acknowledgment` reaches the artifact, so "was the passivation acknowledged, and by whom" is a question this artifact answers — *by whom* meaning the signing **party**, not a person, and a passivation the file holds no acknowledgment of a **could-not-evaluate** rather than a *no* ([`docs/lossiness.md`](docs/lossiness.md) *Retained* #7) |
+| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim. `Limits.source` is required with no default, and each tagged edge records what its tag was computed from in `edge_layer_basis` — `reg.query.cold_read` reports `layer-tag-basis` as `CHECKABLE` |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
 | **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the claim is [`docs/plan.md`](docs/plan.md) Claim 1 and the measurements, the arithmetic and the record of how they moved are [`docs/retention.md`](docs/retention.md): **267 GB** per robot for six months at occurrence resolution (±1 s), **~684x** below an assumed 182.5 TB sensor log at a 50 Hz control rate. That coarsest level is **98.5% attestation records**, so the figure is the price of retaining *attestation*, not of a DSSAD-equivalent event log. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). The original framing — is the graph smaller than the stream it replaces — is answered **no**: **~51x** *larger* than a gzipped copy of the raw state stream — which is **24 columns** for the priced fixture, **19 of them Layer B**: the human's pose and velocity and every obstacle's, beside 5 proprioceptive ones (`reg.stream.expected_header`, `reg.bench.proprioceptive_columns`) — measured on the artifact that carries Layer A. That baseline is not what practitioners retain: against rosbag2/MCAP, the incumbent, the same proprioceptive content costs **11.76x** what the gzipped CSV does at rosbag2's default preset — uncompressed, chunked and message-indexed, which is what a practitioner keeps without choosing anything — and **3.83x** at one compressed projection standing for both zstd profiles, both on a **hand-built encoding comparison and not a real bag**, which [`docs/sensor-baseline.md`](docs/sensor-baseline.md) requires be said wherever a projected figure is quoted. Priced over all 24 columns rather than 5 — `/joint_states` plus a `/tf` tree, the arrangement most favourable to the incumbent — the comparison is against bags `ros2 bag record` wrote: the artifact is **2.01x** the uncompressed default bag, **9.11x** a `zstd_fast` one and **13.04x** a `zstd_small` one, and *those* are the figures the ~51x composes with rather than sits beside. Both compressed profiles are published because rosbag2 ships both; **9.11x** leads, being the larger bag and so the smaller ratio — the end least flattering to this project. The artifact is larger than the bag under every profile, so the original framing is still answered no and this status is unchanged by it. |
 
@@ -140,19 +140,13 @@ both are documented and deliberately unimplemented
 witness records `commitment: none` in so many words — silence never reads as
 commitment.
 
-**The artifact contains personal data, and this project has not addressed that.**
-Every other limitation on this page bounds what the artifact can *answer*. This
-one bounds whether it may be *kept*: per shift it records the robot's proximity
-to an entity whose `kind` is `human`, contact and closest-approach occurrences
-naming that entity with a wall-clock datum, and `meta[operator_id]` beside
-`meta[run_start_utc]` — which together select a shift, and a shift resolves
-against any roster to a person.
-
-The minimisation is real and in the schema, not in a policy: no column here names
-anybody. The obligations that remain are named and not discharged, and the AI
-Act's six-month period is expressly subordinate to data-protection law — so for
-that half of the artifact it may be a ceiling rather than the floor Claim 1
-prices against ([`docs/limitations.md` §8](docs/limitations.md)).
+**The artifact contains personal data.** Per shift it records the robot's
+proximity to an entity whose `kind` is `human` — contact and closest-approach
+occurrences naming that entity with a wall-clock datum, and `meta[operator_id]`
+beside `meta[run_start_utc]`, which together select a shift. No column names
+anybody: the minimisation is in the schema, not in a policy. What remains is
+stated, not discharged — [`docs/limitations.md` §8](docs/limitations.md) carries
+the obligations, and the cold read reports `disclosures-stated`.
 
 Two smaller admissions in the same spirit, stated here because nothing else in
 the repository states them:
@@ -295,28 +289,13 @@ witness signature is what stops the recorded heads being rewritten to match.
 
 ## Status
 
-**Published.** The write-up — [`docs/plan.md`](docs/plan.md) Phase 10 — is at
-[ernan.dev/projects/reg](https://ernan.dev/projects/reg). The GIF that phase also
-listed is **descoped** rather than pending; `reg/viz.py` renders the still frame and
-that is where the visual argument stops, so nothing in Phase 10 is outstanding.
-
-Nothing on this page is illustrated by a placeholder. A plausible one would be
-indistinguishable from a measured result to every later reader, and that
-difference is the project's whole argument — which is also why the sensor-log
-comparison is labelled a projection, and why `reg.bench --sensor-multiplier` has
-no default: there is no value of that flag that makes the output claim to have
-measured a robot. The incident report above **is** real output, reproduced by the
-four commands beside it.
-
-Read [`docs/plan.md`](docs/plan.md) for the argument and the full build order, and
-[`docs/prior-art.md`](docs/prior-art.md) before claiming anything here is novel.
-The two disagree in places; prior art wins.
+**Published** — the write-up is at
+[ernan.dev/projects/reg](https://ernan.dev/projects/reg).
 
 ## How work happens
 
-Groom an issue, label it `agent-ready`, and an unattended writer picks it up,
-cuts a worktree, implements it, and opens a **draft PR**. A human marks it ready;
-nothing on the worker host merges. What makes an issue ready, how issues declare
+Work arrives as a groomed issue labelled `agent-ready` and lands as a **draft
+PR** that a human marks ready. What makes an issue ready, how issues declare
 their order, and what has to be in the PR are in
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
 
@@ -324,17 +303,10 @@ Every PR the writer opens carries an **impact report** — what the change touch
 and what that reaches. It is advisory: it informs the human review, it does not
 gate the merge.
 
-```bash
-gh issue edit N --add-label agent-ready
-journalctl --user -u reg-runner -f
-```
-
-The conventions code here must follow are in [`CLAUDE.md`](CLAUDE.md). The
-harness itself is [`nan-bit/wake-runner`](https://github.com/nan-bit/wake-runner),
-installed on the worker host — this repo configures it through `.runner.conf`.
-[`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner) is its archived
-predecessor; older commits and issues here name it and none of them mean the
-harness running now.
+The harness itself is [`nan-bit/wake-runner`](https://github.com/nan-bit/wake-runner),
+installed on the worker host. [`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner)
+is its archived predecessor; older commits and issues here name it and none of
+them mean the harness running now.
 
 ## License
 

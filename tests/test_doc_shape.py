@@ -385,6 +385,12 @@ EXEMPT: dict[str, str] = {
 #         corrected, the air-gap history, and the whole ## Why — with every
 #         guarded table kept. 18,242 / 330 = 55.28, rounded up to the next
 #         tenth. Measured, no headroom.
+#   53.2  today, 2026-09-27, after #280: the entry points — `README.md`
+#         3,467 -> 3,093 (claims rows 3-4 condensed, the honesty note, the
+#         Status section and *How work happens* now pointers), plus
+#         `docs/CONTRIBUTING.md` 704 -> 366 (the CLAUDE.md copy becomes
+#         pointers). 17,545 / 330 = 53.17, rounded up to the next tenth.
+#         Measured, no headroom.
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -397,7 +403,7 @@ EXEMPT: dict[str, str] = {
 # cut to the prose that describes the package. It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 55.3
+RATE = 53.2
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -719,6 +725,9 @@ PARAGRAPH_MAX_WORDS = 120
 #    71  today, 2026-09-27, after #279: `docs/sensor-baseline.md` re-measured
 #        at 71 — the cut took tables and short paragraphs, no long one.
 #        Confirmed, not lowered.
+#    71  today, 2026-09-27, after #280: re-measured at 71 — the entry-point
+#        cuts took prose paragraphs, none of them over the 120-word line.
+#        Confirmed, not lowered.
 LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
@@ -830,6 +839,9 @@ LONG_PARAGRAPHS_MAX = 71
 #        reason the #241 row gives
 #   110  today, 2026-09-27, after #279: `docs/sensor-baseline.md` re-measured
 #        at 110 — the Why history it cut sat below the rationale line.
+#        Confirmed, not lowered.
+#   110  today, 2026-09-27, after #280: re-measured at 110 — the entry-point
+#        cuts took restated process prose, none of it a past-defect narration.
 #        Confirmed, not lowered.
 NARRATION_MAX = 110
 
@@ -2677,5 +2689,546 @@ def test_baseline_sensor_multiplier_has_no_default() -> None:
     assert verdict == DISAGREE, "a text without the no-default paragraph passes"
     assert problems
     verdict, problems = baseline_sensor_multiplier_has_no_default("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+# ==========================================================================
+# THE ENTRY POINTS AS POINTERS (issue #280; decisions D4 and D5).
+#
+# The last cut of #270 covers the entry points: the docs index, which is now
+# wrong about its own contents; the front page's status restatement; and
+# `docs/CONTRIBUTING.md`'s copy of `CLAUDE.md`. Under D5 `CLAUDE.md` stays
+# whole, so `CONTRIBUTING.md` points at it instead of restating it.
+# ==========================================================================
+
+
+def _index_text() -> str:
+    return (REPO / "docs" / "README.md").read_text(encoding="utf-8")
+
+
+def _front_page_text() -> str:
+    return (REPO / "README.md").read_text(encoding="utf-8")
+
+
+def _contributing_text() -> str:
+    return (REPO / "docs" / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+
+def _entry_point_empty_is_no_verdict(
+    text: str, name: str
+) -> tuple[str, list[str]] | None:
+    if not text.strip():
+        return COULD_NOT_EVALUATE, [f"{name} could not be read"]
+    return None
+
+
+def index_states_ten_documents(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The index counts the documents it actually holds.
+
+    Eleven `.md` files live under `docs/`, one of them this index — and there
+    was no row for `self-describing.md`. The count said nine.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "docs/README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    if "Nine documents besides this index" in text:
+        problems.append("the stale nine-document count is back")
+    if "Ten documents besides this index" not in text:
+        problems.append("the corrected ten-document count is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def index_lists_self_describing(
+    text: str,
+) -> tuple[str, list[str]]:
+    """`self-describing.md` gets the row the index owed it.
+
+    The document existed before the index named it; a reader arriving at the
+    folder rather than the front page had no way to learn what it answers.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "docs/README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    if "self-describing.md`](self-describing.md)" not in text:
+        problems.append("the self-describing.md row is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def index_mobile_base_row_is_a_pointer(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The mobile-base row points at that document's status line.
+
+    The row restated what the track had built; the document's own status line
+    is the authority, and a copy is how the two drift apart.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "docs/README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    if "every tier of its §7 has landed" in text:
+        problems.append("the stale mobile-base build-order restatement is back")
+    if "Its status line is the authority" not in text:
+        problems.append("the pointer at mobile-base.md's status line is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def index_prior_art_budget_condensed(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The prior-art row's budget sentence is a clause, not a paragraph.
+
+    The exemption is what the reader needs; the test module that enforces it
+    is named in the test module, not the index.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "docs/README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    if "The one document **exempt from the word budget**" in text:
+        problems.append("the stale prior-art budget sentence is back")
+    if "**Exempt from the word budget**" not in text:
+        problems.append("the condensed budget clause is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def readme_claim_rows_condensed(
+    text: str,
+) -> tuple[str, list[str]]:
+    """Claims rows 3 and 4 are condensed, with their pinned clauses kept.
+
+    D4 keeps the Claim 1 row; rows 3 and 4 carried narration that belongs in
+    the documents they point at. What must not go with it: row 3's
+    `edge_layer_basis` clause, which `test_published_figures` pins, and row
+    4's status word in backticks with no gap phrases, which `test_readme`
+    pins.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    for stale in (
+        "The tag is checkable and not merely readable",
+        "DSSAD's `R157SWIN` element is **not implemented**",
+        "the `stale_declaration` fixture produces one",
+        "the layer argument is [`docs/sufficiency.md`](docs/sufficiency.md) §5.10",
+    ):
+        if stale in text:
+            problems.append(f"the stale claims-row narration is back: {stale[:40]}")
+    if "edge_layer_basis" not in text:
+        problems.append("row 3 lost the basis clause test_published_figures pins")
+    if "`landed` — the `Declaration` record" not in text:
+        problems.append("row 4 lost its backticked status word")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def readme_personal_data_note_condensed(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The honesty note states the disclosure instead of understating it.
+
+    The artifact states its disclosures in `docs/limitations.md` §8 and the
+    cold read reports `disclosures-stated`; the note said the project had not
+    addressed it.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    if "this project has not addressed that" in text:
+        problems.append("the understated honesty note is back")
+    if "disclosures-stated" not in text:
+        problems.append("the note no longer names what the cold read reports")
+    if "docs/limitations.md" not in text or "§8" not in text:
+        problems.append("the note no longer points at limitations.md §8")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def readme_status_is_a_link(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The Status section is the write-up link and nothing else.
+
+    The descoped-GIF accounting, the placeholder paragraph and the
+    read-plan.md pointer are restatements of the argument the section exists
+    to send the reader to.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    for stale in (
+        "is **descoped** rather than pending",
+        "Nothing on this page is illustrated by a placeholder",
+        "Read [`docs/plan.md`](docs/plan.md) for the argument",
+    ):
+        if stale in text:
+            problems.append(f"the stale Status section is back: {stale[:40]}")
+    if "https://ernan.dev/projects/reg" not in text:
+        problems.append("the write-up link is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def readme_how_work_happens_is_a_pointer(
+    text: str,
+) -> tuple[str, list[str]]:
+    """*How work happens* points at CONTRIBUTING.md instead of restating it.
+
+    The impact report and the pointer at the running harness stay — the latter
+    is pinned by `test_harness_pointer` — and the grooming steps live in
+    `docs/CONTRIBUTING.md`.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "README.md")
+    if empty is not None:
+        return empty
+    problems = []
+    for stale in (
+        "journalctl --user -u reg-runner -f",
+        "The conventions code here must follow are in [`CLAUDE.md`](CLAUDE.md)",
+    ):
+        if stale in text:
+            problems.append(f"the stale How-work-happens prose is back: {stale[:40]}")
+    if "docs/CONTRIBUTING.md" not in text:
+        problems.append("the pointer at CONTRIBUTING.md is gone")
+    if "impact report" not in text:
+        problems.append("the impact report is gone")
+    if "nan-bit/wake-runner" not in text:
+        problems.append("the harness pointer test_harness_pointer pins is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def contributing_path_is_a_pointer(
+    text: str,
+) -> tuple[str, list[str]]:
+    """*The path a change takes* points at CLAUDE.md's *Working unattended*.
+
+    The numbered steps restated the run's rules; the queue-and-watch commands
+    are this file's own and stay.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "docs/CONTRIBUTING.md")
+    if empty is not None:
+        return empty
+    problems = []
+    for stale in (
+        "**Someone grooms an issue.**",
+        "within ~2 minutes of polling",
+        "Those are different claims and the machine only makes the first one",
+    ):
+        if stale in text:
+            problems.append(f"the restated path steps are back: {stale[:40]}")
+    if "*Working unattended*" not in text:
+        problems.append("the pointer at CLAUDE.md's Working unattended is gone")
+    if "gh issue edit N --add-label agent-ready" not in text:
+        problems.append("the queue command is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def contributing_ready_is_a_pointer(
+    text: str,
+) -> tuple[str, list[str]]:
+    """*What makes an issue ready* names the rules instead of restating them.
+
+    D5: the section restated `CLAUDE.md`'s *Queueing work*. No rule is lost —
+    the pointer names the literal `## Affected areas` heading rule and
+    "declare `tests/`", which live in `CLAUDE.md`.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "docs/CONTRIBUTING.md")
+    if empty is not None:
+        return empty
+    problems = []
+    for stale in (
+        "Anything the writer would otherwise have to invent",
+        "`epic-advance.yml` workflow flips the next tier",
+        "the PR body says exactly what remains",
+    ):
+        if stale in text:
+            problems.append(f"the restated readiness rules are back: {stale[:40]}")
+    for kept in ("*Queueing work*", "## Affected areas", "declare `tests/`"):
+        if kept not in text:
+            problems.append(f"the pointer lost a rule it must name: {kept}")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def contributing_pr_is_a_pointer(
+    text: str,
+) -> tuple[str, list[str]]:
+    """*What lands in a pull request* points at CLAUDE.md's *Commits*.
+
+    The bullets restated the repo's rules for the change itself; the draft /
+    verification / `Closes #N` shape is the section's own and stays.
+    """
+    empty = _entry_point_empty_is_no_verdict(text, "docs/CONTRIBUTING.md")
+    if empty is not None:
+        return empty
+    problems = []
+    for stale in (
+        "a smaller correct change in\n  preference to a larger speculative one",
+        "no \"Generated with Claude Code\" trailer",
+    ):
+        if stale in text:
+            problems.append(f"the restated PR rules are back: {stale[:40]}")
+    if "*Commits*" not in text:
+        problems.append("the pointer at CLAUDE.md's Commits is gone")
+    if "`Closes #N`" not in text:
+        problems.append("the Closes trailer is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+#: Contiguous-verbatim text from the pre-#280 documents, each the thing its
+#: predicate must refuse.
+STALE_INDEX_COUNT = """Nine documents besides this index, five of them normative over something. This
+page exists so that a reader arriving at the folder rather than at the front page
+can tell which one answers their question, and — more importantly — which one
+wins when two of them disagree."""
+
+STALE_INDEX_TABLE = """| [`plan.md`](plan.md) | What is being built and why: the four claims, the ten phases, the non-goals table. The source document. | Binding for scope. Subordinate to `prior-art.md`. |
+| [`prior-art.md`](prior-art.md) | What already exists, what this borrows, and what it must not claim is novel. Six dated passes. | **Normative** where it disagrees with `plan.md`. The one document **exempt from the word budget** in `tests/test_doc_shape.py`: a log of outside work does not get shorter when this package does. |
+| [`retention.md`](retention.md) | What the artifact costs to keep, measured — Claim 1's figures, the arithmetic, and how the numbers moved. | Normative for every retention figure published anywhere. |
+| [`sufficiency.md`](sufficiency.md) | Which audit questions the artifact answers on its own authority, and which are only as strong as whatever supplied the entity positions — with the basis each tag was computed from recorded beside it, per edge. Claim 3. | **Normative for what this project may claim.** |
+| [`limitations.md`](limitations.md) | Each thing the artifact cannot do, what it costs, and what a claim would need in order not to inherit it. | **Normative for what this project may claim.** |
+| [`lossiness.md`](lossiness.md) | What the graph keeps, what it discards, what becomes unanswerable, and the three resolution levels. | **Normative.** A design constraint on the graph, not a description of it. |
+| [`sensor-baseline.md`](sensor-baseline.md) | Where the sensor-log figure every ratio is computed against comes from. | An **assumption with a sourced range**, never a measurement. |
+| [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | **A design document whose track is built** — every tier of its §7 has landed, and its §7.3 is the authority on what the track supports. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`CLAUDE.md`](../CLAUDE.md) for the conventions code must follow. |"""
+
+STALE_MOBILE_BASE_ROW = """| [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | **A design document whose track is built** — every tier of its §7 has landed, and its §7.3 is the authority on what the track supports. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |"""
+
+STALE_PRIOR_ART_ROW = """| [`prior-art.md`](prior-art.md) | What already exists, what this borrows, and what it must not claim is novel. Six dated passes. | **Normative** where it disagrees with `plan.md`. The one document **exempt from the word budget** in `tests/test_doc_shape.py`: a log of outside work does not get shorter when this package does. |"""
+
+STALE_CLAIM_ROWS = """| **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact (`reg/graph.py`), and `verify_chain` with the `--tamper` demonstration that it can say no, all exercisable end to end from a shipped fixture to a query. What the chain binds is the *party that made each record*, not the build of the policy under investigation — DSSAD's `R157SWIN` element is **not implemented**, because nothing here has a policy version to bind ([`docs/prior-art.md` §9](docs/prior-art.md)). **Passivation and reintegration are exercisable since issue #247.** The `Acknowledgment` reaches the artifact — a table, an `ACKNOWLEDGED` edge, the enforcement chain over both record kinds, and `reg.query.acknowledgments` — and the `stale_declaration` fixture produces one, so **"was the passivation acknowledged, and by whom" is a question this artifact answers**. It answers *by whom* with the signing **party** and not a person, no field of the record holding one, and a passivation the file holds no acknowledgment of is a **could-not-evaluate** rather than a *no* ([`docs/lossiness.md`](docs/lossiness.md) *Retained* #7; the layer argument is [`docs/sufficiency.md`](docs/sufficiency.md) §5.10) |
+| **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim. The rule is not name-based alone, because a taint can arrive in a *value*: `Limits.source` is required with no default, and an artifact carrying none is a **could-not-evaluate** rather than a clean Layer A one ([`docs/limitations.md` §4](docs/limitations.md)). **The tag is checkable and not merely readable**: each tagged edge records what its tag was computed from in `edge_layer_basis`, and `reg.query.cold_read` reports `layer-tag-basis` as `CHECKABLE` |"""
+
+STALE_HONESTY_NOTE = """**The artifact contains personal data, and this project has not addressed that.**
+Every other limitation on this page bounds what the artifact can *answer*. This
+one bounds whether it may be *kept*: per shift it records the robot's proximity
+to an entity whose `kind` is `human`, contact and closest-approach occurrences
+naming that entity with a wall-clock datum, and `meta[operator_id]` beside
+`meta[run_start_utc]` — which together select a shift, and a shift resolves
+against any roster to a person.
+
+The minimisation is real and in the schema, not in a policy: no column here names
+anybody. The obligations that remain are named and not discharged, and the AI
+Act's six-month period is expressly subordinate to data-protection law — so for
+that half of the artifact it may be a ceiling rather than the floor Claim 1
+prices against ([`docs/limitations.md` §8](docs/limitations.md))."""
+
+STALE_STATUS = """## Status
+
+**Published.** The write-up — [`docs/plan.md`](docs/plan.md) Phase 10 — is at
+[ernan.dev/projects/reg](https://ernan.dev/projects/reg). The GIF that phase also
+listed is **descoped** rather than pending; `reg/viz.py` renders the still frame and
+that is where the visual argument stops, so nothing in Phase 10 is outstanding.
+
+Nothing on this page is illustrated by a placeholder. A plausible one would be
+indistinguishable from a measured result to every later reader, and that
+difference is the project's whole argument — which is also why the sensor-log
+comparison is labelled a projection, and why `reg.bench --sensor-multiplier` has
+no default: there is no value of that flag that makes the output claim to have
+measured a robot. The incident report above **is** real output, reproduced by the
+four commands beside it.
+
+Read [`docs/plan.md`](docs/plan.md) for the argument and the full build order, and
+[`docs/prior-art.md`](docs/prior-art.md) before claiming anything here is novel.
+The two disagree in places; prior art wins."""
+
+STALE_HOW_WORK_HAPPENS = """## How work happens
+
+Groom an issue, label it `agent-ready`, and an unattended writer picks it up,
+cuts a worktree, implements it, and opens a **draft PR**. A human marks it ready;
+nothing on the worker host merges. What makes an issue ready, how issues declare
+their order, and what has to be in the PR are in
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md).
+
+Every PR the writer opens carries an **impact report** — what the change touches
+and what that reaches. It is advisory: it informs the human review, it does not
+gate the merge.
+
+```bash
+gh issue edit N --add-label agent-ready
+journalctl --user -u reg-runner -f
+```
+
+The conventions code here must follow are in [`CLAUDE.md`](CLAUDE.md). The
+harness itself is [`nan-bit/wake-runner`](https://github.com/nan-bit/wake-runner),
+installed on the worker host — this repo configures it through `.runner.conf`.
+[`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner) is its archived
+predecessor; older commits and issues here name it and none of them mean the
+harness running now."""
+
+STALE_CONTRIBUTING_PATH = """## The path a change takes
+
+1. **Someone grooms an issue.** Not a wish — a specification (see below).
+2. **Someone labels it `agent-ready`.** That label is the queue. Applying it is the
+   decision to spend a writer pass on the issue; it is a human action, deliberately.
+3. **The writer picks it up** within ~2 minutes of polling, cuts a fresh worktree
+   and branch (`auto/issue-N`) off `origin/main`, and implements the issue there.
+   One issue → one worktree → one branch → one PR.
+4. **The writer runs the issue's stated verification** and opens a **draft PR** with
+   that output pasted into the body.
+5. **A human reviews and marks it ready.** Merging is manual. A draft PR is the
+   writer saying "here is my work"; marking it ready is a person saying "I have read
+   it". Those are different claims and the machine only makes the first one."""
+
+STALE_CONTRIBUTING_READY = """## What makes an issue ready
+
+An issue is ready when a writer that cannot ask a follow-up question could still
+finish it. Concretely, it names three things:
+
+- **Acceptance criteria** — what must be true when the work is done, stated so that
+  a reader can check each one rather than judge them.
+- **Affected areas** — the paths the change is allowed to touch. Concurrent agents
+  share this repo, and an unexplained edit outside the stated areas becomes someone
+  else's merge conflict.
+- **Verification** — the command that decides done. If the issue names a command,
+  that command *is* the definition of done, and its output belongs in the PR body.
+
+Anything the writer would otherwise have to invent — a threshold, a limit, a
+filename, a default — belongs in the issue, for the reason [`CLAUDE.md`](../CLAUDE.md)
+gives under *Never invent a default*. If it is missing, the writer is expected to
+say so loudly rather than fill the gap.
+
+### Dependencies between issues
+
+Issues declare order with a `Depends-on: #N` trailer in the body. The
+`epic-advance.yml` workflow flips the next tier to `agent-ready` when the issues it
+depends on **close** — so a PR that says `Refs #N` instead of `Closes #N` leaves
+`#N` open and stalls every task waiting on it. `Refs` is the right choice only when
+scope was knowingly left unfinished, and then the PR body says exactly what remains."""
+
+STALE_CONTRIBUTING_PR = """## What lands in a pull request
+
+- **Always a draft.** A human marks it ready.
+- **The verification output**, pasted into the body.
+- **`Closes #N`** when the acceptance criteria are met.
+- **The repo's rules for the change itself** — tests as the deliverable, the
+  negative test beside anything that acts as a check, a smaller correct change in
+  preference to a larger speculative one, and conventional-commit subjects with no
+  `Co-Authored-By` and no "Generated with Claude Code" trailer. Each is stated in
+  full in [`CLAUDE.md`](../CLAUDE.md), and they apply to the writer because they are
+  the repo's, not the other way round."""
+
+
+def test_index_states_ten_documents() -> None:
+    verdict, problems = index_states_ten_documents(_index_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = index_states_ten_documents(STALE_INDEX_COUNT)
+    assert verdict == DISAGREE, "the stale nine-document count passes"
+    assert problems
+    verdict, problems = index_states_ten_documents("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_index_lists_self_describing() -> None:
+    verdict, problems = index_lists_self_describing(_index_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = index_lists_self_describing(STALE_INDEX_TABLE)
+    assert verdict == DISAGREE, "the stale table without the row passes"
+    assert problems
+    verdict, problems = index_lists_self_describing("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_index_mobile_base_row_is_a_pointer() -> None:
+    verdict, problems = index_mobile_base_row_is_a_pointer(_index_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = index_mobile_base_row_is_a_pointer(STALE_MOBILE_BASE_ROW)
+    assert verdict == DISAGREE, "the stale mobile-base row passes"
+    assert problems
+    verdict, problems = index_mobile_base_row_is_a_pointer("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_index_prior_art_budget_condensed() -> None:
+    verdict, problems = index_prior_art_budget_condensed(_index_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = index_prior_art_budget_condensed(STALE_PRIOR_ART_ROW)
+    assert verdict == DISAGREE, "the stale budget sentence passes"
+    assert problems
+    verdict, problems = index_prior_art_budget_condensed("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_readme_claim_rows_condensed() -> None:
+    verdict, problems = readme_claim_rows_condensed(_front_page_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = readme_claim_rows_condensed(STALE_CLAIM_ROWS)
+    assert verdict == DISAGREE, "the stale claims rows pass"
+    assert problems
+    verdict, problems = readme_claim_rows_condensed("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_readme_personal_data_note_condensed() -> None:
+    verdict, problems = readme_personal_data_note_condensed(_front_page_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = readme_personal_data_note_condensed(STALE_HONESTY_NOTE)
+    assert verdict == DISAGREE, "the stale honesty note passes"
+    assert problems
+    verdict, problems = readme_personal_data_note_condensed("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_readme_status_is_a_link() -> None:
+    verdict, problems = readme_status_is_a_link(_front_page_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = readme_status_is_a_link(STALE_STATUS)
+    assert verdict == DISAGREE, "the stale Status section passes"
+    assert problems
+    verdict, problems = readme_status_is_a_link("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_readme_how_work_happens_is_a_pointer() -> None:
+    verdict, problems = readme_how_work_happens_is_a_pointer(_front_page_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = readme_how_work_happens_is_a_pointer(STALE_HOW_WORK_HAPPENS)
+    assert verdict == DISAGREE, "the stale How-work-happens section passes"
+    assert problems
+    verdict, problems = readme_how_work_happens_is_a_pointer("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_contributing_path_is_a_pointer() -> None:
+    verdict, problems = contributing_path_is_a_pointer(_contributing_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = contributing_path_is_a_pointer(STALE_CONTRIBUTING_PATH)
+    assert verdict == DISAGREE, "the stale path steps pass"
+    assert problems
+    verdict, problems = contributing_path_is_a_pointer("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_contributing_ready_is_a_pointer() -> None:
+    verdict, problems = contributing_ready_is_a_pointer(_contributing_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = contributing_ready_is_a_pointer(STALE_CONTRIBUTING_READY)
+    assert verdict == DISAGREE, "the stale readiness rules pass"
+    assert problems
+    verdict, problems = contributing_ready_is_a_pointer("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_contributing_pr_is_a_pointer() -> None:
+    verdict, problems = contributing_pr_is_a_pointer(_contributing_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = contributing_pr_is_a_pointer(STALE_CONTRIBUTING_PR)
+    assert verdict == DISAGREE, "the stale PR rules pass"
+    assert problems
+    verdict, problems = contributing_pr_is_a_pointer("")
     assert verdict == COULD_NOT_EVALUATE
     assert problems

@@ -160,7 +160,7 @@ assumed **182.5 TB** raw sensor log over the same period. Two orders, not three,
 and never four — the ratio is linear in the assumed sensor rate, and
 [`sensor-baseline.md`](sensor-baseline.md) is blunt about what that buys. That
 sentence is the claim; the criteria a *figure* has to meet before it may be
-published under it — three live, and a fourth kept for the record — are
+published under it — three live, the fourth superseded to a single line — are
 [`retention.md`](retention.md), *Success, restated*.
 
 **The measured rate behind the total.** The artifact's measured rate is

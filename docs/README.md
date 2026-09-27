@@ -2,7 +2,7 @@
 
 **Status:** an index, and nothing else · written 2026-08-31 · keep current
 
-Nine documents besides this index, five of them normative over something. This
+Ten documents besides this index, five of them normative over something. This
 page exists so that a reader arriving at the folder rather than at the front page
 can tell which one answers their question, and — more importantly — which one
 wins when two of them disagree.
@@ -18,13 +18,14 @@ edited.**
 | Document | What it answers | Standing |
 |---|---|---|
 | [`plan.md`](plan.md) | What is being built and why: the four claims, the ten phases, the non-goals table. The source document. | Binding for scope. Subordinate to `prior-art.md`. |
-| [`prior-art.md`](prior-art.md) | What already exists, what this borrows, and what it must not claim is novel. Six dated passes. | **Normative** where it disagrees with `plan.md`. The one document **exempt from the word budget** in `tests/test_doc_shape.py`: a log of outside work does not get shorter when this package does. |
+| [`prior-art.md`](prior-art.md) | What already exists, what this borrows, and what it must not claim is novel. Six dated passes. | **Normative** where it disagrees with `plan.md`. **Exempt from the word budget**: a log of outside work does not get shorter when this package does. |
 | [`retention.md`](retention.md) | What the artifact costs to keep, measured — Claim 1's figures, the arithmetic, and how the numbers moved. | Normative for every retention figure published anywhere. |
 | [`sufficiency.md`](sufficiency.md) | Which audit questions the artifact answers on its own authority, and which are only as strong as whatever supplied the entity positions — with the basis each tag was computed from recorded beside it, per edge. Claim 3. | **Normative for what this project may claim.** |
 | [`limitations.md`](limitations.md) | Each thing the artifact cannot do, what it costs, and what a claim would need in order not to inherit it. | **Normative for what this project may claim.** |
 | [`lossiness.md`](lossiness.md) | What the graph keeps, what it discards, what becomes unanswerable, and the three resolution levels. | **Normative.** A design constraint on the graph, not a description of it. |
+| [`self-describing.md`](self-describing.md) | What the artifact must carry so a reader need not trust the prose — the three gaps, now normative in `limitations.md` §12. | A design document; every tier of §8 has landed. Normative over nothing yet; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
 | [`sensor-baseline.md`](sensor-baseline.md) | Where the sensor-log figure every ratio is computed against comes from. | An **assumption with a sourced range**, never a measurement. |
-| [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | **A design document whose track is built** — every tier of its §7 has landed, and its §7.3 is the authority on what the track supports. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
+| [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | Its status line is the authority. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`CLAUDE.md`](../CLAUDE.md) for the conventions code must follow. |
 
 ## Reading order

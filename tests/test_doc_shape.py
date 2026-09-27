@@ -378,6 +378,13 @@ EXEMPT: dict[str, str] = {
 #         Second-largest step this ratchet has taken and the same cheap
 #         kind as #275's: the denominator did not move, because a design
 #         document's tiers landing removes no symbol
+#   55.3  today, 2026-09-27, after #279: `docs/sensor-baseline.md` 6,066 ->
+#         4,162. The cut is the duplicated tables and the Why history — the
+#         linearity note, the six-month table (now a pointer at `retention.md`
+#         and `limitations.md` §5), the sublinear-growth paragraph #273 had
+#         corrected, the air-gap history, and the whole ## Why — with every
+#         guarded table kept. 18,242 / 330 = 55.28, rounded up to the next
+#         tenth. Measured, no headroom.
 #
 # The step to 78.2 is the finding #171 was regroomed to state: code-coupled
 # prose grew 29% while the surface it describes grew 3%, which is the exact
@@ -390,7 +397,7 @@ EXEMPT: dict[str, str] = {
 # cut to the prose that describes the package. It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 61.1
+RATE = 55.3
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -709,6 +716,9 @@ PARAGRAPH_MAX_WORDS = 120
 #        the marginal-cost paragraph and the kept-for-the-record criterion —
 #        all cut with the narration that carried them, not for this ceiling.
 #        Lowered for the reason the #241 row gives
+#    71  today, 2026-09-27, after #279: `docs/sensor-baseline.md` re-measured
+#        at 71 — the cut took tables and short paragraphs, no long one.
+#        Confirmed, not lowered.
 LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
@@ -818,6 +828,9 @@ LONG_PARAGRAPHS_MAX = 71
 #        below the rationale line. The four that remain are issue-cited
 #        measurement records the document keeps inline. Lowered for the
 #        reason the #241 row gives
+#   110  today, 2026-09-27, after #279: `docs/sensor-baseline.md` re-measured
+#        at 110 — the Why history it cut sat below the rationale line.
+#        Confirmed, not lowered.
 NARRATION_MAX = 110
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
@@ -2377,5 +2390,292 @@ def test_retention_why_is_a_section() -> None:
     assert verdict == DISAGREE, "the old Why-it-lost heading passes"
     assert problems
     verdict, problems = retention_why_is_a_section("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def _baseline_text() -> str:
+    return (REPO / "docs" / "sensor-baseline.md").read_text(encoding="utf-8")
+
+
+def _baseline_empty_is_no_verdict(
+    text: str,
+) -> tuple[str, list[str]] | None:
+    if not text.strip():
+        return COULD_NOT_EVALUATE, ["docs/sensor-baseline.md could not be read"]
+    return None
+
+
+def baseline_why_is_one_sentence(
+    text: str,
+) -> tuple[str, list[str]]:
+    """## Why is one sentence: the multiplier stayed 1 TB/day.
+
+    D3 reverses #213, which had moved the section history under ## Why as
+    worth keeping. The provenance table and the re-measurement narratives
+    are gone.
+    """
+    empty = _baseline_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "The multiplier stayed 1 TB/day through every re-measurement." not in text:
+        problems.append("the one-sentence ## Why is gone")
+    for stale in (
+        "Nothing below is normative. It is the provenance",
+        "### When each section was added",
+        "### The sizes the Layer A re-measurement replaced",
+        "### What the two re-measurements did to the conclusion",
+    ):
+        if stale in text:
+            problems.append(f"the stale Why history is back: {stale[:40]}")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def baseline_no_six_month_table(
+    text: str,
+) -> tuple[str, list[str]]:
+    """*What it does to the claim* is a pointer, not a table.
+
+    retention.md and limitations.md §5 duplicate the six-month table exactly
+    and with no guard on the copy; this document keeps only the sensor side,
+    which does not move.
+    """
+    empty = _baseline_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "| **1 kHz** | **4.72 TB**" in text:
+        problems.append("the stale six-month table is back")
+    if "What the claim becomes at each rung" not in text:
+        problems.append("the pointer at retention.md's six-month table is gone")
+    if "limitations.md" not in text or "§5" not in text:
+        problems.append("the pointer at limitations.md §5 is gone")
+    if "The sensor assumption is not adjusted to compensate" not in text:
+        problems.append("the sensor-side-not-adjusted paragraph is gone")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def baseline_no_sublinear_growth_paragraph(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The sublinear-growth paragraph is gone.
+
+    #273 corrected its attribution; what remains is history around the
+    re-measured ladder, which stays.
+    """
+    empty = _baseline_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    if "The growth is **sublinear**" in text:
+        return DISAGREE, ["the stale sublinear-growth paragraph is back"]
+    return AGREE, []
+
+
+def baseline_air_gap_is_a_retired_pointer(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The air-gap section names the premise, says retired, and points.
+
+    The history of where the premise was stated and what would bring it back
+    is gone; the heading, the retirement, and the requirement half stay.
+    """
+    empty = _baseline_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "## A premise this document does not carry: air-gapped sites" not in text:
+        problems.append("the air-gap heading is gone")
+    if "retired, not repaired" not in text:
+        problems.append("the retirement is gone")
+    for stale in (
+        "It was stated as fact in `README.md`",
+        "**What would bring the premise back.**",
+        "stood in for the requirement below in three more places",
+    ):
+        if stale in text:
+            problems.append(f"the stale air-gap history is back: {stale[:40]}")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def baseline_sensitivity_parameter_block_condensed(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The Sensitivity parameter block is one line, not a duplicated block.
+
+    The full run parameters live in retention.md; here only the command and
+    the rate travel with the table.
+    """
+    empty = _baseline_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "at a 50 Hz control rate. Each" not in text:
+        problems.append("the condensed parameter line is gone")
+    for stale in (
+        "16 envelope samples, 200 ms horizon",
+        "1.0 s occurrence resolution, 0.5 s replan interval",
+    ):
+        if stale in text:
+            problems.append(f"the stale parameter block is back: {stale[:40]}")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def baseline_sensor_multiplier_has_no_default(
+    text: str,
+) -> tuple[str, list[str]]:
+    """--sensor-multiplier has no default.
+
+    The benchmark enforces the baseline in code rather than prose; the
+    paragraph stating that stays.
+    """
+    empty = _baseline_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    if "--sensor-multiplier` has\n**no default**" not in text:
+        return DISAGREE, ["the --sensor-multiplier no-default paragraph is gone"]
+    return AGREE, []
+
+
+# The stale wordings each predicate guards against, verbatim from
+# docs/sensor-baseline.md before #279. Every one must fail its predicate.
+STALE_BASELINE_WHY = """## Why
+
+Nothing below is normative. It is the provenance of the sections above: which
+issue each arrived with, and what each re-measurement moved. An assumption is
+worth least once nobody remembers what it was weighed against.
+
+### When each section was added"""
+
+STALE_SIX_MONTH_TABLE = """| control rate | occurrence, 6 months | vs 182.5 TB | transition | vs | per-frame | vs |
+|---|---|---|---|---|---|---|
+| **50 Hz** | **267 GB** | **~684x** | 838 GB | ~218x | 1,293 GB | ~141x |
+| 100 Hz | 469 GB | ~389x | 1.38 TB | ~132x | 2.47 TB | ~74x |
+| 250 Hz | 1.09 TB | ~167x | 2.96 TB | ~62x | 6.42 TB | ~28x |
+| **1 kHz** | **4.72 TB** | **~39x** | 11.57 TB | ~16x | 28.53 TB | ~6x |"""
+
+STALE_SUBLINEAR = """The growth is **sublinear**: 17.7x at the occurrence level for a 20x rate
+increase, and the term that does not scale is the **`declaration` table**, 18.3%
+of the coarsest level at 50 Hz: the policy replans on a wall-clock interval, so
+it emits the same declarations at every rung.
+[`retention.md`](retention.md), *Why the growth is sublinear*, measures that
+level per table and is where the attribution is established. Only the record
+layer scales, and by 1 kHz it is 60,101 of that level's 61,826 node rows —
+97.2%, against 98.5% at 50 Hz. That level is almost
+entirely a per-action attestation stream at either rate, which is what the rate
+buys and what a cadence change would cut."""
+
+STALE_AIR_GAP = """**The retention argument rests on the sensor rate alone.** A second empirical
+claim once stood beside it: that full sensor logs cannot leave an air-gapped
+site. It was stated as fact in `README.md` and three times in
+[`plan.md`](plan.md), stood in for the requirement below in three more places,
+and appeared **zero times here** — no source, no range, no sensitivity, in the
+document where every other input gets all three.
+
+**It is retired rather than sourced, because the argument does not need it.**
+What the retention argument needs is that keeping the raw log for the mandated
+window is expensive per robot and keeping the artifact is not. Both halves are
+above and neither mentions a network: 182.5 TB per robot per window at the
+published multiplier, against 267 GB of artifact at occurrence resolution and a
+50 Hz control rate, sensitivity in [Sensitivity](#sensitivity). None of that
+arithmetic moves on a site with a fibre uplink, and sourcing the premise would
+have added a second empirical input carrying no weight.
+
+**The requirement half stands, because it is a different kind of claim.**
+*Off-network verifiability* — one self-contained file an assessor can check years
+later with no service still running and no call to anyone — is a **requirement of
+the design**, not an observation about how sites are run. These sites are heavily
+instrumented and their telemetry already flows to a cloud the operator runs,
+which is the reason for it: an assessor certifying what happened needs a record
+whose integrity does not rest on the assessed party's infrastructure.
+
+Requirements are stated, not sourced, so that half needs nothing from this
+document. It is stated in [`limitations.md`](limitations.md) §6, in
+[`plan.md`](plan.md) under Claim 4, and in `reg/commit.py`, where RFC 3161 and
+transparency-log commitment are documented and deliberately unimplemented under
+it.
+
+**What would bring the premise back.** A measurement rather than an assertion:
+how many deployments in the target class run isolated, over what range, with the
+retention argument's sensitivity to it — the three things every other input here
+carries. Absent that, no document states site isolation as fact, and
+`tests/test_air_gap_framing.py` fails if one starts to."""
+
+STALE_SENSITIVITY_PARAMS = """The artifact sizes below are **measured**, from one execution of
+`python -m reg.bench --resolution --seed 0`: `long_run` at 3,000 frames **at a
+50 Hz control rate**, 16 envelope samples, 200 ms horizon, 1.0 s occurrence
+resolution, 0.5 s replan interval and declaration horizon, 1.0 s watchdog. Each
+size is that level's measured `bytes/hour` — 60.85, 191.39 and 295.13 MB/h —
+times the 4,380 hours in the retention floor."""
+
+
+def test_baseline_why_is_one_sentence() -> None:
+    verdict, problems = baseline_why_is_one_sentence(_baseline_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = baseline_why_is_one_sentence(STALE_BASELINE_WHY)
+    assert verdict == DISAGREE, "the stale Why history passes"
+    assert problems
+    verdict, problems = baseline_why_is_one_sentence("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_baseline_no_six_month_table() -> None:
+    verdict, problems = baseline_no_six_month_table(_baseline_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = baseline_no_six_month_table(STALE_SIX_MONTH_TABLE)
+    assert verdict == DISAGREE, "the stale six-month table passes"
+    assert problems
+    verdict, problems = baseline_no_six_month_table("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_baseline_no_sublinear_growth_paragraph() -> None:
+    verdict, problems = baseline_no_sublinear_growth_paragraph(_baseline_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = baseline_no_sublinear_growth_paragraph(STALE_SUBLINEAR)
+    assert verdict == DISAGREE, "the stale sublinear paragraph passes"
+    assert problems
+    verdict, problems = baseline_no_sublinear_growth_paragraph("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_baseline_air_gap_is_a_retired_pointer() -> None:
+    verdict, problems = baseline_air_gap_is_a_retired_pointer(_baseline_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = baseline_air_gap_is_a_retired_pointer(STALE_AIR_GAP)
+    assert verdict == DISAGREE, "the stale air-gap history passes"
+    assert problems
+    verdict, problems = baseline_air_gap_is_a_retired_pointer("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_baseline_sensitivity_parameter_block_condensed() -> None:
+    verdict, problems = baseline_sensitivity_parameter_block_condensed(
+        _baseline_text()
+    )
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = baseline_sensitivity_parameter_block_condensed(
+        STALE_SENSITIVITY_PARAMS
+    )
+    assert verdict == DISAGREE, "the stale parameter block passes"
+    assert problems
+    verdict, problems = baseline_sensitivity_parameter_block_condensed("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_baseline_sensor_multiplier_has_no_default() -> None:
+    verdict, problems = baseline_sensor_multiplier_has_no_default(_baseline_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = baseline_sensor_multiplier_has_no_default(
+        "The benchmark enforces this in code rather than prose."
+    )
+    assert verdict == DISAGREE, "a text without the no-default paragraph passes"
+    assert problems
+    verdict, problems = baseline_sensor_multiplier_has_no_default("")
     assert verdict == COULD_NOT_EVALUATE
     assert problems

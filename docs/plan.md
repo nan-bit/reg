@@ -10,19 +10,7 @@ for the **seven** items named below · keep current
 
 Where this file and [`docs/prior-art.md`](prior-art.md) disagree, **prior art
 wins and this file gets edited**, and phases are cut when research shows they
-reinvent something with a name. This is not a brainstorm and has not been one
-since the first pass ran. It is still not a *specification* either: nothing here
-is normative over `prior-art.md`.
-
-That rule has not changed; what has changed is that it has been exercised four
-times, and most of what those passes ordered into this file is now in it — DSSAD
-and EU AI Act Art. 12 in the standards baseline; Simplex / ASTM F3269 named for
-what Phase 4 already was, and ARMTD / ARMOUR for the envelope machinery, with the
-novelty claim they take dropped; Claim 1 restated as a retention rate and Claim 2
-as answer-agreement; Schneier–Kelsey cited where Phase 6 introduces the chain
-(issue #104); ConSerts where Claim 3 states its contribution; rosbag2/MCAP priced
-against Claim 1's baseline (issue #117). A phase that has not been built says so
-in its own section.
+reinvent something with a name.
 
 **What is unreconciled is these seven, and nothing else is meant by the word.**
 Each is a change a pass ordered into *this* file, and this file has not made:
@@ -67,34 +55,6 @@ per robot at the rate Claim 1 assumes, and that arithmetic is the same on a site
 with a fibre uplink as on one without ([`sensor-baseline.md`](sensor-baseline.md)
 sources the rate and gives the sensitivity). A scene graph may be the only
 representation you can retain, export, and hand to an assessor or insurer.
-
-> **Amended twice on 2026-08-19; read the second amendment. Re-measured
-> 2026-08-20.** The clause "orders of magnitude smaller" was struck that morning,
-> because the benchmark showed the graph *larger* per frame than a gzipped copy
-> of the simulator's raw state stream, 24 columns and 19 of them Layer B —
-> measured then on an artifact holding no Layer A, and that figure is retired.
-> The artifact this project ships carries the record stream and is **~51x**
-> larger, which is what Claim 1 publishes. It was restored the same day, because that
-> stream was never what the claim was about — it is ~90 MB/day gzipped and
-> answers no audit question. Against a *sensor* log the artifact is **~684x**
-> smaller over a six-month retention period at occurrence resolution (267 GB vs
-> 182.5 TB per robot). That is two orders of magnitude and not three: the
-> earlier ~9,900x was measured before the artifact carried any Layer A record
-> (issue #59). The artifact side is measured; the sensor side is sourced and must
-> always be labelled a projection. See Claim 1 for both numbers and why the first
-> amendment was wrong.
-
-> **Amended 2026-08-26 (issue #102).** The thesis paragraph rested on a second
-> empirical premise beside the sensor rate — an unsourced claim about the
-> connectivity of the sites this targets — which appeared nowhere in
-> [`sensor-baseline.md`](sensor-baseline.md), the document where every other
-> assumption of this argument carries a source, a range and a sensitivity. It is
-> **retired rather than sourced**: the volume and the retention floor carry the
-> retention argument on their own. The retirement, and what evidence would bring
-> the premise back, is recorded in `sensor-baseline.md`. *Off-network
-> verifiability* is a different thing and is not retired — it is a **requirement**
-> of this design rather than an observation about sites, and it is stated as one
-> under Claim 4 and in [`limitations.md`](limitations.md) §6.
 
 **This is not:** a perception system, a safety controller, a physics engine, a
 research contribution to reachability analysis, or a proposed standard. It is an
@@ -166,11 +126,8 @@ If a task doesn't serve one of the four claims, cut it.
 
 ## The four claims
 
-**The numbers are identifiers, not a ranking.** They are referenced from 125
-places across this repository, including `reg/` and `tests/`, so they do not
-move. They were assigned in build order, and build order is not argument order —
-reading the numbering as a priority is what let the differentiating claim sit at
-six lines while the supporting one ran to 264.
+**The numbers are identifiers, not a ranking.** They are referenced across this
+repository, including `reg/` and `tests/`, so they do not move.
 
 Argument order is **4, 3, 2, 1**: what the artifact proves, what that proof is
 worth, how you ask it, and what it costs to keep. The sections below stay in
@@ -179,8 +136,6 @@ summary in [`README.md`](../README.md) presents them in argument order. Claim 1
 is the one that is short here on purpose — it states the claim and the conditions
 that travel with its figures, and its measurement record is
 [`retention.md`](retention.md).
-
-Each is independently shippable.
 
 ### Claim 1 — Retention (what it costs to keep, and why that is a supporting claim)
 
@@ -208,45 +163,16 @@ sentence is the claim; the criteria a *figure* has to meet before it may be
 published under it — three live, and a fourth kept for the record — are
 [`retention.md`](retention.md), *Success, restated*.
 
-**That coarsest level is 98.5% attestation records, and the figure means nothing
-without it** (issue #116). 3,120 of its 3,166 node rows are declarations and
-verdicts, against 42 occurrences: no resolution level coarsens a per-action
-record, so 267 GB is the price of retaining **attestation**, not the price of a
-DSSAD-equivalent event log. The level was labelled *DSSAD-shaped* until #116,
-which was true of 1.3% of the rows and of 100% of the reader's impression.
-Quoting "at occurrence resolution" without the composition reinstates exactly
-that reading. The label, the two rejected alternatives and what the choice
-commits this project to are in [`retention.md`](retention.md), *What the coarsest
-level actually holds*.
-
-**And 267 GB is derived, not measured.** It is the measured **60.85 MB/h** — at
-the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs at, and linear in it —
-times the 4,380 hours in the 182.5-day retention floor. `bytes/hour` is itself
-`size × 3600 / run seconds` over a 59.98-second run, so the artifact's fixed
-schema-and-index cost is scaled to an hour alongside its per-frame cost and the
-hourly rate is an **over**statement — by most at the coarsest level, where that
-fixed term is the largest share of the file. `reg.bench` carries that sentence in
-every report shape that prints a `bytes/hour` figure; it is carried here for the
-same reason, because this is where the derived total is led with.
+**The measured rate behind the total.** The artifact's measured rate is
+**60.85 MB/h** at the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs
+at, and linear in it; the six-month total is that rate times the window. The
+arithmetic, and the record of how the figures moved, are in
+[`retention.md`](retention.md).
 
 **The artifact side is measured; the sensor side is a projection.** The
 multiplier is an assumption with a sourced range — **1 TB/day** — and
 `reg.bench --sensor-multiplier` has no default, so it is always stated rather
 than inherited. `reg` has no sensors and nothing here can measure one.
-
-**The mandated window, and the law that is not this section's to price**
-(issue #101). The EU AI Act sets the six-month floor in **Article 19** for
-providers and **Article 26(6)** for deployers; Article 12 is record-keeping and
-sets no period. Both Articles set that period *"unless provided otherwise in
-applicable Union or national law, **in particular Union law on the protection of
-personal data**"*. The artifact contains personal data: `meta[operator_id]` with
-`meta[run_start_utc]` selects a shift, and the Layer B edges record how close a
-human came to a machine, to the centimetre, all shift. So for that half of the
-file six months may be a **ceiling** rather than a floor. Every figure published
-under this claim is what it costs to keep the artifact for the mandated window;
-none of them is a claim that keeping it for that window is permitted. The
-entry — with Art. 26(7) and the DPIA obligation named, and no claim of
-compliance — is [`docs/limitations.md` §8](limitations.md).
 
 **Three conditions that travel with the comparison figures wherever they are
 quoted.** The original framing — is the graph smaller than the stream it
@@ -306,17 +232,17 @@ above which the time base can no longer place a frame is
 Audit questions answered from the graph alone, no access to the original stream.
 **Success:** 4 queries returning answers verifiable against held-out ground truth.
 
-**Reframed 2026-08-19.** The benchmark reports a 264–380x speedup against
-recomputing from the raw CSV, and **that is not the claim worth making** — 70 ms
-is not slow, and nobody retains an evidence artifact to save 70 ms. The claim is
-the `AGREE` column beside it: at every measured length up to 30,000 frames, the
-graph's answer matches ground truth recomputed from the raw stream to within
-0.0–8.2 mm against a 10 mm advertised tolerance.
+**Reframed 2026-08-19.** The benchmark's measured figures — the speedup against
+recomputing from the raw CSV, the frame counts, and the agreement tolerance the
+graph's answers are held to — are in [`tests/test_bench.py`](../tests/test_bench.py),
+and this section quotes none of them, because a figure quoted here and measured
+there drifts. **That speedup is not the claim worth making** — nobody retains an
+evidence artifact to save milliseconds. The claim is the `AGREE` column beside
+it: the graph's answer matches ground truth recomputed from the raw stream.
 
 That is the retention argument, not a performance one: **the answers survive the
 discard.** A smaller artifact that answered differently would be worthless; this
 one answers the same and is the thing you can still hold when the stream is gone.
-Quote the agreement, mention the speed once, and never lead with it.
 
 ### Claim 3 — Sufficiency boundary (the strongest surviving novelty)
 
@@ -342,19 +268,7 @@ will. A ConSert discharges a demand against a component's guarantee and withdraw
 the guarantee when it cannot; `reg` answers anyway and marks what the answer
 depends on. *May I act* versus *what may be concluded afterwards*.
 
-**Why it is Layer A that makes this work.** The boundary is enforced by types
-rather than by reviewer discipline — `ProprioState` names no entity, and
-`tests/test_layer_boundary.py` fails if that erodes — and by the schema, where
-`layer` is a column on every edge and every occurrence rather than a caveat in a
-README. `Limits` was the known gap — it was declared Layer A as a property of the
-robot, and under ISO/TS 15066 speed-and-separation monitoring a commanded speed
-bound is a function of measured separation, which makes it perception-derived
-while nothing caught it. **Closed by issue #84**: `Limits.source` is required with
-no default, and the `HAS_ENVELOPE` edge is tagged from it rather than from its
-type, so an SSM-derived envelope is a Layer B edge. The dependence is unchanged;
-what changed is that the artifact records it. See
-[`docs/sufficiency.md`](sufficiency.md) §7 for what that still does not claim —
-starting with the fact that a two-value provenance is a simplification.
+The audit question it cannot answer is worth more than the gigabytes.
 
 **Success:** a taxonomy with worked examples of each, normative for what this
 project may claim.
@@ -379,13 +293,17 @@ constraint layer supplied by the same party as the policy has common-cause
 failure with it; widening that import is never a refactor.
 
 **What the independent check actually checks, stated plainly.**
-`horizon_bound(state, limits, window, substep_dt)` is the radius a declared
-region is tested against, and it is the smaller of two sound bounds: the
-workspace disc `sum(link_lengths) + link_radius`, which reads no `q`, no `q̇`
-and no horizon; and the radial projection of `reg.envelope.outer_envelope`, a
-horizon-limited **outer** reachable set — the joint box pushed through the
-forward kinematics as an interval — which reads all three. Both over-cover, so
-nothing inside is ever falsely accused.
+`horizon_bound(state, limits, horizon, substep_dt)` is the radius a declared
+region is tested against. For a **fixed base** it is the smaller of two sound
+bounds: the workspace disc `sum(link_lengths) + link_radius`, which reads no
+`q`, no `q̇` and no horizon; and the radial projection of
+`reg.envelope.outer_envelope`, a horizon-limited **outer** reachable set — the
+joint box pushed through the forward kinematics as an interval — which reads all
+three. For a **driven base** there is only the second term: `computed_bound`
+refuses a nonzero base bound rather than returning an arm-only disc the vehicle
+can drive straight out of, so the bound rests on the outer set's soundness
+argument alone. Both terms over-cover, so nothing inside is ever falsely
+accused.
 
 It is **incomplete, and in a way that is sayable in one line**: the bound is a
 radius, so it detects an overclaim that reaches *further than the robot can* and
@@ -394,43 +312,18 @@ real; the capability is bounded and the bound is stated, and those are different
 sentences. Phase 4 below has the angular half and the held decision;
 [`docs/limitations.md`](limitations.md) §3 is normative on both.
 
-**What the chain proves, and what it does not.** It proves the records are
-internally consistent under the keys that signed them. It does not prove no
-record was withheld. On re-issuance — the whole history re-run and re-signed
-offline by its own author, which is the party a regulator distrusts most — issue
-#83 closed the two gaps that made the question unaskable, and it is worth being
-exact about how far that goes.
+A third-party timestamp (RFC 3161, transparency log) would prove the chain
+heads existed by a given instant to someone with no relationship to the
+operator; both are documented and deliberately unimplemented — each needs a
+network call at artifact close, and this artifact is required to be checkable
+years later with no service still running and no call to anyone. That
+requirement is not a site constraint worked around; it is the point.
 
-The artifact now carries **absolute time**: `--run-start` is a required
-caller-supplied input with no default, `meta` names the unit and the operator,
-and every occurrence carries DSSAD's `date` derived from that start. Determinism
-is untouched, because the instant is declared rather than read from a clock —
-same seed *and* same declared start, same bytes. That makes the run locatable and
-correlatable with the other logs in the cell. It does not by itself make the date
-*true*: it is a claim by the same author as the records.
-
-What bears on the claim is the **commitment** (`reg/commit.py`): the two chain
-heads signed at artifact close by a second on-site keyholder whose key signed no
-record in the file, refused outright if it is one of the record-signing keys.
-Half of it needs no key at all — the recorded heads are recomputed from the
-records the artifact actually holds, so *anyone* holding the file can see a
-re-issued chain — and the witness signature is what stops the recorded heads
-being rewritten to match. An artifact closed with no supplier records
-`commitment: none` explicitly; silence never reads as commitment.
-
-So this is now the structure of non-repudiation **plus a second party at the same
-site**, and that is the honest ceiling of it. An on-site witness is not a
-third-party timestamp: it does not prove the heads existed by any given instant
-to someone with no relationship to the operator. RFC 3161 and transparency-log
-adapters would, and both are documented and deliberately unimplemented — each
-needs a network call at artifact close, and this artifact is required to be
-checkable years later with no service still running and no call to anyone. That
-requirement is not a site constraint worked around; it is the point. An assessor
-certifying what happened needs a record whose integrity does not rest on
-infrastructure belonging to the party being assessed, and the telemetry pipeline
-these sites already run is that party's. The `Committer` interface exists so that
-a deployment prepared to take the dependency gets an adapter rather than a
-rewrite.
+An assessor certifying what happened needs a record whose integrity does not
+rest on infrastructure belonging to the party being assessed, and the telemetry
+pipeline these sites already run is that party's. The `Committer` interface
+exists so that a deployment prepared to take the dependency gets an adapter
+rather than a rewrite.
 
 **What this claim now covers.** *Was the passivation acknowledged, and by whom*
 is a question this claim's evidence answers, on the terms
@@ -443,18 +336,8 @@ is a question this claim's evidence answers, on the terms
 
 ## Architecture
 
-```
-sim/          2D world, robot kinematics, scripted human motion
-envelope/     proprioception-only forward reachable set  [LAYER A]
-declare/      policy-side declaration emission            [BLACK CHANNEL]
-enforce/      independent verification, verdicts, faults  [LAYER A]
-chain/        hash chain + HMAC over the record
-graph/        temporal evidence graph, incremental diff
-store/        persistence (SQLite)
-query/        audit query API
-viz/          matplotlib rendering
-bench/        compression + query benchmarks
-```
+The layout lives in [`CLAUDE.md`](../CLAUDE.md) and is enforced by
+`tests/test_layout.py`; this file does not carry a second copy.
 
 ### Stack
 
@@ -545,8 +428,9 @@ world, the sufficiency argument evaporates and you've built a visualization.
 5. Return `shapely` polygon
 
 This is an **inner approximation** — sampling can only under-cover. Say so in the
-code and the writeup. A real safety claim needs an outer approximation. Naming
-this is a point in your favor.
+code and the writeup. The outer approximation is no longer outstanding:
+`reg.envelope.outer_envelope` landed in issue #82, and it is what Phase 4's
+bound rests on.
 
 Also compute `envelope_area` and `envelope_hash` (for Phase 5 diffing).
 
@@ -563,18 +447,8 @@ The policy here is scripted and deliberately imperfect — in `declared_violatio
 it declares one bound and then commands outside it. **The policy is the black
 channel: arbitrarily capable, uncertified, out of scope.** Do not make it smart.
 
-```python
-@dataclass
-class Declaration:
-    declaration_id: str
-    seq: int                    # monotonic — replay/reorder detection
-    t_issued: float
-    horizon: float              # validity window
-    action_class: str           # from a fixed vocabulary
-    declared_envelope: bytes    # WKB polygon the policy claims it will stay within
-    prev_hash: str              # hash chain link
-    mac: str                    # HMAC over all of the above, policy key
-```
+The declaration record is `reg.declare.Declaration` in the code; this section
+does not carry a second copy of its fields.
 
 Vocabulary for `action_class`: `reach`, `hold`, `retract`, `traverse`, `escalate`.
 Fixed and small — an out-of-vocabulary declaration is a detectable fault.
@@ -601,15 +475,22 @@ failure with it.
 is *not* `compute_envelope` from Phase 2 — that is an under-approximation, and
 vetoing against something that under-covers the reachable set would produce false
 VETOs on truthful policies. It is `reg.enforce.horizon_bound(state, limits,
-window, substep_dt)`, the smaller of two bounds that each over-cover:
+horizon, substep_dt)`, and how many terms it has is a property of the robot
+(issue #164):
 
-- `computed_bound(limits)`, the radius of the **workspace disc**,
+- **Fixed base** — the smaller of two bounds that each over-cover:
+  `computed_bound(limits)`, the radius of the **workspace disc**,
   `sum(link_lengths) + link_radius`, base at the origin. It takes `Limits`, a
-  property of the robot rather than of its state, so it reads no `q`, no `qd` and
-  no horizon and is the same scalar at every frame of every scenario.
-- the radial projection of `reg.envelope.outer_envelope(state, limits, window)` —
-  a horizon-limited **outer** reachable set, the joint box pushed through the
-  forward kinematics as an interval (issue #82). This one reads all three.
+  property of the robot rather than of its state, so it reads no `q`, no `qd`
+  and no horizon and is the same scalar at every frame of every scenario; and
+  the radial projection of `reg.envelope.outer_envelope(state, limits, horizon,
+  base, substep_dt)` — a horizon-limited **outer** reachable set, the joint box
+  pushed through the forward kinematics as an interval (issue #82). This one
+  reads all three.
+- **Driven base** — the outer-set projection **alone**. `computed_bound`
+  refuses a nonzero base bound rather than returning an arm-only disc the
+  vehicle can drive straight out of, so for a driven base every VETO rests on
+  the outer set's soundness argument alone.
 
 That makes Phase 4 an independent monitor whose bound is **sound in the
 conservative direction and radial.** It over-covers, so nothing inside it is ever
@@ -655,37 +536,20 @@ calling out in the writeup.
 
 ### Verdict
 
-```python
-@dataclass
-class Verdict:
-    verdict_id: str
-    declaration_id: str | None
-    seq: int
-    t: float
-    outcome: Literal["PERMIT", "CLAMP", "VETO", "SAFE_STATE"]
-    fault: str | None           # from the taxonomy
-    clamped_envelope: bytes | None
-    prev_hash: str
-    mac: str                    # enforcement key — different from policy key
-```
+The verdict record is `reg.enforce.Verdict` in the code; this section does not
+carry a second copy of its fields.
 
 ### Passivation and reintegration
-
-After VETO or SAFE_STATE, recovery is **not** automatic. Requires a fresh
-declaration plus an explicit acknowledgment record. That asymmetry is deliberate
-and it's the part people omit when they copy the pattern — implement it.
 
 **It is implemented.** `reg.enforce.Acknowledgment` is signed with the
 enforcement key, names the `verdict_id` that passivated rather than just the
 fault, and refuses both a second acknowledgment of one passivation and a
 pre-emptive one; `Enforcer.acknowledge` and a fresh accepted declaration are both
-required, and either alone resumes nothing.
-
-**And it reaches the artifact** — a table, an `ACKNOWLEDGED` edge, one
-enforcement chain over both record kinds, `reg.query.acknowledgments`, and
-`stale_declaration` as the fixture that produces one. What the schema refused
-before it could hold the record is [`docs/lossiness.md`](lossiness.md)
-*Retained* #7.
+required, and either alone resumes nothing. It reaches the artifact — a table,
+an `ACKNOWLEDGED` edge, one enforcement chain over both record kinds,
+`reg.query.acknowledgments`, and `stale_declaration` as the fixture that produces
+one. What the schema refused before it could hold the record is
+[`docs/lossiness.md`](lossiness.md) *Retained* #7.
 
 **Deliverable:** verdict stream, and a scenario where the `declared_violation` run
 produces a clean CLAMP with a named fault.
@@ -699,32 +563,9 @@ not raw state.
 
 ### Schema
 
-**Nodes**
-
-| Type | Fields |
-|---|---|
-| ~~`Timestep`~~ | ~~`t`, `frame_id`~~ — **dropped, issue #29.** Every edge already carries `t_start`/`t_end`; a node per instant was a second and denser representation of time, one row per frame, and nothing in Phase 7's query set reads it. See [`docs/lossiness.md`](lossiness.md) *Discarded* #10 |
-| `node` | `node_key`, `node_id` — **added, issue #55.** Not a node kind: the identity table. The readable identifier of every node of every kind is stored here once, and the INTEGER `node_key` is what each payload row is keyed on and what every join and index below carries. The `*_id` columns in the rows that follow name the identifier a reader still gets from `reg.store`; the *column* is `node.node_id`. A storage decision — the identifiers, the reports that cite them and the answers are unchanged |
-| `Envelope` | `envelope_id`, `area`, `geometry_wkb`, `horizon`, `source` (`computed` / `declared` / `clamped`), `envelope_hash` (stored as 32 raw bytes since issue #55; hex on the wire) |
-| `Entity` | `entity_id`, `kind`, `geometry_wkb` |
-| `RobotConfig` | `config_id`, `q`, `qd` (quantized) |
-| `Occurrence` | `occurrence_id`, `seq`, `type` (the DSSAD occurrence flag), `layer`, `reason`, `t` (at `occurrence_time_resolution_s`), `date`, `t_utc`, `entity_id`, `value`, `recorder_version` — **added, issue #35.** The event-level layer, additive beside the edges; see [`docs/lossiness.md`](lossiness.md) *The three resolution levels* and [`docs/prior-art.md` §9](prior-art.md). `recorder_version` is the **recorder's** build and envelope digest and was called `sw_version` until issue #109; it is **not** DSSAD's `R157SWIN`, which names the system under investigation and which this project does **not implement** — nothing here has a policy version to bind ([`docs/prior-art.md` §9](prior-art.md)) |
-| `Declaration` | as Phase 3 |
-| `Verdict` | as Phase 4 |
-
-**Edges** — all carry `t_start`, `t_end`, which is what makes this temporal and
-compressible
-
-| Type | Semantics |
-|---|---|
-| `HAS_ENVELOPE` | RobotConfig → Envelope (was Timestep → Envelope; issue #29) |
-| `CONTAINS` / `INTERSECTS` | Envelope → Entity (with `overlap_area`) |
-| `SEPARATION` | RobotConfig → Entity (`min_distance`) |
-| `CONTACT` | RobotConfig → Entity |
-| `DECLARED` | Declaration → Envelope |
-| `ADJUDICATED` | Verdict → Declaration |
-| `ENFORCED` | Verdict → Envelope (the bound actually applied) |
-| `FOLLOWS` | hash chain link between consecutive records |
+The schema lives in the code, not here: the tables are defined in
+`reg/store.py`, and the edge kinds in `reg.store.EDGE_SPECS`. This section
+does not carry a second copy.
 
 ### The incremental principle — the AIC transfer
 
@@ -737,21 +578,10 @@ Do **not** emit a node per frame. Emit on change; extend `t_end` otherwise.
 A robot holding still for 3 seconds at 50Hz should produce ~1 node, not 150. The
 compression ratio comes almost entirely from this.
 
-### Lossiness contract — write this BEFORE implementing the graph
+### Lossiness contract
 
-`docs/lossiness.md`, kept current:
-
-> **Retained:** topological and metric relationships between the reachable set and
-> every entity at cm/10ms resolution; exact timing of relationship transitions;
-> every declaration, verdict, and fault with full attribution.
->
-> **Discarded:** exact joint trajectories between transitions, sub-cm geometry, raw
-> sensor data, anything not affecting a supported query.
->
-> **Unanswerable:** exact pose at an arbitrary unsampled instant; anything about
-> entities outside the entity set.
-
-Same discipline as reachability pruning in AIC — not compressing, discarding what's
+The contract is [`docs/lossiness.md`](lossiness.md), kept current. Same
+discipline as reachability pruning in AIC — not compressing, discarding what's
 provably irrelevant to the supported question set.
 
 **Deliverable:** the build in [`README.md`](../README.md)'s *Reading an
@@ -789,14 +619,6 @@ inherit.
 Include a `--tamper` flag that mutates one record in the persisted graph, so
 `verify_chain()` visibly fails. That's the demo.
 
-### Honesty note — put this in the README, not a footnote
-
-In this prototype both keys live in the same process. **That demonstrates the
-structure of non-repudiation, not non-repudiation.** A real deployment requires the
-enforcement key in hardware the policy vendor cannot reach — which is the same
-independence argument as the layer separation, one level down. Say this plainly;
-the project is more credible for it.
-
 **Deliverable:** `python -m reg.query runs/contact.sqlite --verify-chain`
 
 ---
@@ -829,19 +651,9 @@ enforce it, the same way Layer A is enforced.
 ### The money query
 
 `incident_report(t_incident)` — one call, returning the demo sentence as structured
-output:
-
-```
-At t=12.34s the policy declared envelope D-0891 (area 0.42 m²)
-  action_class: reach, horizon 200ms, seq 891
-At t=12.41s the commanded action exceeded that envelope by 0.09 m²
-  fault: DECLARATION_ACTION_MISMATCH
-Enforcement adjudicated V-0891 at t=12.41s
-  outcome: CLAMP to declared bound
-Human entity human_0 was inside the computed physical envelope
-  from t=12.28s to t=12.55s (27 frames)
-Chain verified: 4,218 records, 0 breaks
-```
+output. The real output is [`README.md`](../README.md)'s *Reading an incident*,
+which [`tests/test_readme.py`](../tests/test_readme.py) proves runs; this
+section does not carry a second copy.
 
 **Verification:** for each scenario compute ground truth from the CSV, compare
 against graph-derived answers, report agreement within stated quantization
@@ -860,7 +672,7 @@ Per scenario:
 | Raw state stream | CSV bytes, and gzipped CSV bytes |
 | "Realistic sensor" projection | raw × a stated, conservative multiplier — **label as projection, not measurement** |
 | Graph size | sqlite bytes, and gzipped sqlite bytes |
-| Ratio | vs. raw and vs. projection |
+| Bytes/hour | per side, **not a ratio** — Claim 1's ratio ban above forbids quoting a compression ratio as the commercial argument while the measured one is below 1, and `reg.bench` refuses to carry such a column at all |
 | Node/edge counts | vs. frame count |
 | Declaration/verdict overhead | bytes added by Phases 3–6 |
 
@@ -877,8 +689,8 @@ schema-and-index cost dominates the artifact there:
 
 | Metric | |
 |---|---|
-| Ratio vs. run length | one fixture (`reg.scenarios.long_run`) at 300, 1k, 3k, 10k, 30k frames |
-| Crossover | the measured length at which the ratio passes 1.0 — or, plainly, that it does not |
+| Bytes/hour vs. run length | one fixture (`reg.scenarios.long_run`) at 300, 1k, 3k, 10k, 30k frames |
+| Crossover | the measured length at which the artifact's bytes/hour drops below the CSV's — or, plainly, that it does not |
 | Marginal cost | Δ bytes per frame between two measured lengths, both sides |
 
 **Measured points only.** No fitted curve, and no projected crossover quoted as
@@ -890,22 +702,10 @@ if it were measured — the same rule the sensor projection follows.
 
 ## Phase 9 — Sufficiency boundary (Claim 3)
 
-Tag every edge with the layer(s) it depends on:
-
-- **Layer A (certifiable):** proprioception-derived envelope, declarations,
-  verdicts, chain. Sensors with characterizable failure modes.
-- **Layer B (uncertifiable):** entity positions — ground truth here, perception in
-  a real system.
-
-Then the taxonomy:
-
-| Query | Layer A alone | Needs Layer B | Claim strength |
-|---|---|---|---|
-| Could the robot have reached (x,y) at time t? | ✅ | | Certifiable |
-| Did the policy exceed its declared bound? | ✅ | | Certifiable |
-| Was the record tampered with? | ✅ | | Certifiable |
-| Was the human inside the reachable set? | | ✅ | Only as strong as perception |
-| Did the robot contact the human? | | ✅ | Only as strong as perception |
+Every edge is tagged with the layer(s) it depends on — Layer A
+(proprioception-derived envelope, declarations, verdicts, chain) or Layer B
+(entity positions: ground truth here, perception in a real system) — and the
+query taxonomy is drawn along that line:
 
 **The finding:** a volume derived from perception inherits perception's failure
 modes. You cannot ground a certifiable envelope in an uncertifiable perceiver.
@@ -926,9 +726,10 @@ black-channel pattern buys.
 
 ### Repo
 
-- `README.md` — thesis in 3 paragraphs, four claims, headline compression number,
-  the incident report output, how to run
-- `docs/standards.md` — the baseline table above, with the two deliberate deviations
+- `README.md` — thesis in 3 paragraphs, four claims, the incident report output,
+  how to run
+- `docs/standards.md` — never created; the baseline table lives in this file's
+  *Standards baseline* section, with the two deliberate deviations
 - `docs/lossiness.md`
 - `docs/sufficiency.md`
 - `docs/limitations.md` — inner-approximation sampling, 2D only, ground-truth
@@ -958,7 +759,7 @@ Lead paragraph, roughly:
 > retention window and self-contained enough to check with no service still
 > running.
 
-Then: the headline compression number. The incident report block. Link to
+Then: the incident report block. Link to
 repo. A short "what this doesn't do" section — that one earns more credibility than
 anything else on the page.
 
@@ -968,32 +769,4 @@ anything else on the page.
 
 ## Build order
 
-| Milestone | Phases | Ship-worthy? |
-|---|---|---|
-| **1** | 1, 2, 5 (basic), 8 (compression only) | Yes — "here's a compression number and a picture" |
-| **2** | 7 (scene queries), 8 (full), 9 | Yes — "and here are the audit queries, and here's what they can't tell you" |
-| **3** | 3, 4, 6, 7 (attestation queries) | Yes — the demo sentence, end to end |
-| **4** | 10 | The site piece |
-
-**Milestone 3 roughly doubles the project.** Milestones 1–2 stand alone as a
-complete argument about evidence. Do not start Phase 3 until Milestone 2 ships. If
-time runs out, a finished Milestone 2 beats a half-built Milestone 3.
-
----
-
-## Notes for the implementing agent
-
-- Clarity over performance everywhere. This is a demonstration, not a system.
-- **Determinism is non-negotiable.** Seed everything. An audit artifact that isn't
-  reproducible isn't an audit artifact.
-- **Enforce Layer A / Layer B with types, not convention.** Most important
-  structural property in the codebase.
-- **Enforce enforcement/policy independence the same way.** `enforce/` must not
-  import from `declare/` beyond the dataclass.
-- Write the lossiness contract before implementing the graph. It's a design
-  constraint, not documentation.
-- Scenario fixtures stay small and hand-authored. Randomized scenarios make the
-  compression numbers unfalsifiable.
-- The scripted policy should be *imperfect on purpose*. A policy that never
-  violates its declaration makes Phase 4 undemonstrable.
-- When a phase's success criterion is met, commit and stop. Do not gold-plate.
+Milestones 1–3 shipped; milestone 4 / Phase 10 remains.

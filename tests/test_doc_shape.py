@@ -574,7 +574,25 @@ RATE = 61.1
 #           with nothing built behind it. `docs/sufficiency.md` went 11,507 ->
 #           11,437. Seventy words lower than the last ceiling rather than level
 #           with it, for the reason the #233 row gives — measured, no headroom
-ARGUMENT_MAX = 46866
+#   44,640  today, 2026-09-26, after #277 corrected what the code contradicts
+#           and cut what the file carries in `docs/plan.md`. `docs/plan.md`
+#           went 8,491 -> 6,265: the amendments, the Claim 1 composition and
+#           derived-arithmetic narration, the mandated-window paragraph, Claim
+#           3's *Why*, Claim 4's re-issuance section, the stale architecture
+#           tree, the Declaration and Verdict dataclasses, the Phase 5 schema
+#           tables and lossiness blockquote, Phase 6's honesty note, Phase 7's
+#           fake output, Phase 9's table, the build-order table and the
+#           implementing-agent notes. Two thousand two hundred twenty-six words
+#           lower than the last ceiling rather than level with it, for the
+#           reason the #233 row gives — measured, no headroom
+#   44,688  today, 2026-09-26, after restoring the one paragraph the issue
+#           keeps: `60.85 MB/h` with 50 Hz, which `tests/test_bench.py`
+#           requires in `docs/plan.md`. The "derived, not measured" paragraph
+#           stays cut; the figure now lives in a 48-word paragraph stating the
+#           measured rate, its control rate and the pointer at `retention.md`.
+#           Forty-eight words above the last ceiling rather than level with
+#           it, for the reason the #233 row gives — measured, no headroom
+ARGUMENT_MAX = 44688
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -668,7 +686,14 @@ PARAGRAPH_MAX_WORDS = 120
 #        reason the #241 row gives. The cut file contributed nothing to this
 #        count before or after: #214 took it to zero and the prose that replaced
 #        §2's opening was split rather than left at 121 words
-LONG_PARAGRAPHS_MAX = 78
+#    75  today, 2026-09-26, after #277: `docs/plan.md` went 6 -> 3. The three
+#        that fell are the mandated-window paragraph, Claim 3's *Why it is
+#        Layer A that makes this work*, and Claim 4's re-issuance closer — all
+#        cut with the sections that carried them, not for this ceiling. The
+#        rewritten network-call paragraph was split in two rather than left at
+#        130 words, because two claims were sharing it, which is the #217
+#        reason for splitting. Lowered for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 75
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -757,7 +782,18 @@ LONG_PARAGRAPHS_MAX = 78
 #        they sat. What this row records is that the replacement prose narrates
 #        nothing new: §3's construction paragraph was reworded off `was not
 #        raised` rather than rewrapped around it, which is the #217 caveat
-NARRATION_MAX = 128
+#   126  today, 2026-09-26, after #277. Five narrations went with the cut
+#        prose — the header's *what has changed*, the Claim 1 composition
+#        paragraph, the mandated-window paragraph, Claim 3's *Why it is Layer
+#        A that makes this work*, and the passivation paragraph that reached
+#        the artifact — and three markers newly fire on the replacement prose:
+#        Phase 4's bound paragraph on its live `(issue #164)` cross-reference,
+#        the merged passivation paragraph on a carried-over *before it*, and
+#        Phase 2 on the *no longer outstanding* the issue ordered stated. The
+#        first two are the shape #213 found, references plan.md keeps inline
+#        by its status header; the third narrates by instruction. Net two, and
+#        lowered for the reason the #241 row gives
+NARRATION_MAX = 126
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it
@@ -1530,3 +1566,403 @@ def test_public_symbols_counts_top_level_public_definitions_only() -> None:
         and not node.name.startswith("_")
     )
     assert counted == 3  # public, Public, Outer — the nested and private ones are not
+
+
+# --------------------------------------------------------------------------
+# The #277 corrections are pinned (issue #277, decision D6 of #270).
+#
+# `docs/plan.md` is binding for scope but carried implementation descriptions
+# the code contradicts and prose other files already carry. Each predicate
+# below reads `docs/plan.md` and says whether the corrected statement is in
+# it and the stale one is not. Every predicate is fed the stale wording it
+# guards against and required to say DISAGREE, and an empty document is
+# COULD-NOT-EVALUATE — deleting the section is not how a correction is kept.
+# --------------------------------------------------------------------------
+
+
+def _plan_text() -> str:
+    return (REPO / "docs" / "plan.md").read_text(encoding="utf-8")
+
+
+def _empty_is_no_verdict(
+    text: str,
+) -> tuple[str, list[str]] | None:
+    if not text.strip():
+        return COULD_NOT_EVALUATE, ["docs/plan.md could not be read"]
+    return None
+
+
+def horizon_bound_states_the_driven_base_case(
+    text: str,
+) -> tuple[str, list[str]]:
+    """Claim 4 and Phase 4: two terms for a fixed base, one for a driven one.
+
+    Issue #164. `computed_bound` refuses a nonzero base bound, so a driven
+    base gets the outer-set projection alone — the old unconditional "smaller
+    of two sound bounds" described a robot that cannot drive.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if not re.search(r"fixed base.{0,200}smaller of two", text, re.I | re.S):
+        problems.append("no fixed-base two-term bound stated")
+    if not re.search(r"driven base.{0,300}alone", text, re.I | re.S):
+        problems.append("no driven-base outer-projection-alone stated")
+    if not re.search(r"computed_bound.{0,200}refus", text, re.I | re.S):
+        problems.append("no computed_bound refusal stated")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def phase_5_schema_is_a_pointer(text: str) -> tuple[str, list[str]]:
+    """Phase 5 carries no schema tables; the code does.
+
+    The Nodes/Edges tables named `CONTAINS`, which `reg.store.EDGE_SPECS`
+    does not define. The section now points at `reg/store.py` and
+    `reg.store.EDGE_SPECS` instead of carrying a second copy.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "reg/store.py" not in text:
+        problems.append("no pointer at reg/store.py")
+    if "EDGE_SPECS" not in text:
+        problems.append("no pointer at reg.store.EDGE_SPECS")
+    if "CONTAINS" in text:
+        problems.append("stale CONTAINS edge still named")
+    if "envelope_id" in text:
+        problems.append("stale Nodes table fields still present")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def phase_7_money_query_points_at_readme(text: str) -> tuple[str, list[str]]:
+    """Phase 7's money query points at README's real output, not a fenced fake.
+
+    `tests/test_readme.py` proves the *Reading an incident* block runs; the
+    D-0891 / 4,218-records block was invented and is gone.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "Reading an incident" not in text:
+        problems.append("no pointer at README's Reading an incident")
+    if "D-0891" in text:
+        problems.append("fake incident output still present")
+    if "4,218 records" in text:
+        problems.append("fake chain-verified line still present")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def phase_8_agrees_with_the_ratio_ban(text: str) -> tuple[str, list[str]]:
+    """Phase 8 measures bytes/hour, not a ratio — Claim 1's ban, stated there.
+
+    *Nothing in this repository may quote a compression ratio as the
+    commercial argument while the measured one is below 1.* Phase 8's tables
+    asked for one anyway.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if re.search(r"^\| Ratio", text, re.M):
+        problems.append("a Ratio metric row is still in Phase 8's tables")
+    if not re.search(r"not a ratio", text, re.I):
+        problems.append("Phase 8 does not say why there is no ratio column")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def no_stale_architecture_tree(text: str) -> tuple[str, list[str]]:
+    """The layout lives in CLAUDE.md and tests/test_layout.py, not here.
+
+    The tree named `sim/`, `envelope/` and the other pre-`reg/` directory
+    names; it disagreed with the repository it described.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if re.search(r"^sim/ +2D world", text, re.M):
+        problems.append("the stale architecture tree is back")
+    if "test_layout.py" not in text:
+        problems.append("no pointer at the file that enforces the layout")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def phase_2_outer_approximation_is_landed(text: str) -> tuple[str, list[str]]:
+    """Phase 2 no longer asks for an outer approximation — #82 built it.
+
+    `reg.envelope.outer_envelope` is what Phase 4's bound rests on; the old
+    "a real safety claim needs an outer approximation" is false.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if not re.search(r"outer_envelope.{0,40}landed", text, re.I):
+        problems.append("no statement that outer_envelope landed")
+    if re.search(r"needs an outer approximation", text, re.I):
+        problems.append("the outstanding-outer-approximation sentence is back")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def claim_2_quotes_no_benchmark_figures(text: str) -> tuple[str, list[str]]:
+    """Claim 2 quotes no benchmark figures; tests/test_bench.py holds them.
+
+    The 264–380x, 70 ms, 0.0–8.2 mm and 10 mm figures were measured nowhere
+    this repository checks. The section points at the benchmark instead of
+    quoting it, because a figure quoted here and measured there drifts.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    for figure in ("264–380x", "70 ms", "0.0–8.2", "10 mm"):
+        if figure in text:
+            problems.append(f"unguarded benchmark figure still quoted: {figure}")
+    if "test_bench.py" not in text:
+        problems.append("no pointer at tests/test_bench.py")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def build_order_states_what_shipped(text: str) -> tuple[str, list[str]]:
+    """Build order is one status line: milestones 1–3 shipped, 4/Phase 10 left.
+
+    The milestone table described a project that had not started; the table
+    is gone and the line says what is true.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if not re.search(r"Milestones 1–3 shipped", text):
+        problems.append("no statement that milestones 1–3 shipped")
+    if not re.search(r"[Mm]ilestone 4.*Phase 10 remains", text, re.S):
+        problems.append("no statement that milestone 4 / Phase 10 remains")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def phase_10_has_no_headline_number(text: str) -> tuple[str, list[str]]:
+    """Phase 10 promises no headline compression number; standards.md died.
+
+    `docs/standards.md` was never created — the baseline table lives in
+    plan.md's own Standards baseline section — and Claim 1 bans the ratio
+    the headline number would have quoted.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if re.search(r"headline compression number", text, re.I):
+        problems.append("the headline compression number is back")
+    if not re.search(r"standards\.md.{0,60}never created", text, re.I | re.S):
+        problems.append("no statement that docs/standards.md was never created")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def claim_1_keeps_the_measured_rate(text: str) -> tuple[str, list[str]]:
+    """Claim 1 keeps `60.85 MB/h` with 50 Hz — `tests/test_bench.py` needs it.
+
+    The composition paragraph and the "derived, not measured" paragraph are
+    cut, but the measured rate they carried stays: a document that quotes the
+    six-month total publishes the `bytes/hour` it is built from, and a figure
+    linear in an unstated rate is not a measured figure.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "60.85 MB/h" not in text:
+        problems.append("the measured 60.85 MB/h rate is gone")
+    if not re.search(r"60\.85 MB/h.{0,200}50 Hz", text, re.S):
+        problems.append("the rate is not stated with its 50 Hz control rate")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def claim_numbers_carry_no_stale_count(text: str) -> tuple[str, list[str]]:
+    """The claim identifiers' reference count is not quoted.
+
+    "Referenced from 125 places" was unmeasured and unmaintained; the
+    sentence that the numbers do not move stands without it.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    if re.search(r"125\s+places", text):
+        return DISAGREE, ["the stale 125-places count is back"]
+    return AGREE, []
+
+
+# The stale wordings each predicate guards against, verbatim from plan.md
+# before #277. Every one must fail its predicate.
+STALE_HORIZON_BOUND = """`horizon_bound(state, limits, window, substep_dt)` is the radius a declared
+region is tested against, and it is the smaller of two sound bounds: the
+workspace disc `sum(link_lengths) + link_radius`, which reads no `q`, no `q̇`
+and no horizon; and the radial projection of `reg.envelope.outer_envelope`, a
+horizon-limited **outer** reachable set — the joint box pushed through the
+forward kinematics as an interval — which reads all three. Both over-cover, so
+nothing inside is ever falsely accused."""
+
+STALE_SCHEMA = """| `Envelope` | `envelope_id`, `area`, `geometry_wkb`, `horizon`, `source` |
+| `CONTAINS` / `INTERSECTS` | Envelope → Entity (with `overlap_area`) |"""
+
+STALE_MONEY_QUERY = """```
+At t=12.34s the policy declared envelope D-0891 (area 0.42 m²)
+Chain verified: 4,218 records, 0 breaks
+```"""
+
+STALE_RATIO_ROW = """| Ratio | vs. raw and vs. projection |"""
+
+STALE_TREE = """```
+sim/          2D world, robot kinematics, scripted human motion
+envelope/     proprioception-only forward reachable set  [LAYER A]
+```"""
+
+STALE_OUTER_APPROXIMATION = """A real safety claim needs an outer approximation. Naming
+this is a point in your favor."""
+
+STALE_REFRAMED = """**Reframed 2026-08-19.** The benchmark reports a 264–380x speedup against
+recomputing from the raw CSV, and **that is not the claim worth making** — 70 ms
+is not slow, and nobody retains an evidence artifact to save 70 ms. The claim is
+the `AGREE` column beside it: at every measured length up to 30,000 frames, the
+graph's answer matches ground truth recomputed from the raw stream to within
+0.0–8.2 mm against a 10 mm advertised tolerance."""
+
+STALE_BUILD_ORDER = """| **1** | 1, 2, 5 (basic), 8 (compression only) | Yes — "here's a compression number and a picture" |"""
+
+STALE_PHASE_10 = """- `README.md` — thesis in 3 paragraphs, four claims, headline compression number,
+  the incident report output, how to run
+- `docs/standards.md` — the baseline table above, with the two deliberate deviations"""
+
+STALE_MEASURED_RATE = """**The artifact's measured rate is 60.85 MB/h** at an unstated control rate;
+the six-month total is that rate times the window."""
+
+STALE_COUNT = """**The numbers are identifiers, not a ranking.** They are referenced from 125
+places across this repository, including `reg/` and `tests/`, so they do not
+move."""
+
+
+def test_horizon_bound_states_the_driven_base_case() -> None:
+    verdict, problems = horizon_bound_states_the_driven_base_case(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = horizon_bound_states_the_driven_base_case(
+        STALE_HORIZON_BOUND
+    )
+    assert verdict == DISAGREE, "the unconditional two-term bound passes"
+    assert problems
+    verdict, problems = horizon_bound_states_the_driven_base_case("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_phase_5_schema_is_a_pointer() -> None:
+    verdict, problems = phase_5_schema_is_a_pointer(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = phase_5_schema_is_a_pointer(STALE_SCHEMA)
+    assert verdict == DISAGREE, "the stale schema tables pass"
+    assert problems
+    verdict, problems = phase_5_schema_is_a_pointer("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_phase_7_money_query_points_at_readme() -> None:
+    verdict, problems = phase_7_money_query_points_at_readme(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = phase_7_money_query_points_at_readme(STALE_MONEY_QUERY)
+    assert verdict == DISAGREE, "the fake output block passes"
+    assert problems
+    verdict, problems = phase_7_money_query_points_at_readme("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_phase_8_agrees_with_the_ratio_ban() -> None:
+    verdict, problems = phase_8_agrees_with_the_ratio_ban(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = phase_8_agrees_with_the_ratio_ban(STALE_RATIO_ROW)
+    assert verdict == DISAGREE, "the Ratio metric row passes"
+    assert problems
+    verdict, problems = phase_8_agrees_with_the_ratio_ban("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_no_stale_architecture_tree() -> None:
+    verdict, problems = no_stale_architecture_tree(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = no_stale_architecture_tree(STALE_TREE)
+    assert verdict == DISAGREE, "the stale tree passes"
+    assert problems
+    verdict, problems = no_stale_architecture_tree("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_phase_2_outer_approximation_is_landed() -> None:
+    verdict, problems = phase_2_outer_approximation_is_landed(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = phase_2_outer_approximation_is_landed(
+        STALE_OUTER_APPROXIMATION
+    )
+    assert verdict == DISAGREE, "the outstanding-outer-approximation passes"
+    assert problems
+    verdict, problems = phase_2_outer_approximation_is_landed("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_claim_2_quotes_no_benchmark_figures() -> None:
+    verdict, problems = claim_2_quotes_no_benchmark_figures(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = claim_2_quotes_no_benchmark_figures(STALE_REFRAMED)
+    assert verdict == DISAGREE, "the unguarded benchmark figures pass"
+    assert problems
+    verdict, problems = claim_2_quotes_no_benchmark_figures("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_build_order_states_what_shipped() -> None:
+    verdict, problems = build_order_states_what_shipped(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = build_order_states_what_shipped(STALE_BUILD_ORDER)
+    assert verdict == DISAGREE, "the milestone table passes"
+    assert problems
+    verdict, problems = build_order_states_what_shipped("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_phase_10_has_no_headline_number() -> None:
+    verdict, problems = phase_10_has_no_headline_number(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = phase_10_has_no_headline_number(STALE_PHASE_10)
+    assert verdict == DISAGREE, "the headline number passes"
+    assert problems
+    verdict, problems = phase_10_has_no_headline_number("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_claim_1_keeps_the_measured_rate() -> None:
+    verdict, problems = claim_1_keeps_the_measured_rate(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = claim_1_keeps_the_measured_rate(STALE_MEASURED_RATE)
+    assert verdict == DISAGREE, "the rate without its control rate passes"
+    assert problems
+    verdict, problems = claim_1_keeps_the_measured_rate("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_claim_numbers_carry_no_stale_count() -> None:
+    verdict, problems = claim_numbers_carry_no_stale_count(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = claim_numbers_carry_no_stale_count(STALE_COUNT)
+    assert verdict == DISAGREE, "the 125-places count passes"
+    assert problems
+    verdict, problems = claim_numbers_carry_no_stale_count("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems

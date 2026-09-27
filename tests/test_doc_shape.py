@@ -592,7 +592,18 @@ RATE = 61.1
 #           measured rate, its control rate and the pointer at `retention.md`.
 #           Forty-eight words above the last ceiling rather than level with
 #           it, for the reason the #233 row gives — measured, no headroom
-ARGUMENT_MAX = 44688
+#   41,892  today, 2026-09-27, after #278: `docs/retention.md` lost ~2,700
+#           words of figure-move and history narration — the status line, the
+#           reframing archaeology, the parameter history, the sensitivity
+#           numbers, the marginal-cost account, the superseded 2.51x, the
+#           kept-for-the-record criterion — and the surviving rationale moved
+#           under a plain `## Why`. Measured, no headroom, for the reason the
+#           #233 row gives
+#   41,891  2026-09-27, #278 follow-up: restoring the "24 columns, 19 of them
+#           Layer B" composition `test_baseline_stream_description.py` requires
+#           cost a net 1 word after tightening the `## Why` prose to stay under
+#           the ceiling. Measured, no headroom.
+ARGUMENT_MAX = 41891
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -693,7 +704,12 @@ PARAGRAPH_MAX_WORDS = 120
 #        rewritten network-call paragraph was split in two rather than left at
 #        130 words, because two claims were sharing it, which is the #217
 #        reason for splitting. Lowered for the reason the #241 row gives
-LONG_PARAGRAPHS_MAX = 75
+#    71  today, 2026-09-27, after #278: `docs/retention.md` went 5 -> 1. The
+#        four that fell are the reframing blockquote, the parameter history,
+#        the marginal-cost paragraph and the kept-for-the-record criterion —
+#        all cut with the narration that carried them, not for this ceiling.
+#        Lowered for the reason the #241 row gives
+LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -793,7 +809,16 @@ LONG_PARAGRAPHS_MAX = 75
 #        first two are the shape #213 found, references plan.md keeps inline
 #        by its status header; the third narrates by instruction. Net two, and
 #        lowered for the reason the #241 row gives
-NARRATION_MAX = 126
+#   110  today, 2026-09-27, after #278: `docs/retention.md` went 20 -> 4. The
+#        sixteen that fell are the status line, the wrong-twice paragraph, the
+#        reframing blockquote, the parameter history, the sensitivity numbers,
+#        the marginal-cost account, the superseded 2.51x and the
+#        kept-for-the-record criterion — all cut with the narration that
+#        carried them, and the surviving rationale moved under `## Why`,
+#        below the rationale line. The four that remain are issue-cited
+#        measurement records the document keeps inline. Lowered for the
+#        reason the #241 row gives
+NARRATION_MAX = 110
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it
@@ -1964,5 +1989,393 @@ def test_claim_numbers_carry_no_stale_count() -> None:
     assert verdict == DISAGREE, "the 125-places count passes"
     assert problems
     verdict, problems = claim_numbers_carry_no_stale_count("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+# --------------------------------------------------------------------------
+# Issue #278: `docs/retention.md` loses ~2,400 words of figure-move and
+# history narration. The tables and the live argument stay; the archaeology
+# goes, and what rationale survives moves under a plain `## Why`, the split
+# issue #170 gave the other documents. Each predicate below reads
+# `docs/retention.md` (the plan one reads `docs/plan.md`) and says whether the
+# corrected statement is in it and the stale one is not. Every predicate is
+# fed the stale wording it guards against and required to say DISAGREE, and
+# an empty document is COULD-NOT-EVALUATE — deleting the section is not how a
+# correction is kept.
+# --------------------------------------------------------------------------
+
+
+def _retention_text() -> str:
+    return (REPO / "docs" / "retention.md").read_text(encoding="utf-8")
+
+
+def _retention_empty_is_no_verdict(
+    text: str,
+) -> tuple[str, list[str]] | None:
+    if not text.strip():
+        return COULD_NOT_EVALUATE, ["docs/retention.md could not be read"]
+    return None
+
+
+def retention_header_keeps_machine_checked_drops_history(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The header keeps the scope line and the fixed-base condition.
+
+    The status line ("keep current", the re-measurement roll) and the "wrong
+    twice" paragraph were history about the document rather than conditions on
+    the figures; the rationale they carried moved under `## Why`.
+    """
+    empty = _retention_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "What is machine-checked here is less than the whole file" not in text:
+        problems.append("the machine-checked scope line is gone")
+    if "fixed-base planar" not in text:
+        problems.append("the fixed-base condition is gone")
+    if "keep current" in text:
+        problems.append("the stale status line is back")
+    if "wrong twice" in text:
+        problems.append("the wrong-twice archaeology is back")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def retention_parameter_block_is_command_and_rate(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The parameter block is the dated command at 50 Hz, not the history.
+
+    The blockquote named what it replaced (provisional figures, a no-Layer-A
+    artifact) instead of what it is: one dated command at the 50 Hz fixture
+    rate.
+    """
+    empty = _retention_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "Measured 2026-08-20 (issue #60)" not in text:
+        problems.append("the dated measurement command is gone")
+    if "**50 Hz**" not in text:
+        problems.append("the parameter block no longer names 50 Hz")
+    if "These replace the provisional figures" in text:
+        problems.append("the provisional-figures history is back")
+    if "no Layer A at all" in text:
+        problems.append("the no-Layer-A history is back")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def retention_two_orders_points_at_sensor_baseline(
+    text: str,
+) -> tuple[str, list[str]]:
+    """Two orders, not three, never four — the sensitivity lives in sensor-baseline.md.
+
+    The paragraph carried the sensitivity numbers (0.146/1.46/14.6 TB/day)
+    inline; they are sensor-baseline.md's to keep current, so this is a
+    pointer now, keeping the "two, not three, never four" and the DSSAD clause.
+    """
+    empty = _retention_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "two orders, not three, and never four" not in text:
+        problems.append("the two-not-three-never-four statement is gone")
+    if "DSSAD" not in text:
+        problems.append("the DSSAD clause is gone")
+    if "sensor-baseline.md" not in text:
+        problems.append("no pointer at sensor-baseline.md")
+    for stale in ("0.146 TB/day", "1.46 TB/day", "14.6 TB/day"):
+        if stale in text:
+            problems.append(f"stale inline sensitivity figure is back: {stale}")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def retention_scaling_says_encoding_does_not_move_it(
+    text: str,
+) -> tuple[str, list[str]]:
+    """The scaling narrative is one line: encoding doesn't move it, resolution does.
+
+    The marginal-cost arithmetic (21.5 B vs 354.6 B) and the structural account
+    were history around the re-measured #273 rungs, which stay.
+    """
+    empty = _retention_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "Encoding does not move it; resolution does" not in text:
+        problems.append("the encoding-does-not-move-it conclusion is gone")
+    if "21.5 B of gzipped CSV" in text:
+        problems.append("the stale marginal-cost arithmetic is back")
+    if "354.6 B of SQLite" in text:
+        problems.append("the stale marginal-cost arithmetic is back")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def retention_no_superseded_251x(text: str) -> tuple[str, list[str]]:
+    """The superseded 2.51x is gone.
+
+    It priced compression as a default rosbag2 does not apply and left the
+    message index out; the incumbent table beside it carries the comparison
+    now.
+    """
+    empty = _retention_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    if "2.51x" in text:
+        return DISAGREE, ["the superseded 2.51x is back"]
+    return AGREE, []
+
+
+def retention_criterion_4_is_one_line(text: str) -> tuple[str, list[str]]:
+    """Criterion 4 is a single superseded line, not a kept record.
+
+    The paragraph headed "Superseded, and kept for the record" carried the
+    live prohibition inside a superseded bullet; the prohibition is plan.md
+    Claim 1's.
+    """
+    empty = _retention_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    match = re.search(r"^4\. (.+)$", text, re.M)
+    if not match:
+        problems.append("criterion 4 not found")
+    else:
+        line = match.group(1)
+        if "Superseded" not in line:
+            problems.append("criterion 4 does not say superseded")
+        if "does not rest on compression" not in line:
+            problems.append("criterion 4 lost its one-line content")
+    if "kept for the record" in text:
+        problems.append("the stale kept-for-the-record wording is back")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def plan_no_fourth_kept_for_record(text: str) -> tuple[str, list[str]]:
+    """plan.md no longer keeps a fourth criterion for the record.
+
+    Criterion 4 is superseded to a single line in retention.md; the plan's
+    pointer says so.
+    """
+    empty = _empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if "a fourth kept for the record" in text:
+        problems.append("the stale fourth-kept-for-the-record wording is back")
+    if "fourth superseded" not in text:
+        problems.append("the plan does not say the fourth is superseded")
+    return (DISAGREE if problems else AGREE), problems
+
+
+def retention_why_is_a_section(text: str) -> tuple[str, list[str]]:
+    """The rationale lives under a plain `## Why`, per the #170 split.
+
+    "Why it lost" was a dated section of three numbered findings; it is two
+    sentences now, pointing at prior-art.md §8 and lossiness.md, and the label
+    and reframing rationale sit beside it under the same heading.
+    """
+    empty = _retention_empty_is_no_verdict(text)
+    if empty is not None:
+        return empty
+    problems = []
+    if not re.search(r"^## Why$", text, re.M):
+        problems.append("no plain ## Why section")
+    if "## Why it lost" in text:
+        problems.append("the old Why-it-lost heading is back")
+    why = re.search(r"^## Why$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    body = why.group(1) if why else ""
+    if "prior-art.md" not in body or "§8" not in body:
+        problems.append("## Why does not point at prior-art.md §8")
+    if "lossiness.md" not in body:
+        problems.append("## Why does not point at lossiness.md")
+    if "The baseline was never the thesis" in text:
+        problems.append("the old numbered why-it-lost findings are back")
+    return (DISAGREE if problems else AGREE), problems
+
+
+# The stale wordings each predicate guards against, verbatim from
+# docs/retention.md (and docs/plan.md) before #278. Every one must fail its
+# predicate.
+STALE_RETENTION_STATUS = """**Status:** normative for every retention figure this project publishes ·
+re-measured 2026-08-20 (issue #60), with later work carrying its own issue
+number where it sits — #98's Layer-A comparison, #116's label and byte
+attribution, #257's outer boundary, #273's re-measured ladder · extracted from [`plan.md`](plan.md) Claim 1 on 2026-08-31, **with
+no figure changed** · keep current
+
+**What is machine-checked here is less than the whole file.**
+`tests/test_published_figures.py` re-derives four things from the code on every
+CI run: the control-rate ladder's **50 Hz row**, the coarsest level's **label**
+and the record and node counts behind it, the **byte attribution**, and the
+**Layer-A comparison** table.
+
+Everything else is prose or arithmetic over those, `267 GB` among them; that
+module's own *What this does not cover* is the authority on the boundary, and
+this line exists so that nothing here reads as guaranteed when it is not.
+
+This is [`plan.md`](plan.md) Claim 1's measurement record: a set of measured
+figures, the arithmetic behind them, and the record of how they moved. `plan.md`
+states the claim and the conditions that travel with it; the derivations, the
+ladder and the corrections are here.
+
+**The artifact side of every figure here is measured on the fixed-base planar
+arm** — 2–3 revolute links, base at the origin. That is a condition on all of
+them, and moving the robot would move all of them. The **control rate** is not a
+single condition in the same way: the resolution table below is at the 50 Hz
+`reg.scenarios.DEFAULT_DT` runs at, and *The control rate* measures the same
+curve at 100 Hz, 250 Hz and 1 kHz. Every table says which rate it is at.
+
+**This document has been wrong twice and the corrections are kept in place
+rather than tidied away** — refuted against a baseline that was never the claim,
+then republished against an artifact that turned out to hold no Layer A at all.
+The record of how a number moved is worth more here than a clean statement of
+where it landed, in a project whose argument is that evidence should survive its
+own revision."""
+
+STALE_PARAMETER_BLOCK = """> **Measured 2026-08-20 (issue #60). These replace the provisional figures.**
+> One execution of `python -m reg.bench --resolution --seed 0` — `long_run` at
+> 3,000 frames (60.0 s of robot time), 16 envelope samples, 200 ms horizon,
+> 1.0 s occurrence resolution, 0.5 s replan interval and declaration horizon,
+> 1.0 s watchdog. The figures it replaces predated the #54/#55 encoding work
+> and, far more importantly, measured an artifact holding **no Layer A at all**
+> (issue #59). Every level got **larger**, and the coarsest got larger by 13.9x:
+> the declaration, verdict and chain records are emitted per action and **no
+> resolution level coarsens them**, so at ±1 s they are 3,120 of the artifact's
+> 3,166 node rows. Coarsening now buys much less than the provisional table implied,
+> and that is the finding, not a defect in it."""
+
+STALE_TWO_ORDERS = """**State it at two orders, not three, and never four.** The ratio is linear in
+the assumed sensor rate, and the sensitivity analysis is blunt about what that
+buys: the 2-order band is occupied down to 0.146 TB/day — a sevenfold margin
+below the assumption, where before Layer A was measured it looked like a
+hundredfold — while three orders needs 1.46 TB/day, which the published
+assumption does **not** reach, and four needs 14.6 TB/day. The robust claim is
+the one to make, and it is now a narrower one. It is also, conveniently, the
+resolution the only mandated evidence recorder in existence operates at (UN R157
+DSSAD, ±1.0 s). The finer levels are weaker again: transition clears two orders
+only above ~0.46 TB/day and per-frame only above ~0.71 TB/day."""
+
+STALE_SCALING = """The ratio *does* improve with run length — the fixed schema cost amortises.
+**It does not reach 1.0 anywhere in the measured range.** The marginal cost of
+one more frame over the interval between the two rungs is 21.5 B of gzipped CSV
+against 354.6 B of SQLite. Measured points only: the ladder holds what was run."""
+
+STALE_251X = """The **2.51x** published here from 2026-08-26 is superseded: it priced
+compression as a default rosbag2 does not apply and left the message index out,
+and both made the incumbent look cheap."""
+
+STALE_CRITERION_4 = """4. Superseded, and kept for the record: *until a measured length clears 1.0, the
+   retainable-artifact argument does not rest on compression.* It was written
+   when the wrong baseline was believed to be the right one."""
+
+STALE_PLAN_FOURTH = """published under it — three live, and a fourth kept for the record — are
+[`retention.md`](retention.md), *Success, restated*."""
+
+STALE_WHY_IT_LOST = """## Why it lost — three things the measurement exposed (2026-08-19)
+
+**1. The baseline was never the thesis.**"""
+
+
+def test_retention_header_keeps_machine_checked_drops_history() -> None:
+    verdict, problems = retention_header_keeps_machine_checked_drops_history(
+        _retention_text()
+    )
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = retention_header_keeps_machine_checked_drops_history(
+        STALE_RETENTION_STATUS
+    )
+    assert verdict == DISAGREE, "the stale status line passes"
+    assert problems
+    verdict, problems = retention_header_keeps_machine_checked_drops_history("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_retention_parameter_block_is_command_and_rate() -> None:
+    verdict, problems = retention_parameter_block_is_command_and_rate(
+        _retention_text()
+    )
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = retention_parameter_block_is_command_and_rate(
+        STALE_PARAMETER_BLOCK
+    )
+    assert verdict == DISAGREE, "the stale parameter block passes"
+    assert problems
+    verdict, problems = retention_parameter_block_is_command_and_rate("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_retention_two_orders_points_at_sensor_baseline() -> None:
+    verdict, problems = retention_two_orders_points_at_sensor_baseline(
+        _retention_text()
+    )
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = retention_two_orders_points_at_sensor_baseline(
+        STALE_TWO_ORDERS
+    )
+    assert verdict == DISAGREE, "the stale inline sensitivity passes"
+    assert problems
+    verdict, problems = retention_two_orders_points_at_sensor_baseline("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_retention_scaling_says_encoding_does_not_move_it() -> None:
+    verdict, problems = retention_scaling_says_encoding_does_not_move_it(
+        _retention_text()
+    )
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = retention_scaling_says_encoding_does_not_move_it(
+        STALE_SCALING
+    )
+    assert verdict == DISAGREE, "the stale marginal-cost arithmetic passes"
+    assert problems
+    verdict, problems = retention_scaling_says_encoding_does_not_move_it("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_retention_no_superseded_251x() -> None:
+    verdict, problems = retention_no_superseded_251x(_retention_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = retention_no_superseded_251x(STALE_251X)
+    assert verdict == DISAGREE, "the superseded 2.51x passes"
+    assert problems
+    verdict, problems = retention_no_superseded_251x("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_retention_criterion_4_is_one_line() -> None:
+    verdict, problems = retention_criterion_4_is_one_line(_retention_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = retention_criterion_4_is_one_line(STALE_CRITERION_4)
+    assert verdict == DISAGREE, "the stale kept-for-the-record criterion passes"
+    assert problems
+    verdict, problems = retention_criterion_4_is_one_line("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_plan_no_fourth_kept_for_record() -> None:
+    verdict, problems = plan_no_fourth_kept_for_record(_plan_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = plan_no_fourth_kept_for_record(STALE_PLAN_FOURTH)
+    assert verdict == DISAGREE, "the stale fourth-kept-for-the-record passes"
+    assert problems
+    verdict, problems = plan_no_fourth_kept_for_record("")
+    assert verdict == COULD_NOT_EVALUATE
+    assert problems
+
+
+def test_retention_why_is_a_section() -> None:
+    verdict, problems = retention_why_is_a_section(_retention_text())
+    assert verdict == AGREE, "\n".join(problems)
+    verdict, problems = retention_why_is_a_section(STALE_WHY_IT_LOST)
+    assert verdict == DISAGREE, "the old Why-it-lost heading passes"
+    assert problems
+    verdict, problems = retention_why_is_a_section("")
     assert verdict == COULD_NOT_EVALUATE
     assert problems

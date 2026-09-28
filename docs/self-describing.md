@@ -224,49 +224,7 @@ it (§26). The contribution, if any, stays where Claim 3 puts it.
 
 ## 8. Build order
 
-Sized so a bad attempt is cheap, and split on the seam between writing the data
-and using it: only the second changes what a query answers. Every tier has
-landed.
-
-- **Tier 0 — say what is true.** #198, 2026-09-05:
-  [`limitations.md`](limitations.md) §12 states the three gaps.
-- **Tier 1 — the argument.** #199, 2026-09-05: the
-  [`prior-art.md`](prior-art.md) sixth pass, §26–§29, which everything below
-  depended on, per the rule that prior art wins.
-- **Tier 2 — the environment in `meta`.** #200 and #201, 2026-09-05: six keys
-  from `reg.store.build_environment` at `SCHEMA_VERSION` 11, and
-  `reg.graph.envelope_at` refusing to recompute off the recording environment.
-  No published figure moved.
-- **Tier 3 — the cold read.** #231, #242 and #262, 2026-09-07 to 2026-09-11:
-  `reg.query.cold_read` and `--cold-read`, seven claims in five states.
-- **Tier 4 — the layer basis.** #252, 2026-09-08: option A, per edge, as
-  `reg.store.EDGE_BASIS_TABLE` at `SCHEMA_VERSION` 13, with `envelope_layer` the
-  weakest of its inputs and `open_edge` refusing an edge whose tag disagrees
-  with it. Every published retention figure moved.
-- **Tier 5 — the boundary.** #257, #258 and #265, 2026-09-10 to 2026-09-11:
-  `envelope.outer_wkb` at `SCHEMA_VERSION` 14 under option C, plus
-  `reg.query.reached_point`, `pointwise_coverage` and `--reached-point`. Every
-  published retention figure moved again.
-
-**Where the costings are.** Both tiers priced their options before adopting
-one, on `long_run` at 3,000 frames with `--seed 0`. The dated tables are **PR
-#251**'s (tier 4, `reg.bench --layer-basis`) and **PR #250**'s (tier 5,
-`reg.bench --outer-boundary`), the second restated in issue #228's first
-comment, 2026-09-07. Both are against the figures published then; the artifact
-has since grown, so re-running either describes neither run.
-
-**What tier 4's costing found, and per edge was adopted on.** Per envelope is
-cheaper by covering less rather than by sharing, and it cannot express the case
-it is priced against: two `HAS_ENVELOPE` edges over one deduplicated envelope
-row whose bases differ get one basis between them.
-
-**What tier 5's costing found, and option C was adopted on. The headline figures
-do not move at all** — the occurrence level retains no envelope row, so
-no boundary reaches the figure Claim 1 is quoted on. C writes 12 boundaries
-where B writes 84, and `ENVELOPE_RETENTION` has already capped the pointwise
-question at 2.8% of frames, so B buys 84 answerable frames rather than 12. Which
-coverage is right is a question about what an incident report cites, and the
-ceiling is a separate decision.
+Every tier landed. Sized so a bad attempt is cheap — only using the data changes what a query answers, not writing it: tier 0 stated the three gaps (#198); tier 1 wrote the sixth prior-art pass (#199); tier 2 put the build environment in `meta` (#200/#201); tier 3 shipped the cold read (#231, #242, #262); tier 4 adopted per-edge layer basis (#252); tier 5 adopted option C outer boundary (#257, #258, #265). Tiers 4 and 5 priced their options on `long_run` at 3,000 frames; the dated tables are PR #251's and PR #250's.
 
 ## See also
 

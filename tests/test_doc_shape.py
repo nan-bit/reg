@@ -425,7 +425,14 @@ EXEMPT: dict[str, str] = {
 # cut to the prose that describes the package. It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 46.2
+#   44.3  today, 2026-09-27, after #295: `docs/sensor-baseline.md` 4,162 ->
+#         3,584 (the incumbent-encoding methodology condensed to its tables:
+#         the validation procedure to a reproduction pointer, the retire-this-
+#         section to one sentence, the air-gap premise to its retirement
+#         record, the Assumptions list roughly halved). Code-coupled words
+#         15,227 -> 14,592; 14,592 / 330 = 44.22, rounded up to the next
+#         tenth. Measured, no headroom.
+RATE = 44.3
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -768,6 +775,9 @@ PARAGRAPH_MAX_WORDS = 120
 #        Why history paragraphs, the sublinear analysis items and the
 #        candidate-label deliberation table, none of them over the 120-word
 #        line. Confirmed, not lowered.
+#    71  today, 2026-09-27, after #295: `docs/sensor-baseline.md` re-measured
+#        at 71 — the methodology cuts took procedural narration and list
+#        items, none of them over the 120-word line. Confirmed, not lowered.
 LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
@@ -887,6 +897,9 @@ LONG_PARAGRAPHS_MAX = 71
 #        one narration fell with the cut prose (the sublinear analysis item
 #        citing issue #116); the Why history it cut sat below the rationale
 #        line. Lowered.
+#   109  today, 2026-09-27, after #295: `docs/sensor-baseline.md` re-measured
+#        at 109 — the methodology cuts took procedure and rationale prose,
+#        none of it a past-defect narration. Confirmed, not lowered.
 NARRATION_MAX = 109
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE

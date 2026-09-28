@@ -110,10 +110,6 @@ CODE_COUPLED: dict[str, str] = {
         "The front page. It describes what the package is and how to run it, "
         "and every section of it points at a module."
     ),
-    "CLAUDE.md": (
-        "The conventions the code must follow, stated in terms of the modules "
-        "and tests that enforce them. Simplifying an API shortens it."
-    ),
     "docs/CONTRIBUTING.md": (
         "How work arrives and what a queueable issue names. It describes the "
         "process around the package rather than arguing anything about it."
@@ -175,8 +171,25 @@ ARGUMENT: dict[str, str] = {
 #
 # Adding to this list is not free: #170 tier 6 settled that the ceiling a
 # document leaves is re-measured without it, so an exemption gives the
-# documents left behind no room. See ARGUMENT_MAX below.
+# documents left behind no room. See ARGUMENT_MAX below. #244 is this
+# mechanism's second use: `CLAUDE.md` leaves the code-coupled group and the
+# ceiling is re-measured over the six documents that remain (see the RATE log
+# row), which is the origin #170 tier 6 one click away.
 EXEMPT: dict[str, str] = {
+    "CLAUDE.md": (
+        "The conventions the code must follow, and the only file the "
+        "unattended writer reads by default — its three rules are the ones "
+        "this repository calls structural. The budget's premise is that a "
+        "document should shrink when the thing it describes simplifies, and "
+        "the ceiling rewards doing exactly that; a document that must not "
+        "shrink into pointers cannot sit under it, because a rule turned into "
+        "a pointer may be a rule the next agent never reads — whether links "
+        "inside `CLAUDE.md` are followed was investigated on 2026-09-11 (#244) "
+        "and could not be settled from retained evidence. Decision D5 (#270) "
+        "leaves the file whole, so the file leaves the budget. It is exempt "
+        "from the *budget* only: the paragraph and narration ceilings still "
+        "count its paragraphs, as `docs/prior-art.md`'s entry records."
+    ),
     "docs/prior-art.md": (
         "A dated log of work done outside this repository — twenty-nine "
         "entries across six passes, each kept whole because half of what the "
@@ -385,6 +398,15 @@ EXEMPT: dict[str, str] = {
 #         corrected, the air-gap history, and the whole ## Why — with every
 #         guarded table kept. 18,242 / 330 = 55.28, rounded up to the next
 #         tenth. Measured, no headroom.
+#   46.2  today, 2026-09-27, after #244 exempted `CLAUDE.md` from the word
+#         budget (decision D5, #270 — the file stays whole, so it leaves the
+#         group). This is the trap #237's row documents for the argument group
+#         (#170 tier 6), applied to the code-coupled group: a document leaving
+#         takes its words out of the ceiling with it. `CLAUDE.md`'s 2,321 words
+#         are gone from the numerator and nothing else moved; the six documents
+#         that remain are 15,227 / 330 = 46.14, rounded up to the next tenth.
+#         Measured, no headroom.
+#
 #   53.2  today, 2026-09-27, after #280: the entry points — `README.md`
 #         3,467 -> 3,093 (claims rows 3-4 condensed, the honesty note, the
 #         Status section and *How work happens* now pointers), plus
@@ -403,7 +425,7 @@ EXEMPT: dict[str, str] = {
 # cut to the prose that describes the package. It is separate from ARGUMENT_MAX
 # because these words track the package and those words track how much there is
 # to argue; see the module docstring.
-RATE = 53.2
+RATE = 46.2
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -1378,7 +1400,7 @@ def test_a_second_exemption_with_no_reason_is_could_not_evaluate() -> None:
 def test_prose_added_without_surface_fails_the_budget() -> None:
     """The signal this whole check exists to produce."""
     docs = dict(read_corpus())
-    docs["CLAUDE.md"] = docs["CLAUDE.md"] + "\n\n" + ("filler " * 2000)
+    docs["README.md"] = docs["README.md"] + "\n\n" + ("filler " * 2000)
     verdict, problems = budget_verdict(
         docs, public_symbols(PACKAGE), CODE_COUPLED, ARGUMENT, RATE, ARGUMENT_MAX
     )

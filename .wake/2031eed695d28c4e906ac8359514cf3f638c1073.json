@@ -1,0 +1,114 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "304-1790571246474504082-2031eed",
+    "authored_by": {
+      "agent": "muse-spark",
+      "agent_args": "",
+      "agent_version": "",
+      "harness": "none",
+      "harness_version": "",
+      "instruction_sources": [
+        "issue-body"
+      ],
+      "model": "muse-spark",
+      "model_source": "main-transcript"
+    },
+    "base": "origin/main",
+    "commit": "2031eed695d28c4e906ac8359514cf3f638c1073",
+    "concluded": {
+      "analyzer": "manual",
+      "changed": [
+        "README.md",
+        "docs/limitations.md",
+        "docs/lossiness.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_doc_shape.py"
+      ],
+      "edge_kinds": [
+        "file-reference"
+      ],
+      "granularity": "file",
+      "reach": [
+        "README.md",
+        "docs/limitations.md",
+        "docs/lossiness.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_doc_shape.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 1
+      },
+      "changed_unreadable": [],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {},
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [
+        "README.md",
+        "docs/limitations.md",
+        "docs/lossiness.md",
+        "docs/plan.md",
+        "docs/prior-art.md",
+        "docs/retention.md",
+        "tests/test_baseline_stream_description.py",
+        "tests/test_doc_shape.py"
+      ],
+      "source": "issue-body:Scope,Success criteria",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 304,
+    "out_of_scope": [],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "in-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Success criteria",
+      "state": "declared"
+    },
+    "chain": {
+      "field_digests": {
+        "attempt_id": "6be278a86e5dc6b91807d7aaf008662469f1e20e261099f5c5d610ccb12c7416",
+        "authored_by": "98fae08c9ca86c8d9e6c883feb0b2f27a9c49212805400b290f3328d6c8c0d42",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "b962828fd062bd514e6f6613d22296e4913dfb975207ea2e91d39dc08d6aea59",
+        "concluded": "e97b8254af9418bb54374ac80f229d665ccbe107a57802d399a15a80c6ffa721",
+        "coverage": "9360e452d6a4874cb5a15609a3eae8a472b389a6b891b2f1a29480f1036473f9",
+        "declared": "75382a81ee3c406f64755598c9b797464a1754b7ddcdd24cbdde8ff491e50116",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "d874e4e4a5df21173b0f83e313151f813bea4f488686efe670ae47f87c177595",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "286e06199ea2870d49fe46d4cc3c4e738b587756cb2a00372d0eb7aff1df0f9f",
+        "verification": "f20f2f471c4010c7f9b2bdc27ab0dd0fac2148c6e8f37ad65993a6212c9374d3"
+      },
+      "head": "c18bb309ae70b7cf70032ff0c50e940a7ed23de7ac327603d1adea8f04056f89",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    }
+  },
+  "predicateType": "https://nan-bit.dev/wake-runner/attestation/v1",
+  "subject": []
+}

@@ -437,7 +437,13 @@ EXEMPT: dict[str, str] = {
 #         link to `docs/sensor-baseline.md`. Code-coupled words
 #         14,592 -> 14,568; 14,568 / 330 = 44.15, rounded up to the next
 #         tenth. Measured, no headroom.
-RATE = 44.2
+#   43.3  today, 2026-09-28, after #296: `docs/self-describing.md` §8
+#         396 -> 94 words (the build order to its landed statement: the
+#         dated tier table, "Where the costings are", and the two tier-4/5
+#         costing paragraphs cut; the dated tables live on in PRs #250/#251).
+#         Code-coupled words 14,568 -> 14,266; 14,266 / 330 = 43.23,
+#         rounded up to the next tenth. Measured, no headroom.
+RATE = 43.3
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -791,6 +797,9 @@ PARAGRAPH_MAX_WORDS = 120
 #    71  today, 2026-09-28, after #304: re-measured at 71 — the composition
 #        cuts took clauses inside paragraphs, no paragraph over the line.
 #        Confirmed, not lowered.
+#    71  today, 2026-09-28, after #296: re-measured at 71 — the §8 cuts took
+#        a table and list items, no paragraph over the line. Confirmed, not
+#        lowered.
 LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
@@ -915,6 +924,9 @@ LONG_PARAGRAPHS_MAX = 71
 #        none of it a past-defect narration. Confirmed, not lowered.
 #   109  today, 2026-09-28, after #304: re-measured at 109 — the composition
 #        cuts took restated counts, none of it a past-defect narration.
+#        Confirmed, not lowered.
+#   109  today, 2026-09-28, after #296: re-measured at 109 — the §8 cuts took
+#        dated decision archaeology, none of it a past-defect narration.
 #        Confirmed, not lowered.
 NARRATION_MAX = 109
 

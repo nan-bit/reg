@@ -432,7 +432,12 @@ EXEMPT: dict[str, str] = {
 #         record, the Assumptions list roughly halved). Code-coupled words
 #         15,227 -> 14,592; 14,592 / 330 = 44.22, rounded up to the next
 #         tenth. Measured, no headroom.
-RATE = 44.3
+#   44.2  today, 2026-09-28, after #304: the baseline composition became
+#         single-source-of-truth — `README.md`'s restatement replaced by a
+#         link to `docs/sensor-baseline.md`. Code-coupled words
+#         14,592 -> 14,568; 14,568 / 330 = 44.15, rounded up to the next
+#         tenth. Measured, no headroom.
+RATE = 44.2
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -659,7 +664,12 @@ RATE = 44.3
 #           from the cut "Claim 1 lost" paragraph to the Layer-A comparison
 #           prose — a document naming the baseline must say what it holds.
 #           Measured, no headroom.
-ARGUMENT_MAX = 41233
+#   41,205  today, 2026-09-28, after #304: the composition is stated once, in
+#           `docs/sensor-baseline.md` — `docs/plan.md`, `docs/limitations.md`,
+#           `docs/lossiness.md` and `docs/retention.md` link it instead of
+#           restating it (`docs/prior-art.md`'s three restatements leave with
+#           it; that file is exempt from this budget). Measured, no headroom.
+ARGUMENT_MAX = 41205
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -778,6 +788,9 @@ PARAGRAPH_MAX_WORDS = 120
 #    71  today, 2026-09-27, after #295: `docs/sensor-baseline.md` re-measured
 #        at 71 — the methodology cuts took procedural narration and list
 #        items, none of them over the 120-word line. Confirmed, not lowered.
+#    71  today, 2026-09-28, after #304: re-measured at 71 — the composition
+#        cuts took clauses inside paragraphs, no paragraph over the line.
+#        Confirmed, not lowered.
 LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
@@ -900,6 +913,9 @@ LONG_PARAGRAPHS_MAX = 71
 #   109  today, 2026-09-27, after #295: `docs/sensor-baseline.md` re-measured
 #        at 109 — the methodology cuts took procedure and rationale prose,
 #        none of it a past-defect narration. Confirmed, not lowered.
+#   109  today, 2026-09-28, after #304: re-measured at 109 — the composition
+#        cuts took restated counts, none of it a past-defect narration.
+#        Confirmed, not lowered.
 NARRATION_MAX = 109
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE

@@ -364,10 +364,8 @@ written: it is the reason no further encoding work is worth doing.
 ## 8. Time-series compression is the baseline `reg` was actually competing with
 
 `reg.bench` compares the SQLite artifact against a **gzipped copy of the
-simulator's raw state CSV** — for the priced `declared_violation` fixture, **24
-columns, 19 of them Layer B** (`reg.stream.expected_header(2, 3)`: the human's
-pose and velocity and each obstacle's id, kind and pose, beside the five
-proprioceptive columns `reg.bench.proprioceptive_columns` returns).
+simulator's raw state CSV** — for the priced `declared_violation` fixture, [the
+sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against).
 That is not a naive baseline — it is close to the state of the art for this data
 shape. Facebook's **Gorilla** (VLDB 2015) compresses a 16-byte `(timestamp,
 value)` pair to **1.37 bytes per point** in production, via delta-of-delta
@@ -1081,8 +1079,8 @@ Issue #104 is where that was discharged (§20), and
 What the pass costs, up front:
 
 - **§16 names the incumbent.** Every retention comparison this project publishes
-  was against a gzipped copy of the simulator's own raw state CSV — 24 columns
-  for the priced fixture, 19 of them Layer B. What practitioners actually retain
+  was against a gzipped copy of the simulator's own raw state CSV ([the sensor
+  baseline](sensor-baseline.md#what-the-projection-is-measured-against)). What practitioners actually retain
   is a **rosbag2/MCAP** bag, and a reader who runs one was never told this file
   knew the name. The arithmetic does not move; the honesty of the framing does.
 - **§17 takes "Simplex, applied to a learned policy, in robotics".** SOTER did
@@ -1181,8 +1179,7 @@ that comparison buys nothing.
 It does, however, sharpen one figure's direction. The `~40x larger` comparison
 is against a **gzipped copy of this project's own raw state stream at
 `reg.stream.FLOAT_PRECISION`** — text, quantised to the artifact's stated
-resolution before it is compressed, and **24 columns wide for the priced
-fixture, 19 of them Layer B**. A bag carries the joint states out of it as CDR
+resolution before it is compressed ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against)). A bag carries the joint states out of it as CDR
 doubles with all 52 mantissa bits, a per-message record header and two
 timestamps, under a general-purpose compressor that does no better on float
 noise than gzip does (§8's Gorilla citation is the same observation from the

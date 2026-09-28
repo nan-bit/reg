@@ -1053,8 +1053,7 @@ true one.
 ### The three resolution levels — the refutation that started them
 
 Claim 1's original form — the graph is orders of magnitude smaller than the stream
-— was measured against a gzipped copy of the simulator's own raw state CSV — 24
-columns for the priced fixture, 19 of them Layer B, not the proprioception that
+— was measured against a gzipped copy of the simulator's own raw state CSV — [the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against), not the proprioception that
 line called it — and came out 14x *worse* (issue #30). That refutation has since
 been withdrawn: the CSV was never the baseline the claim was about, the sensor-log
 baseline is stated in the README and in the original plan, and the plan's own

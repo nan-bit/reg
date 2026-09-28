@@ -116,8 +116,7 @@ Two consequences worth being precise about, because they are not the same:
 
 **What a claim would need instead.** Retaining every polygon — which is what
 this project did until the artifact was measured at 20–30x *larger* than a
-gzipped CSV of the stream it replaced (24 columns for the priced fixture, 19 of
-them Layer B, and not proprioception) — or an exact, versioned geometry kernel
+gzipped CSV of the stream it replaced ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against) — and not proprioception) — or an exact, versioned geometry kernel
 whose output is specified rather than implementation-defined, plus correctly
 rounded transcendentals: a claim of bit-identity across architectures needs the
 whole stack to be specified, not merely deterministic. Neither is in scope for a

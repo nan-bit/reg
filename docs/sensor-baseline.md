@@ -226,26 +226,11 @@ headline meets it, on the whole-stream figures below.
 These govern both tables in this section — the same encoder over different
 columns of the same fixture.
 
-- **`none` is a floor; the compressed figure is not.** Every assumption below
-  makes the uncompressed profile look cheaper than a real bag, so 11.76x
-  understates the incumbent. The compressed figure instead rests on **gzip -9
-  standing in for zstd** — comparable in class, not identical — which costs both
-  compressed whole-stream figures their standing
-  ([Validating the projection](#validating-the-projection-against-a-real-bag)).
-- **File-level records excluded** — header, schema, channel, chunk headers,
-  chunk index, statistics, summary, footer, and the 15 B fixed part of each
-  MessageIndex record. Roughly 1-2 kB fixed: negligible at scale, material at
-  251 messages, and it makes MCAP look *better* here than it is.
-- **The per-message index is included**, at 16 B per message under every profile
-  priced, and measured at 16.06 B against the `fastwrite` bag that writes none.
-  It makes a bag seekable, rosbag2 writes it by default, and it scales with the
-  run. `fastwrite` is not priced here for the same reason: the cost that defines
-  it is one this encoder always charges.
-- **Joint names `joint_0` / `joint_1`, empty `frame_id`, empty `effort`.** Real
-  robots use longer joint names, which makes MCAP look worse.
-- **`sensor_msgs/msg/JointState` with position and velocity only.** A system
-  publishing effort, or publishing at a higher rate than it commands, differs.
-- **XCDR1 little-endian**, the ROS 2 default via Fast-CDR.
+- **`none` is a floor; the compressed figure is not** — every assumption below cheapens the uncompressed bag, so 11.76x understates the incumbent; the compressed figure rests on gzip -9 for zstd, so neither compressed whole-stream figure stands.
+- **File-level records excluded** (~1-2 kB fixed) — negligible at scale, material at 251 messages, favouring MCAP.
+- **The per-message index is included** at 16 B per message under every profile priced (measured 16.06 B) — the honest charge, rosbag2's default; `fastwrite` not priced.
+- **Joint names `joint_0` / `joint_1`, empty `frame_id`, empty `effort`** — real robots use longer names, making MCAP look worse.
+- **`sensor_msgs/msg/JointState` with position and velocity only**; **XCDR1 little-endian**, the ROS 2 default.
 
 ### The Layer B asymmetry, and what closing it costs
 
@@ -330,51 +315,7 @@ against this project.
 
 ### Validating the projection against a real bag
 
-A specification can be read correctly and applied to the wrong configuration, so
-a projection nobody outside this repository can regenerate is an assertion
-([`prior-art.md`](prior-art.md) §27). Both fixtures, at the seed every figure
-here is measured at:
-
-```bash
-python -m reg.sim --scenario declared_violation --seed 0 --out dv.csv        #   251 frames
-python -m reg.sim --scenario long_run_3000      --seed 0 --out long_run.csv  # 3,000 frames
-```
-
-Republish each row as ROS 2 messages and record with rosbag2's MCAP plugin.
-`/joint_states` is `sensor_msgs/msg/JointState`: `header.stamp` from `t`, empty
-`frame_id`, `name` `joint_0`/`joint_1`, `position` from `q_*`, `velocity` from
-`qd_*`, empty `effort`. `/tf` is `tf2_msgs/msg/TFMessage`, one per control period,
-one `TransformStamped` per entity in header order, `frame_id` `map`
-(`reg.bench.LAYER_B_PARENT_FRAME`), `child_frame_id` the entity name, translation
-(`x`, `y`, 0), identity rotation. Both carry `log_time` = `publish_time` =
-`round(t x 1e9)` and `sequence` = the row index, XCDR1 little-endian. Six bags —
-`/joint_states` over 251 frames, then `/joint_states`, `/tf` and both over 3,000
-— uncompressed, chunked at 768 KiB, indexed, and again with zstd chunks.
-
-**Compare the per-message scaling total, not file sizes**, since the projection
-excludes every file-level record. Walk the bag by opcode; per chunk sum the
-Message records with their framing, re-compressing those records alone at the
-writer's own chunk boundaries; add 16 B per MessageIndex entry, read out of the
-index records. Set that beside `reg.bench.mcap_joint_states_bytes`,
-`layer_b_mcap_bytes(option="tf_tree")` and `full_content_mcap_bytes`.
-
-**The tolerance, fixed in commit e8f1534 ahead of the bags.** Payload length,
-per-message framing, MessageIndex entry width and the whole uncompressed total
-are compared **exactly**: byte counts off the spec and the IDL over a known
-message count, with no estimate in them. The compressed total gets **+/-5%**,
-for the one substitution — gzip -9 for zstd, which *Assumptions* above declines a
-direction for.
-
-Within the band the projection stands, delta beside it. Outside it, the figure
-is marked as not standing wherever this document quotes it. A tolerance chosen
-after seeing the number is not one, and either outcome is a result.
-
-**The measurement: 2026-09-06, x86_64 Linux**, by the reference Python MCAP
-writer — `mcap` 1.4.0, `mcap-ros2-support` 0.5.7, `zstandard` 0.25.0 (libzstd
-1.5.7), CPython 3.12.3. **Not exercised: rosbag2's own C++ writer**, so a second
-implementation of the same spec stands in. All five per-message terms are exact,
-and the 96 B and 356 B payloads came back **byte-identical** to
-`reg.bench.joint_state_cdr` and `tf_message_cdr`, padding included.
+A specification can be read correctly and applied to the wrong configuration, so a projection nobody outside this repository can regenerate is an assertion ([`prior-art.md`](prior-art.md) §27). Reproduce: `python -m reg.sim --scenario declared_violation --seed 0` / `--scenario long_run_3000 --seed 0`; republish each row as ROS 2 messages — `sensor_msgs/msg/JointState` on `/joint_states`, `tf2_msgs/msg/TFMessage` on `/tf` with `frame_id` from `reg.bench.LAYER_B_PARENT_FRAME` — XCDR1, `log_time` and `sequence` per row; record with rosbag2's MCAP plugin, 768 KiB chunks, presets `none` / `zstd_fast`; compare the per-message scaling total against `reg.bench`'s byte functions. The verdict tolerances are constants fixed in `reg.bench` ahead of the measurement (`MCAP_VALIDATION_TOLERANCE`), not chosen after seeing the numbers. Measured 2026-09-06 by the reference Python MCAP writer (`mcap` 1.4.0, `mcap-ros2-support` 0.5.7, `zstandard` 0.25.0); rosbag2's own writer not exercised — full provenance in `reg.bench.MCAP_VALIDATION_PROVENANCE`.
 
 ```
 fixture             frames  topics             preset                  projected    measured    delta  verdict
@@ -391,20 +332,6 @@ long_run_3000        3,000  /joint_states+/tf  reference_zstd_l3         307,128
 `reg.bench.MCAP_SIZE_MEASUREMENTS` holds those rows and derives each verdict from
 its own two byte counts; `tests/test_incumbent_encoding.py` fails if table and
 record disagree, or if the projection drifts.
-
-**Every uncompressed figure is the same integer**, on both fixtures and both
-column sets, so **11.76x and 25.34x stand as measurements**. **The compressed
-figures split**, structurally: gzip's window is 32 KiB and zstd's is not, while a
-`/tf` message repeats the parent frame, four entity names, three static poses and
-four identity quaternions every 387 B.
-
-A negative delta means the projection published a bag dearer than the real one.
-Across zstd levels 1 to 19 `/tf` stays outside the band, so the verdict is not an
-artefact of the level.
-
-**The two are marked, not replaced.** `reg.bench` computes them live for any
-stream, and a constant substituted here would make a general function return a
-number it never computed.
 
 ### The rosbag2 run
 
@@ -464,27 +391,11 @@ record disagree.
 
 ### What would retire this section
 
-A compressed projection that models one of the two zstd profiles. Everything a
-bag can settle is settled above — record layout, payloads, framing, index and the
-whole uncompressed total — and no further `ros2 bag record` closes what is left:
-the two profiles bracket the projection, so a compressed figure that stands has
-to name which one it models. That is a modelling question ([`plan.md`](plan.md)
-forbids the dependency that would answer it directly).
+A compressed projection that models one of the two zstd profiles — the profiles bracket the projection, so a standing compressed figure has to name which one.
 
 ## A premise this document does not carry: air-gapped sites
 
-**It is retired rather than sourced, because the argument does not need it.**
-The retention argument rests on the sensor rate alone — 182.5 TB per robot per
-window at the published multiplier against 267 GB of artifact — and none of that
-arithmetic moves on a site with a fibre uplink. The claim that full sensor logs
-cannot leave an air-gapped site appeared zero times in this document and is
-retired, not repaired.
-
-**The requirement half stands, because it is a different kind of claim.**
-*Off-network verifiability* — one self-contained file an assessor can check years
-later with no service still running and no call to anyone — is a **requirement of
-the design**, stated in [`limitations.md`](limitations.md) §6,
-[`plan.md`](plan.md) under Claim 4, and `reg/commit.py`.
+The air-gap premise — that full sensor logs cannot leave an air-gapped site — is **retired, not repaired**.
 
 ## What would retire this document
 

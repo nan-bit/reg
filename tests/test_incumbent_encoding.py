@@ -600,8 +600,14 @@ CORPUS: tuple[tuple[str, Path], ...] = (
 #: Where the incumbent ratio is published. Pinned, because every check below
 #: goes green on a document that quietly stopped quoting it, and a figure that
 #: disappears from the front page is a bigger change than one that moves.
+#:
+#: 2026-09-28, #298: `README.md` left this set on purpose. The Claim 1 cell
+#: was condensed to its headline figures (267 GB / ~684x, the 2.01x/9.11x/13.04x
+#: bag trio, the hand-built-encoding caveat), and the bag-over-gzip arithmetic
+#: (11.76x / 3.83x) it repeated now lives only where the arithmetic is argued:
+#: the four documents below.
 DOCS_PUBLISHING_THE_RATIO = frozenset(
-    {"README.md", "plan.md", "prior-art.md", "retention.md", "sensor-baseline.md"}
+    {"plan.md", "prior-art.md", "retention.md", "sensor-baseline.md"}
 )
 
 #: Where the byte figures behind it are published, which is fewer places: a

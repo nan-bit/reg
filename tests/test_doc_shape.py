@@ -443,7 +443,13 @@ EXEMPT: dict[str, str] = {
 #         costing paragraphs cut; the dated tables live on in PRs #250/#251).
 #         Code-coupled words 14,568 -> 14,266; 14,266 / 330 = 43.23,
 #         rounded up to the next tenth. Measured, no headroom.
-RATE = 43.3
+#   41.5  today, 2026-09-28, after #297: `docs/mobile-base.md`'s `## Why`
+#         539 -> 22 words (the 24-row landing table and the precedent-setting
+#         paragraph cut to a one-line retirement stub) and §6 107 -> 22 words
+#         (a pointer at `prior-art.md` §21–§25). Code-coupled words
+#         14,266 -> 13,672; 13,672 / 330 = 41.44, rounded up to the next
+#         tenth. Measured, no headroom.
+RATE = 41.5
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -675,6 +681,9 @@ RATE = 43.3
 #           `docs/lossiness.md` and `docs/retention.md` link it instead of
 #           restating it (`docs/prior-art.md`'s three restatements leave with
 #           it; that file is exempt from this budget). Measured, no headroom.
+#   41,205  today, 2026-09-28, after #297: re-measured at 41,205 —
+#           `docs/mobile-base.md` is code-coupled, not in this group, so the
+#           Why/§6 cuts moved nothing here. Confirmed, not lowered.
 ARGUMENT_MAX = 41205
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
@@ -800,6 +809,9 @@ PARAGRAPH_MAX_WORDS = 120
 #    71  today, 2026-09-28, after #296: re-measured at 71 — the §8 cuts took
 #        a table and list items, no paragraph over the line. Confirmed, not
 #        lowered.
+#    71  today, 2026-09-28, after #297: re-measured at 71 — the Why cut took
+#        a table and the §6 cut took one paragraph, neither over the line.
+#        Confirmed, not lowered.
 LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
@@ -928,6 +940,9 @@ LONG_PARAGRAPHS_MAX = 71
 #   109  today, 2026-09-28, after #296: re-measured at 109 — the §8 cuts took
 #        dated decision archaeology, none of it a past-defect narration.
 #        Confirmed, not lowered.
+#   109  today, 2026-09-28, after #297: re-measured at 109 — the Why and §6
+#        cuts took a dated table and present-tense prior-art prose, none of it
+#        a past-defect narration. Confirmed, not lowered.
 NARRATION_MAX = 109
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE

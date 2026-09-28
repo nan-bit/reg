@@ -283,19 +283,12 @@ something would have to.
 
 ## 6. Prior art, and what it was read from
 
-The five bodies of work behind this design are the **fifth pass, 2026-09-01** in
-[`prior-art.md`](prior-art.md), §21–§25: Marvel & Bostelman on the unbounded work
-volume (§21), ISO 3691-4 and ANSI/A3 R15.08 on the speed-dependent protective
-field in the vehicle frame (§22), RTD and REFINE on the forward reachable set and
-the fail-safe manoeuvre (§23), CORA on zonotopes and conservative linearization
-(§24), and set-theoretic localization (§25). Each entry states what it was read
-from — for §22, secondary sources and vendor summaries, because both standards
-are paywalled — and the pass is right where this document and it differ.
+The five bodies of work behind this design are the fifth prior-art pass, 2026-09-01: [`prior-art.md`](prior-art.md) §21–§25, which states what each was read from.
 
 ## 7. Build order
 
 Small, independent, and argument before code — a bad attempt should cost a closed
-PR. Every tier is built; `## Why` dates each one.
+PR. Every tier is built.
 
 | Tier | What it is |
 |---|---|
@@ -406,40 +399,4 @@ first one is a gap this track surfaced rather than a decision it took:
 
 ## Why
 
-Nothing below is normative. It is the provenance of the sections above: which
-issue each part of the track arrived on, and where the precedents it reuses were
-set.
-
-### When each part of the track landed
-
-| Section | What landed | Issue | Dated |
-|---|---|---|---|
-| §7 Tier 0 | The fixed base as a `limitations.md` entry, §9 | #136 | 2026-09-01 |
-| §6 | The fifth prior-art pass, `prior-art.md` §21–§25 | #138 | 2026-09-01 |
-| §2, §2.1, §2.2 | The argument carried into `sufficiency.md` §2, §5.1, §5.6 and §7 | #139 | 2026-09-01 |
-| §7 Tier 2 | A Layer B pose type, with a provenance that selects no layer | #149 | 2026-09-01 |
-| §7 Tier 2, §2 | `base_vel` on `ProprioState` and not a pose; `Scenario.drives` rather than a pose at the origin | #150 | 2026-09-02 |
-| §7 Tier 2 | Base actuation bounds on `Limits`, under the no-default rule | #151 | 2026-09-02 |
-| §4 item 1 | `forward_kinematics` takes an explicit base frame | #152 | 2026-09-02 |
-| §3 | `base_motion_bounds` and the base in the outer set; looseness into `limitations.md` §10 | #163 | 2026-09-02 |
-| §1 | `computed_bound` refuses a nonzero base bound; `horizon_bound` on `outer_envelope` alone | #164 | 2026-09-02 |
-| §4 items 5 and 6 | The two `declare.py` defects | #165 | 2026-09-02 |
-| §4 item 4 | The pose on `robot_config`, `SCHEMA_VERSION` 10, `sufficiency.md` §5.8 and `lossiness.md` | #166 | 2026-09-02 |
-| §4 item 3 | The outer bound measured from a `BaseFrame` rather than from the origin | #162 | 2026-09-02 |
-| §7.1 | The raw stream carries a base, without moving the priced fixture | #176 | 2026-09-03 |
-| §7 Tier 2, §2.2 | `VelocitySource` required on `BaseVelocity` — the value a perceiver can fill | #156 | 2026-09-03 |
-| §4 item 7, §7.1 | `BASE_XY` removed; the room check moved to `Scenario` | #184 | 2026-09-04 |
-| §7.1 | `Scenario.base_waypoints`, `PoseSource`, `VelocitySource`, the jitter pair | #177 | 2026-09-04 |
-| §7 Tier 3 | `Enforcer` constructs for and adjudicates a driven base | #189 | 2026-09-04 |
-| §7.1, §4 item 4 | The pose written to `robot_config`; `GEOMETRY_RETENTION` on posed frames | #191 | 2026-09-05 |
-| §7.2 | The first three mobile fixtures | #178 | 2026-09-05 |
-| §7.2 | `mobile_derived_velocity`, the fixture §11's gap is observable in | #229 | 2026-09-07 |
-| §1 | The passivation clause: the record reaches a table, an edge and a query | #247 | 2026-09-07 |
-| §7.2 | `envelope_layer` became the weakest of its inputs, and `edge_layer_basis` records which input the tag followed | #252 | 2026-09-08 |
-
-**Where the precedents these sections reuse were set.** `Limits.source` as a
-two-value tag with the simplification stated out loud is issue #84, and §2.2
-reuses it twice: once for pose provenance and once for the set-valued pose. The
-linear-in, linear-out shape §4 item 4 refuses to put back is issue #29. The
-radial containment decision §3 makes harder to defer is issue #82. The
-interpolate-then-integrate argument §7.1 reuses one frame out is issue #96.
+The dated landing table and precedent-setting notes this section held are retired — every tier landed, and the sections above are what stand.

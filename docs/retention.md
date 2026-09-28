@@ -67,11 +67,9 @@ execution of the command in the blockquote above:
 | entities — an occurrence naming an entity the file does not hold is not a record of anything | 4 | 0.1% |
 | **total** | **3,166** | |
 
-| candidate label | what it claims this artifact is | verdict |
-|---|---|---|
-| *occurrence (±1 s, DSSAD-shaped)* | a mandated-style event recorder operating at DSSAD's quantum | **rejected.** True of 1.3% of the rows and of 100% of the reader's impression. It also claims a lineage the artifact does not have: `R157SWIN` is not implemented ([`prior-art.md` §9](prior-art.md)), so this is not a DSSAD even at the level it borrows a quantum from |
-| *occurrence (±1 s)* | a timestamp resolution, and nothing about contents | **rejected.** Accurate and empty. Silence about what the level holds is what let the first label stand for three milestones |
-| **occurrence (±1 s) — 98.5% attestation records** | a per-action attestation record whose coarsest view keeps a DSSAD-**aligned** occurrence layer | **chosen.** It states the composition, which is the thing a reader gets wrong, and it keeps the quantum's provenance where it belongs — on the quantum |
+The level is therefore called **occurrence (±1 s) — 98.5% attestation records**:
+a per-action attestation record whose coarsest view keeps a DSSAD-**aligned**
+occurrence layer.
 
 ## The control rate — and it is not two orders at 1 kHz
 
@@ -146,30 +144,6 @@ Claim 1 prices:
 `long_run` passivates never and this level holds no edge, so each is one empty
 page.*
 
-1. The scene rows (0.5%) and the genuinely fixed schema (3.1%) are too small to
-   turn 20x into 17.7x: the scene rows are 5,120 B, and the fixed cost is an
-   artifact created and never written to — 31,744 B — not the 134,144 B of
-   `indexes + schema`, most of which is indexes over rows.
-2. **The mass the control rate does not move is the `declaration` table**, at
-   185,344 B and 18.3% of the level. The fixture's policy replans on a
-   **wall-clock** interval, so it emits the same 120 declarations at every rung
-   of the ladder — `tests/test_bench.py` asserts exactly that — and a
-   declaration row is fat: ~1,545 B against a verdict row's ~184 B, because it
-   carries the declared region as a polygon. Twenty times the control rate buys
-   twenty times the verdicts and **no** further declarations. An 18.3% share at
-   50 Hz is a share of about 1% at 1 kHz, and that dilution is where the
-   difference between 20x and 17.7x goes.
-
-The stated cause is smaller than the one that carries the effect by a factor of
-**5.0**: the two terms it named come to 36,864 B, 3.6% of the level, against the
-declaration table's 185,344 B, 18.3%.
-
-**It is no longer a document's job to be right about it.** `reg.bench` prints
-the whole attribution at **every** rung of any ladder it is asked for, with an
-exact identity over it and no remainder — the cause is read off a column instead
-of being asserted in prose. On a SQLite build without `dbstat` the report states
-that the cause **could not be established** and substitutes nothing for it.
-
 **This is a purchasing decision, not a slogan.** 267 GB buys *did contact
 occur*, *how close did it come*, every refused action with its fault code and
 the declaration it was raised against, and both hash chains walked end to end.
@@ -242,7 +216,8 @@ favourable to the incumbent.
 **Beside `~51x` the figure is a pair, and the pair is a range with its ends
 named**: the artifact is **9.11x** a `zstd_fast` bag and **13.04x** a
 `zstd_small` one, of the same 24 columns of the same run, where `~51x` is against
-a gzipped CSV of those same columns. Each end composes — `50.83x / 5.58x` and
+a gzipped CSV of those same columns — 24 for the `declared_violation` fixture,
+19 of them Layer B. Each end composes — `50.83x / 5.58x` and
 `50.83x / 3.90x` — which a five-column ratio against a 24-column headline could
 never do. **If one number is wanted it is 9.11x**, because `zstd_fast` is the
 larger bag and so the smaller ratio: the end least flattering to this project.
@@ -274,32 +249,8 @@ one governs.
 
 Nothing below is normative — the rationale for the record above: how the
 figures moved, and which shapings arrived as choices rather than findings.
-
-Success was originally stated as 2–4 orders of magnitude, one number, one
-chart — then reframed (2026-08-19) when this record declared Claim 1 *refuted*
-against a gzipped copy of the simulator's own raw state stream. That comparison
-was never the claim: nobody chooses between retaining this simulator's state
-stream and retaining a scene graph. The economic argument was always the
-artifact against *sensor* logs, which this simulator has none of.
-
-A reader who took the first label — *occurrence (±1 s, DSSAD-shaped)* — at face
-value concluded this is a DSSAD-equivalent event recorder priced at 267 GB. It
-is a **per-action attestation record** with an occurrence layer attached; the
-measurement was right and nothing about it moved when the label did. The DSSAD
-comparison is of **resolution** (±1.0 s against ±1.0 s), not content or cost,
-and the lever on the 267 GB is the **attestation cadence** — declaring per
-behaviour segment rather than per control step would cut the term that dominates,
-and that design change is held open.
-
-Claim 1 lost because the baseline was never the thesis — the simulator's own raw
-state stream, 24 columns for the `declared_violation` fixture and 19 of them
-Layer B, gzipped to ~21 B/frame, a float compressor doing what float
-compressors are for — and because `reg` priced a resolution no standard asks
-for, cm / 10 ms every frame where UN R157's DSSAD records occurrences at ±1.0 s;
-[`prior-art.md`](prior-art.md) §8 carries the like-for-like comparison and
-[`lossiness.md`](lossiness.md) the resolution argument. The number that is
-actually about retention is absolute and was always in hand: the resolution curve
-this record leads with.
+The like-for-like comparison is [`prior-art.md`](prior-art.md) §8; the
+resolution argument is [`lossiness.md`](lossiness.md).
 
 ### What replaces it
 

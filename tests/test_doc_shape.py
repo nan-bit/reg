@@ -638,7 +638,21 @@ RATE = 46.2
 #           Layer B" composition `test_baseline_stream_description.py` requires
 #           cost a net 1 word after tightening the `## Why` prose to stay under
 #           the ceiling. Measured, no headroom.
-ARGUMENT_MAX = 41891
+#   41,211  today, 2026-09-27, after #294: `docs/retention.md` lost the Why
+#           history paragraphs, the sublinear-growth analysis (the numbered
+#           items, the 5.0x paragraph, the "no longer a document's job"
+#           paragraph — `reg.bench` prints the attribution at every rung now),
+#           and the candidate-label deliberation table. Measured, no headroom.
+#   41,222  2026-09-27, #294 follow-up: the Why stub keeps one pointer sentence
+#           at prior-art.md §8 and lossiness.md — `test_retention_why_is_a_section`
+#           requires the section to point at both, and the pointers are live
+#           cross-references, not history. Measured, no headroom.
+#   41,233  2026-09-27, #294 follow-up 2: the "24 columns / 19 Layer B"
+#           composition `test_baseline_stream_description.py` requires moved
+#           from the cut "Claim 1 lost" paragraph to the Layer-A comparison
+#           prose — a document naming the baseline must say what it holds.
+#           Measured, no headroom.
+ARGUMENT_MAX = 41233
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -750,6 +764,10 @@ PARAGRAPH_MAX_WORDS = 120
 #    71  today, 2026-09-27, after #280: re-measured at 71 — the entry-point
 #        cuts took prose paragraphs, none of them over the 120-word line.
 #        Confirmed, not lowered.
+#    71  today, 2026-09-27, after #294: re-measured at 71 — the cut took the
+#        Why history paragraphs, the sublinear analysis items and the
+#        candidate-label deliberation table, none of them over the 120-word
+#        line. Confirmed, not lowered.
 LONG_PARAGRAPHS_MAX = 71
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
@@ -865,7 +883,11 @@ LONG_PARAGRAPHS_MAX = 71
 #   110  today, 2026-09-27, after #280: re-measured at 110 — the entry-point
 #        cuts took restated process prose, none of it a past-defect narration.
 #        Confirmed, not lowered.
-NARRATION_MAX = 110
+#   109  today, 2026-09-27, after #294: `docs/retention.md` re-measured at 109 —
+#        one narration fell with the cut prose (the sublinear analysis item
+#        citing issue #116); the Why history it cut sat below the rationale
+#        line. Lowered.
+NARRATION_MAX = 109
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it

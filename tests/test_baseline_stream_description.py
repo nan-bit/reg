@@ -32,9 +32,12 @@ THREE CHECKS, EACH WITH ITS NEGATIVE
 1. **No document misdescribes the stream.** `nine-float`, `proprioception CSV`,
    `proprioceptive stream` — the names for a file that carries `human_*`.
 2. **Where a description states a count, it is the schema's count**, and every
-   document that names the baseline states what the stream holds somewhere in it.
-   Three-valued: a document that never names the baseline is COULD-NOT-EVALUATE,
-   and `test_the_documents_describing_the_baseline_are_the_ones_expected` is why
+   document that names the baseline discloses what the stream holds. Single
+   source of truth (issue #304): the composition — `24 columns, 19 of them
+   Layer B` — is stated once, in `docs/sensor-baseline.md`, and the other
+   documents link that statement instead of restating it. Three-valued: a
+   document that never names the baseline is COULD-NOT-EVALUATE, and
+   `test_the_documents_describing_the_baseline_are_the_ones_expected` is why
    deleting the description is not a way to pass.
 3. **The published byte figures are the measured ones.** ~21 B/frame is the full
    24-column stream and does not move; the proprioception-only slice, which is the
@@ -164,9 +167,20 @@ COUNT_CLAIM = re.compile(
 
 #: What the stream holds, stated with both counts: `24 columns, 19 of them Layer
 #: B`. Built from the schema, so a fixture that gains an obstacle invalidates
-#: every document stating the old pair.
+#: every document stating the old pair. Pinned once, in `docs/sensor-baseline.md`
+#: (issue #304) — the other documents that name the baseline link it instead of
+#: restating it, and the link below is what those documents are checked for.
 COMPOSITION = re.compile(
     rf"\b{len(HEADER)}\b[^.]{{0,140}}?\b{len(LAYER_B)}\b[^.]{{0,40}}?Layer B",
+    re.IGNORECASE,
+)
+
+#: A markdown link to the canonical composition statement in
+#: `docs/sensor-baseline.md`, any anchor. The link text must not restate the
+#: composition — it is the pointer that replaces the restatement, not a second
+#: copy of it in link clothing.
+CANONICAL_LINK = re.compile(
+    r"\]\((?:docs/)?sensor-baseline\.md[^)]*\)",
     re.IGNORECASE,
 )
 
@@ -297,10 +311,33 @@ def counts_are_the_schemas(text: str) -> tuple[str, list[str]]:
 
 
 def states_what_the_stream_holds(text: str) -> str:
-    """Verdict on whether a document that names the baseline says what it holds."""
+    """Verdict on whether a document that names the baseline says what it holds.
+
+    This is the canonical-document form of the check: it applies unchanged to
+    `docs/sensor-baseline.md`, where the composition is pinned (issue #304).
+    """
     if not any(BASELINE_SUBJECT.search(unit) for unit in units(text)):
         return COULD_NOT_EVALUATE
     return AGREE if COMPOSITION.search(normalise(text)) else DISAGREE
+
+
+def discloses_the_baseline(doc: str, text: str) -> str:
+    """Verdict on whether a document that names the baseline discloses it.
+
+    Single source of truth (issue #304): the composition is stated once, in
+    `docs/sensor-baseline.md`. The other documents that name the baseline link
+    that statement instead of restating it, and the link counts as the
+    disclosure. A document that neither states it nor links it is silent, and
+    silence is still not a pass.
+    """
+    if not any(BASELINE_SUBJECT.search(unit) for unit in units(text)):
+        return COULD_NOT_EVALUATE
+    if doc == "sensor-baseline.md":
+        return AGREE if COMPOSITION.search(normalise(text)) else DISAGREE
+    normalised = normalise(text)
+    if COMPOSITION.search(normalised):
+        return AGREE
+    return AGREE if CANONICAL_LINK.search(text) else DISAGREE
 
 
 @pytest.mark.parametrize("doc,path", CORPUS)
@@ -324,11 +361,15 @@ def test_a_document_naming_the_baseline_says_what_it_holds(
 ) -> None:
     """The Layer B content travels with the baseline, in every document that
     names it. Naming the file without naming what is in it is how the wrong
-    label survived four milestones."""
-    assert states_what_the_stream_holds(path.read_text(encoding="utf-8")) != DISAGREE, (
-        f"{doc} names the stream the artifact is priced against but never says "
-        f"what it holds. State it: {len(HEADER)} columns for the "
-        f"{PRICED_FIXTURE} fixture, {len(LAYER_B)} of them Layer B."
+    label survived four milestones. Single source of truth (issue #304):
+    `docs/sensor-baseline.md` states the composition; the other documents link
+    its statement instead of restating it, and the link is the disclosure."""
+    assert discloses_the_baseline(doc, path.read_text(encoding="utf-8")) != DISAGREE, (
+        f"{doc} names the stream the artifact is priced against but neither "
+        f"states what it holds nor links the canonical statement. Either state "
+        f"it ({len(HEADER)} columns for the {PRICED_FIXTURE} fixture, "
+        f"{len(LAYER_B)} of them Layer B) — only in `docs/sensor-baseline.md` "
+        "— or link that document's statement."
     )
 
 
@@ -339,7 +380,7 @@ def test_the_documents_describing_the_baseline_are_the_ones_expected() -> None:
     describing = {
         doc
         for doc, path in CORPUS
-        if states_what_the_stream_holds(path.read_text(encoding="utf-8"))
+        if discloses_the_baseline(doc, path.read_text(encoding="utf-8"))
         != COULD_NOT_EVALUATE
     }
     assert describing == set(DOCS_DESCRIBING_THE_BASELINE), (
@@ -401,6 +442,45 @@ def test_the_composition_must_be_both_counts_together() -> None:
         "The artifact is ~40x larger than a gzipped copy of the 24-column state\n"
         "stream.\n"
     ) == DISAGREE
+
+
+def test_a_link_to_the_canonical_statement_is_the_disclosure() -> None:
+    """**The positive for the single-source-of-truth form (issue #304).** A
+    document that names the baseline and links `docs/sensor-baseline.md`'s
+    statement discloses the composition without restating it."""
+    assert discloses_the_baseline(
+        "retention.md",
+        "The artifact is ~51x larger than a gzipped copy of the raw state\n"
+        "stream ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against)).\n",
+    ) == AGREE
+
+
+def test_the_canonical_document_must_state_not_link() -> None:
+    """The pin has to be somewhere: `docs/sensor-baseline.md` linking itself
+    instead of stating the composition leaves the composition stated nowhere."""
+    assert discloses_the_baseline(
+        "sensor-baseline.md",
+        "The artifact is ~51x larger than a gzipped copy of the raw state\n"
+        "stream ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against)).\n",
+    ) == DISAGREE
+
+
+def test_naming_the_baseline_without_statement_or_link_is_caught() -> None:
+    """**The negative for the single-source-of-truth form.** Neither the
+    composition nor the pointer: the silence #123 was written for."""
+    assert discloses_the_baseline(
+        "retention.md",
+        "The artifact is ~40x larger than a gzipped copy of the state stream.\n",
+    ) == DISAGREE
+
+
+def test_a_link_without_the_baseline_is_still_could_not_evaluate() -> None:
+    """The third outcome, and it stays third: a link alone does not put a
+    document in the describing set."""
+    assert discloses_the_baseline(
+        "retention.md",
+        "The projection is documented in [the sensor baseline](sensor-baseline.md).\n",
+    ) == COULD_NOT_EVALUATE
 
 
 # --- check 3: the figures ---------------------------------------------------

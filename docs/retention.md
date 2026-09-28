@@ -216,8 +216,7 @@ favourable to the incumbent.
 **Beside `~51x` the figure is a pair, and the pair is a range with its ends
 named**: the artifact is **9.11x** a `zstd_fast` bag and **13.04x** a
 `zstd_small` one, of the same 24 columns of the same run, where `~51x` is against
-a gzipped CSV of those same columns — 24 for the `declared_violation` fixture,
-19 of them Layer B. Each end composes — `50.83x / 5.58x` and
+a gzipped CSV of those same columns ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against)). Each end composes — `50.83x / 5.58x` and
 `50.83x / 3.90x` — which a five-column ratio against a 24-column headline could
 never do. **If one number is wanted it is 9.11x**, because `zstd_fast` is the
 larger bag and so the smaller ratio: the end least flattering to this project.

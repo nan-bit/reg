@@ -214,7 +214,7 @@ stated here so that following any of them lands on it.
 
 *Two wordings, one object.* Those sites say "against the CSV" and "against the
 stream" in roughly equal numbers. They mean the same thing — the gzipped copy of
-the simulator's own raw state CSV, 24 columns and 19 of them Layer B — and the
+the simulator's own raw state CSV ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against)) — and the
 rule above is deliberately stated without either name, so that it does not have
 to be restated when one of them is settled on. What replaces the ratio —
 resolution as the measured variable — is [`retention.md`](retention.md),

@@ -690,7 +690,12 @@ RATE = 41.0
 #   41,205  today, 2026-09-28, after #297: re-measured at 41,205 —
 #           `docs/mobile-base.md` is code-coupled, not in this group, so the
 #           Why/§6 cuts moved nothing here. Confirmed, not lowered.
-ARGUMENT_MAX = 41205
+#   41,113  today, 2026-09-29, after #299: `docs/plan.md`'s "For ernan.dev"
+#           242 -> 151 words — the drafted site copy (the full lead paragraph
+#           and the incident-report / "what this doesn't do" notes) condensed
+#           to an outline; the Frame line, the Repo checklist, the milestone
+#           itself and the Tone line stay. Measured, no headroom.
+ARGUMENT_MAX = 41113
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.

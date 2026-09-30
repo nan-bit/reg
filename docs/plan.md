@@ -739,29 +739,20 @@ black-channel pattern buys.
 
 **Frame:** *An evidence layer for physical AI.*
 
-Lead paragraph, roughly:
+The one-pager lives on ernan.dev; this repo is the engineer review. The page,
+in outline:
 
-> Robot safety research asks whether a machine will cause harm. Regulated buyers
-> ask a different question: when something happens, can you prove what happened?
-> ISO 25785-1, the first safety standard for dynamically stable robots, is still a
-> committee draft. UL 4600 already established that autonomous systems are
-> certified through a structured safety case rather than a test result. Meanwhile
-> the EU AI Act is in force, the Product Liability Directive lands in December
-> 2026, and the Machinery Regulation in January 2027. The evidence requirement is
-> arriving before the standard does.
->
-> This prototype takes a pattern from industrial functional safety — IEC 61784-3's
-> black channel, where an uncertifiable transport is declared out of scope and all
-> assurance moves to the endpoints — and applies it to a learned control policy.
-> The policy stays arbitrarily capable and uncertified. A bounded enforcement layer
-> independently verifies what it declared it would do, and every exchange lands in
-> a queryable, tamper-evident record cheap enough to keep for the mandated
-> retention window and self-contained enough to check with no service still
-> running.
-
-Then: the incident report block. Link to
-repo. A short "what this doesn't do" section — that one earns more credibility than
-anything else on the page.
+- Lead: the evidence question arrives before the standard — regulated buyers
+  ask whether you can prove what happened; ISO 25785-1 still a draft, UL 4600
+  the structured-safety-case precedent, EU AI Act in force, Product Liability
+  Directive (Dec 2026) and Machinery Regulation (Jan 2027) on the way in
+- The black-channel pattern applied to a learned control policy (IEC 61784-3):
+  uncertifiable transport declared out of scope, assurance at the endpoints,
+  every exchange in a queryable, tamper-evident record cheap enough to keep
+  and self-contained enough to check with no service still running
+- The incident report block; link to repo
+- A short "what this doesn't do" — earns more credibility than anything else
+  on the page
 
 **Tone:** a position paper with a working implementation attached, not a product.
 

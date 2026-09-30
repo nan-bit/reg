@@ -1,0 +1,95 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "298-1790616132191-991169f",
+    "authored_by": {
+      "agent": "muse-spark",
+      "agent_args": "",
+      "agent_version": "",
+      "harness": "none",
+      "harness_version": "",
+      "instruction_sources": [
+        "issue-body"
+      ],
+      "model": "muse-spark",
+      "model_source": "main-transcript"
+    },
+    "base": "origin/main",
+    "commit": "da3f40b18fccf1df1f403f2fe6f1df67cde70a7a",
+    "concluded": {
+      "analyzer": "manual",
+      "changed": [
+        "README.md",
+        "tests/test_doc_shape.py"
+      ],
+      "edge_kinds": [
+        "file-reference"
+      ],
+      "granularity": "file",
+      "reach": [
+        "README.md",
+        "tests/test_doc_shape.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 1
+      },
+      "changed_unreadable": [],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {},
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [
+        "README.md",
+        "tests/test_doc_shape.py"
+      ],
+      "source": "issue-body:Scope,Success criteria",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 298,
+    "out_of_scope": [],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "in-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Success criteria",
+      "state": "declared",
+      "note": "independent review caught test_incumbent_encoding failure (README left DOCS_PUBLISHING_THE_RATIO); pin updated deliberately per #298, full suite re-run green"
+    },
+    "chain": {
+      "field_digests": {
+        "attempt_id": "14c416f875bebc697880a618b0f344eaa105541b1980e40fc50f546c2bbe72fa",
+        "authored_by": "98fae08c9ca86c8d9e6c883feb0b2f27a9c49212805400b290f3328d6c8c0d42",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "685b947a1f85e9984945b3bcf1aeedddc567b4cbcc0b76e7d4c371db5b8283e9",
+        "concluded": "e9055285237835425a9fadd269e87c65e26e63c2f92376d76036de7e565e7f35",
+        "coverage": "9360e452d6a4874cb5a15609a3eae8a472b389a6b891b2f1a29480f1036473f9",
+        "declared": "2628e669245af40c366590f8fdea9fad31e349c3ae996ee0544825dd04c6576e",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "76ebdb6d45c61ca12e622118cc90939ade672adf7890aa2b246405d4884dd75a",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "286e06199ea2870d49fe46d4cc3c4e738b587756cb2a00372d0eb7aff1df0f9f",
+        "verification": "833275aed0129b106e1dcece32fe0efd3a35f5c43440fe82b64a005e01b938ec"
+      },
+      "head": "07cdcf85390d47aaf9032ae2c335006b5ae129163af9776994283c96c3d138a2",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    }
+  }
+}

@@ -449,7 +449,13 @@ EXEMPT: dict[str, str] = {
 #         (a pointer at `prior-art.md` §21–§25). Code-coupled words
 #         14,266 -> 13,672; 13,672 / 330 = 41.44, rounded up to the next
 #         tenth. Measured, no headroom.
-RATE = 41.5
+#   41.0  today, 2026-09-28, after #298: `README.md`'s claims-table Claim 1
+#         cell 312 -> 154 words (the restated retention argument condensed to
+#         headline figures and one-line pointers; the three bag figures and
+#         the hand-built-encoding caveat stay). Code-coupled words
+#         13,672 -> 13,514; 13,514 / 330 = 40.95, rounded up to the next
+#         tenth. Measured, no headroom.
+RATE = 41.0
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #

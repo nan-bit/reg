@@ -1,0 +1,95 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "predicate": {
+    "attempt_id": "299-1790620000000-2990000",
+    "authored_by": {
+      "agent": "muse-spark",
+      "agent_args": "",
+      "agent_version": "",
+      "harness": "none",
+      "harness_version": "",
+      "instruction_sources": [
+        "issue-body"
+      ],
+      "model": "muse-spark",
+      "model_source": "main-transcript"
+    },
+    "base": "origin/main",
+    "commit": "816e5a9ebdac7355516801d9dffe1e809932fca6",
+    "concluded": {
+      "analyzer": "manual",
+      "changed": [
+        "docs/plan.md",
+        "tests/test_doc_shape.py"
+      ],
+      "edge_kinds": [
+        "file-reference"
+      ],
+      "granularity": "file",
+      "reach": [
+        "docs/plan.md",
+        "tests/test_doc_shape.py"
+      ]
+    },
+    "coverage": {
+      "analyzed": {
+        "python": 1
+      },
+      "changed_unreadable": [],
+      "reason": "no adapter configured for: md (python adapter: ok)",
+      "unreadable": {},
+      "unresolved_edges": []
+    },
+    "declared": {
+      "patterns": [
+        "docs/plan.md",
+        "tests/test_doc_shape.py"
+      ],
+      "source": "issue-body:Scope,Success criteria",
+      "state": "declared"
+    },
+    "identity_mode": "hmac-sha256-v1",
+    "issue": 299,
+    "out_of_scope": [],
+    "preceding": {
+      "base": "origin/main",
+      "recorded": 0,
+      "source_commits": 0,
+      "state": "complete",
+      "unrecorded": []
+    },
+    "prev": [],
+    "produced": true,
+    "repository": "github.com/nan-bit/reg",
+    "verdict": "in-scope",
+    "verification": {
+      "declared": "pytest",
+      "source": "issue-body:Success criteria",
+      "state": "declared",
+      "note": "For ernan.dev 242 -> 151 words as outline; Frame line, Repo checklist, milestone and Tone line kept; ARGUMENT_MAX 41,205 -> 41,113 measured no headroom, dated row 2026-09-29; full pytest suite green, 2,933 passed, 0 failed/error (1062s)"
+    },
+    "chain": {
+      "field_digests": {
+        "attempt_id": "818d7d752f4d16a1f78542db6e3233dd946e8bcfd1111eac21a73c32bf80d106",
+        "authored_by": "98fae08c9ca86c8d9e6c883feb0b2f27a9c49212805400b290f3328d6c8c0d42",
+        "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+        "commit": "def3cf0ae097947efecbe6726001ca04f5ca0145a35cdecd479ba891e51cf9ec",
+        "concluded": "018b0fc78f3d4ed31080e5ca6d8b751a90bf57742b3ce27deb67178df9d87aec",
+        "coverage": "9360e452d6a4874cb5a15609a3eae8a472b389a6b891b2f1a29480f1036473f9",
+        "declared": "eba735becc0772bba6dbac7756fe045d0c3c7c965158f609fa93aeb9032883d7",
+        "identity_mode": "cf53ddac6737690089d1a713ccd1f1882f757485570ace633c3f0e47aa4d8d10",
+        "issue": "308831041ea4863c3f87d222c31f759411898c874a9006b4bd6c745858b8f3bd",
+        "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "preceding": "51a830430ceea4f5839f94143557664403a72c45594286d6e1634d3f11c7b117",
+        "prev": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "produced": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+        "repository": "6e8582b9c91df4bf7de2b8400df7f5218f3ae16a43a8ecbf69075a3b566834c8",
+        "verdict": "286e06199ea2870d49fe46d4cc3c4e738b587756cb2a00372d0eb7aff1df0f9f",
+        "verification": "58cebea9c32e9f790834307234a5f63bb3c5127d53280e127c7218b362f1b709"
+      },
+      "head": "02616d7adab0f73ddddd267e86cf23ce86dfcd35813e6aaac092841f47e3cdf4",
+      "prev_heads": [],
+      "scheme": "wake-chain-sha256-v1"
+    }
+  }
+}

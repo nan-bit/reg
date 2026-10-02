@@ -28,7 +28,7 @@ identically numbered table rows, and §7's two answered questions, which the cut
 deletes and §11's amendment records the answer to. A retired place is not
 detectable by section number, which is why it needs its own table.
 
-Three-valued per `CLAUDE.md`'s *a check must be able to fail*, and the third
+Three-valued per `AGENTS.md`'s *a check must be able to fail*, and the third
 state never resolves to the first: no source files, no documents, no citations
 found at all, and a cited document that numbers no sections are each
 COULD-NOT-EVALUATE. Only AGREE passes. Emptying `reg/` is not how this check

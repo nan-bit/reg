@@ -839,7 +839,7 @@ def test_the_envelope_layer_is_the_weakest_of_its_inputs() -> None:
 def test_the_two_state_side_inputs_have_no_default() -> None:
     """**THE NEGATIVE.** A caller who has not thought about them gets no 'A'.
 
-    `CLAUDE.md`: never invent a default. A `posed=False` or a
+    `AGENTS.md`: never invent a default. A `posed=False` or a
     `base_vel_source=None` this function supplied on the caller's behalf would
     be indistinguishable downstream from one a build actually established, and
     it would hand back the permissive answer — which is precisely what issue #84
@@ -1574,7 +1574,7 @@ def test_the_scan_catches_a_mapping_that_is_there() -> None:
 
     Without this the check above asserts an absence it has never been shown able
     to detect: a mistyped `_POSE_LAYER_NAME`, or the dict condition inverted,
-    and it passes forever while the thing it guards walks in. `CLAUDE.md`: feed a
+    and it passes forever while the thing it guards walks in. `AGENTS.md`: feed a
     check the condition it guards against and assert it says no.
     """
     offenders = pose_layer_offenders([_module_that_offends("reg.fake_offender")])

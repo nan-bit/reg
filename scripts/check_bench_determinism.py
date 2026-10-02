@@ -43,7 +43,7 @@ and is how the check is shown able to fail; see
 THE WORKFLOW STEP THIS IS WAITING FOR
 -------------------------------------
 `.github/workflows/**` is the machinery that runs the unattended writer and the
-writer does not edit it (CLAUDE.md, docs/CONTRIBUTING.md "What is off limits"),
+writer does not edit it (AGENTS.md, docs/CONTRIBUTING.md "What is off limits"),
 so the CI wiring is a human's to paste in. Until it is, this check runs only when
 someone runs it. The step, to go after the existing `reg.sim` one, which stays
 exactly as it is:

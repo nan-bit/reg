@@ -52,7 +52,7 @@ checks here hold the pair together:
 THREE-VALUED, LIKE EVERY OTHER CHECK HERE
 -----------------------------------------
 A missing section, an empty document and a schema that could not be read are
-**COULD-NOT-EVALUATE**, never AGREE (CLAUDE.md, `docs/CONTRIBUTING.md`). Deleting
+**COULD-NOT-EVALUATE**, never AGREE (AGENTS.md, `docs/CONTRIBUTING.md`). Deleting
 §7 must not be a way to pass the test that §7 exists, which is precisely how a
 grep-shaped check gets defeated.
 """

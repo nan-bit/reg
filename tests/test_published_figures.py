@@ -17,7 +17,7 @@ be.
 
 THIS IS A GOLDEN VALUE, AND THAT IS THE POINT
 ---------------------------------------------
-CLAUDE.md says prefer invariants to golden values, and `tests/test_bench.py`
+AGENTS.md says prefer invariants to golden values, and `tests/test_bench.py`
 opens with the argument for why almost nothing there asserts a live number. Both
 still hold — for a *ratio*, which moves with every legitimate change to the
 schema, the envelope parameters and the float precision, and which no document
@@ -334,7 +334,7 @@ def measured_parameters() -> dict[str, object]:
     parameterization and the two would drift — which is the shape of the defect
     this module exists to catch, committed by its own fixture. A parser default
     that went missing is a refusal rather than a number invented at this call
-    site (CLAUDE.md, "never invent a default").
+    site (AGENTS.md, "never invent a default").
     """
     parser = bench._parser()
     wanted = {
@@ -1445,7 +1445,7 @@ def test_a_document_with_no_attribution_table_is_not_a_pass() -> None:
 #
 # So: a paragraph that cites this module as a guarantee may not also claim the
 # guarantee is universal. It has to name a carve-out, and the carve-outs are the
-# ones this module already lists. Three-valued, per CLAUDE.md: a repository where
+# ones this module already lists. Three-valued, per AGENTS.md: a repository where
 # no document cites the module at all is COULD-NOT-EVALUATE, because deleting the
 # sentences is otherwise how this check goes green.
 # ==========================================================================

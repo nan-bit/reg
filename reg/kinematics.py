@@ -3,7 +3,7 @@
 Everything here is a pure function of joint state and `Limits` — proprioception
 and a property of the robot, nothing else. There is deliberately no argument by
 which a caller can hand these functions an `Obstacle`, a `StateFrame`, or any
-other view of the world: see the Layer A rule in CLAUDE.md and the docstring at
+other view of the world: see the Layer A rule in AGENTS.md and the docstring at
 the top of `reg/types.py`. The envelope, the viz and every separation
 computation build on this module, so the boundary has to hold here first.
 

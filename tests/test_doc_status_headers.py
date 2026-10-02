@@ -27,7 +27,7 @@ accidentally assert away with a substring match against a document that mentions
 the topic somewhere else — so the negatives below feed each predicate the exact
 wording that was there on 2026-08-26, and a mutated body, and require DISAGREE.
 
-Three-valued, per `CLAUDE.md`'s *a check must be able to fail*: a header with no
+Three-valued, per `AGENTS.md`'s *a check must be able to fail*: a header with no
 status line, a body whose section cannot be located, and an empty list are all
 COULD-NOT-EVALUATE, and none of them resolves to a pass. Deleting the table is
 not how this check gets satisfied.

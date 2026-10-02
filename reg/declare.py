@@ -139,7 +139,7 @@ class Declaration:
 
     Args:
         declaration_id: unique within a run and deterministic. Not a UUID —
-            same seed, same bytes (CLAUDE.md rule 2), and a random id would make
+            same seed, same bytes (AGENTS.md rule 2), and a random id would make
             two runs of the same command produce different records.
         seq: monotonic within a run, from 0. Reuse or regression is the
             replay/reorder fault in Phase 4's taxonomy, which is only detectable
@@ -664,12 +664,12 @@ def _extension(config: np.ndarray, limits: Limits) -> float:
     `traverse`. A frozen arm on a turning base should tie. It tied on one
     machine and lost by an ULP on another, so the same declaration classified
     `traverse` locally and `retract` in CI — a verdict that reaches the record,
-    decided by a rounding difference. `CLAUDE.md` rule 2 forbids exactly that:
+    decided by a rounding difference. `AGENTS.md` rule 2 forbids exactly that:
     determinism is not negotiable, and a classification that depends on the
     platform is not reproducible evidence.
 
     Removing the parameter is the fix rather than adding a tolerance. A
-    threshold here would be an invented number (`CLAUDE.md`: never invent a
+    threshold here would be an invented number (`AGENTS.md`: never invent a
     default), and it would leave the real defect — an invariant asserted in a
     docstring that the arithmetic does not honour — in place.
 

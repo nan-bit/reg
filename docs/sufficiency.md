@@ -240,7 +240,7 @@ The envelope at `t` is computed by `reg.envelope.compute_envelope`, whose only
 inputs are a `ProprioState` and a `Limits`. `ProprioState` has no field naming an
 entity, and `tests/test_layer_boundary.py::test_propriostate_fields_are_exactly_
 the_allowed_set` fails if one appears — *that absence is the enforcement*
-(CLAUDE.md rule 1). `reg.graph._observe` computes the envelope first and only then
+(AGENTS.md rule 1). `reg.graph._observe` computes the envelope first and only then
 intersects it with the scene, which is why `HAS_ENVELOPE` can be tagged `A` while
 every edge naming an entity is tagged `B`.
 

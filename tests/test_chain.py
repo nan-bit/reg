@@ -9,7 +9,7 @@ wrong key, no key, a malformed MAC, a field that will not serialize.
 THE SECOND HALF OF THIS FILE IS THE SAME ARGUMENT ABOUT `verify_chain`
 -----------------------------------------------------------------------
 Issue #49. A tamper-evidence mechanism that has never been shown to detect
-tampering is exactly the check-that-cannot-fail CLAUDE.md forbids, so the
+tampering is exactly the check-that-cannot-fail AGENTS.md forbids, so the
 deliverable is not "an untampered artifact verifies" — that would pass for a
 walker that returns VERIFIED unconditionally. It is one test per way of altering
 a real artifact: a declaration field, a verdict field, a `mac`, a `prev_hash`, a
@@ -1433,7 +1433,7 @@ def test_deleting_every_link_edge_is_not_a_verified_artifact(
 
     `_dangling_links` reports `FOLLOWS` edges that exist and point at nothing, so
     deleting them all leaves nothing to dangle and the artifact verified clean.
-    An empty witness list reading as a pass is the inversion CLAUDE.md forbids.
+    An empty witness list reading as a pass is the inversion AGENTS.md forbids.
     The census asserts the count instead of inspecting the survivors.
     """
     out = _copy(attested, tmp_path / "no-links.sqlite")

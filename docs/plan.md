@@ -336,7 +336,7 @@ is a question this claim's evidence answers, on the terms
 
 ## Architecture
 
-The layout lives in [`CLAUDE.md`](../CLAUDE.md) and is enforced by
+The layout lives in [`AGENTS.md`](../AGENTS.md) and is enforced by
 `tests/test_layout.py`; this file does not carry a second copy.
 
 ### Stack

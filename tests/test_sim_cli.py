@@ -439,7 +439,7 @@ def test_the_producer_writes_the_base_blocks_for_a_driving_scenario(
 def test_a_driving_run_is_still_byte_identical_on_two_writes(
     tmp_path, monkeypatch
 ) -> None:
-    """Determinism is non-negotiable (CLAUDE.md rule 2), and the base columns
+    """Determinism is non-negotiable (AGENTS.md rule 2), and the base columns
     are new floats on the path CI compares. A run whose seed perturbs a base
     path has to reproduce byte for byte like every other one."""
     scn = driving_scenario()
@@ -518,7 +518,7 @@ def test_every_mobile_fixture_can_be_written_and_read(tmp_path, name: str) -> No
 
 @pytest.mark.parametrize("name", list(MOBILE_SCENARIOS))
 def test_a_mobile_fixture_is_byte_identical_on_two_writes(tmp_path, name: str) -> None:
-    """CLAUDE.md rule 2, over the columns this tier added. Same seed, same bytes."""
+    """AGENTS.md rule 2, over the columns this tier added. Same seed, same bytes."""
     a = run(tmp_path, name=name, seed=0, out=f"{name}-a.csv")
     b = run(tmp_path, name=name, seed=0, out=f"{name}-b.csv")
     assert a.read_bytes() == b.read_bytes()

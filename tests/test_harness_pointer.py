@@ -1,8 +1,8 @@
-"""What `CLAUDE.md` tells an unattended agent about the thing running it.
+"""What `AGENTS.md` tells an unattended agent about the thing running it.
 
 THE DEFECT THIS EXISTS FOR (issue #132)
 ---------------------------------------
-`CLAUDE.md`'s "How the runner works" pointed at `nan-bit/issue-runner` as the
+`AGENTS.md`'s "How the runner works" pointed at `nan-bit/issue-runner` as the
 harness that writes changes in this repository. That stopped being true: the
 writer is `nan-bit/wake-runner`, and `issue-runner` is its archived predecessor,
 still named in older commit messages here. A wrong pointer in ordinary prose
@@ -33,7 +33,7 @@ WHAT IS CHECKED, AND WHY EACH ONE CAN FAIL
    docs. A schema duplicated in two repositories drifts, and the copy nobody runs
    is the one that goes stale.
 
-Three-valued, per `CLAUDE.md`'s own *a check must be able to fail*: a file with
+Three-valued, per `AGENTS.md`'s own *a check must be able to fail*: a file with
 no such section is COULD-NOT-EVALUATE for every predicate, and
 `test_the_section_exists_to_be_checked` is why deleting the section is not a way
 to pass. **Every predicate is also fed the pre-#132 paragraph** — the exact
@@ -50,7 +50,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-CONVENTIONS = REPO / "CLAUDE.md"
+CONVENTIONS = REPO / "AGENTS.md"
 FRONT_PAGE = REPO / "README.md"
 
 AGREE = "AGREE"
@@ -62,7 +62,7 @@ COULD_NOT_EVALUATE = "COULD-NOT-EVALUATE"
 #: failure and deleting the section is.
 HEADING = "How the runner works"
 
-#: The README's equivalent section. Issue #132 corrected `CLAUDE.md` and left
+#: The README's equivalent section. Issue #132 corrected `AGENTS.md` and left
 #: this one saying "the harness itself is `nan-bit/issue-runner`" — the same
 #: defect, on the page more people read, surviving because the check below was
 #: scoped to one file. The predicates are properties of the paragraph, so
@@ -108,8 +108,8 @@ def section(text: str, heading: str = HEADING) -> str | None:
 
     `heading` is a parameter because the same defect had two sites. The
     predicates below are properties of a *paragraph that points at the harness*,
-    not of `CLAUDE.md`, and the README carried the pre-#132 wording for five days
-    after `CLAUDE.md` was corrected — see `README_HEADING`.
+    not of `AGENTS.md`, and the README carried the pre-#132 wording for five days
+    after `AGENTS.md` was corrected — see `README_HEADING`.
     """
     match = re.search(
         rf"^#+\s*{re.escape(heading)}\s*$(.*?)(?=^#+\s|\Z)",
@@ -165,7 +165,7 @@ def test_the_section_names_and_links_the_harness_that_runs_this_repo(
     """**THE CHECK ISSUE #132 EXISTS FOR.** An agent that follows this pointer
     lands in the documentation for the thing that is actually executing it."""
     assert names_the_running_harness(section(conventions)) == AGREE, (
-        f"CLAUDE.md's '{HEADING}' does not link {HARNESS} as the harness. It is "
+        f"AGENTS.md's '{HEADING}' does not link {HARNESS} as the harness. It is "
         "the paragraph an unattended agent reads to find out what is running it."
     )
 
@@ -179,21 +179,21 @@ def test_the_pre_132_paragraph_is_caught(conventions: str) -> None:
 def test_the_front_page_names_and_links_the_running_harness(front_page: str) -> None:
     """The same check, on the page a reader arrives at first.
 
-    `CLAUDE.md` was corrected by issue #132 and the README was not, because this
+    `AGENTS.md` was corrected by issue #132 and the README was not, because this
     file read one of them. The README is where someone who has never opened
-    `CLAUDE.md` learns what writes the code here, so it is the worse of the two
+    `AGENTS.md` learns what writes the code here, so it is the worse of the two
     places to leave pointing at an archived repository.
     """
     assert names_the_running_harness(section(front_page, README_HEADING)) == AGREE, (
         f"README.md's '{README_HEADING}' does not link {HARNESS} as the harness. "
         f"It said {PREDECESSOR} was 'the harness itself' for as long as this "
-        "check was scoped to CLAUDE.md."
+        "check was scoped to AGENTS.md."
     )
 
 
 def test_the_front_page_says_what_issue_runner_is(front_page: str) -> None:
     """And the predecessor is placed there too, for the same reason it is placed
-    in `CLAUDE.md`: the name outlives the pointer, in commit messages and issues
+    in `AGENTS.md`: the name outlives the pointer, in commit messages and issues
     that already shipped."""
     assert predecessor_is_placed(section(front_page, README_HEADING)) == AGREE, (
         f"README.md's '{README_HEADING}' does not say that {PREDECESSOR} is the "
@@ -247,7 +247,7 @@ def test_the_section_says_what_issue_runner_is(conventions: str) -> None:
     """History in this repository names `issue-runner` — three commits pin a
     version of it. A reader meeting that name needs this sentence."""
     assert predecessor_is_placed(section(conventions)) == AGREE, (
-        f"CLAUDE.md's '{HEADING}' does not say that {PREDECESSOR} is the "
+        f"AGENTS.md's '{HEADING}' does not say that {PREDECESSOR} is the "
         "archived predecessor. Commit messages here still name it."
     )
 
@@ -303,7 +303,7 @@ def test_the_section_explains_the_attempt_records(conventions: str) -> None:
     """An agent will find `.wake/` in its worktree. It has to arrive already
     knowing that the directory is not its to tidy."""
     assert records_are_explained(section(conventions)) == AGREE, (
-        f"CLAUDE.md's '{HEADING}' does not say that {RECORDS} holds attempt "
+        f"AGENTS.md's '{HEADING}' does not say that {RECORDS} holds attempt "
         "records written by the harness and must not be edited or deleted."
     )
 
@@ -373,7 +373,7 @@ def test_the_two_harness_facing_files_are_still_listed(conventions: str) -> None
     the regression guard for the edit itself."""
     verdict, missing = harness_facing_files_are_intact(section(conventions))
     assert verdict == AGREE, (
-        f"CLAUDE.md's '{HEADING}' no longer lists {missing} as harness-facing."
+        f"AGENTS.md's '{HEADING}' no longer lists {missing} as harness-facing."
     )
 
 
@@ -426,7 +426,7 @@ def test_the_section_does_not_restate_the_record_format(conventions: str) -> Non
     this repository can hold to the first, so it drifts silently."""
     verdict, offenders = keeps_the_schema_elsewhere(section(conventions))
     assert verdict == AGREE, (
-        f"CLAUDE.md's '{HEADING}' describes what an attempt record contains:\n"
+        f"AGENTS.md's '{HEADING}' describes what an attempt record contains:\n"
         + "\n".join(f"  - {sentence[:180]}" for sentence in offenders)
         + "\nThat belongs to wake-runner's docs; this file names the directory."
     )
@@ -464,6 +464,6 @@ def test_the_section_exists_to_be_checked(conventions: str) -> None:
     paragraph about the harness is worse off than one with a stale pointer: it
     does not know `.wake/` exists at all."""
     assert section(conventions) is not None, (
-        f"CLAUDE.md has no '{HEADING}' section. It is where an unattended agent "
+        f"AGENTS.md has no '{HEADING}' section. It is where an unattended agent "
         "learns what is running it and which files are not its to touch."
     )

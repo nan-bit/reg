@@ -2325,7 +2325,7 @@ def test_declared_violation_verdicts_are_all_attributed_to_enforcement() -> None
 
 
 def test_the_verdict_stream_is_deterministic() -> None:
-    """Same seed, same verdicts, same MACs, same chain head. CLAUDE.md rule 2."""
+    """Same seed, same verdicts, same MACs, same chain head. AGENTS.md rule 2."""
     a_enforcer, _, a = run_declared_violation(seed=0)
     b_enforcer, _, b = run_declared_violation(seed=0)
     assert a == b
@@ -2728,7 +2728,7 @@ def test_an_acknowledged_passivation_makes_the_same_declaration_lawful() -> None
 
 @pytest.mark.parametrize("name", FAULT_FIXTURES)
 def test_a_fault_fixtures_verdict_stream_is_deterministic(name: str) -> None:
-    """Same seed, same verdicts, same MACs, same chain head. CLAUDE.md rule 2."""
+    """Same seed, same verdicts, same MACs, same chain head. AGENTS.md rule 2."""
     first = run_scenario(SCENARIOS[name], 0)
     second = run_scenario(SCENARIOS[name], 0)
     assert first.verdicts == second.verdicts
@@ -2964,7 +2964,7 @@ def test_no_declaration_over_a_driving_base_is_a_reach(seed: int) -> None:
 
 @pytest.mark.parametrize("name", sorted(MOBILE_SCENARIOS))
 def test_a_mobile_fixtures_verdict_stream_is_deterministic(name: str) -> None:
-    """Same seed, same verdicts, same MACs, same chain head. CLAUDE.md rule 2."""
+    """Same seed, same verdicts, same MACs, same chain head. AGENTS.md rule 2."""
     first = run_scenario(MOBILE_SCENARIOS[name], 0)
     second = run_scenario(MOBILE_SCENARIOS[name], 0)
     assert first.verdicts == second.verdicts

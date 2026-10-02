@@ -28,7 +28,7 @@ So nothing here reads a clock. There is no `datetime.now()` in this module and
 there must never be one: the run start is *declared* by the caller, recorded in
 the artifact, and the property CI checks becomes **same seed and same declared
 start, same bytes**. An ambient default would be indistinguishable downstream
-from a declared one, which is the failure mode CLAUDE.md's "never invent a
+from a declared one, which is the failure mode AGENTS.md's "never invent a
 default" names — so `RunIdentity` has no default for any of its three fields and
 `--run-start` has none either.
 

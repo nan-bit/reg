@@ -1446,7 +1446,7 @@ def test_a_base_that_cannot_move_needs_no_base_velocity() -> None:
     columns for one), so refusing `None` outright would refuse the entire
     existing corpus. Accepting it for a robot that can drive would read "not
     recorded" as "standing still", which is the could-not-evaluate resolving to
-    the permissive answer that `CLAUDE.md` forbids.
+    the permissive answer that `AGENTS.md` forbids.
     """
     state = SOUNDNESS_STATES[2]
     assert state.base_vel is None

@@ -26,7 +26,7 @@ edited.**
 | [`self-describing.md`](self-describing.md) | What the artifact must carry so a reader need not trust the prose — the three gaps, now normative in `limitations.md` §12. | A design document; every tier of §8 has landed. Normative over nothing yet; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
 | [`sensor-baseline.md`](sensor-baseline.md) | Where the sensor-log figure every ratio is computed against comes from. | An **assumption with a sourced range**, never a measurement. |
 | [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | Its status line is the authority. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`CLAUDE.md`](../CLAUDE.md) for the conventions code must follow. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`AGENTS.md`](../AGENTS.md) for the conventions code must follow. |
 
 ## Reading order
 
@@ -41,7 +41,7 @@ edited.**
   `267 GB` among them — are **not**. That module's own
   *What this does not cover* is the list, and it is worth reading before
   treating any figure here as machine-checked.
-- **To write code here:** [`CLAUDE.md`](../CLAUDE.md), then
+- **To write code here:** [`AGENTS.md`](../AGENTS.md), then
   [`CONTRIBUTING.md`](CONTRIBUTING.md), then
   [`lossiness.md`](lossiness.md) if the change touches what the graph keeps.
 

@@ -32,7 +32,7 @@ can fail, and the defect being guarded is an *absence*, which is the easiest
 thing in the world to accidentally assert away with a substring match against a
 document that mentions the topic somewhere else.
 
-Three-valued, per `docs/CONTRIBUTING.md` and `CLAUDE.md`: a file that cannot be
+Three-valued, per `docs/CONTRIBUTING.md` and `AGENTS.md`: a file that cannot be
 read, or a section that cannot be located, is COULD-NOT-EVALUATE and never
 resolves to a pass. Deleting a section is not how this check gets satisfied.
 """

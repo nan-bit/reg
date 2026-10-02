@@ -141,7 +141,7 @@ in the same reachable set, and the set is re-verified each planning step, so the
 robot is never in a state with no verified action. `reg` cannot take that answer,
 for two structural reasons rather than preferences. RTD's guarantee lives inside
 the **planner** — the same party that chooses the trajectory proves it safe,
-which is the common-cause structure CLAUDE.md rule 3 exists to refuse. And this
+which is the common-cause structure AGENTS.md rule 3 exists to refuse. And this
 module VETOes a *declaration* and commands nothing; the one thing in the tree
 that resembles a fail-safe, passivation, is a record about a stop and not a stop
 — since issue #247 it reaches the artifact, and what reaches it is the

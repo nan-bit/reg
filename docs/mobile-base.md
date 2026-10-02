@@ -34,7 +34,7 @@ function's soundness argument, which makes
 `tests/test_envelope.py::test_no_bang_bang_trajectory_escapes_the_outer_envelope`
 load-bearing rather than merely good. The normative statements are
 [`limitations.md`](limitations.md) §3 and §9 and
-[`../CLAUDE.md`](../CLAUDE.md) rule 3; what follows is the argument they state.
+[`../AGENTS.md`](../AGENTS.md) rule 3; what follows is the argument they state.
 
 `reg.enforce.computed_bound` is `sum(link_lengths) + link_radius`, a disc centred
 on the base. It is finite **because the base is bolted down**. A driven base has
@@ -63,7 +63,7 @@ intersection silently clips away most of the true outer set. The result is an
 worst failure available in this codebase: everything it clears is cleared
 wrongly, and nothing downstream can tell.
 
-**The right behaviour is refusal.** [`CLAUDE.md`](../CLAUDE.md)'s *a check must
+**The right behaviour is refusal.** [`AGENTS.md`](../AGENTS.md)'s *a check must
 be able to fail* says a check reports pass, fail, or could-not-evaluate, and that
 the third never resolves to the first. An unbounded workspace is a
 could-not-evaluate. `computed_bound` must say so for a mobile model rather than
@@ -78,7 +78,7 @@ verified action ([`prior-art.md`](prior-art.md) §23).
 
 `reg` cannot take that answer, for two reasons that are architectural rather than
 preferences. The guarantee lives in the *planner*, which is the common-cause
-structure [`CLAUDE.md`](../CLAUDE.md) rule 3 refuses; and this project's
+structure [`AGENTS.md`](../AGENTS.md) rule 3 refuses; and this project's
 enforcement layer VETOes a declaration and commands nothing, while the one thing
 in the tree that resembles a fail-safe — passivation — is a *record about* a stop
 and not a stop: it reaches a table, an edge and a query, and none of the three
@@ -300,7 +300,7 @@ PR. Every tier is built.
 
 Tier 3's normative statements live elsewhere and this document defers to all of
 them: [`limitations.md`](limitations.md) §10 for the outer envelope's looseness,
-§3 and §9 plus [`../CLAUDE.md`](../CLAUDE.md) rule 3 for the bound,
+§3 and §9 plus [`../AGENTS.md`](../AGENTS.md) rule 3 for the bound,
 [`sufficiency.md`](sufficiency.md) §5.8 for the schema work, and
 [`lossiness.md`](lossiness.md) for the recomputation clause.
 

@@ -300,7 +300,7 @@ def test_link_polygons_move_with_the_base_too() -> None:
 
 
 def test_the_base_frame_is_required_with_no_default() -> None:
-    """The rule this signature is shaped by (CLAUDE.md; issues #115 and #151).
+    """The rule this signature is shaped by (AGENTS.md; issues #115 and #151).
 
     A base frame defaulting to the origin would be a frame nobody chose, and
     every figure measured against it would be indistinguishable downstream from

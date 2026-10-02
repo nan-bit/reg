@@ -451,7 +451,7 @@ The gap is left open rather than filled. Nothing in this prototype has a policy
 version to bind: the simulator has no policy vendor, `reg.declare.Declaration`
 carries no version field, and no `META_*` key names a policy, model or vendor.
 Manufacturing an identifier to fill the column would be the invented default
-`CLAUDE.md` forbids, one layer up from a parameter — indistinguishable
+`AGENTS.md` forbids, one layer up from a parameter — indistinguishable
 downstream from a real one. A deployment with a real policy build is where the
 element becomes bindable, and there it would be a **required, caller-supplied
 input** with no default, the shape `--run-start` and the keyring already have;
@@ -1887,7 +1887,7 @@ all, by carrying a verified stopping manoeuvre and re-verifying every step.
 `reg` cannot take that answer, and the reason is architectural rather than a
 preference. RTD's guarantee lives in a **planner** — the same party that chooses
 the trajectory proves the trajectory safe, which is the common-cause structure
-[`CLAUDE.md`](../CLAUDE.md) rule 3 exists to refuse. And `reg`'s enforcement layer
+[`AGENTS.md`](../AGENTS.md) rule 3 exists to refuse. And `reg`'s enforcement layer
 VETOes a *declaration*; it commands nothing, and the one thing in the tree that
 resembles a fail-safe — passivation — is a **record about** a stop rather than a
 stop, reaching a table, an edge type and a query and commanding nothing through
@@ -2297,7 +2297,7 @@ through SLSA Build L3"*. No build level requires a hermetic or a reproducible
 build, and the FAQ is explicit that *"SLSA does not require verified reproducible
 builds directly"* — they are *"one option for implementing the requirements"*,
 declined as a requirement partly because rebuilders sharing a pipeline share a
-common cause, which is `CLAUDE.md`'s third rule arriving from the other direction.
+common cause, which is `AGENTS.md`'s third rule arriving from the other direction.
 
 So this literature's answer to *whom do I believe about this artifact* is a signed
 identity, and its answer to *what would reproduce it* is: ask the builder. That is

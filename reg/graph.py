@@ -402,7 +402,7 @@ CLAMPED_ENVELOPE_SOURCE = "clamped"
 # numbers by accident — and record what it said." This is that caller, and these
 # three lines are it saying so.
 #
-# The honest test for a default (CLAUDE.md: never invent one) is whether an
+# The honest test for a default (AGENTS.md: never invent one) is whether an
 # invented number would be indistinguishable downstream from a supplied one.
 # Every value below is written into the artifact's meta table, so nothing
 # downstream ever has to guess which one produced a given file — the same
@@ -904,7 +904,7 @@ META_LIMITS_SOURCE = "limits_source"
 #: bit-identical in `cos` and `sin` over the arguments `reg.kinematics` passes
 #: them. numpy does not promise that, nothing here measures it, and the
 #: granularity that made the assertion would be a threshold nobody supplied —
-#: `CLAUDE.md`, *never invent a default*. Comparing the whole string asserts
+#: `AGENTS.md`, *never invent a default*. Comparing the whole string asserts
 #: only that two strings differ, which is all this reader can see.
 #:
 #: The interpreter is recorded and is still not a trigger;
@@ -1583,7 +1583,7 @@ def recorder_version(
     element is recorded as **not implemented** — in the schema comment, in
     `OCCURRENCE_RETENTION` so the artifact itself says so, and in
     `docs/prior-art.md` §9. Filling it with a plausible string would be the
-    invented default CLAUDE.md forbids, one layer up from a parameter.
+    invented default AGENTS.md forbids, one layer up from a parameter.
 
     What the value *is* good for stands unchanged, and is why it is kept rather
     than dropped: the same code with a different horizon computes a different
@@ -3578,7 +3578,7 @@ def _refuse_a_recomputation_off_the_recording_environment(
     nothing downstream carries the qualifier.
 
     Three states, and the third never resolves to either of the others
-    (`CLAUDE.md`, *a check must be able to fail*):
+    (`AGENTS.md`, *a check must be able to fail*):
 
     * the compared keys agree — return, and `envelope_at` recomputes exactly as
       it did before this guard existed;

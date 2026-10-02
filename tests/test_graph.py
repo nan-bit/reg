@@ -1207,7 +1207,7 @@ def test_a_geos_version_this_build_cannot_name_is_refused(monkeypatch) -> None:
 
 
 def test_two_builds_of_one_stream_are_byte_identical(tmp_path: Path) -> None:
-    """Determinism is non-negotiable (CLAUDE.md rule 2). CI compares two runs."""
+    """Determinism is non-negotiable (AGENTS.md rule 2). CI compares two runs."""
     csv = _held_stream(tmp_path / "held.csv", 20)
     a, b = tmp_path / "a.sqlite", tmp_path / "b.sqlite"
     _build(csv, a)
@@ -4565,7 +4565,7 @@ def test_the_artifact_says_which_robot_and_which_shift(tmp_path: Path) -> None:
 def test_the_same_seed_and_the_same_declared_start_give_the_same_bytes(
     tmp_path: Path,
 ) -> None:
-    """CLAUDE.md rule 2, over the input that was supposed to make it impossible.
+    """AGENTS.md rule 2, over the input that was supposed to make it impossible.
 
     This is the property the issue's whole argument rests on: absolute time was
     left out because a wall clock is "exactly the ambient value that would break
@@ -5434,7 +5434,7 @@ def test_the_artifact_says_whether_it_was_given_a_record_stream(
 
 
 def test_the_attestation_layer_is_deterministic(tmp_path: Path) -> None:
-    """CLAUDE.md rule 2, over the half of the artifact that carries MACs.
+    """AGENTS.md rule 2, over the half of the artifact that carries MACs.
 
     Same stream, same keyring, same parameters, same bytes. A record stream is
     the easiest place for an artifact to stop being reproducible — a clock, a
@@ -7729,7 +7729,7 @@ def test_a_mobile_fixtures_retained_regions_are_in_the_room_it_drove_through(
 
 
 def test_two_builds_of_a_mobile_fixture_are_byte_identical(tmp_path: Path) -> None:
-    """CLAUDE.md rule 2, on the path this tier added.
+    """AGENTS.md rule 2, on the path this tier added.
 
     A mobile artifact holds a polygon per posed configuration where a bolted one
     holds a handful, so it exercises far more of the geometry writer — and

@@ -134,7 +134,7 @@ def test_render_frame_works_without_an_envelope(tmp_path) -> None:
 
 
 def test_two_renders_of_the_same_frame_are_byte_identical(tmp_path) -> None:
-    """Determinism is not optional here (CLAUDE.md): same call, same bytes."""
+    """Determinism is not optional here (AGENTS.md): same call, same bytes."""
     frame = a_frame()
     envelope = an_envelope(frame)
 

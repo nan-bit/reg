@@ -161,7 +161,7 @@ line — is the shape this document is written in.
 
 - **No new claim.** *The claim this is about* quotes the two this serves.
 - **No change to the Layer A / Layer B boundary.** A basis records what a tag was
-  computed from; it does not move what counts as Layer A. `CLAUDE.md` rule 1 is
+  computed from; it does not move what counts as Layer A. `AGENTS.md` rule 1 is
   untouched.
 - **No dependency.** A version string is `importlib.metadata`; a basis is rows.
 - **Not a resolution of polygon containment** (issue #82), which became

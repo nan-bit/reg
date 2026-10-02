@@ -202,7 +202,7 @@ always.** *Tests are the deliverable* is a rule of this repository, so an agent
 that adds one is following the repo; if the declaration named only the file being
 changed, the record then reports the test as out of scope. That has happened on
 three consecutive attempts, and every time the finding was correct and useless —
-it flagged the agent for obeying `CLAUDE.md`.
+it flagged the agent for obeying `AGENTS.md`.
 
 A scope check that fires on the expected shape of the work teaches you to ignore
 it, which costs the findings you would have wanted. Declaring the test path is

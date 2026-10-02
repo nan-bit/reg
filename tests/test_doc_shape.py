@@ -59,7 +59,7 @@ place. Two consequences are deliberate:
   surface should go — but it fires at an inconvenient moment, so the failure
   message names the group, the ceiling and the overage.
 
-Three-valued per `CLAUDE.md`'s *a check must be able to fail*: an empty corpus,
+Three-valued per `AGENTS.md`'s *a check must be able to fail*: an empty corpus,
 a package with no public symbols, a classification entry with no reason, and a
 document with no prose at all are COULD-NOT-EVALUATE, and none of them resolves
 to a pass. Deleting the documents is not how this check gets satisfied.
@@ -96,7 +96,7 @@ def corpus_paths() -> tuple[str, ...]:
     corpus by existing and has to be classified below before `pytest` is green
     again. That is the intent, not an oversight.
     """
-    top = ("README.md", "CLAUDE.md")
+    top = ("README.md", "AGENTS.md")
     docs = tuple(f"docs/{path.name}" for path in sorted((REPO / "docs").glob("*.md")))
     return tuple(name for name in top + docs if (REPO / name).is_file())
 
@@ -172,11 +172,11 @@ ARGUMENT: dict[str, str] = {
 # Adding to this list is not free: #170 tier 6 settled that the ceiling a
 # document leaves is re-measured without it, so an exemption gives the
 # documents left behind no room. See ARGUMENT_MAX below. #244 is this
-# mechanism's second use: `CLAUDE.md` leaves the code-coupled group and the
+# mechanism's second use: `AGENTS.md` leaves the code-coupled group and the
 # ceiling is re-measured over the six documents that remain (see the RATE log
 # row), which is the origin #170 tier 6 one click away.
 EXEMPT: dict[str, str] = {
-    "CLAUDE.md": (
+    "AGENTS.md": (
         "The conventions the code must follow, and the only file the "
         "unattended writer reads by default — its three rules are the ones "
         "this repository calls structural. The budget's premise is that a "
@@ -184,7 +184,7 @@ EXEMPT: dict[str, str] = {
         "the ceiling rewards doing exactly that; a document that must not "
         "shrink into pointers cannot sit under it, because a rule turned into "
         "a pointer may be a rule the next agent never reads — whether links "
-        "inside `CLAUDE.md` are followed was investigated on 2026-09-11 (#244) "
+        "inside `AGENTS.md` are followed was investigated on 2026-09-11 (#244) "
         "and could not be settled from retained evidence. Decision D5 (#270) "
         "leaves the file whole, so the file leaves the budget. It is exempt "
         "from the *budget* only: the paragraph and narration ceilings still "
@@ -398,11 +398,11 @@ EXEMPT: dict[str, str] = {
 #         corrected, the air-gap history, and the whole ## Why — with every
 #         guarded table kept. 18,242 / 330 = 55.28, rounded up to the next
 #         tenth. Measured, no headroom.
-#   46.2  today, 2026-09-27, after #244 exempted `CLAUDE.md` from the word
+#   46.2  today, 2026-09-27, after #244 exempted `AGENTS.md` from the word
 #         budget (decision D5, #270 — the file stays whole, so it leaves the
 #         group). This is the trap #237's row documents for the argument group
 #         (#170 tier 6), applied to the code-coupled group: a document leaving
-#         takes its words out of the ceiling with it. `CLAUDE.md`'s 2,321 words
+#         takes its words out of the ceiling with it. `AGENTS.md`'s 2,321 words
 #         are gone from the numerator and nothing else moved; the six documents
 #         that remain are 15,227 / 330 = 46.14, rounded up to the next tenth.
 #         Measured, no headroom.
@@ -410,7 +410,7 @@ EXEMPT: dict[str, str] = {
 #   53.2  today, 2026-09-27, after #280: the entry points — `README.md`
 #         3,467 -> 3,093 (claims rows 3-4 condensed, the honesty note, the
 #         Status section and *How work happens* now pointers), plus
-#         `docs/CONTRIBUTING.md` 704 -> 366 (the CLAUDE.md copy becomes
+#         `docs/CONTRIBUTING.md` 704 -> 366 (the AGENTS.md copy becomes
 #         pointers). 17,545 / 330 = 53.17, rounded up to the next tenth.
 #         Measured, no headroom.
 #
@@ -854,7 +854,7 @@ LONG_PARAGRAPHS_MAX = 71
 #   139  today, 2026-09-06, after #217: README.md and docs/CONTRIBUTING.md went
 #        1 -> 0 each, and neither file gained a `## Why` line — an entry point
 #        that needs one is an entry point carrying provenance. One went by a cut
-#        (CONTRIBUTING's restatement of CLAUDE.md's *Never invent a default*,
+#        (CONTRIBUTING's restatement of AGENTS.md's *Never invent a default*,
 #        now a pointer to it) and one by rewording in the present tense, the
 #        same over-count #210 recorded. A third paragraph fired mid-cut and is
 #        worth knowing about: `was\nnot made` did not match across a line break
@@ -1473,7 +1473,7 @@ def test_a_classification_with_no_reason_is_could_not_evaluate() -> None:
 def test_a_second_exemption_with_no_reason_is_could_not_evaluate() -> None:
     """A second document exempted in silence, which is how a list grows.
 
-    COULD-NOT-EVALUATE and not a pass: `CLAUDE.md`'s rule is that the third
+    COULD-NOT-EVALUATE and not a pass: `AGENTS.md`'s rule is that the third
     verdict never resolves to the first, and a wordless exemption is exactly
     the silence that rule names.
     """
@@ -1835,7 +1835,7 @@ def phase_8_agrees_with_the_ratio_ban(text: str) -> tuple[str, list[str]]:
 
 
 def no_stale_architecture_tree(text: str) -> tuple[str, list[str]]:
-    """The layout lives in CLAUDE.md and tests/test_layout.py, not here.
+    """The layout lives in AGENTS.md and tests/test_layout.py, not here.
 
     The tree named `sim/`, `envelope/` and the other pre-`reg/` directory
     names; it disagreed with the repository it described.
@@ -2809,7 +2809,7 @@ def test_baseline_sensor_multiplier_has_no_default() -> None:
 #
 # The last cut of #270 covers the entry points: the docs index, which is now
 # wrong about its own contents; the front page's status restatement; and
-# `docs/CONTRIBUTING.md`'s copy of `CLAUDE.md`. Under D5 `CLAUDE.md` stays
+# `docs/CONTRIBUTING.md`'s copy of `AGENTS.md`. Under D5 `AGENTS.md` stays
 # whole, so `CONTRIBUTING.md` points at it instead of restating it.
 # ==========================================================================
 
@@ -3000,7 +3000,7 @@ def readme_how_work_happens_is_a_pointer(
     problems = []
     for stale in (
         "journalctl --user -u reg-runner -f",
-        "The conventions code here must follow are in [`CLAUDE.md`](CLAUDE.md)",
+        "The conventions code here must follow are in [`AGENTS.md`](AGENTS.md)",
     ):
         if stale in text:
             problems.append(f"the stale How-work-happens prose is back: {stale[:40]}")
@@ -3016,7 +3016,7 @@ def readme_how_work_happens_is_a_pointer(
 def contributing_path_is_a_pointer(
     text: str,
 ) -> tuple[str, list[str]]:
-    """*The path a change takes* points at CLAUDE.md's *Working unattended*.
+    """*The path a change takes* points at AGENTS.md's *Working unattended*.
 
     The numbered steps restated the run's rules; the queue-and-watch commands
     are this file's own and stay.
@@ -3033,7 +3033,7 @@ def contributing_path_is_a_pointer(
         if stale in text:
             problems.append(f"the restated path steps are back: {stale[:40]}")
     if "*Working unattended*" not in text:
-        problems.append("the pointer at CLAUDE.md's Working unattended is gone")
+        problems.append("the pointer at AGENTS.md's Working unattended is gone")
     if "gh issue edit N --add-label agent-ready" not in text:
         problems.append("the queue command is gone")
     return (DISAGREE if problems else AGREE), problems
@@ -3044,9 +3044,9 @@ def contributing_ready_is_a_pointer(
 ) -> tuple[str, list[str]]:
     """*What makes an issue ready* names the rules instead of restating them.
 
-    D5: the section restated `CLAUDE.md`'s *Queueing work*. No rule is lost —
+    D5: the section restated `AGENTS.md`'s *Queueing work*. No rule is lost —
     the pointer names the literal `## Affected areas` heading rule and
-    "declare `tests/`", which live in `CLAUDE.md`.
+    "declare `tests/`", which live in `AGENTS.md`.
     """
     empty = _entry_point_empty_is_no_verdict(text, "docs/CONTRIBUTING.md")
     if empty is not None:
@@ -3068,7 +3068,7 @@ def contributing_ready_is_a_pointer(
 def contributing_pr_is_a_pointer(
     text: str,
 ) -> tuple[str, list[str]]:
-    """*What lands in a pull request* points at CLAUDE.md's *Commits*.
+    """*What lands in a pull request* points at AGENTS.md's *Commits*.
 
     The bullets restated the repo's rules for the change itself; the draft /
     verification / `Closes #N` shape is the section's own and stays.
@@ -3084,7 +3084,7 @@ def contributing_pr_is_a_pointer(
         if stale in text:
             problems.append(f"the restated PR rules are back: {stale[:40]}")
     if "*Commits*" not in text:
-        problems.append("the pointer at CLAUDE.md's Commits is gone")
+        problems.append("the pointer at AGENTS.md's Commits is gone")
     if "`Closes #N`" not in text:
         problems.append("the Closes trailer is gone")
     return (DISAGREE if problems else AGREE), problems
@@ -3105,7 +3105,7 @@ STALE_INDEX_TABLE = """| [`plan.md`](plan.md) | What is being built and why: the
 | [`lossiness.md`](lossiness.md) | What the graph keeps, what it discards, what becomes unanswerable, and the three resolution levels. | **Normative.** A design constraint on the graph, not a description of it. |
 | [`sensor-baseline.md`](sensor-baseline.md) | Where the sensor-log figure every ratio is computed against comes from. | An **assumption with a sourced range**, never a measurement. |
 | [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | **A design document whose track is built** — every tier of its §7 has landed, and its §7.3 is the authority on what the track supports. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`CLAUDE.md`](../CLAUDE.md) for the conventions code must follow. |"""
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`AGENTS.md`](../AGENTS.md) for the conventions code must follow. |"""
 
 STALE_MOBILE_BASE_ROW = """| [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | **A design document whose track is built** — every tier of its §7 has landed, and its §7.3 is the authority on what the track supports. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |"""
 
@@ -3164,7 +3164,7 @@ gh issue edit N --add-label agent-ready
 journalctl --user -u reg-runner -f
 ```
 
-The conventions code here must follow are in [`CLAUDE.md`](CLAUDE.md). The
+The conventions code here must follow are in [`AGENTS.md`](AGENTS.md). The
 harness itself is [`nan-bit/wake-runner`](https://github.com/nan-bit/wake-runner),
 installed on the worker host — this repo configures it through `.runner.conf`.
 [`nan-bit/issue-runner`](https://github.com/nan-bit/issue-runner) is its archived
@@ -3199,7 +3199,7 @@ finish it. Concretely, it names three things:
   that command *is* the definition of done, and its output belongs in the PR body.
 
 Anything the writer would otherwise have to invent — a threshold, a limit, a
-filename, a default — belongs in the issue, for the reason [`CLAUDE.md`](../CLAUDE.md)
+filename, a default — belongs in the issue, for the reason [`AGENTS.md`](../AGENTS.md)
 gives under *Never invent a default*. If it is missing, the writer is expected to
 say so loudly rather than fill the gap.
 
@@ -3220,7 +3220,7 @@ STALE_CONTRIBUTING_PR = """## What lands in a pull request
   negative test beside anything that acts as a check, a smaller correct change in
   preference to a larger speculative one, and conventional-commit subjects with no
   `Co-Authored-By` and no "Generated with Claude Code" trailer. Each is stated in
-  full in [`CLAUDE.md`](../CLAUDE.md), and they apply to the writer because they are
+  full in [`AGENTS.md`](../AGENTS.md), and they apply to the writer because they are
   the repo's, not the other way round."""
 
 

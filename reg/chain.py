@@ -1422,7 +1422,7 @@ def _link_edge_census(
     `_dangling_links` reports edges that **exist and point at nothing**, which
     means deleting the edges too leaves nothing to dangle and reads as a pass.
     `DELETE FROM edge WHERE type='FOLLOWS'` verified clean before this existed.
-    An empty witness list rendering as a pass is the inversion CLAUDE.md forbids,
+    An empty witness list rendering as a pass is the inversion AGENTS.md forbids,
     so the count is asserted rather than the survivors inspected.
 
     The edge rows are not covered by any MAC, so this is a *witness* and not

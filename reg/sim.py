@@ -54,7 +54,7 @@ a fixture this command declined to name would be one nobody could run.
 
 ON `--seed` HAVING A DEFAULT
 ----------------------------
-CLAUDE.md forbids inventing defaults, and the reason it gives is precise: an
+AGENTS.md forbids inventing defaults, and the reason it gives is precise: an
 invented number is *indistinguishable downstream from a supplied one*. `--seed 0`
 is specified by issue #12 rather than invented here, and — the part that matters
 — it is recorded in the artifact either way, so nothing downstream has to guess

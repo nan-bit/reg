@@ -11,7 +11,7 @@ alone, and the README's old figure is no longer in `plan.md` — fail. Invent a
 figure for the front page that was never measured — fail. It cannot check that
 the *prose around* a figure is honest; a reviewer still has to do that.
 
-The verdict is three-valued on purpose (docs/CONTRIBUTING.md, CLAUDE.md): a
+The verdict is three-valued on purpose (docs/CONTRIBUTING.md, AGENTS.md): a
 README with no figures in it at all is COULD-NOT-EVALUATE, not a pass, because
 silence is how a check of this shape would otherwise be defeated.
 

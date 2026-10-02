@@ -170,7 +170,7 @@ input stream.
 
 `build_environment` is the one block that is a function of the *machine* rather
 than of the stream, and it does not weaken that (issue #200). Two builds on one
-machine record the same six strings, which is the whole of what CLAUDE.md rule 2
+machine record the same six strings, which is the whole of what AGENTS.md rule 2
 claims — determinism *within* an architecture — and it is why the record is a
 version and a machine class rather than a hostname or a path, both of which
 differ between two checkouts on one machine while nothing about the geometry
@@ -1372,7 +1372,7 @@ CREATE TABLE edge (
 -- The gap is not filled, because filling it would be a fiction. `reg`'s
 -- simulator has no policy vendor and `reg.declare.Declaration` carries no
 -- version field, so there is no policy build here to name; inventing a string
--- for the column is the invented default CLAUDE.md forbids, one layer up from a
+-- for the column is the invented default AGENTS.md forbids, one layer up from a
 -- parameter. A deployment that does have a policy version is where binding one
 -- becomes a real requirement, and it would be a required, caller-supplied input
 -- there — the shape `--run-start` and the keyring already have — not a value

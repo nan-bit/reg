@@ -133,7 +133,7 @@ def check_module():
     """`scripts/check_bench_determinism.py` imported by path.
 
     It is a script, not part of the `reg` package — CI machinery is not the
-    product (CLAUDE.md) — so the could-not-evaluate paths are reached by
+    product (AGENTS.md) — so the could-not-evaluate paths are reached by
     importing it here rather than by making it importable as `reg.something`.
     """
     spec = importlib.util.spec_from_file_location("check_bench_determinism", SCRIPT)
@@ -303,7 +303,7 @@ def test_the_check_reports_a_difference_when_the_second_run_is_perturbed() -> No
 
 
 def test_a_bench_that_exited_non_zero_is_a_failure_not_a_pass() -> None:
-    """Could-not-evaluate never resolves to pass (CLAUDE.md). An unknown scenario
+    """Could-not-evaluate never resolves to pass (AGENTS.md). An unknown scenario
     makes `reg.bench` exit before writing anything; two reports that were never
     produced are not two identical reports."""
     proc = _script("--seed", "0", "--", "--scenario", "not_a_scenario")
@@ -369,7 +369,7 @@ def test_it_refuses_bench_arguments_it_supplies_itself(clash: str, form: str) ->
 
 
 def test_it_will_not_run_without_a_seed_or_without_a_benchmark() -> None:
-    """No invented default for either (CLAUDE.md). A seed nobody stated is a
+    """No invented default for either (AGENTS.md). A seed nobody stated is a
     check nobody can reproduce, and a benchmark this script chose for itself
     would be a run the workflow does not show."""
     assert _script("--", *TINY_RUN).returncode == 2

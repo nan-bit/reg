@@ -1,6 +1,6 @@
 """`tests/` mirrors `reg/` — and where it does not, the exception is named.
 
-Issue #129. `CLAUDE.md` stated the layout as *`tests/` mirrors it*, and four
+Issue #129. `AGENTS.md` stated the layout as *`tests/` mirrors it*, and four
 modules had no mirrored file: `reg/sim.py`, `reg/store.py`, `reg/types.py`,
 `reg/world.py`. The coverage was never the problem — each of those is imported
 by seven to eleven test files and is exercised hard. The problem was that the
@@ -12,7 +12,7 @@ clarity about where those modules are actually verified.
 So this is not a coverage check and it must not be mistaken for one. It checks
 one thing: **every module under `reg/` either has a mirrored `tests/test_*.py`
 or a `VERIFIED_ELSEWHERE` entry that names the tests standing in for it.** The
-sentence in `CLAUDE.md` now describes that arrangement, and `test_claude_md_*`
+sentence in `AGENTS.md` now describes that arrangement, and `test_claude_md_*`
 below holds it to it.
 
 It fails in both directions, which is the only shape worth having:
@@ -25,14 +25,14 @@ It fails in both directions, which is the only shape worth having:
 * a witness that does not exist, or that does not import the module it is
   claimed to verify — fail. The entry has to be true, not just present.
 
-Three-valued per `CLAUDE.md`'s *a check must be able to fail*: an empty `reg/`,
+Three-valued per `AGENTS.md`'s *a check must be able to fail*: an empty `reg/`,
 an empty `tests/`, an allowlist entry naming no witness, and an allowlist entry
 giving no reason are all COULD-NOT-EVALUATE, and none of them resolves to a
 pass. Emptying something is not how this check gets satisfied.
 
 The negatives are the deliverable here. Every predicate is fed a tree it must
 reject — a module with neither condition, an emptied allowlist against the real
-absent mirrors, a lying witness, and the pre-#129 wording of the `CLAUDE.md`
+absent mirrors, a lying witness, and the pre-#129 wording of the `AGENTS.md`
 sentence — and required to say DISAGREE.
 """
 
@@ -47,13 +47,13 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 PACKAGE = REPO / "reg"
 TESTS = REPO / "tests"
-CLAUDE_MD = REPO / "CLAUDE.md"
+CLAUDE_MD = REPO / "AGENTS.md"
 
 AGREE = "AGREE"
 DISAGREE = "DISAGREE"
 COULD_NOT_EVALUATE = "COULD-NOT-EVALUATE"
 
-# This file is what the `CLAUDE.md` layout sentence points at. If it is renamed,
+# This file is what the `AGENTS.md` layout sentence points at. If it is renamed,
 # rename it there too — `test_claude_md_points_at_this_allowlist` will say so.
 SELF = Path(__file__).name
 
@@ -364,13 +364,13 @@ def claude_md_verdict(text: str) -> tuple[str, list[str]]:
     """Does the layout paragraph point at the allowlist that qualifies it?
 
     A paragraph claiming `tests/` mirrors `reg/` full stop is DISAGREE: that is
-    the pre-#129 wording, and it is false. A `CLAUDE.md` with no layout
+    the pre-#129 wording, and it is false. A `AGENTS.md` with no layout
     paragraph at all is COULD-NOT-EVALUATE — deleting the sentence is not how
     the sentence gets to be true.
     """
     paragraph = layout_paragraph(text)
     if paragraph is None:
-        return COULD_NOT_EVALUATE, ["CLAUDE.md has no `Layout:` paragraph"]
+        return COULD_NOT_EVALUATE, ["AGENTS.md has no `Layout:` paragraph"]
     if SELF not in paragraph:
         return DISAGREE, [
             f"the layout paragraph does not name tests/{SELF}, which is where "

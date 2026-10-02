@@ -617,7 +617,7 @@ def measurement_keyring(seed: int) -> Keyring:
       The curve reports byte counts and whether each level still answers the
       supported questions. A MAC is 64 hex characters whatever key produced it,
       so the key's value moves no number in the table.
-    * **Determinism is not optional here** (CLAUDE.md rule 2). Two runs of
+    * **Determinism is not optional here** (AGENTS.md rule 2). Two runs of
       `python -m reg.bench --resolution` at one seed must produce the same bytes,
       and `tests/test_bench.py` compares them. A keyring from `secrets` would
       make the artifact differ between runs in the one column an audit artifact
@@ -3701,7 +3701,7 @@ SUPPORTED_QUESTIONS: tuple[SupportedQuestion, ...] = (
         status=EXCLUDED,
         reason=(
             "it takes a **threshold** and nothing supplies one. This project "
-            "does not invent a threshold to make a table wider (CLAUDE.md, "
+            "does not invent a threshold to make a table wider (AGENTS.md, "
             "'never invent a default'), and a distance picked here would be "
             "indistinguishable downstream from one somebody chose. The metric it "
             "thresholds is priced in full by `separation_timeline`"
@@ -7916,7 +7916,7 @@ def _sublinearity_attribution(
     **No threshold anywhere in it.** Splitting the tables into "scales" and
     "does not scale" would need one — how close to 1.0x counts as fixed — and a
     threshold invented here would decide the answer it is supposed to report
-    (CLAUDE.md, "never invent a default"). The identity needs none: a table that
+    (AGENTS.md, "never invent a default"). The identity needs none: a table that
     was assumed fixed and is not simply contributes less.
 
     **Could-not-evaluate never resolves to an explanation.** Without `dbstat`
@@ -7973,7 +7973,7 @@ def _sublinearity_attribution(
     # THE ARITHMETIC, AND WHY IT IS THIS ARITHMETIC. The obvious move is to
     # split the tables into "scales" and "does not scale" and take a ratio of
     # each part. That needs a threshold — how close to 1.0x counts as "does not
-    # scale" — and a threshold invented here would decide the answer (CLAUDE.md,
+    # scale" — and a threshold invented here would decide the answer (AGENTS.md,
     # "never invent a default"). What follows instead is an exact identity: if
     # every table had grown by the rate multiple the file would be `rate_x`
     # times its low-rate size, and the difference between that and what was

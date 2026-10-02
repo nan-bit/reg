@@ -6,11 +6,11 @@ ready. There is no other path — nothing on the worker host merges, and no agen
 marks its own PR ready.
 
 This file describes that path. The conventions the code itself must follow live in
-[`CLAUDE.md`](../CLAUDE.md); this is about how work gets in and out.
+[`AGENTS.md`](../AGENTS.md); this is about how work gets in and out.
 
 ## The path a change takes
 
-The run's rules are [`CLAUDE.md`](../CLAUDE.md)'s *Working unattended*: one
+The run's rules are [`AGENTS.md`](../AGENTS.md)'s *Working unattended*: one
 issue → one worktree → one branch → one **draft** PR, and nothing on the worker
 host merges. This file does not restate them.
 
@@ -25,18 +25,18 @@ An issue is ready when a writer that cannot ask a follow-up question could
 still finish it. The rules — acceptance criteria, the literal
 `## Affected areas` heading, the command that verifies it, the rule to declare `tests/`
 whenever the work will need a test, and the `Depends-on: #N` order trailer —
-are [`CLAUDE.md`](../CLAUDE.md)'s *Queueing work*. This file does not restate
+are [`AGENTS.md`](../AGENTS.md)'s *Queueing work*. This file does not restate
 them.
 ## What lands in a pull request
 
 Always a draft; the verification output pasted into the body; `Closes #N`
 when the acceptance criteria are met. The repo's rules for the change itself
-are [`CLAUDE.md`](../CLAUDE.md)'s *Commits*. This file does not restate them.
+are [`AGENTS.md`](../AGENTS.md)'s *Commits*. This file does not restate them.
 
 ## What is off limits
 
 `.github/workflows/**` and `.runner.conf` are the machinery that runs the writer,
-not the product, and [`CLAUDE.md`](../CLAUDE.md) puts them off limits to it. An agent
+not the product, and [`AGENTS.md`](../AGENTS.md) puts them off limits to it. An agent
 editing them mid-flight would be changing the rules of the run it is inside, and a
 writer that breaks itself cannot report that it did. Changes there are made by a
 human, in a separate PR. An issue that genuinely requires them gets the rest of its

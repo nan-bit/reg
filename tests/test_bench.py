@@ -547,7 +547,7 @@ def test_the_fixed_question_is_answered_from_both_sides_and_they_agree(
 
 
 def test_two_runs_agree_on_every_number_except_the_clock(tmp_path: Path) -> None:
-    """Determinism (CLAUDE.md rule 2), scoped honestly: the sizes, the row
+    """Determinism (AGENTS.md rule 2), scoped honestly: the sizes, the row
     counts and the answers are a function of the seeds; the timings are not, and
     the report says which is which rather than claiming both."""
     a = run_scenario(SCENARIO, tmp_path / "a", seed=0, **_FAST)
@@ -2857,7 +2857,7 @@ def test_a_ladder_that_is_not_a_ladder_is_refused_at_the_cli(raw: str) -> None:
 
 
 def test_the_cli_has_no_default_control_rate() -> None:
-    """**No default, and there must not be one** (CLAUDE.md, and the whole point
+    """**No default, and there must not be one** (AGENTS.md, and the whole point
     of issue #68). The rate is exactly the parameter that went unstated under
     every published retention figure; a ladder this flag picked for itself would
     restate the problem one level down."""
@@ -3534,7 +3534,7 @@ def test_a_parallel_report_is_byte_identical_to_the_serial_one(tmp_path: Path) -
 
 
 def test_the_cli_has_no_default_job_count() -> None:
-    """CLAUDE.md: never invent a default. The worker count is a property of the
+    """AGENTS.md: never invent a default. The worker count is a property of the
     machine, so a benchmark that picked one would print a wall-clock figure
     nobody could reproduce elsewhere — and the serial path has to stay reachable
     for the comparison the wall-clock table is made of."""

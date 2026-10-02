@@ -45,7 +45,7 @@ parametrizations differ in their last bits on arm64 Darwin, and each table
 therefore records the platform it was captured on and reports an explicit
 could-not-evaluate — the repository's third state, warned so it is audible and
 skipped so it never reads as a pass — anywhere else. The moved-base negatives
-stay ungated, so a real divergence is still red on every platform. `CLAUDE.md`
+stay ungated, so a real divergence is still red on every platform. `AGENTS.md`
 rule 2 carries the same qualifier, because *same seed, same bytes* is checked by
 two CI runs on one platform.
 
@@ -221,7 +221,7 @@ is the load-bearing test rather than merely a good one.
 literature's answer to an unbounded workspace is a **verified fail-safe
 manoeuvre** rather than a refusal, which `reg` cannot adopt — that guarantee
 lives inside the planner, the common-cause structure
-[`../CLAUDE.md`](../CLAUDE.md) rule 3 refuses, and this project can represent no
+[`../AGENTS.md`](../AGENTS.md) rule 3 refuses, and this project can represent no
 stop to rest a bound on — and, in consolation, that RTD's own reachable set is
 horizon-limited and per-step, so resting on the outer envelope alone is the
 position that literature works from.
@@ -686,7 +686,7 @@ same scalar at every frame of every scenario" is a fixed-base property: a driven
 base has an unbounded workspace, so no horizon-free radius exists for it to
 compute. Remove the mounting and the first term is not a looser bound, it is not
 a bound — so `computed_bound` refuses a `Limits` with any nonzero base bound,
-naming the field, and `CLAUDE.md` rule 3 and §3 both say which case each term
+naming the field, and `AGENTS.md` rule 3 and §3 both say which case each term
 applies to rather than describing the bound as the smaller of two
 unconditionally. [`docs/mobile-base.md`](mobile-base.md) §1 works that through,
 including the origin-centred disc intersected *inside* `outer_envelope` — the
@@ -726,7 +726,7 @@ is **conditional on the base being fixed**, and the artifact now says so — a
 exist; the third is half of one.
 
 1. **A bound that refuses.** An unbounded workspace is a could-not-evaluate
-   under `CLAUDE.md`'s *a check must be able to fail*, and `computed_bound` must
+   under `AGENTS.md`'s *a check must be able to fail*, and `computed_bound` must
    say so for a mobile model rather than return a large plausible number that
    VETOes while looking principled. That is built, and `horizon_bound` rests on
    the outer envelope alone for a driven base as a consequence; what it buys is

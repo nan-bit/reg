@@ -54,13 +54,16 @@ states already cover an unknown scheme as COULD-NOT-EVALUATE.
 
 - `meta['chain_format']`: `chain-sha256-v1` → `chain-sha256-v2`. v1 artifacts
   verify unchanged under the old walk.
-- New table `epoch_heads(epoch INTEGER PK, head BLOB, merkle_root BLOB,
-  checkpoint_sig BLOB, key_id TEXT)`.
+- `meta['epoch_records']`: records per epoch (1,024); the walk reads epoch
+  boundaries here, not from a constant.
+- `epoch_heads(chain TEXT, epoch INTEGER, head BLOB, merkle_root BLOB,
+  checkpoint_sig BLOB, key_id TEXT, PRIMARY KEY (chain, epoch))` — per chain,
+  one key schedule each.
 - New table `anchor_receipts(epoch INTEGER, scheme TEXT, receipt BLOB,
   PRIMARY KEY (epoch, scheme))`: TSA tokens as DER bytes, Rekor inclusion proofs
   as canonical JSON.
-- Only 32-byte heads leave the operator boundary — no record payload, no
-  personal data (`limitations.md` §8 is unaffected).
+- Only 32-byte heads leave the operator boundary — no payload, no personal
+  data.
 
 ## 5. Offline verifiability
 

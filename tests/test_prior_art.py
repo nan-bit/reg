@@ -101,26 +101,31 @@ def cites_the_truncation_attack(text: str) -> bool:
     )
 
 
-def records_forward_security_as_an_absence(text: str) -> bool:
-    """Does `text` say `reg` does *not* have forward security, and own it?
+def records_implemented_forward_security(text: str) -> bool:
+    """Does `text` say `reg` *has* forward security (per epoch), and own the
+    boundary?
 
-    Three conjuncts, because each alone is satisfiable by text that leaves the
-    reader worse off: the property has to be named, the absence has to be
-    stated as this artifact's, and the keys have to be described as static —
-    which is the mechanism, and the part someone re-deriving the entry would
-    have to get right.
+    Three conjuncts: the property has to be named as implemented (not as an
+    absence), the per-epoch mechanism has to be stated (which is what someone
+    re-deriving the entry would have to get right), and the remaining boundary
+    — the verifier still holds the keyring — has to be present, because that is
+    the half of §14's asymmetry that survives.
     """
     flat = normalise(text)
     return (
-        re.search(r"forward secur", flat, re.IGNORECASE) is not None
+        re.search(r"forward.secur", flat, re.IGNORECASE) is not None
         and re.search(
-            r"(no forward secur|without its forward secur|minus (the|its) forward"
-            r" secur|missing forward secur|has no forward secur)",
+            r"(per epoch|k_\{i\+1\}|every 1,024 records|predecessor is erased)",
             flat,
             re.IGNORECASE,
         )
         is not None
-        and re.search(r"keys are static|static for the life", flat) is not None
+        and re.search(
+            r"(anyone who can verify.*can also forge|verifier.*holds the key)",
+            flat,
+            re.IGNORECASE,
+        )
+        is not None
     )
 
 
@@ -350,19 +355,19 @@ def test_phase_6_cites_the_construction() -> None:
     )
 
 
-def test_the_missing_forward_security_is_recorded_as_a_named_absence() -> None:
+def test_the_implemented_forward_security_is_recorded_with_its_boundary() -> None:
     """§14's fourth ordered action, and the one with no other home.
 
-    `docs/limitations.md` is where a deliberate absence goes; §14's own words
-    are *a named, deliberate absence rather than an oversight*, together with
-    the verifier-holds-the-key asymmetry.
+    `docs/limitations.md` is where the chain's properties go; §14's own words
+    are now *with its forward security, per epoch*, together with the
+    verifier-holds-the-key asymmetry that survives it.
     """
     text = LIMITATIONS.read_text(encoding="utf-8")
-    entry = section(text, re.compile(r"forward secur", re.IGNORECASE))
-    assert verdict(entry, records_forward_security_as_an_absence(entry)) == AGREE, (
+    entry = section(text, re.compile(r"forward.secur", re.IGNORECASE))
+    assert verdict(entry, records_implemented_forward_security(entry)) == AGREE, (
         "docs/limitations.md has no entry recording that reg/chain.py "
-        "implements Schneier-Kelsey without its forward security. Until it "
-        "does, an assessor reads static keys as an oversight, which is the "
+        "implements Schneier-Kelsey with per-epoch forward security. Until it "
+        "does, an assessor reads the ratchet as an oversight, which is the "
         "reading docs/prior-art.md §14 says is unavailable."
     )
     assert verdict(entry, records_the_verifier_holds_the_key(entry)) == AGREE, (
@@ -636,24 +641,24 @@ def test_the_forward_security_check_rejects_the_adjacent_admissions() -> None:
 
     §6 and the README's honesty note discuss key custody at length, so a loose
     predicate would have passed on the file as it stood and reported the
-    absence as recorded. Both are fed in here and both must fail.
+    mechanism as recorded. Both are fed in here and both must fail.
     """
     before_limitations = (
         "The keyring is a JSON file of two hex keys. There is no PKI, no key "
         "rotation and no revocation, and the file's only protection is its "
         "filesystem mode. Two keyholders at one employer share a common cause."
     )
-    assert not records_forward_security_as_an_absence(before_limitations)
+    assert not records_implemented_forward_security(before_limitations)
     assert not records_the_verifier_holds_the_key(before_limitations)
-    assert not records_forward_security_as_an_absence(BEFORE_README)
+    assert not records_implemented_forward_security(BEFORE_README)
 
-    # Naming the property while claiming it is the inversion that matters most:
-    # this must not pass just because the words appear.
+    # Naming the property without the per-epoch mechanism is the inversion
+    # that matters most: this must not pass just because the words appear.
     claims_it = (
         "The chain has forward security: the key is evolved after every record "
         "and the old value erased."
     )
-    assert not records_forward_security_as_an_absence(claims_it)
+    assert not records_implemented_forward_security(claims_it)
 
 
 def test_the_unread_check_rejects_the_bullet_that_stood_for_three_passes() -> None:

@@ -46,6 +46,7 @@ from reg.chain import (
     HASH_HEX_LEN,
     KEY_BYTES,
     UNSIGNED_MAC,
+    EpochSigner,
     KeyRoleError,
     Keyring,
     MacState,
@@ -233,7 +234,7 @@ def enforcer(
 ) -> Enforcer:
     return Enforcer(
         LIMITS,
-        key=ENFORCEMENT_KEY,
+        signer=EpochSigner(ENFORCEMENT_KEY),
         policy_key=policy_key,
         watchdog_period_s=watchdog_period_s,
         t_start=t_start,
@@ -1123,7 +1124,7 @@ MOBILE_DRIVING = dataclasses.replace(
 def mobile_enforcer(**overrides: object) -> Enforcer:
     """`enforcer()` over a robot whose base can drive. Same parameters otherwise."""
     kwargs: dict[str, object] = dict(
-        key=ENFORCEMENT_KEY,
+        signer=EpochSigner(ENFORCEMENT_KEY),
         policy_key=POLICY_KEY,
         watchdog_period_s=WATCHDOG_S,
         t_start=T_START,
@@ -1662,7 +1663,7 @@ def test_the_watchdog_period_and_t_start_have_no_default() -> None:
     with pytest.raises(TypeError, match="watchdog_period_s"):
         Enforcer(  # type: ignore[call-arg]
             LIMITS,
-            key=ENFORCEMENT_KEY,
+            signer=EpochSigner(ENFORCEMENT_KEY),
             policy_key=POLICY_KEY,
             t_start=0.0,
             substep_dt=SUBSTEP_DT_S,
@@ -1671,7 +1672,7 @@ def test_the_watchdog_period_and_t_start_have_no_default() -> None:
     with pytest.raises(TypeError, match="t_start"):
         Enforcer(  # type: ignore[call-arg]
             LIMITS,
-            key=ENFORCEMENT_KEY,
+            signer=EpochSigner(ENFORCEMENT_KEY),
             policy_key=POLICY_KEY,
             watchdog_period_s=1.0,
             substep_dt=SUBSTEP_DT_S,
@@ -1682,10 +1683,10 @@ def test_the_watchdog_period_and_t_start_have_no_default() -> None:
 
 
 def test_the_enforcer_refuses_keys_of_the_wrong_role() -> None:
-    with pytest.raises(EnforcementError, match="enforcement Key"):
+    with pytest.raises(EnforcementError, match="enforcement EpochSigner"):
         Enforcer(
             LIMITS,
-            key=POLICY_KEY,
+            signer=EpochSigner(POLICY_KEY),
             policy_key=POLICY_KEY,
             watchdog_period_s=1.0,
             t_start=0.0,
@@ -1695,7 +1696,7 @@ def test_the_enforcer_refuses_keys_of_the_wrong_role() -> None:
     with pytest.raises(EnforcementError, match="policy Key or None"):
         Enforcer(
             LIMITS,
-            key=ENFORCEMENT_KEY,
+            signer=EpochSigner(ENFORCEMENT_KEY),
             policy_key=ENFORCEMENT_KEY,
             watchdog_period_s=1.0,
             t_start=0.0,
@@ -1742,7 +1743,7 @@ def test_substep_dt_has_no_default_anywhere_the_bound_is_computed() -> None:
     with pytest.raises(TypeError, match="substep_dt"):
         Enforcer(  # type: ignore[call-arg]
             LIMITS,
-            key=ENFORCEMENT_KEY,
+            signer=EpochSigner(ENFORCEMENT_KEY),
             policy_key=POLICY_KEY,
             watchdog_period_s=1.0,
             t_start=0.0,
@@ -2209,7 +2210,7 @@ def declarations_for(
     declarations = emit_declarations(
         speaking,
         scenario.world.limits,
-        key=POLICY_KEY,
+        signer=EpochSigner(POLICY_KEY),
         replan_interval_s=FIXTURE_REPLAN_S,
         horizon_s=FIXTURE_HORIZON_S,
         declared_q_bounds=scenario.declared_q_bounds,
@@ -2238,7 +2239,7 @@ def run_scenario(scenario: Scenario, seed: int) -> FixtureRun:
         # cannot drive, which for a mobile fixture is the one mistake this whole
         # track is about.
         scenario.world.limits,
-        key=ENFORCEMENT_KEY,
+        signer=EpochSigner(ENFORCEMENT_KEY),
         policy_key=POLICY_KEY,
         watchdog_period_s=FIXTURE_WATCHDOG_S,
         t_start=0.0,
@@ -2693,7 +2694,7 @@ def test_an_acknowledged_passivation_makes_the_same_declaration_lawful() -> None
 
     e = Enforcer(
         LIMITS,
-        key=ENFORCEMENT_KEY,
+        signer=EpochSigner(ENFORCEMENT_KEY),
         policy_key=POLICY_KEY,
         watchdog_period_s=FIXTURE_WATCHDOG_S,
         t_start=0.0,

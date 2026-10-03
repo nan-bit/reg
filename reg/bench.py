@@ -5843,9 +5843,9 @@ class PublishedRetention:
 #: 50 Hz row). `tests/test_bench.py` holds each rate against that document, so
 #: a figure republished there without this table moving is caught.
 PUBLISHED_RETENTION: dict[str, PublishedRetention] = {
-    OCCURRENCE_LEVEL: PublishedRetention("60.85 MB/h", 267.0, 684.0),
-    TRANSITION_LEVEL: PublishedRetention("191.39 MB/h", 838.0, 218.0),
-    PER_FRAME_LEVEL: PublishedRetention("295.13 MB/h", 1293.0, 141.0),
+    OCCURRENCE_LEVEL: PublishedRetention("61.03 MB/h", 267.0, 684.0),
+    TRANSITION_LEVEL: PublishedRetention("191.57 MB/h", 838.0, 218.0),
+    PER_FRAME_LEVEL: PublishedRetention("295.32 MB/h", 1293.0, 141.0),
 }
 
 

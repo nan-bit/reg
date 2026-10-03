@@ -15,15 +15,21 @@ canonical preimage, walked by a verifier that checks both, is **Schneier, B. and
 Kelsey, J., "Cryptographic Support for Secure Logs on Untrusted Machines"**, 7th
 USENIX Security Symposium, 1998 — journal version, "Secure Audit Logs to Support
 Computer Forensics", ACM TISSEC 2(2), 1999; forward integrity for logs is due to
-Bellare and Yee. This module is that scheme **minus its forward security**: the
-1998 construction evolves the secret after every entry and deletes the old value,
-so an attacker who takes the machine cannot forge anything written before the
-compromise, and `reg`'s keys are static for the life of a run. That absence is
-deliberate and is written down as a limitation, not left here as a footnote —
-`docs/limitations.md` §7, and `docs/prior-art.md` §14 for what the comparison
-costs the project's claims. Nothing about this chain is novel; two things about
-it are not in the ancestor (two chains under role-typed keys, and a verifier with
-three outcomes) and both are below.
+Bellare and Yee. Through `chain-sha256-v1` this module was that scheme **minus
+its forward security**: the 1998 construction evolves the secret after every
+entry and deletes the old value, so an attacker who takes the machine cannot
+forge anything written before the compromise, and `reg`'s keys were static for
+the life of a run. That absence was deliberate and was written down as a
+limitation, not left here as a footnote — it is `docs/limitations.md` §7 in its
+old form. As of `chain-sha256-v2` the evolution is implemented, per epoch
+rather than per entry (1,024 records): the granularity the threat model needs,
+and the only one a verifier can recompute without being handed every
+intermediate key. The v1 walk is retained — an artifact that predates the
+format key verifies exactly as it did — and `docs/prior-art.md` §14 holds the
+comparison. Nothing about this chain is novel; three things about it are not in
+the ancestor (two chains under role-typed keys, a verifier with three outcomes,
+and per-epoch key evolution closed by checkpoint signatures) and all three are
+below.
 
 THE CRUX IS THE SERIALIZATION, NOT THE HASH
 -------------------------------------------
@@ -158,29 +164,39 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal, get_args
 
+from reg import ed25519
 from reg import store
 from reg.stream import ENCODING, FLOAT_PRECISION
 
 __all__ = [
     "ATTESTATION_PRESENT",
     "CHAINS",
+    "CHAIN_FORMAT_V1",
+    "CHAIN_FORMAT_V2",
+    "EPOCH_RECORDS",
     "FAILURE_KINDS",
+    "GENESIS_EPOCH_HEAD",
     "GENESIS_HASH",
     "HASH_HEX_LEN",
     "KEY_BYTES",
     "MAC_FIELD",
     "META_ACKNOWLEDGMENT_COUNT",
     "META_ATTESTATION_RECORDS",
+    "META_CHAIN_FORMAT",
     "META_DECLARATION_COUNT",
+    "META_EPOCH_RECORDS",
     "META_VERDICT_COUNT",
     "ROLES",
     "TAMPER_DELETE",
     "UNSIGNED_MAC",
     "CanonicalizationError",
     "ChainFailure",
+    "ChainError",
     "ChainReport",
     "ChainResult",
     "ChainSpec",
+    "EpochHead",
+    "EpochSigner",
     "RecordSpec",
     "ChainState",
     "Key",
@@ -196,9 +212,14 @@ __all__ = [
     "canonical_bytes",
     "chain_hash",
     "chain_head",
+    "checkpoint_bytes",
+    "checkpoint_seed",
+    "epoch_key_material",
     "generate_keyring",
     "is_hash",
+    "key_commitment",
     "load_keyring",
+    "merkle_root",
     "read_chain_records",
     "sign",
     "signing_bytes",
@@ -260,6 +281,17 @@ class CanonicalizationError(ValueError):
     Always a could-not-evaluate, never a fallback: a record with a field this
     module does not know how to commit to must not receive a digest computed over
     some other rendering of it.
+    """
+
+
+class ChainError(ValueError):
+    """A caller error in the chain machinery: a malformed epoch, a non-key
+    where a key belongs, an empty Merkle tree.
+
+    Not a verification failure — the epoch helpers and the `EpochSigner`
+    refuse bad inputs loudly rather than evolving a key from garbage, because
+    a key schedule that silently accepted garbage would sign records under
+    keys nobody can reconstruct.
     """
 
 
@@ -792,6 +824,499 @@ def verify(record: object, mac: object, key: Key | None) -> MacCheck:
 
 
 # --------------------------------------------------------------------------
+# FORWARD SECURITY: PER-EPOCH KEY EVOLUTION (epic #313, issue #315)
+#
+# The chain above was Schneier–Kelsey minus the property the scheme was written
+# for: keys static for the life of a run. As of `chain-sha256-v2` each chain's
+# MAC key evolves per epoch and each predecessor is erased, so an attacker who
+# takes the machine at epoch *b* learns nothing that forges anything written
+# before *b*. What the walk needs to check a v2 artifact is the epoch-0 key —
+# the keyring, as before: every later key is a public, deterministic function
+# of it, and the checkpoint below says which one signed which epoch.
+#
+# EPOCHS ARE PER CHAIN, NOT PER ARTIFACT. Each chain has its own MAC key, so
+# each chain has its own key schedule; evolving the policy key on the
+# enforcement chain's record count would couple two parties' key schedules for
+# no reason. Epoch *e* of a chain is records [e*EPOCH_RECORDS,
+# (e+1)*EPOCH_RECORDS) in chain order, and the final partial epoch closes at
+# artifact close. The `ChainHeads -> Commitment` seam in `reg.commit` takes
+# every chain's latest epoch head, so anchoring needs no shared epoch index.
+#
+# THE CHECKPOINT KEY IS DERIVED, AND THAT IS A DELIBERATE CHOICE. Each epoch
+# closes with an Ed25519 signature over the epoch's key commitment, made with a
+# checkpoint key that never signs records. That key is derived from the party's
+# epoch-0 key through a domain-separated KDF — not stored anywhere new — so no
+# keyring format changes and no new secrets to manage. The tradeoff is stated
+# plainly: the checkpoint key is only as secure as the epoch-0 key it derives
+# from. What the derivation buys is independence of *role* (a key that never
+# signs records, whose compromise alone forges no record) without independence
+# of *custody*. A deployment that wants custody separation stores an
+# independent checkpoint key and writes its public key as the epoch's key_id;
+# verification uses the stored key either way and does not check the
+# derivation.
+#
+# THE KEY COMMITMENT IS DOMAIN-SEPARATED, AND THAT IS LOAD-BEARING. The
+# commitment is SHA-256 over domain-separated key material — not plain
+# SHA-256(k), because k_{i+1} = SHA-256(k_i): a plain hash here would publish
+# the next epoch's key inside the checkpoint signature.
+#
+# ERASURE IS BEST-EFFORT, AND THAT IS STATED WHERE IT MATTERS. The predecessor
+# is overwritten in the mutable buffer before the reference is dropped.
+# CPython will still have copied the bytes around — `bytes()` copies,
+# `hashlib` may copy, the allocator does not promise to zero freed memory —
+# so a cold-memory read of the build host is outside what this claims. What it
+# claims is the checkable part: no reachable reference to any predecessor
+# survives in the process or in the artifact, and the test suite asserts both.
+# --------------------------------------------------------------------------
+
+#: Records per epoch, per chain. A count, not a wall-clock window: it is
+#: deterministic and replayable, and the verifier recomputes it from the
+#: records alone.
+EPOCH_RECORDS = 1024
+
+#: Chain format versions, in `meta['chain_format']`. v1 is the static-key
+#: chain; v2 is the per-epoch ratchet. An artifact that predates the key
+#: carries no format and walks as v1 — the absence is the version, and it is
+#: not backfilled.
+CHAIN_FORMAT_V1 = "chain-sha256-v1"
+CHAIN_FORMAT_V2 = "chain-sha256-v2"
+META_CHAIN_FORMAT = "chain_format"
+
+#: `meta['epoch_records']`: the records per epoch the builder closed epochs
+#: at. The walk and `tamper --resign` read it — epoch boundaries are a fact
+#: about the build, and a verifier that guessed them would be asserting a key
+#: schedule nobody wrote. A v2 artifact that does not state it is
+#: could-not-evaluate for every epoch-dependent check. (The Enforcer, which
+#: verifies declarations online without reading the artifact, takes it as a
+#: constructor argument instead.)
+META_EPOCH_RECORDS = "epoch_records"
+
+#: The epoch head of the first epoch commits to thirty-two zero bytes, stated
+#: in the artifact (design doc `docs/tamper-evidence-design.md` §2). A
+#: definition, like GENESIS_HASH: the first epoch has no predecessor, and the
+#: verifier must be able to tell that apart from an epoch that claims one.
+GENESIS_EPOCH_HEAD = bytes(32)
+
+#: Domain separators. The key-commitment separator exists because plain
+#: SHA-256(k) would *be* the next epoch key (see above); the others exist so
+#: that no two of these constructions share a preimage shape.
+_CHECKPOINT_KEY_DOMAIN = b"reg-checkpoint-key-v1\x00"
+_KEY_COMMIT_DOMAIN = b"reg-epoch-key-commit-v1\x00"
+_CHECKPOINT_MSG_DOMAIN = b"reg-epoch-checkpoint-v1\x00"
+_MERKLE_NODE_DOMAIN = b"reg-merkle-node-v1\x00"
+
+
+@dataclasses.dataclass(frozen=True)
+class EpochHead:
+    """One closed epoch, as the builder wrote it and the walk checks it.
+
+    `chain` is the role whose key schedule this epoch belongs to (epochs are
+    per chain). `epoch` counts from 0. `merkle_root` commits to the epoch's
+    records; `checkpoint_sig` is the Ed25519 signature over
+    `checkpoint_bytes(chain, epoch, merkle_root, key_commitment(k_e))`;
+    `key_id` is the hex of the checkpoint public key the signature is checked
+    against; `head` chains this epoch to the previous one:
+    SHA-256(prev_head || merkle_root || checkpoint_sig).
+    """
+
+    chain: Role
+    epoch: int
+    merkle_root: bytes
+    checkpoint_sig: bytes
+    key_id: str
+    head: bytes
+
+
+def epoch_key_material(seed: bytes, epoch: int) -> bytes:
+    """The MAC key for `epoch`: SHA-256 iterated `epoch` times from `seed`.
+
+    The design doc's evolution, `k_{i+1} = SHA-256(k_i)`, as a pure function
+    the verifier can recompute from the epoch-0 key. Plain iteration — no
+    domain separation here — because this is what the builder's signer does
+    too, and the two must agree byte for byte. (Domain separation lives in the
+    *commitment*, which must not equal the next key; see above.)
+    """
+    if not isinstance(seed, bytes) or len(seed) != KEY_BYTES:
+        raise ChainError(
+            f"seed must be {KEY_BYTES} bytes of key material, got "
+            f"{type(seed).__name__} of length {len(seed) if isinstance(seed, bytes) else '?'}."
+        )
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise ChainError(f"epoch must be a non-negative int, got {epoch!r}.")
+    key = seed
+    for _ in range(epoch):
+        key = hashlib.sha256(key).digest()
+    return key
+
+
+def checkpoint_seed(role: Role, master: bytes) -> bytes:
+    """The Ed25519 seed for a party's checkpoint key, derived from the party's
+    epoch-0 MAC key.
+
+    Deliberate, not convenient: deriving rather than storing means no keyring
+    format change and no new secret to manage, at the cost that the checkpoint
+    key shares the epoch-0 key's custody (see the section header). The domain
+    separator keeps this derivation disjoint from the key evolution and the
+    key commitment.
+    """
+    _check_role(role)
+    if not isinstance(master, bytes) or len(master) != KEY_BYTES:
+        raise ChainError(
+            f"master must be {KEY_BYTES} bytes of key material, got "
+            f"{type(master).__name__}."
+        )
+    return hashlib.sha256(_CHECKPOINT_KEY_DOMAIN + role.encode("ascii") + master).digest()
+
+
+def key_commitment(key_material: bytes) -> bytes:
+    """What the epoch checkpoint commits to: domain-separated SHA-256 of the
+    epoch's key.
+
+    The verifier recomputes this from the epoch key it derives, so the
+    checkpoint signature binds the Merkle root to the key that signed the
+    epoch's MACs. Domain-separated because plain SHA-256(k_e) would equal
+    k_{e+1} and publish it — `tests/test_chain_epochs.py` asserts they differ.
+    """
+    if not isinstance(key_material, bytes) or len(key_material) != KEY_BYTES:
+        raise ChainError(
+            f"key_material must be {KEY_BYTES} bytes, got "
+            f"{type(key_material).__name__}."
+        )
+    return hashlib.sha256(_KEY_COMMIT_DOMAIN + key_material).digest()
+
+
+def checkpoint_bytes(role: Role, epoch: int, merkle_root: bytes, commitment: bytes) -> bytes:
+    """The exact bytes the checkpoint signature covers.
+
+    Role, epoch, Merkle root and key commitment under one domain separator —
+    the signature says *this key* closed *this epoch* of *this chain* over
+    *these records*. Fixed layout, no length ambiguity: every field is
+    fixed-width.
+    """
+    _check_role(role)
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise ChainError(f"epoch must be a non-negative int, got {epoch!r}.")
+    for name, value in (("merkle_root", merkle_root), ("commitment", commitment)):
+        if not isinstance(value, bytes) or len(value) != 32:
+            raise ChainError(f"{name} must be 32 bytes, got {type(value).__name__}.")
+    return (
+        _CHECKPOINT_MSG_DOMAIN
+        + role.encode("ascii")
+        + epoch.to_bytes(8, "big")
+        + merkle_root
+        + commitment
+    )
+
+
+def merkle_root(leaves: list[bytes]) -> bytes:
+    """The binary Merkle root over 32-byte leaf hashes.
+
+    Internal nodes are SHA-256(domain || left || right); an odd level
+    duplicates its last leaf, the standard padding. An empty epoch is a
+    builder bug, not an empty tree — it refuses rather than defining a root
+    for nothing.
+    """
+    if not leaves:
+        raise ChainError("merkle_root of no leaves: an epoch always holds records.")
+    for leaf in leaves:
+        if not isinstance(leaf, bytes) or len(leaf) != 32:
+            raise ChainError(
+                f"every leaf must be 32 bytes, got {type(leaf).__name__}."
+            )
+    level = list(leaves)
+    while len(level) > 1:
+        if len(level) % 2:
+            level.append(level[-1])
+        level = [
+            hashlib.sha256(_MERKLE_NODE_DOMAIN + level[i] + level[i + 1]).digest()
+            for i in range(0, len(level), 2)
+        ]
+    return level[0]
+
+
+def _check_role(role: object) -> Role:
+    """The Role check `Key` already does, for the functions here that take a
+    role without a Key."""
+    if role not in get_args(Role):
+        raise ChainError(f"role must be one of {get_args(Role)}, got {role!r}.")
+    return role  # type: ignore[return-value]
+
+
+class EpochSigner:
+    """Builder-side per-chain key evolution: the thing that makes v2 forward-secure.
+
+    One signer per chain, owned by the producer that signs that chain's
+    records. The producer signs each record under `current_key()` and calls
+    `note_signed` with the signed record; the signer counts, and at each
+    EPOCH_RECORDS boundary (and at `close()`) it closes the epoch — Merkle
+    root over the epoch's records, checkpoint signature under the derived
+    checkpoint key, head chained to the previous epoch — then evolves the key
+    and erases the predecessor. After `close()` the signer holds only the key
+    of the epoch after the last one written, which is exactly the forward
+    security claim: the running process no longer has anything that signs a
+    past record.
+
+    The checkpoint key is derived once, at construction, and kept: it signs
+    every epoch's checkpoint and is a *signing* key, not a MAC key, so keeping
+    it does not weaken the ratchet.
+    """
+
+    def __init__(self, key: Key, *, epoch_records: int = EPOCH_RECORDS) -> None:
+        if not isinstance(key, Key):
+            raise ChainError(
+                f"key must be a Key, got {type(key).__name__}. The signer "
+                "evolves a party's chain key; it does not invent one."
+            )
+        if (
+            not isinstance(epoch_records, int)
+            or isinstance(epoch_records, bool)
+            or epoch_records <= 0
+        ):
+            raise ChainError(
+                f"epoch_records must be a positive int, got {epoch_records!r}."
+            )
+        self._role = key.role
+        self._material = bytearray(key.material)
+        self._epoch_records = epoch_records
+        self._epoch = 0
+        self._leaves: list[bytes] = []
+        self._epochs: list[EpochHead] = []
+        self._prev_head = GENESIS_EPOCH_HEAD
+        self._checkpoint_seed = checkpoint_seed(key.role, key.material)
+        self._checkpoint_public = ed25519.public_key(self._checkpoint_seed)
+
+    @property
+    def role(self) -> Role:
+        """Whose chain this signer evolves."""
+        return self._role
+
+    @property
+    def epoch(self) -> int:
+        """The epoch the next signed record belongs to."""
+        return self._epoch
+
+    @property
+    def epochs(self) -> tuple[EpochHead, ...]:
+        """Every closed epoch, in order. What the builder persists."""
+        return tuple(self._epochs)
+
+    def current_key(self) -> Key:
+        """The MAC key for the current epoch, as a Key the `sign_*`
+        functions take. A copy: mutating it does not touch the signer."""
+        return Key(role=self._role, material=bytes(self._material))
+
+    def note_signed(self, record: object) -> None:
+        """Record one signed record in the current epoch.
+
+        Takes the *signed* record — the MAC is part of the canonical bytes
+        the Merkle leaf commits to, so noting the unsigned record would bind
+        the epoch to bytes nobody can check. Closes the epoch exactly when it
+        fills.
+        """
+        self._leaves.append(hashlib.sha256(canonical_bytes(record)).digest())
+        if len(self._leaves) >= self._epoch_records:
+            self._close_epoch()
+
+    def _close_epoch(self) -> EpochHead:
+        root = merkle_root(self._leaves)
+        material = bytes(self._material)
+        commitment = key_commitment(material)
+        msg = checkpoint_bytes(self._role, self._epoch, root, commitment)
+        sig = ed25519.sign(self._checkpoint_seed, msg)
+        head = hashlib.sha256(self._prev_head + root + sig).digest()
+        epoch_head = EpochHead(
+            chain=self._role,
+            epoch=self._epoch,
+            merkle_root=root,
+            checkpoint_sig=sig,
+            key_id=self._checkpoint_public.hex(),
+            head=head,
+        )
+        self._epochs.append(epoch_head)
+        # Evolve, then erase: the new key is derived from the old, and the
+        # old buffer is zeroed before the reference is dropped. Best-effort —
+        # see the section header — and exactly what the test asserts.
+        new_material = hashlib.sha256(material).digest()
+        for i in range(len(self._material)):
+            self._material[i] = 0
+        self._material = bytearray(new_material)
+        self._prev_head = head
+        self._epoch += 1
+        self._leaves = []
+        return epoch_head
+
+    def close(self) -> EpochHead | None:
+        """Close the final partial epoch at artifact close.
+
+        Returns the closed epoch, or `None` when no records were signed since
+        the last close — an empty epoch would be a head over nothing. After
+        this call the signer is spent for this artifact: it holds only the
+        next epoch's key.
+        """
+        if not self._leaves:
+            return None
+        return self._close_epoch()
+
+
+def _epoch_failure(
+    chain: Role, kind: str, state: ChainState, reason: str
+) -> ChainFailure:
+    return ChainFailure(chain=chain, kind=kind, state=state, reason=reason)
+
+
+def _verify_epochs(
+    conn: sqlite3.Connection,
+    spec: ChainSpec,
+    records: list,
+    key: Key | None,
+    epoch_records: int,
+) -> list[ChainFailure]:
+    """The v2 epoch structure, checked against the records the walk just walked.
+
+    Four checks, one per new failure kind, each independent of the others: a
+    bad epoch does not cascade into the next, because `prev_head` advances
+    from the *stored* head. Without a key the Merkle roots and the head chain
+    still check — they need no secrets. The checkpoint signature is not
+    checked without a key, and no per-epoch failure is reported for that: the
+    v1 `no-key` failure already covers every key-dependent check going
+    unchecked, and a second could-not-evaluate per epoch would just restate
+    it.
+
+    `epoch_records` is the build's epoch size, from `meta['epoch_records']`:
+    epoch *e* is records [e*epoch_records, (e+1)*epoch_records).
+    """
+    failures: list[ChainFailure] = []
+    try:
+        rows = conn.execute(
+            "SELECT epoch, head, merkle_root, checkpoint_sig, key_id "
+            "FROM epoch_heads WHERE chain = ? ORDER BY epoch",
+            (spec.role,),
+        ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        return [
+            _epoch_failure(
+                spec.role,
+                "epoch-census",
+                ChainState.COULD_NOT_EVALUATE,
+                f"the epoch_heads table could not be read ({exc}); the epoch "
+                "structure went unchecked.",
+            )
+        ]
+
+    epochs: list[int] = []
+    for row in rows:
+        try:
+            epochs.append(int(row["epoch"]))
+        except (TypeError, ValueError):
+            return [
+                _epoch_failure(
+                    spec.role,
+                    "epoch-census",
+                    ChainState.COULD_NOT_EVALUATE,
+                    "an epoch_heads row carries an epoch that is not an "
+                    "integer; the epoch structure went unchecked.",
+                )
+            ]
+    n = len(records)
+    expected = (n + epoch_records - 1) // epoch_records if n else 0
+    if epochs != list(range(expected)):
+        return [
+            _epoch_failure(
+                spec.role,
+                "epoch-census",
+                ChainState.BROKEN,
+                f"{n} records at {epoch_records} per epoch need epochs "
+                f"{list(range(expected))}, the artifact holds {epochs}: an "
+                "epoch is missing, duplicated, or out of order.",
+            )
+        ]
+
+    prev_head = GENESIS_EPOCH_HEAD
+    for row, epoch in zip(rows, epochs):
+        try:
+            stored_head = bytes(row["head"])
+            stored_root = bytes(row["merkle_root"])
+            stored_sig = bytes(row["checkpoint_sig"])
+            public = bytes.fromhex(str(row["key_id"]))
+        except (TypeError, ValueError):
+            failures.append(
+                _epoch_failure(
+                    spec.role,
+                    "epoch-checkpoint",
+                    ChainState.COULD_NOT_EVALUATE,
+                    f"epoch {epoch}: the epoch_heads row is malformed; the "
+                    "checkpoint went unchecked.",
+                )
+            )
+            continue
+        start = epoch * epoch_records
+        try:
+            root = merkle_root(
+                [
+                    hashlib.sha256(canonical_bytes(r)).digest()
+                    for r in records[start : start + epoch_records]
+                ]
+            )
+        except (ChainError, CanonicalizationError) as exc:
+            failures.append(
+                _epoch_failure(
+                    spec.role,
+                    "epoch-merkle",
+                    ChainState.COULD_NOT_EVALUATE,
+                    f"epoch {epoch}: a record would not serialize ({exc}); "
+                    "the Merkle root went unchecked.",
+                )
+            )
+            prev_head = stored_head
+            continue
+        if root != stored_root:
+            failures.append(
+                _epoch_failure(
+                    spec.role,
+                    "epoch-merkle",
+                    ChainState.BROKEN,
+                    f"epoch {epoch}: the recomputed Merkle root does not "
+                    "match the stored one — a record in this epoch was "
+                    "altered, added, or removed after the checkpoint.",
+                )
+            )
+        if key is None:
+            # No per-epoch checkpoint failure here: the v1 `no-key` failure
+            # already reports that the MACs (and, by extension, the key
+            # commitments the checkpoints bind) went unchecked. A second
+            # could-not-evaluate per epoch would just restate it.
+            pass
+        else:
+            commitment = key_commitment(epoch_key_material(key.material, epoch))
+            msg = checkpoint_bytes(spec.role, epoch, root, commitment)
+            if not ed25519.verify(public, msg, stored_sig):
+                failures.append(
+                    _epoch_failure(
+                        spec.role,
+                        "epoch-checkpoint",
+                        ChainState.BROKEN,
+                        f"epoch {epoch}: the checkpoint signature is invalid "
+                        "under the stored checkpoint key — the epoch's "
+                        "records or its key commitment are not what the "
+                        "checkpoint closed.",
+                    )
+                )
+        head = hashlib.sha256(prev_head + root + stored_sig).digest()
+        if head != stored_head:
+            failures.append(
+                _epoch_failure(
+                    spec.role,
+                    "epoch-head",
+                    ChainState.BROKEN,
+                    f"epoch {epoch}: the head does not chain from the "
+                    "previous epoch's head.",
+                )
+            )
+        prev_head = stored_head
+    return failures
+
+
+# --------------------------------------------------------------------------
 # THE WALK (issue #49)
 #
 # The `meta` keys below are named here rather than imported from `reg.graph`,
@@ -887,6 +1412,16 @@ FAILURE_KINDS: tuple[str, ...] = (
     "no-key",
     #: The artifact does not state how many records this chain should have.
     "no-count",
+    #: A v2 chain's epoch_heads rows are missing, non-contiguous, or the wrong
+    #: count for the records walked.
+    "epoch-census",
+    #: A v2 epoch's recomputed Merkle root does not match the stored one.
+    "epoch-merkle",
+    #: A v2 epoch's checkpoint signature is invalid — or, without a key, could
+    #: not be checked, because the key commitment needs the epoch key.
+    "epoch-checkpoint",
+    #: A v2 epoch's head does not chain from the previous epoch's head.
+    "epoch-head",
 )
 
 
@@ -1288,19 +1823,75 @@ def _walk(
     else:
         key = keyring.key(spec.role)
 
+    # The chain format decides whose key each MAC is checked under. v1 is the
+    # static-key chain: every MAC under the keyring key. v2 is the per-epoch
+    # ratchet: each record's MAC under its epoch's key, derived from the
+    # epoch-0 key. An artifact that predates the key carries no format and
+    # walks as v1 — the absence is the version, and the old walk is retained
+    # so it verifies exactly as it did.
+    chain_format = store.get_meta(conn, META_CHAIN_FORMAT)
+    is_v2 = chain_format == CHAIN_FORMAT_V2
+    epoch_records: int | None = None
+    if is_v2:
+        # Epoch boundaries are a fact about the build, stated in
+        # `meta['epoch_records']`. Without it the verifier cannot know which
+        # key any record was signed under, so every epoch-dependent check —
+        # the per-record MACs and the epoch structure — is
+        # could-not-evaluate. Guessing the protocol default would be
+        # asserting a key schedule nobody wrote.
+        size_text = store.get_meta(conn, META_EPOCH_RECORDS)
+        try:
+            epoch_records = int(size_text) if size_text is not None else None
+            if epoch_records is None or epoch_records <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            failures.append(
+                ChainFailure(
+                    chain=spec.role,
+                    kind="epoch-census",
+                    state=ChainState.COULD_NOT_EVALUATE,
+                    reason=(
+                        f"this chain is {CHAIN_FORMAT_V2} but the artifact "
+                        f"states no usable {META_EPOCH_RECORDS!r} "
+                        f"({size_text!r}), so no epoch boundary — and no "
+                        "epoch key — can be determined. The links below were "
+                        "still walked."
+                    ),
+                )
+            )
+            epoch_records = None
+
     links_checked = 0
     macs_checked = 0
     previous_hash: str | None = None
     previous_id: str | None = None
     walked_ids: set[str] = set()
 
-    for record in records:
+    for position, record in enumerate(records):
         record_id = _record_id(record, spec)
         seq = int(record.seq)
         walked_ids.add(record_id)
 
-        if key is not None:
-            check = verify(record, record.mac, key)
+        # A v2 chain whose epoch size is unknown had its could-not-evaluate
+        # recorded above; its MACs are unchecked, not checked under a guess.
+        v2_without_size = is_v2 and epoch_records is None
+        if key is not None and not v2_without_size:
+            if is_v2:
+                # The epoch is the record's position in chain order, not its
+                # seq: the builder's signer counted signing calls, and chain
+                # order is signing order. A record whose seq disagrees with
+                # its position fails the MAC under the wrong epoch key and
+                # reports BROKEN, which is what a mislabeled record is.
+                assert epoch_records is not None  # narrowed by v2_without_size
+                epoch_key = Key(
+                    role=spec.role,
+                    material=epoch_key_material(
+                        key.material, position // epoch_records
+                    ),
+                )
+            else:
+                epoch_key = key
+            check = verify(record, record.mac, epoch_key)
             if check.state is MacState.VALID:
                 macs_checked += 1
             elif check.state is MacState.INVALID:
@@ -1411,6 +2002,14 @@ def _walk(
     failures.extend(_dangling_links(conn, spec, walked_ids))
     failures.extend(_link_edge_census(conn, spec, walked_ids))
     failures.extend(_cross_referenced_records(conn, spec, records))
+    if is_v2:
+        # The epoch structure is checked after the records, against the
+        # records the walk just walked: Merkle roots, checkpoint signatures,
+        # and the head chain. `key` is the epoch-0 key or None. Without a
+        # stated epoch size there is nothing to check it against — the
+        # could-not-evaluate above is the whole story.
+        if epoch_records is not None:
+            failures.extend(_verify_epochs(conn, spec, records, key, epoch_records))
     return _result(spec, len(records), links_checked, macs_checked, stated, failures)
 
 
@@ -2066,7 +2665,32 @@ def tamper(
             altered = _select(
                 read_chain_records(conn, chain_spec), chain_spec, record_id
             )
-            fresh = sign(altered, keyring.key(chain_spec.role))
+            resign_key = keyring.key(chain_spec.role)
+            if store.get_meta(conn, META_CHAIN_FORMAT) == CHAIN_FORMAT_V2:
+                # A v2 record's MAC is under its epoch's key, and the epoch
+                # boundaries are the build's: re-signing under the epoch-0
+                # key would fail the MAC for the wrong reason and prove
+                # nothing. The size comes from the artifact, not a guess.
+                size_text = store.get_meta(conn, META_EPOCH_RECORDS)
+                try:
+                    size = int(size_text) if size_text is not None else 0
+                    if size <= 0:
+                        raise ValueError
+                except (ValueError, TypeError):
+                    raise TamperError(
+                        f"this chain is {CHAIN_FORMAT_V2} but the artifact "
+                        f"states no usable {META_EPOCH_RECORDS!r} "
+                        f"({size_text!r}): the epoch key cannot be determined, "
+                        "so re-signing is refused rather than done under a "
+                        "guessed key."
+                    )
+                resign_key = Key(
+                    role=chain_spec.role,
+                    material=epoch_key_material(
+                        resign_key.material, int(altered.seq) // size
+                    ),
+                )
+            fresh = sign(altered, resign_key)
             conn.execute(
                 f"UPDATE {record_spec.table} SET {MAC_FIELD} = ? "  # noqa: S608
                 f"WHERE {record_spec.key_column} = ?",

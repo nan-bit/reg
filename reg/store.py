@@ -249,6 +249,7 @@ __all__ = [
     "all_meta",
     "insert_acknowledgment",
     "insert_declaration",
+    "insert_epoch_head",
     "insert_envelope",
     "attach_envelope_geometry",
     "envelope_row",
@@ -1571,6 +1572,26 @@ CREATE TABLE acknowledgment (
     reason             TEXT    NOT NULL,
     prev_hash          TEXT    NOT NULL,
     mac                TEXT    NOT NULL
+);
+
+-- THE EPOCH HEADS (issue #315). One row per closed epoch per chain: the
+-- Merkle root over the epoch's records, the Ed25519 checkpoint signature
+-- over the root and the epoch's key commitment, the checkpoint public key
+-- the signature is checked against, and the head chaining this epoch to the
+-- previous one. Written by the builder alongside the records; read by the
+-- chain walk's `_verify_epochs`. A chain-sha256-v1 artifact has this table
+-- and holds no rows in it — the table arrives with the record layer, not
+-- with a schema version bump, because it changes the meaning of no existing
+-- table and an old artifact opens and verifies without it. The schema
+-- version gate is for readers that would misread; nothing here misreads.
+CREATE TABLE epoch_heads (
+    chain          TEXT    NOT NULL CHECK (chain IN ('policy', 'enforcement')),
+    epoch          INTEGER NOT NULL CHECK (epoch >= 0),
+    head           BLOB    NOT NULL,
+    merkle_root    BLOB    NOT NULL,
+    checkpoint_sig BLOB    NOT NULL,
+    key_id         TEXT    NOT NULL,
+    PRIMARY KEY (chain, epoch)
 );
 """
 
@@ -3108,6 +3129,75 @@ def insert_acknowledgment(conn: sqlite3.Connection, ack: object) -> str:
             "prev_hash": ack.prev_hash,
             "mac": ack.mac,
         },
+    )
+
+
+def insert_epoch_head(conn: sqlite3.Connection, epoch_head: object) -> None:
+    """Store one `EpochHead` verbatim. Idempotent on `(chain, epoch)`.
+
+    Like the record inserts this checks no signature and recomputes nothing —
+    the store holds no keys, and a store able to recompute a checkpoint is a
+    store able to repair a chain nobody should be able to repair. The type is
+    imported here, not at module scope: `reg.chain` imports this module, so
+    the module scope cannot name it.
+
+    Raises:
+        StoreError: the argument is not an `EpochHead`, or `(chain, epoch)`
+            already holds a different head. The second is two different
+            histories for one epoch, and either way the two would merge into
+            an answer about neither.
+    """
+    _require_record_tables(conn, "storing an epoch head")
+    from reg.chain import EpochHead
+
+    if not isinstance(epoch_head, EpochHead):
+        raise StoreError(
+            f"insert_epoch_head takes a reg.chain.EpochHead, got "
+            f"{type(epoch_head).__name__}. The head is what is stored; an "
+            "object that resembles one has not been through the validation "
+            "that makes it a head."
+        )
+    row = {
+        "head": bytes(epoch_head.head),
+        "merkle_root": bytes(epoch_head.merkle_root),
+        "checkpoint_sig": bytes(epoch_head.checkpoint_sig),
+        "key_id": str(epoch_head.key_id),
+    }
+    existing = conn.execute(
+        "SELECT head, merkle_root, checkpoint_sig, key_id FROM epoch_heads "
+        "WHERE chain = ? AND epoch = ?",
+        (epoch_head.chain, int(epoch_head.epoch)),
+    ).fetchone()
+    if existing is not None:
+        clash = {
+            column: value
+            for column, value in row.items()
+            if (
+                bytes(existing[column])
+                if isinstance(value, bytes)
+                else str(existing[column])
+            )
+            != value
+        }
+        if clash:
+            raise StoreError(
+                f"epoch_heads already holds epoch {int(epoch_head.epoch)} of "
+                f"the {epoch_head.chain!r} chain with different contents "
+                f"({sorted(clash)}). Two different histories for one epoch "
+                "would merge into an answer about neither."
+            )
+        return
+    conn.execute(
+        "INSERT INTO epoch_heads (chain, epoch, head, merkle_root, "
+        "checkpoint_sig, key_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            epoch_head.chain,
+            int(epoch_head.epoch),
+            row["head"],
+            row["merkle_root"],
+            row["checkpoint_sig"],
+            row["key_id"],
+        ),
     )
 
 

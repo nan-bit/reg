@@ -244,7 +244,18 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from reg import __version__, store
-from reg.chain import GENESIS_HASH, KeyringError, chain_hash, load_keyring
+from reg.chain import (
+    CHAIN_FORMAT_V1,
+    CHAIN_FORMAT_V2,
+    EPOCH_RECORDS,
+    GENESIS_HASH,
+    META_CHAIN_FORMAT,
+    META_EPOCH_RECORDS,
+    EpochHead,
+    KeyringError,
+    chain_hash,
+    load_keyring,
+)
 from reg.commit import (
     COMMITMENT_NONE,
     COMMITMENT_STATEMENT,
@@ -983,6 +994,22 @@ class AttestationRecords:
     refuses a stream whose links do not hold, because a FOLLOWS edge written
     across a break asserts a link that is not there.
 
+    `epoch_heads` is the per-epoch key-evolution structure (issue #315): one
+    `EpochHead` per closed epoch per chain, in epoch order within each chain.
+    It defaults to `()` — an empty tuple means the chains were signed under
+    static keys and the artifact is `chain-sha256-v1`; a non-empty one means
+    `chain-sha256-v2`, and `build` writes `meta['chain_format']` accordingly.
+    The default is what a hand-built v1 stream passes, and it is not an
+    ambiguity: a v2 stream always has heads, because the signer that signed
+    its records closed its epochs.
+
+    `epoch_records` is the epoch size the signers closed epochs at —
+    `EPOCH_RECORDS` (1,024) unless the caller built the signers otherwise.
+    `build` writes it as `meta['epoch_records']`, which is what the walk and
+    `tamper --resign` read: epoch boundaries are a fact about the build, and
+    a verifier that guessed them would be asserting a key schedule nobody
+    wrote. For a v1 stream it is ignored.
+
     ACKNOWLEDGMENTS ARE HERE NOW, AND THE REFUSAL THEY REPLACE WAS CORRECT
     ----------------------------------------------------------------------
     Until issue #247 there was no third field and `build` refused any run
@@ -1008,6 +1035,8 @@ class AttestationRecords:
     declarations: tuple[Declaration, ...]
     verdicts: tuple[Verdict, ...]
     acknowledgments: tuple[Acknowledgment, ...]
+    epoch_heads: tuple[EpochHead, ...] = ()
+    epoch_records: int = EPOCH_RECORDS
 
     def __post_init__(self) -> None:
         for name, expected in (
@@ -1032,6 +1061,27 @@ class AttestationRecords:
                         "has not been through the validation that makes it a "
                         "record."
                     )
+        if not isinstance(self.epoch_heads, tuple):
+            raise GraphBuildError(
+                f"AttestationRecords.epoch_heads must be a tuple, got "
+                f"{type(self.epoch_heads).__name__}."
+            )
+        for i, head in enumerate(self.epoch_heads):
+            if not isinstance(head, EpochHead):
+                raise GraphBuildError(
+                    f"AttestationRecords.epoch_heads[{i}] is a "
+                    f"{type(head).__name__}, not an EpochHead."
+                )
+        if (
+            not isinstance(self.epoch_records, int)
+            or isinstance(self.epoch_records, bool)
+            or self.epoch_records <= 0
+        ):
+            raise GraphBuildError(
+                f"AttestationRecords.epoch_records must be a positive int, "
+                f"got {self.epoch_records!r}. It is the epoch size the "
+                "signers closed epochs at, and the walk reads it back."
+            )
 
     @property
     def enforcement_chain(self) -> tuple[Verdict | Acknowledgment, ...]:
@@ -2040,6 +2090,22 @@ def _write_attestation(
 
         if isinstance(record, Verdict):
             occurrences.verdict_recorded(record)
+
+    # The chain format is a fact about how the records were signed, stated
+    # where the walk reads it (`meta['chain_format']`). v2 iff the stream
+    # carried epoch heads: a non-empty `epoch_heads` is what a signer-produced
+    # stream always has, and an empty one is what a hand-built v1 stream has.
+    # The v1 value is written, not left absent: an artifact that predates the
+    # key walks as v1 by absence, but a new artifact states what it is.
+    # `meta['epoch_records']` goes with v2: the epoch size the signers closed
+    # epochs at, which the walk needs to know which key signed which record.
+    if records.epoch_heads:
+        store.put_meta(conn, META_CHAIN_FORMAT, CHAIN_FORMAT_V2)
+        store.put_meta(conn, META_EPOCH_RECORDS, str(records.epoch_records))
+        for head in records.epoch_heads:
+            store.insert_epoch_head(conn, head)
+    else:
+        store.put_meta(conn, META_CHAIN_FORMAT, CHAIN_FORMAT_V1)
 
 
 def _open_follows(
@@ -3916,12 +3982,19 @@ def attestation_from_stream(
             either way, because `reg.envelope.compute_envelope` refuses the same
             state in the geometry pass below.
     """
-    from reg.chain import load_keyring
+    from reg.chain import EpochSigner, load_keyring
     from reg.declare import emit_declarations
     from reg.enforce import Enforcer
 
     keyring = load_keyring(keyring_path)
     states = [frame.proprio() for frame in read_frames(csv_path)]
+
+    # One signer per chain: each chain has its own MAC key, so each has its
+    # own key schedule (reg/chain.py, issue #315). The signers count the
+    # records their producer signs; closing them at the end writes the epoch
+    # heads the walk checks.
+    policy_signer = EpochSigner(keyring.key("policy"))
+    enforcement_signer = EpochSigner(keyring.key("enforcement"))
 
     # THE FIXTURE'S POLICY FIELDS, ALL OF THEM. A scenario says three things about
     # what its policy does, and reading only some of them builds an attestation
@@ -3953,7 +4026,7 @@ def attestation_from_stream(
         declarations = emit_declarations(
             speaking,
             scenario.world.limits,
-            key=keyring.key("policy"),
+            signer=policy_signer,
             replan_interval_s=replan_interval_s,
             horizon_s=declaration_horizon_s,
             declared_q_bounds=scenario.declared_q_bounds,
@@ -3967,7 +4040,7 @@ def attestation_from_stream(
     pending = {round(d.t_issued, 9): d for d in declarations}
     enforcer = Enforcer(
         scenario.world.limits,
-        key=keyring.key("enforcement"),
+        signer=enforcement_signer,
         policy_key=keyring.key("policy"),
         watchdog_period_s=watchdog_period_s,
         # Enforcement comes up at the stream's first frame. Stated rather than
@@ -4032,10 +4105,16 @@ def attestation_from_stream(
             "nothing in the run ever adjudicated; dropping them would shorten "
             "the chain with nothing saying so."
         )
+    # Artifact close: seal the final partial epoch of each chain. After this
+    # the signers hold only the next epoch's key — the running process no
+    # longer has anything that signs a record already written.
+    policy_signer.close()
+    enforcement_signer.close()
     return AttestationRecords(
         declarations=tuple(declarations),
         verdicts=tuple(verdicts),
         acknowledgments=tuple(acknowledgments),
+        epoch_heads=tuple(policy_signer.epochs) + tuple(enforcement_signer.epochs),
     )
 
 

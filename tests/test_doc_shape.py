@@ -482,7 +482,17 @@ EXEMPT: dict[str, str] = {
 #         14,848 / 330 = 44.994, rounded up to the next tenth. Measured, no
 #         headroom. #318's net-zero rule requires the epic to land back at or
 #         under 13,961.
-RATE = 45.0
+#   43.3  today, 2026-10-03, after #315: the epoch machinery lands —
+#         `EpochSigner`, `EpochHead`, and the epoch key/commitment/checkpoint/
+#         Merkle helpers in `reg/chain.py`, plus `reg/ed25519.py` with the
+#         pure-Python Ed25519 the checkpoints need: 13 new public symbols.
+#         The docs move is net -8 words (`limitations.md` §7 rewritten for the
+#         implemented forward security, `prior-art.md` §§14/18-adjacent and
+#         `plan.md`/`README.md` touched, design-doc §4 corrected to the
+#         per-chain schema — all paid for with cuts). Code-coupled words
+#         14,848 -> 14,840; 14,840 / 343 = 43.266, rounded up to the next
+#         tenth. Measured, no headroom.
+RATE = 43.3
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -722,7 +732,13 @@ RATE = 45.0
 #           and the incident-report / "what this doesn't do" notes) condensed
 #           to an outline; the Frame line, the Repo checklist, the milestone
 #           itself and the Tone line stay. Measured, no headroom.
-ARGUMENT_MAX = 41113
+#   40,892  today, 2026-10-03, after #315: `docs/limitations.md` §7
+#           rewritten for the implemented forward security (the absence it
+#           described at length is now a per-epoch mechanism, so the section
+#           is shorter), `docs/prior-art.md` §14's "three things" back to two,
+#           `docs/plan.md`'s chain paragraph updated. Argument words
+#           41,113 -> 40,892. Measured, no headroom.
+ARGUMENT_MAX = 40892
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -850,7 +866,9 @@ PARAGRAPH_MAX_WORDS = 120
 #    71  today, 2026-09-28, after #297: re-measured at 71 — the Why cut took
 #        a table and the §6 cut took one paragraph, neither over the line.
 #        Confirmed, not lowered.
-LONG_PARAGRAPHS_MAX = 71
+#    70  today, 2026-10-03, after #315: `docs/limitations.md` §7's rewrite
+#        took one paragraph under the 120-word line. Measured, no headroom.
+LONG_PARAGRAPHS_MAX = 70
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -1950,7 +1968,7 @@ def phase_10_has_no_headline_number(text: str) -> tuple[str, list[str]]:
 
 
 def claim_1_keeps_the_measured_rate(text: str) -> tuple[str, list[str]]:
-    """Claim 1 keeps `60.85 MB/h` with 50 Hz — `tests/test_bench.py` needs it.
+    """Claim 1 keeps `61.03 MB/h` with 50 Hz — `tests/test_bench.py` needs it.
 
     The composition paragraph and the "derived, not measured" paragraph are
     cut, but the measured rate they carried stays: a document that quotes the
@@ -1961,9 +1979,9 @@ def claim_1_keeps_the_measured_rate(text: str) -> tuple[str, list[str]]:
     if empty is not None:
         return empty
     problems = []
-    if "60.85 MB/h" not in text:
-        problems.append("the measured 60.85 MB/h rate is gone")
-    if not re.search(r"60\.85 MB/h.{0,200}50 Hz", text, re.S):
+    if "61.03 MB/h" not in text:
+        problems.append("the measured 61.03 MB/h rate is gone")
+    if not re.search(r"61\.03 MB/h.{0,200}50 Hz", text, re.S):
         problems.append("the rate is not stated with its 50 Hz control rate")
     return (DISAGREE if problems else AGREE), problems
 

@@ -30,6 +30,7 @@ from reg.chain import (
     HASH_HEX_LEN,
     KEY_BYTES,
     UNSIGNED_MAC,
+    EpochSigner,
     KeyRoleError,
     Keyring,
     MacState,
@@ -93,7 +94,7 @@ def states_of(scenario: Scenario) -> list[ProprioState]:
 
 def emit(scenario: Scenario, **overrides: object) -> tuple[Declaration, ...]:
     kwargs: dict[str, object] = dict(
-        key=POLICY_KEY,
+        signer=EpochSigner(POLICY_KEY),
         replan_interval_s=REPLAN_S,
         horizon_s=HORIZON_S,
         declared_q_bounds=scenario.declared_q_bounds,
@@ -250,7 +251,7 @@ def test_the_enforcement_key_cannot_sign_a_declaration() -> None:
     with pytest.raises(KeyRoleError, match="signed by the 'policy' key"):
         sign_declaration(declaration(), ENFORCEMENT_KEY)
     with pytest.raises(KeyRoleError, match="signed by the 'policy' key"):
-        emit(SCENARIOS["contact"], key=ENFORCEMENT_KEY)
+        emit(SCENARIOS["contact"], signer=EpochSigner(ENFORCEMENT_KEY))
 
 
 # --------------------------------------------------------------------------
@@ -489,7 +490,7 @@ def test_emission_is_deterministic_and_the_seed_still_does_something() -> None:
     other = emit_declarations(
         [f.proprio() for f in scenario.states(1)],
         scenario.world.limits,
-        key=POLICY_KEY,
+        signer=EpochSigner(POLICY_KEY),
         replan_interval_s=REPLAN_S,
         horizon_s=HORIZON_S,
         declared_q_bounds=scenario.declared_q_bounds,
@@ -591,7 +592,7 @@ def test_the_action_class_follows_the_motion() -> None:
             for d in emit_declarations(
                 states,
                 LIMITS,
-                key=POLICY_KEY,
+                signer=EpochSigner(POLICY_KEY),
                 replan_interval_s=REPLAN_S,
                 horizon_s=HORIZON_S,
                 declared_q_bounds=None,
@@ -814,7 +815,7 @@ def test_the_policy_takes_proprioception_and_refuses_a_state_frame() -> None:
         emit_declarations(
             [frame],
             LIMITS,
-            key=POLICY_KEY,
+            signer=EpochSigner(POLICY_KEY),
             replan_interval_s=REPLAN_S,
             horizon_s=HORIZON_S,
             declared_q_bounds=None,
@@ -864,7 +865,7 @@ def test_the_policy_refuses_a_run_that_is_not_a_run() -> None:
         emit_declarations(
             [],
             LIMITS,
-            key=POLICY_KEY,
+            signer=EpochSigner(POLICY_KEY),
             replan_interval_s=REPLAN_S,
             horizon_s=HORIZON_S,
             declared_q_bounds=None,
@@ -880,7 +881,7 @@ def test_the_policy_refuses_a_run_that_is_not_a_run() -> None:
         emit_declarations(
             backwards,
             LIMITS,
-            key=POLICY_KEY,
+            signer=EpochSigner(POLICY_KEY),
             replan_interval_s=REPLAN_S,
             horizon_s=HORIZON_S,
             declared_q_bounds=None,

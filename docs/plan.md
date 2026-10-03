@@ -164,7 +164,7 @@ published under it — three live, the fourth superseded to a single line — ar
 [`retention.md`](retention.md), *Success, restated*.
 
 **The measured rate behind the total.** The artifact's measured rate is
-**60.85 MB/h** at the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs
+**61.03 MB/h** at the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs
 at, and linear in it; the six-month total is that rate times the window. The
 arithmetic, and the record of how the figures moved, are in
 [`retention.md`](retention.md).
@@ -190,12 +190,12 @@ condition that is part of the number:
   **hand-built encoding comparison and not a real bag**, which
   [`sensor-baseline.md`](sensor-baseline.md) requires be said wherever a
   projected figure from it is quoted until a measurement retires it.
-- **The figure to quote against the incumbent is a pair, 9.11x and 13.04x**: the
+- **The figure to quote against the incumbent is a pair, 9.11x and 13.05x**: the
   same 24 columns rather than 5, so it composes with the `~51x` instead of
   standing beside it, and measured on bags `ros2 bag record` wrote. The artifact
-  is **9.11x** a `zstd_fast` bag of those columns, **13.04x** a `zstd_small` one
+  is **9.11x** a `zstd_fast` bag of those columns, **13.05x** a `zstd_small` one
   and **2.01x** the uncompressed default — the bags being 5.58x, 3.90x and 25.34x
-  the gzipped CSV, and `50.83x / 5.58x` is where 9.11x comes from. **Both
+  the gzipped CSV, and `50.86x / 5.58x` is where 9.11x comes from. **Both
   compressed profiles are published**, rosbag2 shipping both; if a single number
   is wanted it is 9.11x, the larger bag and so the smaller ratio. Its Layer B
   half goes on `/tf`, the arrangement most favourable to the incumbent of those
@@ -606,8 +606,9 @@ every MAC.
 Per-record MAC plus per-record hash link over one canonical preimage is
 **Schneier & Kelsey, "Cryptographic Support for Secure Logs on Untrusted
 Machines"** (USENIX Security 1998; ACM TISSEC 2(2), 1999) — implemented here
-**minus its forward security**, which is a named, deliberate absence
-([`docs/limitations.md`](limitations.md) §7) and not an oversight. What this phase
+**with its forward security, per epoch** (issue #315: `k_{i+1} = SHA-256(k_i)`
+every 1,024 records, each predecessor erased; [`docs/limitations.md`](limitations.md)
+§7 for what that does and does not buy). What this phase
 adds to the ancestor is two chains under role-typed keys and a verifier with three
 outcomes; nothing cryptographic. The truncation limit is the **truncation attack**
 of Ma & Tsudik (2008), and the structural answer — a Merkle history tree, as

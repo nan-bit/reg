@@ -285,13 +285,16 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from reg.chain import (
+    EPOCH_RECORDS,
     GENESIS_HASH,
     UNSIGNED_MAC,
+    EpochSigner,
     Key,
     MacCheck,
     MacState,
     Role,
     chain_hash,
+    epoch_key_material,
     is_hash,
     sign,
     verify,
@@ -1222,22 +1225,34 @@ class Enforcer:
         self,
         limits: Limits,
         *,
-        key: Key,
+        signer: EpochSigner,
         policy_key: Key | None,
         watchdog_period_s: float,
         t_start: float,
         substep_dt: float,
         id_prefix: str,
+        epoch_records: int = EPOCH_RECORDS,
     ) -> None:
         if not isinstance(limits, Limits):
             raise EnforcementError(
                 f"limits must be a Limits, got {type(limits).__name__}."
             )
-        if not isinstance(key, Key) or key.role != "enforcement":
+        if not isinstance(signer, EpochSigner) or signer.role != "enforcement":
             raise EnforcementError(
-                f"key must be the enforcement Key, got {key!r}. Verdicts signed "
-                "with the policy key would attribute enforcement's findings to "
-                "the party they are findings about."
+                f"signer must be the enforcement EpochSigner, got {signer!r}. "
+                "Verdicts signed with the policy key would attribute "
+                "enforcement's findings to the party they are findings about."
+            )
+        if (
+            not isinstance(epoch_records, int)
+            or isinstance(epoch_records, bool)
+            or epoch_records <= 0
+        ):
+            raise EnforcementError(
+                f"epoch_records must be a positive int, got {epoch_records!r}. "
+                "It is the epoch size the policy's signer closed epochs at; "
+                "the declaration's epoch — and so the key its MAC is checked "
+                "under — is its seq within that schedule."
             )
         if policy_key is not None and (
             not isinstance(policy_key, Key) or policy_key.role != "policy"
@@ -1266,8 +1281,9 @@ class Enforcer:
         _check_id(id_prefix, "id_prefix")
 
         self._limits = limits
-        self._key = key
+        self._signer = signer
         self._policy_key = policy_key
+        self._epoch_records = epoch_records
         self._watchdog_period_s = watchdog_period_s
         self._substep_dt = substep_dt
         self._id_prefix = id_prefix
@@ -1488,7 +1504,30 @@ class Enforcer:
         # same fault.
         self._last_heard_t = max(self._last_heard_t, declaration.t_issued)
 
-        check = verify(declaration, declaration.mac, self._policy_key)
+        # The declaration's MAC is under its epoch's key, not the epoch-0
+        # policy key: the epoch is the declaration's own seq within the
+        # epoch schedule the policy's signer closed epochs at, and the key
+        # derives from the epoch-0 key by the public evolution. A
+        # statically-signed (v1) declaration verifies here exactly when its
+        # seq is in epoch 0 — the derived key is then the key itself — so
+        # this check is backward compatible by construction.
+        #
+        # The derivation is linear in the epoch, and `seq` is unbounded
+        # above, so a policy offering a declaration with an astronomical seq
+        # burns CPU here before the MAC fails. That is accepted: the threat
+        # model is forgery, not denial of service — a compromised policy can
+        # already stall this loop more cheaply — and any bound invented here
+        # would be a new refusal the fault taxonomy does not name.
+        policy_key = self._policy_key
+        if policy_key is not None:
+            policy_key = Key(
+                role="policy",
+                material=epoch_key_material(
+                    policy_key.material,
+                    int(declaration.seq) // self._epoch_records,
+                ),
+            )
+        check = verify(declaration, declaration.mac, policy_key)
         if check.state is MacState.INVALID:
             return self._refuse(declaration, "unattributed", check.reason)
         if check.state is MacState.COULD_NOT_EVALUATE:
@@ -1799,7 +1838,8 @@ class Enforcer:
             prev_hash=self._prev_hash,
             mac=UNSIGNED_MAC,
         )
-        signed = sign_acknowledgment(ack, self._key)
+        signed = sign_acknowledgment(ack, self._signer.current_key())
+        self._signer.note_signed(signed)
         self._acknowledgments.append(signed)
         self._prev_hash = chain_hash(signed, self._prev_hash)
         self._seq += 1
@@ -1864,7 +1904,8 @@ class Enforcer:
             prev_hash=self._prev_hash,
             mac=UNSIGNED_MAC,
         )
-        signed = sign_verdict(verdict, self._key)
+        signed = sign_verdict(verdict, self._signer.current_key())
+        self._signer.note_signed(signed)
         self._verdicts.append(signed)
         self._prev_hash = chain_hash(signed, self._prev_hash)
         self._seq += 1

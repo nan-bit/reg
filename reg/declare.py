@@ -75,7 +75,9 @@ from shapely.ops import unary_union
 from reg.chain import (
     GENESIS_HASH,
     UNSIGNED_MAC,
+    EpochSigner,
     Key,
+    KeyRoleError,
     MacCheck,
     Role,
     chain_hash,
@@ -746,7 +748,7 @@ def emit_declarations(
     states: Iterable[ProprioState],
     limits: Limits,
     *,
-    key: Key,
+    signer: EpochSigner,
     replan_interval_s: float,
     horizon_s: float,
     declared_q_bounds: Sequence[tuple[float, float]] | None,
@@ -763,7 +765,10 @@ def emit_declarations(
         states: the run's proprioceptive states, in time order. Narrow a
             `StateFrame` with `.proprio()` at the call site.
         limits: the robot, for the forward kinematics of the declared region.
-        key: the **policy** key. `reg.chain.sign` refuses any other role.
+        signer: the **policy** chain's `EpochSigner`. Each declaration is
+            signed under the signer's current epoch key and noted with the
+            signer, so the epoch structure the walk checks is the one the
+            builder actually wrote. `reg.chain.sign` refuses any other role.
         replan_interval_s: seconds between declarations. Required and with no
             default — docs/plan.md fixes neither a replan rate nor a watchdog
             period, and a plausible invented one would be indistinguishable
@@ -801,8 +806,15 @@ def emit_declarations(
     Raises:
         DeclarationError: any argument is malformed, the states are not in
             strictly increasing time order, or a declared region cannot be built.
-        KeyRoleError: `key` is not the policy key.
+        KeyRoleError: `signer` is not the policy chain's signer.
     """
+    if not isinstance(signer, EpochSigner) or signer.role != "policy":
+        raise KeyRoleError(
+            f"signer must be the policy chain's EpochSigner, got {signer!r}. "
+            "A declaration must be signed by the 'policy' key; one signed "
+            "with the enforcement key would attribute the policy's claims "
+            "to the party that adjudicates them."
+        )
     states = tuple(states)
     if not states:
         raise DeclarationError(
@@ -900,7 +912,8 @@ def emit_declarations(
             prev_hash=prev_hash,
             mac=UNSIGNED_MAC,
         )
-        signed = sign_declaration(unsigned, key)
+        signed = sign_declaration(unsigned, signer.current_key())
+        signer.note_signed(signed)
         declarations.append(signed)
         prev_hash = chain_hash(signed, prev_hash)
 

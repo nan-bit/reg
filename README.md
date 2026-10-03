@@ -82,7 +82,7 @@ repository as it stands, not the plan.
 | **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact, and `verify_chain` with the `--tamper` demonstration that it can say no. Passivation and reintegration are exercisable since issue #247: the `Acknowledgment` reaches the artifact, so "was the passivation acknowledged, and by whom" is a question this artifact answers — *by whom* meaning the signing **party**, not a person, and a passivation the file holds no acknowledgment of a **could-not-evaluate** rather than a *no* ([`docs/lossiness.md`](docs/lossiness.md) *Retained* #7) |
 | **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim. `Limits.source` is required with no default, and each tagged edge records what its tag was computed from in `edge_layer_basis` — `reg.query.cold_read` reports `layer-tag-basis` as `CHECKABLE` |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
-| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the claim is [`docs/plan.md`](docs/plan.md) Claim 1 and the measurements, the arithmetic and the record of how they moved are [`docs/retention.md`](docs/retention.md): **267 GB** per robot for six months at occurrence resolution (±1 s), **~684x** below an assumed 182.5 TB sensor log — the price of retaining *attestation* (the coarsest level is 98.5% attestation records), not of a DSSAD-equivalent event log. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). Against rosbag2/MCAP, the incumbent — bags `ros2 bag record` wrote, priced over all 24 columns — the artifact is **2.01x** the uncompressed default bag, **9.11x** a `zstd_fast` one and **13.04x** a `zstd_small` one, on a **hand-built encoding comparison and not a real bag**, which [`docs/sensor-baseline.md`](docs/sensor-baseline.md) requires be said wherever a projected figure is quoted: larger than the bag under every profile, so the original framing — is the graph smaller than the stream it replaces — is still answered **no**. |
+| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the claim is [`docs/plan.md`](docs/plan.md) Claim 1 and the measurements, the arithmetic and the record of how they moved are [`docs/retention.md`](docs/retention.md): **267 GB** per robot for six months at occurrence resolution (±1 s), **~684x** below an assumed 182.5 TB sensor log — the price of retaining *attestation* (the coarsest level is 98.5% attestation records), not of a DSSAD-equivalent event log. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). Against rosbag2/MCAP, the incumbent — bags `ros2 bag record` wrote, priced over all 24 columns — the artifact is **2.01x** the uncompressed default bag, **9.11x** a `zstd_fast` one and **13.05x** a `zstd_small` one, on a **hand-built encoding comparison and not a real bag**, which [`docs/sensor-baseline.md`](docs/sensor-baseline.md) requires be said wherever a projected figure is quoted: larger than the bag under every profile, so the original framing — is the graph smaller than the stream it replaces — is still answered **no**. |
 
 The number is an identifier, not a rank; the **order** is the argument
 ([`docs/plan.md`](docs/plan.md), *The four claims*).
@@ -102,19 +102,17 @@ separation, one level down: a signature from a key the signer's counterparty als
 holds has common-cause failure with the thing it is supposed to attest, exactly
 as a constraint layer supplied by the policy vendor does.
 
-**The chain itself is not this project's invention, and the version here is the
-weaker one.** A per-record MAC plus a per-record hash link to the predecessor is
-Schneier and Kelsey's 1998 construction for secure logs on untrusted machines
-(USENIX Security 1998; ACM TISSEC, 1999), and `reg` implements it **without its
-forward security**: their scheme evolves the key after every entry and deletes the
-old one, and `reg`'s keys are static for the life of a run.
+**The chain itself is not this project's invention.** A per-record MAC plus a
+per-record hash link to the predecessor is Schneier and Kelsey's 1998
+construction for secure logs on untrusted machines (USENIX Security 1998; ACM
+TISSEC, 1999), implemented here **with its forward security, per epoch**:
+`k_{i+1} = SHA-256(k_i)` every 1,024 records, each predecessor erased.
 
-Anyone holding the keyring can also re-sign the whole history, and deleting the
+Anyone holding the keyring can still re-sign the whole history, and deleting the
 *last* records of a chain breaks no link — Ma and Tsudik's truncation attack,
-named against exactly this construction. Those two and the missing forward
-security are deliberate absences rather than oversights, and what this project
-adds to the ancestor is not cryptographic
-([`docs/limitations.md` §7](docs/limitations.md),
+named against exactly this construction. Both are deliberate absences rather
+than oversights, and what this project adds to the ancestor is not
+cryptographic ([`docs/limitations.md` §7](docs/limitations.md),
 [`docs/prior-art.md` §14 and §18](docs/prior-art.md)).
 
 **The chain alone deters editing, not re-issuance**, and the two are different

@@ -563,8 +563,8 @@ What the pass costs, stated up front so it is not buried in four long sections:
   2017, not this project's idea. Two of `reg`'s four claims are refinements *of*
   that proposal.
 - **§14 takes the chain.** `reg/chain.py` is Schneier and Kelsey's 1998
-  construction minus its forward security. §5 cited PROFIsafe for the deviation
-  and never cited the thing being deviated from.
+  construction, now with its forward security. §5 cited PROFIsafe for the
+  deviation and never cited the thing being deviated from.
 - **§13 takes the structure of Claim 3.** Guarantees that hold conditional on
   evidence supplied at runtime were formalised as ConSerts in 2013.
 - **§12 is the one that costs nothing and was simply missing.** IEEE 7001-2021
@@ -916,11 +916,14 @@ closes the log with a final record and erases the remaining secrets. A verifier 
 walks the hash chain itself and sends only `Yf` and `Zf` to `T`, which knows `A₀`
 and can therefore recompute `Af`.
 
-**`reg/chain.py` is that, minus the forward security.** Per-record MAC, per-record
-link to the predecessor's hash, one canonical preimage, a walk that checks both.
-The module header cites the black channel and §5 cites PROFIsafe for the deviation
-to HMAC; nothing cited the construction, which has a name, a 1998 paper and thirty
-years of analysis behind it.
+**`reg/chain.py` is that, forward security implemented per epoch since issue
+#315.** Per-record MAC, per-record link to the predecessor's hash, one canonical
+preimage, a walk that checks both — plus the key evolution the scheme was
+written for: `k_{i+1} = SHA-256(k_i)` every 1,024 records, each predecessor
+erased, each epoch closed by a Merkle root and a checkpoint signature. The
+module header cites the black channel and §5 cites PROFIsafe for the deviation
+to HMAC; nothing cited the construction, which has a name, a 1998 paper and
+thirty years of analysis behind it.
 
 Two consequences, and only one of them is comfortable.
 
@@ -957,14 +960,9 @@ cryptographic:
   This is software-engineering discipline — the house rule that a check must be
   able to fail — not a contribution to secure logging.
 
-**Three things the 1998 scheme does that `reg` does not**, and the third is the
-one that is not currently written down anywhere in the repository:
+**Two things the 1998 scheme does that `reg` does not**, and neither is
+currently written down anywhere else in the repository:
 
-- **Forward security.** `reg`'s keys are static for the life of a run;
-  `generate_keyring` draws from OS entropy once and nothing evolves. An attacker
-  who obtains the enforcement key can rewrite and re-sign the entire verdict chain
-  back to genesis. Under Schneier–Kelsey they could not touch anything written
-  before the compromise.
 - **Entry confidentiality and access control.** `reg` stores records in the clear
   in SQLite. Deliberate — the artifact is meant to open without a runtime — but it
   is a difference from the scheme, not an absence in it.
@@ -1247,8 +1245,8 @@ this entry divides from 2,584,576 B to 2,587,648 B, 0.1%, the composition readin
 3,268,608 B, +26.32%, reading 50.56x / 5.58x with the pair 9.06x and 12.97x;
 schema 14 — the outer boundary retained where the sampled polygon already is —
 took it to **3,286,016 B**, +0.53%. So `~40x` above is **~51x**, the composition
-reads **50.83x** / 5.58x and 50.83x / 3.90x, the pair is **9.11x** and
-**13.04x**, and the uncompressed comparison is **2.01x**. The `39.98x / 4.75x`
+reads **50.86x** / 5.58x and 50.86x / 3.90x, the pair is **9.11x** and
+**13.05x**, and the uncompressed comparison is **2.01x**. The `39.98x / 4.75x`
 two paragraphs up stands as that pass's arithmetic. What this entry argues is
 unchanged in direction and larger in size.
 

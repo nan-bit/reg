@@ -140,6 +140,13 @@ CODE_COUPLED: dict[str, str] = {
         "than arguing a claim, so its length tracks the framework it "
         "describes."
     ),
+    "docs/tamper-evidence-design.md": (
+        "A design document for the tamper-evidence hardening epic: the "
+        "threat model, the epoch and anchor schema, and the dependency "
+        "picks. It describes what the package will carry rather than "
+        "arguing a claim, so it is classified beside mobile-base.md and "
+        "self-describing.md for the same reason."
+    ),
 }
 
 # Documents whose length is driven by how much there is to argue or to cite.
@@ -468,7 +475,14 @@ EXEMPT: dict[str, str] = {
 #         and the docs index gains its table row (+32). Code-coupled words
 #         13,514 -> 13,961; 13,961 / 330 = 42.306, rounded up to the next
 #         tenth. Measured, no headroom.
-RATE = 42.4
+#   45.0  today, 2026-10-03, after #314: `docs/tamper-evidence-design.md`
+#         added at 853 words (epic #313's threat model, epoch/anchor schema,
+#         dependency picks, and docs-affected checklist) and the docs index
+#         gains its table row (+34). Code-coupled words 13,961 -> 14,848;
+#         14,848 / 330 = 44.994, rounded up to the next tenth. Measured, no
+#         headroom. #318's net-zero rule requires the epic to land back at or
+#         under 13,961.
+RATE = 45.0
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -2847,22 +2861,23 @@ def _entry_point_empty_is_no_verdict(
     return None
 
 
-def index_states_eleven_documents(
+def index_states_twelve_documents(
     text: str,
 ) -> tuple[str, list[str]]:
     """The index counts the documents it actually holds.
 
-    Twelve `.md` files live under `docs/`, one of them this index — and there
-    was no row for `self-describing.md`. The count said nine, then ten.
+    Thirteen `.md` files live under `docs/`, one of them this index — and there
+    was no row for `self-describing.md`. The count said nine, then ten, then
+    eleven.
     """
     empty = _entry_point_empty_is_no_verdict(text, "docs/README.md")
     if empty is not None:
         return empty
     problems = []
-    if "Ten documents besides this index" in text:
-        problems.append("the stale ten-document count is back")
-    if "Eleven documents besides this index" not in text:
-        problems.append("the corrected eleven-document count is gone")
+    if "Eleven documents besides this index" in text:
+        problems.append("the stale eleven-document count is back")
+    if "Twelve documents besides this index" not in text:
+        problems.append("the corrected twelve-document count is gone")
     return (DISAGREE if problems else AGREE), problems
 
 
@@ -3237,13 +3252,13 @@ STALE_CONTRIBUTING_PR = """## What lands in a pull request
   the repo's, not the other way round."""
 
 
-def test_index_states_eleven_documents() -> None:
-    verdict, problems = index_states_eleven_documents(_index_text())
+def test_index_states_twelve_documents() -> None:
+    verdict, problems = index_states_twelve_documents(_index_text())
     assert verdict == AGREE, "\n".join(problems)
-    verdict, problems = index_states_eleven_documents(STALE_INDEX_COUNT)
+    verdict, problems = index_states_twelve_documents(STALE_INDEX_COUNT)
     assert verdict == DISAGREE, "the stale nine-document count passes"
     assert problems
-    verdict, problems = index_states_eleven_documents("")
+    verdict, problems = index_states_twelve_documents("")
     assert verdict == COULD_NOT_EVALUATE
     assert problems
 

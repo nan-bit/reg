@@ -2,7 +2,7 @@
 
 **Status:** an index, and nothing else · written 2026-08-31 · keep current
 
-Eleven documents besides this index, five of them normative over something. This
+Twelve documents besides this index, five of them normative over something. This
 page exists so that a reader arriving at the folder rather than at the front page
 can tell which one answers their question, and — more importantly — which one
 wins when two of them disagree.
@@ -28,6 +28,7 @@ edited.**
 | [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | Its status line is the authority. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`AGENTS.md`](../AGENTS.md) for the conventions code must follow. |
 | [`adopting.md`](adopting.md) | The reusable pattern without the worked domain, the module-level reuse boundary, and the worked example on a different domain. | For the engineer asking "should we use this?". |
+| [`tamper-evidence-design.md`](tamper-evidence-design.md) | The threat model, epoch and anchor schema, dependency picks, and docs-affected checklist for the tamper-evidence hardening epic. | A design document; **normative** for epic #313's issues #315–#318 where they disagree. |
 
 ## Reading order
 

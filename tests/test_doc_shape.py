@@ -133,6 +133,13 @@ CODE_COUPLED: dict[str, str] = {
         "The sensor assumption and the artifact sizes it is applied against. "
         "Every table in it is measured from the package at a stated rate."
     ),
+    "docs/adopting.md": (
+        "The reusable pattern stated without the worked domain, the "
+        "module-level reuse boundary, and the non-domain worked example. It "
+        "describes what the package's modules provide to an adopter rather "
+        "than arguing a claim, so its length tracks the framework it "
+        "describes."
+    ),
 }
 
 # Documents whose length is driven by how much there is to argue or to cite.
@@ -455,7 +462,13 @@ EXEMPT: dict[str, str] = {
 #         the hand-built-encoding caveat stay). Code-coupled words
 #         13,672 -> 13,514; 13,514 / 330 = 40.95, rounded up to the next
 #         tenth. Measured, no headroom.
-RATE = 41.0
+#   42.4  today, 2026-10-02, after #302: `docs/adopting.md` added at 415
+#         words (the builder's on-ramp: the adoption pattern stated
+#         abstractly, robot-mention-free, plus a tested non-robot example)
+#         and the docs index gains its table row (+32). Code-coupled words
+#         13,514 -> 13,961; 13,961 / 330 = 42.306, rounded up to the next
+#         tenth. Measured, no headroom.
+RATE = 42.4
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -2834,22 +2847,22 @@ def _entry_point_empty_is_no_verdict(
     return None
 
 
-def index_states_ten_documents(
+def index_states_eleven_documents(
     text: str,
 ) -> tuple[str, list[str]]:
     """The index counts the documents it actually holds.
 
-    Eleven `.md` files live under `docs/`, one of them this index — and there
-    was no row for `self-describing.md`. The count said nine.
+    Twelve `.md` files live under `docs/`, one of them this index — and there
+    was no row for `self-describing.md`. The count said nine, then ten.
     """
     empty = _entry_point_empty_is_no_verdict(text, "docs/README.md")
     if empty is not None:
         return empty
     problems = []
-    if "Nine documents besides this index" in text:
-        problems.append("the stale nine-document count is back")
-    if "Ten documents besides this index" not in text:
-        problems.append("the corrected ten-document count is gone")
+    if "Ten documents besides this index" in text:
+        problems.append("the stale ten-document count is back")
+    if "Eleven documents besides this index" not in text:
+        problems.append("the corrected eleven-document count is gone")
     return (DISAGREE if problems else AGREE), problems
 
 
@@ -3224,13 +3237,13 @@ STALE_CONTRIBUTING_PR = """## What lands in a pull request
   the repo's, not the other way round."""
 
 
-def test_index_states_ten_documents() -> None:
-    verdict, problems = index_states_ten_documents(_index_text())
+def test_index_states_eleven_documents() -> None:
+    verdict, problems = index_states_eleven_documents(_index_text())
     assert verdict == AGREE, "\n".join(problems)
-    verdict, problems = index_states_ten_documents(STALE_INDEX_COUNT)
+    verdict, problems = index_states_eleven_documents(STALE_INDEX_COUNT)
     assert verdict == DISAGREE, "the stale nine-document count passes"
     assert problems
-    verdict, problems = index_states_ten_documents("")
+    verdict, problems = index_states_eleven_documents("")
     assert verdict == COULD_NOT_EVALUATE
     assert problems
 

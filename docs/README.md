@@ -2,7 +2,7 @@
 
 **Status:** an index, and nothing else · written 2026-08-31 · keep current
 
-Ten documents besides this index, five of them normative over something. This
+Eleven documents besides this index, five of them normative over something. This
 page exists so that a reader arriving at the folder rather than at the front page
 can tell which one answers their question, and — more importantly — which one
 wins when two of them disagree.
@@ -27,6 +27,7 @@ edited.**
 | [`sensor-baseline.md`](sensor-baseline.md) | Where the sensor-log figure every ratio is computed against comes from. | An **assumption with a sourced range**, never a measurement. |
 | [`mobile-base.md`](mobile-base.md) | What allowing the robot to drive does to the bound, the layer boundary and the geometry. | Its status line is the authority. Normative for the mobile track only; defers to `sufficiency.md` and `limitations.md` on what may be claimed. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | How work gets in and out: grooming an issue, the unattended writer, the draft PR. | Process. See also [`AGENTS.md`](../AGENTS.md) for the conventions code must follow. |
+| [`adopting.md`](adopting.md) | The reusable pattern without the worked domain, the module-level reuse boundary, and the worked example on a different domain. | For the engineer asking "should we use this?". |
 
 ## Reading order
 

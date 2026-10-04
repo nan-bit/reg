@@ -426,63 +426,62 @@ artifact claims.
 
 ---
 
-## 6. The commitment is an on-site witness, not a third-party timestamp
+## 6. The commitment is an on-site witness, or an opt-in third-party timestamp
 
-**What.** An artifact's two chain heads are committed at close by
-`reg/commit.py`'s one shipped scheme, `witness-hmac-sha256-v1`: an HMAC over both
-heads under the key of a **second on-site keyholder**, whose key is refused if it
-is either of the two that signed the records. What that proves is exactly *a
-second party at the same site saw these heads*. It is not timestamping, this
-project will not describe it as timestamping, and the artifact itself carries the
-sentence saying so (`meta[commitment_statement]`) so that a reader who has only
-the file is not misled by the scheme name.
+**What.** An artifact's chain heads are committed at close, and
+`meta[commitment]` says how — `none`, in so many words, where neither was used.
+The default is `witness-hmac-sha256-v1`: an HMAC over both heads under the key
+of a **second on-site keyholder**, refused if it is either of the two that
+signed the records. It proves exactly *a second party at the same site saw
+these heads*. It is not timestamping, this project will not describe it as
+timestamping, and the artifact itself carries the sentence saying so
+(`meta[commitment_statement]`).
 
-Beside it, `meta[run_start_utc]` is a **declared** instant, required with no
+Opt-in at close is `rfc3161-sha256-v1`: every closed epoch head timestamped by
+an RFC 3161 Time Stamp Authority, tokens stored in `anchor_receipts` one per
+`(chain, epoch)`. Only 32-byte heads ever leave the operator boundary;
+verification is file I/O plus crypto, years later, with no service running.
+
+Beside both, `meta[run_start_utc]` is a **declared** instant, required with no
 default. It places the run on a wall clock and it is a claim by the same party
 that signed the records.
 
 **What it costs.**
 
-- **The instant is not attested.** A colluding operator and witness can date a
-  re-issued history to whatever afternoon suits them, sign the heads over it, and
-  produce a file in which every check passes. Nothing inside the artifact bears
-  on that, and nothing inside an artifact can.
-- **The independence is only as good as the site.** Two keyholders at one
-  employer share a common cause the way `reg/enforce.py` and `declare/` would if
-  one imported the other. The refusal in `check_witness_is_independent` catches
-  the *mechanical* version of this — a witness holding a record-signing key — and
-  not the organisational one.
-- **Verification is three-valued, and the third value is common.** An artifact
-  closed with no supplier reports COULD-NOT-EVALUATE and says `commitment: none`;
-  so does one whose witness key the verifier does not hold. Neither ever resolves
-  to VALID, which is correct and does mean an assessor frequently learns nothing
-  from this check alone.
+- **The witness's instant is not attested.** A colluding operator and witness
+  can backdate a re-issued history and every check passes. Nothing inside the
+  artifact bears on that, and nothing inside an artifact can.
+- **The witness's independence is only as good as the site.** The refusal in
+  `check_witness_is_independent` catches the *mechanical* version — a witness
+  holding a record-signing key — and not the organisational one.
+- **The timestamp attests the instant, not the content.** A token says *this
+  32-byte head existed by this instant*; the TSA never saw a record, and the
+  artifact's statement says so.
+- **The tokens check against trust roots the artifact does not carry.**
+  Without them the imprints are still compared to the epoch heads, but no
+  signature is checked, and the check reports COULD-NOT-EVALUATE — never VALID.
+- **The third value is common.** An artifact closed with no supplier reports
+  COULD-NOT-EVALUATE and says `commitment: none`; so does one whose witness key
+  the verifier does not hold, and one whose TSA roots they cannot name. None
+  ever resolves to VALID, which is correct and does mean an assessor frequently
+  learns nothing from this check alone.
 
-**What is *not* limited.** The half that catches a re-issued chain needs **no key
-at all**: `verify_commitment` recomputes both heads from the records the artifact
-actually holds and compares them against the recorded ones, so any holder of the
-file can detect that the history no longer matches what was committed to. The
-witness signature is what stops the recorded heads being rewritten to match. That
-asymmetry is why the heads are stored beside the signature rather than only
-inside it.
+**What is *not* limited.** The half that catches a re-issued chain needs **no
+key at all**: `verify_commitment` recomputes both heads from the records and
+compares them against the recorded ones — any holder of the file detects a
+mismatch. The witness signature or TSA token is what stops the recorded
+heads being rewritten to match. The tokens add what the witness cannot:
+per-epoch existence instants, so a tail trimmed after the last anchor breaks
+against a token the trimmer cannot reproduce.
 
-**What a claim would need instead.** A commitment to a party with no relationship
-to the operator: an **RFC 3161** timestamp token, or inclusion in an append-only
-**transparency log** (which would additionally make a *withheld* artifact
-detectable — §8 and §9 of [`lossiness.md`](lossiness.md) Cannot answer). Both are
-documented and deliberately unimplemented for one reason: each needs a network
-call at artifact close, and this artifact is required to be checkable years later
-with no service still running and no call to anyone. That requirement is not a
-constraint the design works around — it is the reason the design exists. An
-assessor certifying what happened needs a record whose integrity does not rest on
-infrastructure belonging to the party being assessed, and the telemetry these
-sites already emit runs on exactly that infrastructure. `reg/commit.py` is built
-as an interface — `(ChainHeads) -> Commitment` — precisely so that a deployment
-prepared to take the dependency gets an adapter rather than a rewrite.
-Until then the supportable claim is exactly: **the records were not edited, and a
-second party at the same site saw the heads.**
-
----
+**What a claim would need instead.** Withholding detection: a commitment to an
+append-only **transparency log**, where a missing artifact is itself evidence.
+A timestamp proves *this* history existed by an instant; it does
+not prove no other history exists. Still unimplemented: it needs a network
+call at artifact close *and* a log the verifier trusts — the artifact must be
+checkable with no service still running. `reg/commit.py` stays a
+`(ChainHeads) -> Commitment` interface, so a deployment prepared to take the
+dependency gets an adapter rather than a rewrite.
 
 ## 7. The chain is forward-secure per epoch, and the verifier still holds the keys
 

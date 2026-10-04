@@ -197,6 +197,7 @@ __all__ = [
     "CLAUSE_SCENE",
     "CLAUSE_VIOLATION",
     "CLAIM_ACKNOWLEDGMENT",
+    "CLAIM_ANCHOR",
     "CLAIM_CHAIN_INTACT",
     "CLAIM_DISCLOSURES",
     "CLAIM_ENVIRONMENT",
@@ -3868,7 +3869,7 @@ COLD_READ_STATES = (
 #: header: an artifact stating anything else is a could-not-evaluate in both
 #: directions, and this constant moving is a decision about every claim below
 #: rather than a version bump.
-COLD_READ_SCHEMA_VERSION = 14
+COLD_READ_SCHEMA_VERSION = 15
 
 CLAIM_ENVIRONMENT = "recording-environment"
 CLAIM_RECOMPUTE = "recompute-discarded-polygon"
@@ -3877,6 +3878,14 @@ CLAIM_REACHED_POINT = "reached-point"
 CLAIM_CHAIN_INTACT = "chain-intact"
 CLAIM_ACKNOWLEDGMENT = "passivation-acknowledged"
 CLAIM_DISCLOSURES = "disclosures-stated"
+CLAIM_ANCHOR = "anchor-witnessed"
+
+#: `reg.commit.META_COMMITMENT`, spelled out: this module does not import
+#: `reg.commit` at module level (see `render_commitment_check`), so the key
+#: is named here rather than referenced. If the key ever moves, this row
+#: misreads the artifact — which is why the spelling is asserted, not
+#: assumed, by tests/test_anchor_tsa.py.
+_META_COMMITMENT = "commitment"
 
 #: The claims an artifact makes about itself, in the order the report lists
 #: them. One row each, and the set is closed: a claim nobody put here is a claim
@@ -3897,6 +3906,13 @@ CLAIM_DISCLOSURES = "disclosures-stated"
 #: relationship between a claim and a pass; this is one more claim, and giving
 #: it a state of its own would route around the refusal in `ColdReadClaim` that
 #: makes adding one a deliberate act.
+#:
+#: The eighth is the anchor row (issue #316): whether a third party with no
+#: relationship to the operator witnessed the history at a real instant. An
+#: artifact closed with no anchor says `commitment: none` in so many words —
+#: the same inversion the commitment interface runs on — and the row reports
+#: that as ABSENT rather than letting a missing row look like an unasked
+#: question.
 COLD_READ_CLAIMS = (
     CLAIM_ENVIRONMENT,
     CLAIM_RECOMPUTE,
@@ -3905,6 +3921,7 @@ COLD_READ_CLAIMS = (
     CLAIM_CHAIN_INTACT,
     CLAIM_ACKNOWLEDGMENT,
     CLAIM_DISCLOSURES,
+    CLAIM_ANCHOR,
 )
 
 #: What each claim asks, in the words an assessor would ask it in. Carried
@@ -3919,6 +3936,10 @@ COLD_READ_QUESTIONS: Mapping[str, str] = {
     CLAIM_DISCLOSURES: (
         "what does this artifact state about the obligations its existence "
         "creates?"
+    ),
+    CLAIM_ANCHOR: (
+        "did a third party with no relationship to the operator witness this "
+        "history at a real instant?"
     ),
 }
 
@@ -5072,6 +5093,92 @@ def _disclosures_claim(stated: Mapping[str, str]) -> ColdReadClaim:
     )
 
 
+def _anchor_claim(
+    conn: sqlite3.Connection, stated: Mapping[str, str]
+) -> ColdReadClaim:
+    """Did a third party with no relationship to the operator witness this
+    history at a real instant (issue #316)?
+
+    **This does not verify any token.** Token verification is
+    `reg.anchor_tsa.verify_anchors`, and it needs the TSA's trust roots, which
+    the artifact does not carry. What this reads is what the *file* holds
+    towards the question: whether `anchor_receipts` carries timestamp tokens,
+    for which schemes, over how many epoch heads — and, where it carries none,
+    what the artifact states in `meta[commitment]`.
+
+    Three states:
+
+    * receipts present — **CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN**.
+      The check exists (`verify_anchors`) and is gated on trust roots the file
+      does not carry; the detail names the scheme, the anchored epoch count,
+      and what the roots would then say. The file alone does not settle the
+      claim, which is exactly what the fifth state is for.
+    * no receipts and `meta[commitment]` says `none` — **ABSENT**, with the
+      detail quoting `commitment: none`. The artifact states in so many words
+      that its heads were anchored to nothing at close: a re-issued history is
+      undetectable from this file, and the file says so rather than leaving it
+      to be inferred.
+    * no receipts and any other commitment state — **ABSENT**, naming what is
+      there instead. A witness-committed artifact carries no third-party
+      timestamp either, and the row says which commitment it does carry rather
+      than reporting the anchor's absence as the commitment's.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT scheme, count(*) AS n FROM anchor_receipts GROUP BY scheme"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    if rows:
+        held = "; ".join(
+            f"{int(row['n'])} epoch heads under {row['scheme']}" for row in rows
+        )
+        return ColdReadClaim(
+            claim=CLAIM_ANCHOR,
+            question=COLD_READ_QUESTIONS[CLAIM_ANCHOR],
+            state=CHECKABLE_WITH_A_KEY,
+            detail=(
+                f"this artifact carries timestamp tokens — {held}. The tokens "
+                "assert each epoch head existed by the token's instant, to a "
+                "party with no relationship to the operator. Checking them is "
+                "reg.anchor_tsa.verify_anchors, and it needs the TSA's trust "
+                "roots, which this file does not carry: without them the "
+                "tokens are unread, not valid, which is why this row is not "
+                "CHECKABLE from the file alone."
+            ),
+        )
+    commitment = stated.get(_META_COMMITMENT)
+    if commitment == "none":
+        return ColdReadClaim(
+            claim=CLAIM_ANCHOR,
+            question=COLD_READ_QUESTIONS[CLAIM_ANCHOR],
+            state=ABSENT,
+            detail=(
+                "commitment: none — this artifact states its chain heads were "
+                "anchored to nothing at close. Its chain deters editing and "
+                "does not deter re-issuance: the party that signed the "
+                "records could have produced the whole history offline, and "
+                "no third party witnessed any of it."
+            ),
+        )
+    return ColdReadClaim(
+        claim=CLAIM_ANCHOR,
+        question=COLD_READ_QUESTIONS[CLAIM_ANCHOR],
+        state=ABSENT,
+        detail=(
+            "this artifact carries no anchor receipts"
+            + (
+                f"; its commitment is {commitment}, which is an on-site "
+                "witness rather than a third-party timestamp"
+                if commitment
+                else " and states no commitment at all"
+            )
+            + ". Nothing in the file bears on whether the history was "
+            "re-issued offline."
+        ),
+    )
+
+
 def cold_read(conn: sqlite3.Connection) -> ColdRead:
     """What this artifact says about itself, checked against itself alone.
 
@@ -5153,6 +5260,7 @@ def cold_read(conn: sqlite3.Connection) -> ColdRead:
             _chain_intact_claim(conn, stated),
             _acknowledgment_claim(conn),
             _disclosures_claim(stated),
+            _anchor_claim(conn, stated),
         ),
         recompute_permitted=permitted,
     )

@@ -250,6 +250,7 @@ __all__ = [
     "insert_acknowledgment",
     "insert_declaration",
     "insert_epoch_head",
+    "store_anchor_receipt",
     "insert_envelope",
     "attach_envelope_geometry",
     "envelope_row",
@@ -421,7 +422,7 @@ __all__ = [
 #: tell an artifact that retained no boundary from one whose build predates the
 #: rule, and `connect` refusing it is that could-not-evaluate rather than a
 #: recomputation run on the reader's own machine and returned as the file's.
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 #: What each version changed, one line each, keyed by the version it arrived in.
 #: The comment block above is the argument; this is the part a **refusal** can
@@ -471,6 +472,12 @@ SCHEMA_CHANGES: dict[int, str] = {
     "radius alone. reg.query.reached_point is what tests a point against that "
     "boundary (issue #258), and it refuses at every frame the rule kept none "
     "for rather than substituting the radius",
+    15: "the anchor_receipts table arrived — one RFC 3161 TimeStampResp per "
+    "closed epoch head, (chain, epoch, scheme) — so a v14 reader sees an "
+    "artifact whose epoch heads were witnessed by a third party and has no "
+    "column to read the tokens from. reg.anchor_tsa is what parses and "
+    "checks them (issue #316), and the cold read grew an anchor-witnessed "
+    "row whose states are derived against that table",
 }
 
 #: `meta` keys this module owns. Everything else in `meta` belongs to whoever
@@ -1592,6 +1599,21 @@ CREATE TABLE epoch_heads (
     checkpoint_sig BLOB    NOT NULL,
     key_id         TEXT    NOT NULL,
     PRIMARY KEY (chain, epoch)
+);
+
+-- One row per anchored epoch head: the RFC 3161 TimeStampResp DER bytes as
+-- the TSA returned them (issue #316). The design doc's schema named
+-- PRIMARY KEY (epoch, scheme); epochs are per chain since #315, so the key
+-- carries the chain too, the same deviation #315 recorded for epoch_heads.
+-- A receipt is opaque bytes to every reader but the TSA adapter: parsing it
+-- is `reg.anchor_tsa`'s job, and a token that does not parse is a
+-- could-not-evaluate there, never a silent skip here.
+CREATE TABLE anchor_receipts (
+    chain          TEXT    NOT NULL CHECK (chain IN ('policy', 'enforcement')),
+    epoch          INTEGER NOT NULL CHECK (epoch >= 0),
+    scheme         TEXT    NOT NULL,
+    receipt        BLOB    NOT NULL,
+    PRIMARY KEY (chain, epoch, scheme)
 );
 """
 
@@ -3198,6 +3220,62 @@ def insert_epoch_head(conn: sqlite3.Connection, epoch_head: object) -> None:
             row["checkpoint_sig"],
             row["key_id"],
         ),
+    )
+
+
+def store_anchor_receipt(
+    conn: sqlite3.Connection,
+    chain: str,
+    epoch: int,
+    scheme: str,
+    receipt: bytes,
+) -> None:
+    """Persist one anchor receipt: the TSA's TimeStampResp DER, verbatim.
+
+    Refuses anything that is not shaped like a receipt — a non-bytes blob, an
+    empty one — and refuses a second, *different* receipt for one
+    `(chain, epoch, scheme)`. Re-storing the identical bytes is a no-op: a
+    build that anchors twice (a retry after a failed close) must not fail on
+    its own earlier receipt, and identical bytes are the same anchor.
+
+    Raises:
+        StoreError: a refusal above, or `(chain, epoch, scheme)` already holds
+            a different receipt. Two different tokens for one epoch would merge
+            into an answer about neither.
+    """
+    _require_record_tables(conn, "storing an anchor receipt")
+    if chain not in ("policy", "enforcement"):
+        raise StoreError(
+            f"anchor receipt chain must be 'policy' or 'enforcement', got "
+            f"{chain!r}."
+        )
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise StoreError(f"anchor receipt epoch must be a non-negative int, got {epoch!r}.")
+    if not isinstance(scheme, str) or not scheme:
+        raise StoreError(f"anchor receipt scheme must be a non-empty str, got {scheme!r}.")
+    if not isinstance(receipt, bytes) or not receipt:
+        raise StoreError(
+            f"anchor receipt must be non-empty bytes, got "
+            f"{type(receipt).__name__}."
+        )
+    existing = conn.execute(
+        "SELECT receipt FROM anchor_receipts WHERE chain = ? AND epoch = ? "
+        "AND scheme = ?",
+        (chain, epoch, scheme),
+    ).fetchone()
+    if existing is not None:
+        if bytes(existing["receipt"]) != receipt:
+            raise StoreError(
+                f"anchor_receipts already holds a different receipt for epoch "
+                f"{epoch} of the {chain!r} chain under scheme {scheme!r}. Two "
+                "different tokens for one epoch would merge into an answer "
+                "about neither."
+            )
+        return
+    conn.execute(
+        "INSERT INTO anchor_receipts (chain, epoch, scheme, receipt) "
+        "VALUES (?, ?, ?, ?)",
+        (chain, epoch, scheme, receipt),
     )
 
 

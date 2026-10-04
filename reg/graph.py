@@ -244,6 +244,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from reg import __version__, store
+from reg.anchor_tsa import Rfc3161Committer, TsaClient
 from reg.chain import (
     CHAIN_FORMAT_V1,
     CHAIN_FORMAT_V2,
@@ -258,7 +259,6 @@ from reg.chain import (
 )
 from reg.commit import (
     COMMITMENT_NONE,
-    COMMITMENT_STATEMENT,
     META_COMMITMENT,
     META_COMMITMENT_DECLARATION_HEAD,
     META_COMMITMENT_SIGNATURE,
@@ -271,6 +271,7 @@ from reg.commit import (
     WitnessCommitter,
     chain_heads,
     check_witness_is_independent,
+    commitment_statement,
     load_witness,
 )
 from reg.declare import Declaration, DeclarationError
@@ -2412,6 +2413,8 @@ def build(
     occurrence_resolution_s: float = OCCURRENCE_TIME_RESOLUTION_S,
     records: AttestationRecords | None = None,
     commitment: Callable[[ChainHeads], Commitment] | None = None,
+    tsa_client: TsaClient | None = None,
+    tsa_name: str | None = None,
 ) -> BuildResult:
     """Turn a raw CSV stream into a SQLite evidence graph. Overwrites `out_path`.
 
@@ -2473,6 +2476,16 @@ def build(
             commitment. Supplying one without `records` is refused: there is no
             chain to commit to, and a commitment to two genesis hashes would
             verify and mean nothing.
+        tsa_client: a `reg.anchor_tsa.TsaClient` — the TSA the epoch heads are
+            timestamped with at close — or `None`. When given, the build
+            constructs a `reg.anchor_tsa.Rfc3161Committer` around the live
+            artifact connection at close time (the committer reads the epoch
+            heads it anchors from the artifact it is writing, so it cannot be
+            built before the connection exists) and `tsa_name` names the TSA
+            in the artifact. Giving both `commitment` and `tsa_client` is
+            refused: `meta[commitment]` holds one scheme, and two suppliers
+            would be two. `tsa_name` without `tsa_client` is refused as well —
+            a name with nothing behind it.
 
     Returns:
         A `BuildResult` with the row counts and the artifact's size.
@@ -2532,6 +2545,36 @@ def build(
             "`(ChainHeads) -> Commitment` — see reg.commit.WitnessCommitter, "
             "and the RFC 3161 and transparency-log adapters that interface "
             "exists to make cheap."
+        )
+    if commitment is not None and tsa_client is not None:
+        raise GraphBuildError(
+            "commitment and tsa_client were both given. meta[commitment] holds "
+            "one scheme, so one build takes one supplier — pass the witness "
+            "committer *or* the TSA client, not both."
+        )
+    if tsa_client is not None and records is None:
+        raise GraphBuildError(
+            "a TSA client was given and no record stream was. There is no "
+            "chain in this build to anchor, and anchoring two genesis hashes "
+            "would produce tokens that verify and say nothing."
+        )
+    if tsa_client is not None and not isinstance(tsa_client, TsaClient):
+        raise GraphBuildError(
+            f"tsa_client must be a reg.anchor_tsa.TsaClient, got "
+            f"{type(tsa_client).__name__}."
+        )
+    if tsa_name is not None and tsa_client is None:
+        raise GraphBuildError(
+            "tsa_name was given and no TSA client was. A name with nothing "
+            "behind it commits nothing anybody can check."
+        )
+    if tsa_client is not None and (
+        not isinstance(tsa_name, str) or not tsa_name.strip()
+    ):
+        raise GraphBuildError(
+            f"a TSA-anchored build needs tsa_name, got {tsa_name!r}. The "
+            "whole content of the scheme is *which third party* witnessed "
+            "the heads."
         )
     frames = tuple(read_frames(csv_path))
     # Whether this run's base pose is recorded, and a refusal if the stream
@@ -2818,8 +2861,15 @@ def build(
 
         # Last, because a commitment is made at artifact *close*: the heads it
         # signs are recomputed from the records this file actually holds, so
-        # every record has to be in it first.
-        _write_commitment(conn, commitment)
+        # every record has to be in it first. The TSA committer is built here
+        # and not by the caller because it reads the epoch heads it anchors
+        # from this connection — a committer built before build() cannot have
+        # it, and one built after cannot affect the file.
+        supplier = commitment
+        if supplier is None and tsa_client is not None:
+            assert isinstance(tsa_name, str) and tsa_name.strip()
+            supplier = Rfc3161Committer(tsa_client, conn, tsa_name=tsa_name)
+        _write_commitment(conn, supplier)
 
         conn.commit()
         result = _summarize(
@@ -3295,7 +3345,11 @@ def _write_commitment(
         )
 
     store.put_meta(conn, META_COMMITMENT, made.scheme)
-    store.put_meta(conn, META_COMMITMENT_STATEMENT, COMMITMENT_STATEMENT)
+    store.put_meta(
+        conn,
+        META_COMMITMENT_STATEMENT,
+        commitment_statement(made.scheme, made.witness_id),
+    )
     store.put_meta(conn, META_COMMITMENT_WITNESS, made.witness_id)
     store.put_meta(
         conn, META_COMMITMENT_DECLARATION_HEAD, made.heads.declaration_head

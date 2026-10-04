@@ -1245,8 +1245,8 @@ this entry divides from 2,584,576 B to 2,587,648 B, 0.1%, the composition readin
 3,268,608 B, +26.32%, reading 50.56x / 5.58x with the pair 9.06x and 12.97x;
 schema 14 — the outer boundary retained where the sampled polygon already is —
 took it to **3,286,016 B**, +0.53%. So `~40x` above is **~51x**, the composition
-reads **50.86x** / 5.58x and 50.86x / 3.90x, the pair is **9.11x** and
-**13.05x**, and the uncompressed comparison is **2.01x**. The `39.98x / 4.75x`
+reads **50.91x** / 5.58x and 50.91x / 3.90x, the pair is **9.12x** and
+**13.06x**, and the uncompressed comparison is **2.01x**. The `39.98x / 4.75x`
 two paragraphs up stands as that pass's arithmetic. What this entry argues is
 unchanged in direction and larger in size.
 
@@ -1389,9 +1389,10 @@ commitment supports no inclusion proof and is held by a party the operator chose
 good as the site. This line of work supplies the name for what is missing: a split
 view is detected by parties who **compare** heads with each other, and a single
 witness on the operator's payroll compares nothing. Stated this way the gap is
-located rather than merely admitted — `reg` is not missing a timestamp, it is
-missing a gossip set, and RFC 3161 (which `commit.py` and the README already name)
-is the weaker of the two things it could adopt.
+located rather than merely admitted — `reg` was missing a timestamp and a gossip
+set; the timestamp is now an opt-in adapter (`reg/anchor_tsa.py`), so what
+remains missing is the gossip set. The timestamp is the weaker of the two
+things it could adopt, and the one it has.
 
 ### What `reg` does that a transparency log does not
 

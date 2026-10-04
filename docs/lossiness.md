@@ -691,12 +691,13 @@ plausible interpolated number.
    rules out the whole history having been re-issued offline — re-run, re-signed,
    re-dated — which produces a file that verifies perfectly. What bears on it is
    the commitment in `reg/commit.py`: the two chain heads signed at artifact
-   close by a second on-site keyholder whose key signed no record here. That
-   moves the artifact from *deters editing* to *deters re-issuance*, and it is
-   **not** a third-party timestamp — it proves a second party at the same site
-   saw these heads, not that they existed by any instant to someone with no
-   relationship to the operator. An artifact closed with no witness says
-   `commitment: none` in so many words rather than leaving it to be inferred.
+   close by a second on-site keyholder whose key signed no record here, or —
+   opt-in — RFC 3161 timestamps of the epoch heads (`reg/anchor_tsa.py`). The
+   witness half moves the artifact from *deters editing* to *deters re-issuance*, and it is **not** a third-party timestamp
+   — it proves a second party at the same site saw these heads, not that they
+   existed by any instant to someone with no relationship to the operator. An
+   artifact closed with no witness says `commitment: none` in so many words
+   rather than leaving it to be inferred.
    See [`limitations.md`](limitations.md) §6.
 
 ---

@@ -492,7 +492,15 @@ EXEMPT: dict[str, str] = {
 #         per-chain schema — all paid for with cuts). Code-coupled words
 #         14,848 -> 14,840; 14,840 / 343 = 43.266, rounded up to the next
 #         tenth. Measured, no headroom.
-RATE = 43.3
+#   42.0  today, 2026-10-03, after #316: `reg/anchor_tsa.py` lands —
+#         `Rfc3161Committer`, `HttpTsaClient`, `verify_anchors` and the anchor
+#         state/result types, plus the TSA scheme and statement surface in
+#         `reg/commit.py`: 11 new public symbols. The docs move is net +24
+#         words (the README honesty paragraph; the design-doc pin note was
+#         added and cut again). Code-coupled words 14,840 -> 14,864;
+#         14,864 / 354 = 41.989, rounded up to the next tenth. Measured,
+#         no headroom.
+RATE = 42.0
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #
@@ -738,7 +746,12 @@ RATE = 43.3
 #           is shorter), `docs/prior-art.md` §14's "three things" back to two,
 #           `docs/plan.md`'s chain paragraph updated. Argument words
 #           41,113 -> 40,892. Measured, no headroom.
-ARGUMENT_MAX = 40892
+#   40,891  today, 2026-10-03, after #316: `docs/limitations.md` §6 rewritten
+#           for the implemented TSA anchoring (witness *or* timestamp — the
+#           absence it described at length is now an opt-in adapter) plus the
+#           consistency sweep, tightened until the words fit: one under the
+#           old ceiling. Measured, no headroom.
+ARGUMENT_MAX = 40891
 
 # What counts as a long paragraph. 120 is #170's threshold and is kept so the
 # two measurements are of the same thing.
@@ -868,7 +881,9 @@ PARAGRAPH_MAX_WORDS = 120
 #        Confirmed, not lowered.
 #    70  today, 2026-10-03, after #315: `docs/limitations.md` §7's rewrite
 #        took one paragraph under the 120-word line. Measured, no headroom.
-LONG_PARAGRAPHS_MAX = 70
+#    69  today, 2026-10-03, after #316: `docs/limitations.md` §6's rewrite
+#        split the over-long "What" paragraph in two. Measured, no headroom.
+LONG_PARAGRAPHS_MAX = 69
 
 # Prose paragraphs narrating a past defect above the document's rationale line.
 # MAY BE LOWERED, NEVER RAISED.
@@ -999,7 +1014,10 @@ LONG_PARAGRAPHS_MAX = 70
 #   109  today, 2026-09-28, after #297: re-measured at 109 — the Why and §6
 #        cuts took a dated table and present-tense prior-art prose, none of it
 #        a past-defect narration. Confirmed, not lowered.
-NARRATION_MAX = 109
+#   108  today, 2026-10-03, after #316: the issue references added and removed
+#        in the consistency sweep netted one marker under the old ceiling.
+#        Measured, no headroom.
+NARRATION_MAX = 108
 
 # Documents whose summary paragraph runs over SUMMARY_MAX_WORDS. MAY BE
 # LOWERED, NEVER RAISED — and it is already at zero, which is the only value it
@@ -1968,7 +1986,7 @@ def phase_10_has_no_headline_number(text: str) -> tuple[str, list[str]]:
 
 
 def claim_1_keeps_the_measured_rate(text: str) -> tuple[str, list[str]]:
-    """Claim 1 keeps `61.03 MB/h` with 50 Hz — `tests/test_bench.py` needs it.
+    """Claim 1 keeps `61.15 MB/h` with 50 Hz — `tests/test_bench.py` needs it.
 
     The composition paragraph and the "derived, not measured" paragraph are
     cut, but the measured rate they carried stays: a document that quotes the
@@ -1979,9 +1997,9 @@ def claim_1_keeps_the_measured_rate(text: str) -> tuple[str, list[str]]:
     if empty is not None:
         return empty
     problems = []
-    if "61.03 MB/h" not in text:
-        problems.append("the measured 61.03 MB/h rate is gone")
-    if not re.search(r"61\.03 MB/h.{0,200}50 Hz", text, re.S):
+    if "61.15 MB/h" not in text:
+        problems.append("the measured 61.15 MB/h rate is gone")
+    if not re.search(r"61\.15 MB/h.{0,200}50 Hz", text, re.S):
         problems.append("the rate is not stated with its 50 Hz control rate")
     return (DISAGREE if problems else AGREE), problems
 

@@ -1,0 +1,85 @@
+{
+    "_type": "https://in-toto.io/Statement/v1",
+    "subject": [
+        {
+            "name": "auto/issue-317",
+            "digest": {
+                "sha1": "fe12d848f504f81b17cbb113edd19234785b7c3e"
+            }
+        }
+    ],
+    "predicate": {
+        "attempt_id": "317-manual-20261004",
+        "authored_by": {
+            "agent": "muse",
+            "harness": "manual",
+            "model": "muse-spark"
+        },
+        "base": "origin/main",
+        "commit": "fe12d848f504f81b17cbb113edd19234785b7c3e",
+        "concluded": {
+            "analyzer": "manual",
+            "changed": [
+                "README.md",
+                "docs/limitations.md",
+                "docs/lossiness.md",
+                "docs/plan.md",
+                "docs/prior-art.md",
+                "docs/tamper-evidence-design.md",
+                "pyproject.toml",
+                "reg/anchor_rekor.py",
+                "reg/commit.py",
+                "reg/graph.py",
+                "reg/query.py",
+                "tests/test_anchor_rekor.py",
+                "tests/test_commit.py",
+                "tests/test_doc_shape.py"
+            ]
+        },
+        "coverage": "full pytest: 3032 passed, 0 failed",
+        "declared": [
+            "reg/anchor_rekor.py",
+            "reg/commit.py",
+            "reg/graph.py",
+            "reg/query.py",
+            "pyproject.toml",
+            "docs/limitations.md",
+            "docs/tamper-evidence-design.md",
+            "tests/"
+        ],
+        "identity_mode": "agent",
+        "issue": 317,
+        "out_of_scope": [],
+        "preceding": null,
+        "prev": null,
+        "produced": [
+            "draft PR"
+        ],
+        "repository": "nan-bit/reg",
+        "verdict": "in-scope",
+        "verification": "pytest -q: 3032 passed, 0 failed",
+        "chain": {
+            "field_digests": {
+                "attempt_id": "8b8bea51bfa06d2c0d8bbcdd763d0a7fcefb96156df03e33028bdea0776ca97e",
+                "authored_by": "a45feef0b550b6e0baa6b50787ce61e4431230c373f260317a3b44626176334f",
+                "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+                "commit": "5ae6e6e269b80ce85c808b225326a79e3eda75190247c7f4f8e58b18e8ee9e9a",
+                "concluded": "15f08b5576d2495449e6be8830dee635676c595ccd52dd36a835115559154336",
+                "coverage": "a7272fd88bef977ef4f40748beee1134601d217cb16f6ae3c83afc85e93202cc",
+                "declared": "672b23f77630c6fa2f187edb8a61be6723044d1c5caaaa0deb497aaac612acb7",
+                "identity_mode": "7649b444a37e5ea51af536af65bdde29d549803a064bdd0707db6a00c9285673",
+                "issue": "8d1ede4f889e0ed6f0823d8c1821905b9de37a0f851dc270df0dbf72b3c93641",
+                "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                "preceding": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "prev": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "produced": "595e7f67215dd0d584256c1cd7d089b7a6fae9d7913f35cf7d05bed98d3bb1d3",
+                "repository": "e34cb59b23a488d332827ea8c1b8d9acfa7665bb9f81c3ba6dd7d58e7c5ded84",
+                "verdict": "286e06199ea2870d49fe46d4cc3c4e738b587756cb2a00372d0eb7aff1df0f9f",
+                "verification": "491b822d36f1990844c095c7c6c3458646882ef289c8ec5a5fedb5e8bc52a4cd"
+            },
+            "head": "c44cc1a9e7988154f95ba49b256e5c49dd40cd7299f4bb6a3557e99e690b53a6",
+            "prev_heads": [],
+            "scheme": "wake-chain-sha256-v1"
+        }
+    }
+}

@@ -164,7 +164,7 @@ published under it — three live, the fourth superseded to a single line — ar
 [`retention.md`](retention.md), *Success, restated*.
 
 **The measured rate behind the total.** The artifact's measured rate is
-**61.03 MB/h** at the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs
+**61.15 MB/h** at the **50 Hz** control rate `reg.scenarios.DEFAULT_DT` runs
 at, and linear in it; the six-month total is that rate times the window. The
 arithmetic, and the record of how the figures moved, are in
 [`retention.md`](retention.md).
@@ -190,14 +190,14 @@ condition that is part of the number:
   **hand-built encoding comparison and not a real bag**, which
   [`sensor-baseline.md`](sensor-baseline.md) requires be said wherever a
   projected figure from it is quoted until a measurement retires it.
-- **The figure to quote against the incumbent is a pair, 9.11x and 13.05x**: the
+- **The figure to quote against the incumbent is a pair, 9.12x and 13.06x**: the
   same 24 columns rather than 5, so it composes with the `~51x` instead of
   standing beside it, and measured on bags `ros2 bag record` wrote. The artifact
-  is **9.11x** a `zstd_fast` bag of those columns, **13.05x** a `zstd_small` one
+  is **9.12x** a `zstd_fast` bag of those columns, **13.06x** a `zstd_small` one
   and **2.01x** the uncompressed default — the bags being 5.58x, 3.90x and 25.34x
-  the gzipped CSV, and `50.86x / 5.58x` is where 9.11x comes from. **Both
+  the gzipped CSV, and `50.91x / 5.58x` is where 9.12x comes from. **Both
   compressed profiles are published**, rosbag2 shipping both; if a single number
-  is wanted it is 9.11x, the larger bag and so the smaller ratio. Its Layer B
+  is wanted it is 9.12x, the larger bag and so the smaller ratio. Its Layer B
   half goes on `/tf`, the arrangement most favourable to the incumbent of those
   [`sensor-baseline.md`](sensor-baseline.md) prices, so nothing here is won by
   choosing the comparator. **The artifact is larger than the bag under every
@@ -312,12 +312,13 @@ real; the capability is bounded and the bound is stated, and those are different
 sentences. Phase 4 below has the angular half and the held decision;
 [`docs/limitations.md`](limitations.md) §3 is normative on both.
 
-A third-party timestamp (RFC 3161, transparency log) would prove the chain
-heads existed by a given instant to someone with no relationship to the
-operator; both are documented and deliberately unimplemented — each needs a
-network call at artifact close, and this artifact is required to be checkable
-years later with no service still running and no call to anyone. That
-requirement is not a site constraint worked around; it is the point.
+A third-party timestamp (RFC 3161) proves the chain heads existed by a given
+instant to someone with no relationship to the operator; a transparency log
+would make a *withheld* artifact detectable. The first is an
+opt-in adapter (`reg/anchor_tsa.py`): the timestamp needs a network call at
+close, verification stays file I/O plus crypto years later. The second is
+documented and deliberately unimplemented: it needs the network call *and* a log
+the verifier trusts — the artifact must be checkable with no service still running.
 
 An assessor certifying what happened needs a record whose integrity does not
 rest on infrastructure belonging to the party being assessed, and the telemetry

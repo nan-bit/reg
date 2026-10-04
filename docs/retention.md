@@ -33,8 +33,8 @@ Per robot, from the measured resolution curve:
 | per-frame (10 ms) | 1,293 GB | 129.3 TB |
 | *raw sensor log @ 1 TB/day (assumed, **not measured here**)* | *182.5 TB* | *18.2 PB* |
 
-Each is the measured `bytes/hour` for that level — 61.03, 191.57 and
-295.32 MB/h at **50 Hz** — times the 4,380 hours in the 182.5-day retention
+Each is the measured `bytes/hour` for that level — 61.15, 191.70 and
+295.44 MB/h at **50 Hz** — times the 4,380 hours in the 182.5-day retention
 floor. Every one of those three figures **moves with that rate**: enforcement
 emits one verdict and one chain record per commanded action and no resolution
 level coarsens them.
@@ -89,7 +89,7 @@ manipulator control loop runs at 1 kHz, twenty times this simulator's rate:
 
 | control rate | occurrence | transition | per-frame |
 |---|---|---|---|
-| **50 Hz (this simulator, published above)** | **61.03 MB/h → 267 GB → ~684x** | 191.57 MB/h → 838 GB → ~218x | 295.32 MB/h → 1,293 GB → ~141x |
+| **50 Hz (this simulator, published above)** | **61.15 MB/h → 267 GB → ~684x** | 191.70 MB/h → 838 GB → ~218x | 295.44 MB/h → 1,293 GB → ~141x |
 | 100 Hz | 107.00 MB/h → 469 GB → ~389x | 314.74 MB/h → 1.38 TB → ~132x | 563.22 MB/h → 2.47 TB → ~74x |
 | 250 Hz | 247.75 MB/h → 1.09 TB → ~167x | 676.31 MB/h → 2.96 TB → ~62x | 1.47 GB/h → 6.42 TB → ~28x |
 | **1 kHz (a real manipulator)** | **1.08 GB/h → 4.72 TB → ~39x** | 2.64 GB/h → 11.57 TB → ~16x | 6.51 GB/h → 28.53 TB → ~6x |
@@ -130,15 +130,15 @@ Claim 1 prices:
 
 | table, coarsest level at 50 Hz | bytes | share of the level |
 |---|---|---|
-| `verdict` | 551,936 | 54.3% |
+| `verdict` | 551,936 | 54.2% |
 | `declaration` | 185,344 | 18.2% |
-| `indexes + schema` | 137,216 | 13.5% |
+| `indexes + schema` | 139,264 | 13.7% |
 | `node` | 112,640 | 11.1% |
 | `meta` | 12,288 | 1.2% |
 | `occurrence` | 9,216 | 0.9% |
 | `entity` | 3,072 | 0.3% |
 | `envelope`, `robot_config`, `acknowledgment`, `edge`, `edge_layer_basis` — one empty page each | 5,120 | 0.5% |
-| **file** | **1,016,832** | |
+| **file** | **1,018,880** | |
 
 *`acknowledgment` arrives with schema 12 and `edge_layer_basis` with schema 13;
 `long_run` passivates never and this level holds no edge, so each is one empty
@@ -192,7 +192,7 @@ from it:
 | verdicts | 3,000 |
 | faults | 24 |
 | chain records | 3,120 |
-| artifact on disk | 3,288,064 B |
+| artifact on disk | 3,291,136 B |
 | gzipped CSV baseline | 64,652 B |
 | x gz CSV | 0.02x |
 | how much larger | ~51x |
@@ -201,7 +201,7 @@ from it:
 practitioners retain rosbag2, in MCAP. The five-column rows below are
 projections from the MCAP specification ([`sensor-baseline.md`](sensor-baseline.md)),
 held to the byte by `tests/test_incumbent_encoding.py`; the 24-column rows are
-bags `ros2 bag record` wrote on 2026-09-06, whole files, against the 3,288,064 B
+bags `ros2 bag record` wrote on 2026-09-06, whole files, against the 3,291,136 B
 artifact above — both with the Layer B half on `/tf`, the arrangement most
 favourable to the incumbent.
 
@@ -210,15 +210,15 @@ favourable to the incumbent.
 | 5 columns / 251 frames, **projected**, vs 3,053 B — `none` | 35,893 B | **11.76x** | |
 | the same, one compressed projection for both zstd profiles | 11,685 B | **3.83x** | |
 | 24 columns / 3,000 frames, **measured**, vs 64,652 B — no profile passed | 1,637,963 B | **25.34x** | **2.01x** |
-| the same, `zstd_fast` | 360,798 B | **5.58x** | **9.11x** |
-| the same, `zstd_small` | 252,034 B | **3.90x** | **13.05x** |
+| the same, `zstd_fast` | 360,798 B | **5.58x** | **9.12x** |
+| the same, `zstd_small` | 252,034 B | **3.90x** | **13.06x** |
 
 **Beside `~51x` the figure is a pair, and the pair is a range with its ends
-named**: the artifact is **9.11x** a `zstd_fast` bag and **13.05x** a
+named**: the artifact is **9.12x** a `zstd_fast` bag and **13.06x** a
 `zstd_small` one, of the same 24 columns of the same run, where `~51x` is against
-a gzipped CSV of those same columns ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against)). Each end composes — `50.86x / 5.58x` and
-`50.86x / 3.90x` — which a five-column ratio against a 24-column headline could
-never do. **If one number is wanted it is 9.11x**, because `zstd_fast` is the
+a gzipped CSV of those same columns ([the sensor baseline](sensor-baseline.md#what-the-projection-is-measured-against)). Each end composes — `50.91x / 5.58x` and
+`50.91x / 3.90x` — which a five-column ratio against a 24-column headline could
+never do. **If one number is wanted it is 9.12x**, because `zstd_fast` is the
 larger bag and so the smaller ratio: the end least flattering to this project.
 Quoting either alone is preset-shopping. 2.01x is the same comparison at the
 uncompressed default, beside them and not instead of them.

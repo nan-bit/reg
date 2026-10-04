@@ -3824,6 +3824,10 @@ COLD_READ_TODAY = {
     query.CLAIM_CHAIN_INTACT: query.ABSENT,
     query.CLAIM_ACKNOWLEDGMENT: query.ABSENT,
     query.CLAIM_DISCLOSURES: query.CHECKABLE,
+    # No fixture build anchors: the TSA adapter is opt-in per build, and the
+    # fixtures are built without one — so every shipped fixture is ABSENT on
+    # the anchor row, and says so rather than leaving the question unasked.
+    query.CLAIM_ANCHOR: query.ABSENT,
 }
 
 #: The same four rows, on a build that **was** handed a record stream — plus
@@ -3860,6 +3864,9 @@ COLD_READ_OCCURRENCE_VIEW = {
     # the seventh row reads the same three keys the build wrote. It is the one
     # row here that is a property of neither the schema nor the scene layer.
     query.CLAIM_DISCLOSURES: query.CHECKABLE,
+    # The copy keeps anchor_receipts too — but the source build anchored
+    # nothing, so the row is ABSENT here for the same reason as above.
+    query.CLAIM_ANCHOR: query.ABSENT,
 }
 
 #: Names of the cold read's implementation, for the structural check that it

@@ -11,12 +11,19 @@ dependencies = [
     "numpy>=1.26",
     "shapely>=2.0",
     "matplotlib>=3.8",
+    # Pinned exactly: the TSA adapter parses and verifies timestamp tokens with
+    # it, and a token verified under a different build is a different claim.
+    # OSV-checked 2026-10-03 (issue #316): no known vulnerabilities.
+    "rfc3161-client==1.0.9",
 ]
 
 # Only shapely is load-bearing: polygon union and intersection is the actual
 # math. Everything else is substitutable, and a swap must be noted in the README
 # because reproducibility is part of what this project claims. sqlite3, hmac and
 # hashlib are stdlib on purpose — the artifact must open without a runtime.
+# rfc3161-client is the one exception, taken deliberately by issue #316 (epic
+# #313): DER-parsing an RFC 3161 response by hand is exactly the kind of
+# almost-right crypto plumbing this project refuses to own.
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

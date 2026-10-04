@@ -37,19 +37,26 @@ key that signed the records is the author witnessing themself, so
 
 DOCUMENTED AND DELIBERATELY NOT IMPLEMENTED
 -------------------------------------------
-* **RFC 3161 timestamp tokens.** Strictly stronger — a TSA with no relationship
-  to the operator asserts the heads existed by an instant. Rejected here for one
-  reason only: it needs a network call at artifact close, and this artifact is
-  required to be checkable years later with no service still running and no call
-  to anyone — least of all to infrastructure the party being assessed runs. A
-  deployment prepared to take that dependency has its upgrade path here, and the
-  interface above is what makes it an adapter rather than a rewrite.
-* **Transparency-log inclusion** (a Certificate-Transparency-shaped append-only
-  log; docs/prior-art.md). Same shape, same reason, and additionally it makes
-  *withholding* an artifact detectable, which nothing here does.
+* **Transparency-log inclusion** (a Certificate-Transparency-shaped
+  append-only log; docs/prior-art.md). The witness scheme's shape, the same
+  reason — it needs a network call at artifact close, and the artifact must be
+  checkable with no service still running — and additionally it makes
+  *withholding* an artifact detectable, which nothing here does. It
+  would be a `Committer` returning a `Commitment` with a different `scheme`
+  and a different `token`, and `docs/tamper-evidence-design.md` §3 names it
+  `RekorV2Committer` for issue #317.
 
-Both would be a `Committer` returning a `Commitment` with a different `scheme`
-and a different `token`. Nothing else in the project would move.
+IMPLEMENTED ELSEWHERE, ON THIS INTERFACE
+----------------------------------------
+* **RFC 3161 timestamp tokens** (`reg.anchor_tsa`, issue #316). Strictly
+  stronger than the witness — a TSA with no relationship to the operator
+  asserts the epoch heads existed by an instant — and it does take the network
+  call at artifact close this module once rejected it for. The rejection
+  below is kept as the record of why the *witness* scheme still exists: a
+  deployment that cannot take that dependency keeps an on-site commitment, and
+  the interface above is what makes the TSA an adapter rather than a rewrite.
+  Scheme `rfc3161-sha256-v1`; tokens live in `anchor_receipts`, one per closed
+  epoch head, and only 32-byte heads ever leave the operator boundary.
 
 WHERE THE COMMITMENT LIVES, AND WHY THAT IS SAFE
 -------------------------------------------------
@@ -74,6 +81,7 @@ import secrets
 import sqlite3
 from enum import Enum
 from pathlib import Path
+from typing import Sequence
 
 from reg import chain, store
 from reg.stream import ENCODING
@@ -88,6 +96,8 @@ __all__ = [
     "META_COMMITMENT_VERDICT_HEAD",
     "META_COMMITMENT_WITNESS",
     "SCHEMES",
+    "TSA_COMMITMENT_STATEMENT",
+    "TSA_SCHEME",
     "WITNESS_KEY_BYTES",
     "WITNESS_SCHEME",
     "ChainHeads",
@@ -100,6 +110,7 @@ __all__ = [
     "chain_heads",
     "check_witness_is_independent",
     "commitment_bytes",
+    "commitment_statement",
     "generate_witness",
     "load_witness",
     "verify_commitment",
@@ -117,16 +128,23 @@ META_COMMITMENT = "commitment"
 #: module exists: an uncommitted chain must announce itself.
 COMMITMENT_NONE = "none"
 
-#: The one scheme this project implements. Versioned in the name: a change to
-#: `commitment_bytes` is a new scheme, and every old signature visibly stops
-#: matching rather than quietly re-baselining.
+#: The one scheme this project originally implemented. Versioned in the name:
+#: a change to `commitment_bytes` is a new scheme, and every old signature
+#: visibly stops matching rather than quietly re-baselining.
 WITNESS_SCHEME = "witness-hmac-sha256-v1"
+
+#: The RFC 3161 timestamp scheme, implemented by `reg.anchor_tsa` (issue
+#: #316). The name carries the digest algorithm the adapter timestamps under:
+#: a token under another algorithm is not this scheme's token. Defined here,
+#: with the interface, rather than in the adapter, so the scheme registry has
+#: one home.
+TSA_SCHEME = "rfc3161-sha256-v1"
 
 #: Every scheme a reader of this version understands. A `meta[commitment]`
 #: outside this set is a could-not-evaluate — an artifact committed under
 #: something newer, which this reader must say it cannot check rather than
 #: report as uncommitted.
-SCHEMES: tuple[str, ...] = (WITNESS_SCHEME,)
+SCHEMES: tuple[str, ...] = (WITNESS_SCHEME, TSA_SCHEME)
 
 #: Where the rest of the commitment lands in `meta`.
 META_COMMITMENT_WITNESS = "commitment_witness_id"
@@ -135,8 +153,8 @@ META_COMMITMENT_VERDICT_HEAD = "commitment_verdict_head"
 META_COMMITMENT_SIGNATURE = "commitment_signature"
 META_COMMITMENT_STATEMENT = "commitment_statement"
 
-#: What the shipped scheme proves, in the artifact and not only in this module,
-#: because the file is the thing handed over. An assessor who reads
+#: What the shipped witness scheme proves, in the artifact and not only in this
+#: module, because the file is the thing handed over. An assessor who reads
 #: `commitment: witness-hmac-sha256-v1` and takes it for a timestamp has been
 #: misled by this project, so the artifact says plainly that it is not one.
 COMMITMENT_STATEMENT = (
@@ -149,6 +167,46 @@ COMMITMENT_STATEMENT = (
     "artifact close, and this artifact is required to be checkable years later "
     "with no service still running and no call to anyone."
 )
+
+#: What the TSA scheme proves, in the artifact beside the witness sentence
+#: above. The mirror image: this one IS a third-party timestamp, and it says
+#: what that does and does not buy — the instant is attested, the content is
+#: not (only 32-byte heads ever left the boundary), and checking the tokens
+#: needs the TSA's trust roots, which the artifact does not carry.
+TSA_COMMITMENT_STATEMENT = (
+    "The epoch heads were timestamped at artifact close by {witness_id}, an "
+    "RFC 3161 Time Stamp Authority with no relationship to the operator. Each "
+    "token asserts its epoch head existed by the token's instant, which no "
+    "party at the operator's site can backdate. This IS a third-party "
+    "timestamp. What it does not do: it says nothing about the records' "
+    "content — only 32-byte heads left the boundary — and the tokens check "
+    "against the TSA's trust roots, which this artifact does not carry. "
+    "Without them the tokens are unread, not valid."
+)
+
+
+def commitment_statement(scheme: str, witness_id: str) -> str:
+    """The in-artifact sentence for `scheme`, naming who committed.
+
+    Written to `meta[commitment_statement]` on every committed build, because
+    the file is the thing handed over and the scheme name alone misleads: an
+    assessor reading `witness-hmac-sha256-v1` must not take it for a
+    timestamp, and one reading `rfc3161-sha256-v1` must not take it for proof
+    of content.
+    """
+    if scheme == WITNESS_SCHEME:
+        return COMMITMENT_STATEMENT
+    if scheme == TSA_SCHEME:
+        if not isinstance(witness_id, str) or not witness_id.strip():
+            raise CommitmentError(
+                f"a {TSA_SCHEME} statement needs the TSA's name, got "
+                f"{witness_id!r}."
+            )
+        return TSA_COMMITMENT_STATEMENT.format(witness_id=witness_id)
+    raise CommitmentError(
+        f"scheme {scheme!r} is not one this version implements; the schemes "
+        f"are {list(SCHEMES)}."
+    )
 
 #: Witness key material length, the same 32 bytes `reg.chain` uses and for the
 #: same reason: short material is refused rather than stretched.
@@ -603,7 +661,10 @@ def _recorded_heads(conn: sqlite3.Connection) -> ChainHeads | None:
 
 
 def verify_commitment(
-    conn: sqlite3.Connection, witness: Witness | None
+    conn: sqlite3.Connection,
+    witness: Witness | None,
+    *,
+    tsa_roots: Sequence[bytes] | None = None,
 ) -> CommitmentCheck:
     """Check an artifact's commitment against the records it actually holds.
 
@@ -613,9 +674,12 @@ def verify_commitment(
        all. An artifact whose records were re-issued after it was closed has
        heads that no longer match what it committed to, and *anybody* holding
        the file can see it.
-    2. **The token, under the witness key.** This needs the second party's key,
-       and it is what makes the heads themselves unalterable: editing them to
-       match a re-issued chain breaks the signature.
+    2. **The token.** Under the witness scheme this is the HMAC under the
+       witness key, which is what makes the heads themselves unalterable:
+       editing them to match a re-issued chain breaks the signature. Under the
+       TSA scheme it is `reg.anchor_tsa.verify_anchors`: every closed epoch's
+       timestamp token, checked against the epoch heads and — where `tsa_roots`
+       are offered — against the TSA's trust roots.
 
     Args:
         conn: an artifact opened with `reg.store.connect`.
@@ -624,7 +688,12 @@ def verify_commitment(
             `verify_chain`'s keyring is: a caller who did not think about the
             key would otherwise get a report that looks like a verification and
             checked no signature. `None` is could-not-evaluate for step 2 and
-            nothing else — step 1 still runs and is still reported.
+            nothing else — step 1 still runs and is still reported. Ignored
+            under the TSA scheme, which has no witness key.
+        tsa_roots: DER-encoded trust roots for the TSA scheme, or `None` for
+            "no roots offered". Without them the tokens' imprints are still
+            checked against the epoch heads, but no signature is, and the
+            check reports COULD-NOT-EVALUATE rather than VALID.
 
     Returns:
         A `CommitmentCheck`. `bool()` on it raises.
@@ -698,6 +767,41 @@ def verify_commitment(
             "or re-issued after the commitment was made — which is the one "
             "thing a chain under the author's own keys cannot notice, and the "
             "reason this commitment exists.",
+            scheme=scheme,
+            witness_id=witness_id,
+            recorded=recorded,
+            computed=computed,
+        )
+
+    if scheme == TSA_SCHEME:
+        # The TSA scheme has no witness key: the tokens are checked against
+        # the epoch heads and the trust roots, which is `reg.anchor_tsa`'s
+        # job. Imported here, not at module scope: `reg.anchor_tsa` imports
+        # this module, and `reg.query` must be able to name this function's
+        # type without importing either.
+        from reg import anchor_tsa
+
+        try:
+            anchors = anchor_tsa.verify_anchors(conn, tuple(tsa_roots or ()))
+        except anchor_tsa.AnchorError as exc:
+            return CommitmentCheck(
+                CommitmentState.COULD_NOT_EVALUATE,
+                f"the TSA anchors could not be checked: {exc}",
+                scheme=scheme,
+                witness_id=witness_id,
+                recorded=recorded,
+                computed=computed,
+            )
+        state = {
+            anchor_tsa.AnchorState.VALID: CommitmentState.VALID,
+            anchor_tsa.AnchorState.INVALID: CommitmentState.INVALID,
+            anchor_tsa.AnchorState.COULD_NOT_EVALUATE: (
+                CommitmentState.COULD_NOT_EVALUATE
+            ),
+        }[anchors.state]
+        return CommitmentCheck(
+            state,
+            f"TSA {witness_id!r}: {anchors.reason}",
             scheme=scheme,
             witness_id=witness_id,
             recorded=recorded,

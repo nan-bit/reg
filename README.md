@@ -82,7 +82,7 @@ repository as it stands, not the plan.
 | **4** | **Attestation** — declaration, independent verification, verdict, tamper-evident chain | `landed` — the `Declaration` record and the hash chain (`reg/chain.py`, `reg/declare.py`), independent adjudication and the nine-fault taxonomy (`reg/enforce.py`), both record chains persisted in the artifact, and `verify_chain` with the `--tamper` demonstration that it can say no. Passivation and reintegration are exercisable since issue #247: the `Acknowledgment` reaches the artifact, so "was the passivation acknowledged, and by whom" is a question this artifact answers — *by whom* meaning the signing **party**, not a person, and a passivation the file holds no acknowledgment of a **could-not-evaluate** rather than a *no* ([`docs/lossiness.md`](docs/lossiness.md) *Retained* #7) |
 | **3** | **Sufficiency boundary** — which claims proprioception-only evidence supports, and which depend on an uncertifiable perceiver | `landed` — the Layer A/B type boundary and the test that fails when it erodes (`reg/types.py`, `tests/test_layer_boundary.py`), and the taxonomy itself in [`docs/sufficiency.md`](docs/sufficiency.md), which is normative for what this project may claim. `Limits.source` is required with no default, and each tagged edge records what its tag was computed from in `edge_layer_basis` — `reg.query.cold_read` reports `layer-tag-basis` as `CHECKABLE` |
 | **2** | **Query** — audit questions answered from the graph alone, no access to the original stream | `landed` — `reg/query.py` answers all nine of [`docs/plan.md`](docs/plan.md) Phase 7's questions, including `incident_report()`. "Alone" is a property of the import graph, not a promise: the module imports neither the stream reader nor anything that does, and `tests/test_query.py` fails if it ever can |
-| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the claim is [`docs/plan.md`](docs/plan.md) Claim 1 and the measurements, the arithmetic and the record of how they moved are [`docs/retention.md`](docs/retention.md): **267 GB** per robot for six months at occurrence resolution (±1 s), **~684x** below an assumed 182.5 TB sensor log — the price of retaining *attestation* (the coarsest level is 98.5% attestation records), not of a DSSAD-equivalent event log. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). Against rosbag2/MCAP, the incumbent — bags `ros2 bag record` wrote, priced over all 24 columns — the artifact is **2.01x** the uncompressed default bag, **9.11x** a `zstd_fast` one and **13.05x** a `zstd_small` one, on a **hand-built encoding comparison and not a real bag**, which [`docs/sensor-baseline.md`](docs/sensor-baseline.md) requires be said wherever a projected figure is quoted: larger than the bag under every profile, so the original framing — is the graph smaller than the stream it replaces — is still answered **no**. |
+| **1** | **Retention** — what it costs to keep the artifact for the mandated window | `landed, reframed` — the claim is [`docs/plan.md`](docs/plan.md) Claim 1 and the measurements, the arithmetic and the record of how they moved are [`docs/retention.md`](docs/retention.md): **267 GB** per robot for six months at occurrence resolution (±1 s), **~684x** below an assumed 182.5 TB sensor log — the price of retaining *attestation* (the coarsest level is 98.5% attestation records), not of a DSSAD-equivalent event log. Measured on the artifact side, a **projection** on the sensor side ([`docs/sensor-baseline.md`](docs/sensor-baseline.md)). Against rosbag2/MCAP, the incumbent — bags `ros2 bag record` wrote, priced over all 24 columns — the artifact is **2.01x** the uncompressed default bag, **9.12x** a `zstd_fast` one and **13.06x** a `zstd_small` one, on a **hand-built encoding comparison and not a real bag**, which [`docs/sensor-baseline.md`](docs/sensor-baseline.md) requires be said wherever a projected figure is quoted: larger than the bag under every profile, so the original framing — is the graph smaller than the stream it replaces — is still answered **no**. |
 
 The number is an identifier, not a rank; the **order** is the argument
 ([`docs/plan.md`](docs/plan.md), *The four claims*).
@@ -130,13 +130,14 @@ verifies perfectly. Two things bear on that:
 
 **An on-site witness is not a third-party timestamp.** It proves a second party
 at the same site saw these heads, not that they existed by any instant to someone
-with no relationship to the operator. RFC 3161 and transparency-log adapters
-would; both need a network call at the moment the artifact closes, and this
-artifact is meant to be verifiable years later with no service still running, so
-both are documented and deliberately unimplemented
-([`docs/limitations.md` §6](docs/limitations.md)). An artifact closed without a
-witness records `commitment: none` in so many words — silence never reads as
-commitment.
+with no relationship to the operator. An RFC 3161 adapter does the second —
+opt-in at close, one timestamp token per epoch head, tokens stored in the
+artifact, verifiable years later with no service still running — and a
+transparency-log adapter would additionally make a *withheld* artifact
+detectable; that one is still documented and deliberately unimplemented, because
+it needs a network call at close plus a log the verifier trusts ([`docs/limitations.md` §6](docs/limitations.md)). An artifact closed
+without a witness records `commitment: none` in so many words — silence never
+reads as commitment.
 
 **The artifact contains personal data.** Per shift it records the robot's
 proximity to an entity whose `kind` is `human` — contact and closest-approach

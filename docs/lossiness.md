@@ -682,22 +682,25 @@ plausible interpolated number.
 7. **Whether perception was correct.** Every Layer B answer is conditional on the
    entity positions being right, and the artifact contains no evidence bearing on
    that. `reg` states the dependence (Phase 9); it does not discharge it.
-8. **Anything about a run whose records are not in the artifact.** The chain proves
-   the retained records were not altered. It cannot prove that no record was
-   withheld before the artifact was written.
+8. **Anything about records withheld from an artifact that was written.** The
+   chain proves the retained records were not altered. It cannot prove that no
+   record was withheld before the artifact was written. A withheld *artifact*
+   is answerable when the build anchored to Rekor: the epoch heads are public
+   per epoch.
 9. **When the artifact was written, to anyone outside the operator.** The chain
-   proves the records are internally consistent *under keys held by the record's
-   own author*, and `meta[run_start_utc]` is a claim by that same author. Neither
-   rules out the whole history having been re-issued offline — re-run, re-signed,
-   re-dated — which produces a file that verifies perfectly. What bears on it is
-   the commitment in `reg/commit.py`: the two chain heads signed at artifact
-   close by a second on-site keyholder whose key signed no record here, or —
-   opt-in — RFC 3161 timestamps of the epoch heads (`reg/anchor_tsa.py`). The
-   witness half moves the artifact from *deters editing* to *deters re-issuance*, and it is **not** a third-party timestamp
+   proves the records are internally consistent *under the author's own keys*,
+   and `meta[run_start_utc]` is that same author's claim. Neither rules out the
+   whole history having been re-issued offline — re-run, re-signed, re-dated —
+   which verifies perfectly. What bears on it is the commitment: the two chain
+   heads signed at close by a second on-site keyholder whose key signed no
+   record here, or — opt-in — RFC 3161 timestamps of the epoch heads
+   (`reg/anchor_tsa.py`) or Rekor v2 inclusion proofs (`reg/anchor_rekor.py`),
+   composable in one build. The witness half moves the artifact from *deters
+   editing* to *deters re-issuance*, and it is **not** a third-party timestamp
    — it proves a second party at the same site saw these heads, not that they
    existed by any instant to someone with no relationship to the operator. An
-   artifact closed with no witness says `commitment: none` in so many words
-   rather than leaving it to be inferred.
+   artifact closed with no commitment says `commitment: none` in so many words
+   rather than by omission.
    See [`limitations.md`](limitations.md) §6.
 
 ---

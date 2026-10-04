@@ -130,13 +130,16 @@ verifies perfectly. Two things bear on that:
 
 **An on-site witness is not a third-party timestamp.** It proves a second party
 at the same site saw these heads, not that they existed by any instant to someone
-with no relationship to the operator. An RFC 3161 adapter does the second —
-opt-in at close, one timestamp token per epoch head, tokens stored in the
-artifact, verifiable years later with no service still running — and a
-transparency-log adapter would additionally make a *withheld* artifact
-detectable; that one is still documented and deliberately unimplemented, because
-it needs a network call at close plus a log the verifier trusts ([`docs/limitations.md` §6](docs/limitations.md)). An artifact closed
-without a witness records `commitment: none` in so many words — silence never
+with no relationship to the operator. Two opt-in adapters do more, and they
+compose in one build: an RFC 3161 adapter timestamps each epoch head, and a
+Rekor v2 adapter publishes each epoch head to a transparency log as an in-toto
+statement.
+
+One token or one inclusion proof per epoch head, stored in the artifact,
+verifiable years later with no service still running. The log adapter
+additionally makes a *withheld* artifact detectable: the heads are public. Both
+need a network call at close ([`docs/limitations.md` §6](docs/limitations.md)). An artifact closed
+without a commitment records `commitment: none` in so many words — silence never
 reads as commitment.
 
 **The artifact contains personal data.** Per shift it records the robot's

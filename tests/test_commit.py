@@ -404,7 +404,9 @@ def test_a_forged_signature_does_not_verify(
 ) -> None:
     copy = tmp_path / "resigned.sqlite"
     copy.write_bytes(committed.read_bytes())
-    _set_meta(copy, META_COMMITMENT_SIGNATURE, "0" * 64)
+    # Since #317 the per-scheme key is what verification reads; the
+    # un-suffixed key is the legacy copy old readers fall back to.
+    _set_meta(copy, f"{META_COMMITMENT_SIGNATURE}:{WITNESS_SCHEME}", "0" * 64)
     check = _check(copy, witness)
     assert check.state is CommitmentState.INVALID
     assert "does not verify" in check.reason

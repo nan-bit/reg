@@ -85,6 +85,10 @@ verification is file I/O plus crypto. An artifact closed with no anchor records
 Re-check at pin time in #316/#317; a version with known vulnerabilities is not
 pinned.
 
+Re-check record: `sigstore` 4.5.0 was checked 2026-10-03 (clean) and checked
+again at pin time 2026-10-04 (clean) — the earlier check does not substitute.
+`rfc3161-client` 1.0.9 was checked and pinned 2026-10-03.
+
 ## 7. Long-term verification
 
 - **TSA certificates expire.** Store the full chain with each token; verify

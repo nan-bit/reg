@@ -1,0 +1,93 @@
+{
+    "_type": "https://in-toto.io/Statement/v1",
+    "subject": [
+        {
+            "name": "auto/issue-316",
+            "digest": {
+                "sha1": "6536757a2e5be6f451fd08dec4f84ff045669175"
+            }
+        }
+    ],
+    "predicate": {
+        "attempt_id": "316-manual-20261003",
+        "authored_by": {
+            "agent": "muse",
+            "harness": "manual",
+            "model": "muse-spark"
+        },
+        "base": "origin/main",
+        "commit": "6536757a2e5be6f451fd08dec4f84ff045669175",
+        "concluded": {
+            "analyzer": "manual",
+            "changed": [
+                "README.md",
+                "docs/limitations.md",
+                "docs/lossiness.md",
+                "docs/plan.md",
+                "docs/prior-art.md",
+                "docs/retention.md",
+                "docs/sensor-baseline.md",
+                "docs/sufficiency.md",
+                "pyproject.toml",
+                "reg/anchor_tsa.py",
+                "reg/bench.py",
+                "reg/commit.py",
+                "reg/graph.py",
+                "reg/query.py",
+                "reg/store.py",
+                "tests/fixtures/tsa_ca.crt",
+                "tests/fixtures/tsa_response.der",
+                "tests/fixtures/tsa_signer.crt",
+                "tests/test_anchor_tsa.py",
+                "tests/test_doc_shape.py",
+                "tests/test_query.py"
+            ]
+        },
+        "coverage": "full pytest: 3003 passed",
+        "declared": [
+            "reg/anchor_tsa.py",
+            "reg/commit.py",
+            "reg/graph.py",
+            "reg/query.py",
+            "reg/store.py",
+            "docs/limitations.md",
+            "docs/tamper-evidence-design.md",
+            "pyproject.toml",
+            "tests/"
+        ],
+        "identity_mode": "agent",
+        "issue": 316,
+        "out_of_scope": [],
+        "preceding": null,
+        "prev": null,
+        "produced": [
+            "draft PR"
+        ],
+        "repository": "nan-bit/reg",
+        "verdict": "in-scope",
+        "verification": "pytest -q: 3003 passed, 0 failed",
+        "chain": {
+            "field_digests": {
+                "attempt_id": "0af4c90ecf62ea5d0ad5a3bee1bae95447a1c5f29407d058dd1a0b49eaf92984",
+                "authored_by": "a45feef0b550b6e0baa6b50787ce61e4431230c373f260317a3b44626176334f",
+                "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+                "commit": "bb48b506adab08361574d8641a6b2ca47cbdf1daf5b25fd5493261abb5f8a9ae",
+                "concluded": "7552c12cc04cdd679fc0dd821fed3cfa0995ef5d5fd54b3285b6bc0302fc7f0d",
+                "coverage": "a9da4cdcf1a4d39fad9ce9e2d165689de3eb8fd7bc6cf7f1d312dbf2bfee18fe",
+                "declared": "5d8a73ce1c9ec63d8d2ddd19276ab8f765eb9802fbf756b9ddc525c427fb0b57",
+                "identity_mode": "7649b444a37e5ea51af536af65bdde29d549803a064bdd0707db6a00c9285673",
+                "issue": "7a20311cf7a4b222d436424480bc65dd0f9d2cefcbbb1fa148ca0d7e1d5bb55a",
+                "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                "preceding": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "prev": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "produced": "595e7f67215dd0d584256c1cd7d089b7a6fae9d7913f35cf7d05bed98d3bb1d3",
+                "repository": "e34cb59b23a488d332827ea8c1b8d9acfa7665bb9f81c3ba6dd7d58e7c5ded84",
+                "verdict": "286e06199ea2870d49fe46d4cc3c4e738b587756cb2a00372d0eb7aff1df0f9f",
+                "verification": "f2e20d23f4cf80a525e6f8cd98b5d1347b08bb69bb91a65dad5a05c8fa89d145"
+            },
+            "head": "d0f332d9301309229567c5b2ac67dcceb349999739b007780dc6893d7cb971d1",
+            "prev_heads": [],
+            "scheme": "wake-chain-sha256-v1"
+        }
+    }
+}

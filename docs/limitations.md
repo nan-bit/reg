@@ -426,62 +426,66 @@ artifact claims.
 
 ---
 
-## 6. The commitment is an on-site witness, or an opt-in third-party timestamp
+## 6. The commitment is an on-site witness, or opt-in third-party anchors
 
 **What.** An artifact's chain heads are committed at close, and
-`meta[commitment]` says how — `none`, in so many words, where neither was used.
+`meta[commitment]` says how — `none`, in so many words, where nothing was used.
 The default is `witness-hmac-sha256-v1`: an HMAC over both heads under the key
 of a **second on-site keyholder**, refused if it is either of the two that
 signed the records. It proves exactly *a second party at the same site saw
-these heads*. It is not timestamping, this project will not describe it as
-timestamping, and the artifact itself carries the sentence saying so
-(`meta[commitment_statement]`).
+these heads* — not timestamping, and the artifact says so
+in `meta[commitment_statement]`.
 
-Opt-in at close is `rfc3161-sha256-v1`: every closed epoch head timestamped by
-an RFC 3161 Time Stamp Authority, tokens stored in `anchor_receipts` one per
-`(chain, epoch)`. Only 32-byte heads ever leave the operator boundary;
-verification is file I/O plus crypto, years later, with no service running.
+Opt-in at close, the anchor adapters compose: `rfc3161-sha256-v1`
+timestamps each closed epoch head with an RFC 3161 Time Stamp Authority,
+`rekor-v2-inclusion-v1` publishes each to a Rekor v2 transparency log as an
+in-toto statement in a DSSE envelope.
+Tokens and inclusion proofs land in `anchor_receipts`, one per `(chain, epoch)`
+per scheme. Only 32-byte heads leave the operator boundary; verification is
+file I/O plus crypto, years later.
 
-Beside both, `meta[run_start_utc]` is a **declared** instant, required with no
-default. It places the run on a wall clock and it is a claim by the same party
-that signed the records.
+Beside all three, `meta[run_start_utc]` is a **declared** instant, required
+with no default — a claim by the same party that signed the records.
 
 **What it costs.**
 
 - **The witness's instant is not attested.** A colluding operator and witness
-  can backdate a re-issued history and every check passes. Nothing inside the
-  artifact bears on that, and nothing inside an artifact can.
-- **The witness's independence is only as good as the site.** The refusal in
-  `check_witness_is_independent` catches the *mechanical* version — a witness
+  can backdate a re-issued history and every check passes.
+- **The witness's independence is only as good as the site:**
+  `check_witness_is_independent` catches the mechanical version — a witness
   holding a record-signing key — and not the organisational one.
-- **The timestamp attests the instant, not the content.** A token says *this
-  32-byte head existed by this instant*; the TSA never saw a record, and the
-  artifact's statement says so.
-- **The tokens check against trust roots the artifact does not carry.**
-  Without them the imprints are still compared to the epoch heads, but no
-  signature is checked, and the check reports COULD-NOT-EVALUATE — never VALID.
-- **The third value is common.** An artifact closed with no supplier reports
-  COULD-NOT-EVALUATE and says `commitment: none`; so does one whose witness key
-  the verifier does not hold, and one whose TSA roots they cannot name. None
-  ever resolves to VALID, which is correct and does mean an assessor frequently
-  learns nothing from this check alone.
+- **The timestamp attests the instant, the log attests publication — neither
+  saw a record.** A token says *this head existed by this instant*; an entry
+  says *this head is in the log at this index*, and the checkpoint's clock is
+  its only clock.
+- **The tokens check against trust roots the artifact does not carry:**
+  without them no signature is checked, and the check reports
+  COULD-NOT-EVALUATE — never VALID.
+- **The proofs check against a log key the artifact does carry.** Each receipt
+  pins the key it was anchored under — resolved from the TUF trusted root at
+  anchor time, per receipt because shards rotate. An unresolvable pin is
+  COULD-NOT-EVALUATE.
+- **The public log is rate-limited.** Its public-good instance throttles
+  submissions; a deployment anchoring at volume runs its own — the adapter
+  takes any Rekor v2 URL and the receipt records which.
+- **The third value is common.** No supplier, a witness key the verifier does
+  not hold, TSA roots they cannot name: all COULD-NOT-EVALUATE, none ever
+  VALID — correct, though an assessor frequently learns nothing
+  from this check alone.
 
 **What is *not* limited.** The half that catches a re-issued chain needs **no
-key at all**: `verify_commitment` recomputes both heads from the records and
-compares them against the recorded ones — any holder of the file detects a
-mismatch. The witness signature or TSA token is what stops the recorded
-heads being rewritten to match. The tokens add what the witness cannot:
-per-epoch existence instants, so a tail trimmed after the last anchor breaks
-against a token the trimmer cannot reproduce.
+key at all**: `verify_commitment` recomputes both heads from the records — any
+holder of the file detects a mismatch. The anchors stop the recorded heads
+being rewritten to match: tokens add per-epoch existence instants — a tail
+trimmed after the last anchor breaks against an unreproducible token; the log
+adds what the timestamp cannot — the heads are public, so a withheld artifact
+is itself evidence.
 
-**What a claim would need instead.** Withholding detection: a commitment to an
-append-only **transparency log**, where a missing artifact is itself evidence.
-A timestamp proves *this* history existed by an instant; it does
-not prove no other history exists. Still unimplemented: it needs a network
-call at artifact close *and* a log the verifier trusts — the artifact must be
-checkable with no service still running. `reg/commit.py` stays a
-`(ChainHeads) -> Commitment` interface, so a deployment prepared to take the
-dependency gets an adapter rather than a rewrite.
+**What a claim would need instead.** The seam stays `(ChainHeads) ->
+Commitment`: a new third party is an adapter,
+not a rewrite. What no anchor settles is the *content* of the records — a head
+that folded the wrong records verifies as happily as one that folded the
+right ones.
 
 ## 7. The chain is forward-secure per epoch, and the verifier still holds the keys
 

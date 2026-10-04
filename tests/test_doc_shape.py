@@ -500,7 +500,14 @@ EXEMPT: dict[str, str] = {
 #         added and cut again). Code-coupled words 14,840 -> 14,864;
 #         14,864 / 354 = 41.989, rounded up to the next tenth. Measured,
 #         no headroom.
-RATE = 42.0
+#   40.9  today, 2026-10-04, after #317: `reg/anchor_rekor.py` lands —
+#         `RekorV2Committer`, `HttpRekorClient`, `pin_log_key`,
+#         `verify_anchors` and the anchor state/result types: 11 new public
+#         symbols. The docs move is net +44 words (the README honesty
+#         paragraphs; the design-doc sigstore re-check note). Code-coupled
+#         words 14,864 -> 14,908; 14,908 / 365 = 40.844, rounded up to the
+#         next tenth. Measured, no headroom.
+RATE = 40.9
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #

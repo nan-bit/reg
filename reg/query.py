@@ -5097,22 +5097,26 @@ def _anchor_claim(
     conn: sqlite3.Connection, stated: Mapping[str, str]
 ) -> ColdReadClaim:
     """Did a third party with no relationship to the operator witness this
-    history at a real instant (issue #316)?
+    history at a real instant (issues #316, #317)?
 
-    **This does not verify any token.** Token verification is
-    `reg.anchor_tsa.verify_anchors`, and it needs the TSA's trust roots, which
-    the artifact does not carry. What this reads is what the *file* holds
-    towards the question: whether `anchor_receipts` carries timestamp tokens,
-    for which schemes, over how many epoch heads — and, where it carries none,
-    what the artifact states in `meta[commitment]`.
+    **This does not verify any receipt.** Receipt verification is
+    `reg.anchor_tsa.verify_anchors` and `reg.anchor_rekor.verify_anchors`.
+    What this reads is what the *file* holds towards the question: whether
+    `anchor_receipts` carries anchors, for which schemes, over how many epoch
+    heads — and, where it carries none, what the artifact states in
+    `meta[commitment]`.
 
     Three states:
 
-    * receipts present — **CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN**.
-      The check exists (`verify_anchors`) and is gated on trust roots the file
-      does not carry; the detail names the scheme, the anchored epoch count,
-      and what the roots would then say. The file alone does not settle the
-      claim, which is exactly what the fifth state is for.
+    * receipts present — **CHECKABLE**, when every scheme present verifies
+      from the file alone (the Rekor scheme: each receipt carries the entry,
+      the envelope and the pinned log key), or
+      **CHECKABLE-WITH-A-KEY-THE-FILE-DOES-NOT-CONTAIN** when a scheme's
+      check is gated on material the file does not carry (the TSA scheme:
+      `verify_anchors` needs the TSA's trust roots). The detail names the
+      scheme, the anchored epoch count, and what the check would then say.
+      The file alone does not settle the claim, which is exactly what the
+      fifth state is for.
     * no receipts and `meta[commitment]` says `none` — **ABSENT**, with the
       detail quoting `commitment: none`. The artifact states in so many words
       that its heads were anchored to nothing at close: a re-issued history is
@@ -5120,7 +5124,7 @@ def _anchor_claim(
       to be inferred.
     * no receipts and any other commitment state — **ABSENT**, naming what is
       there instead. A witness-committed artifact carries no third-party
-      timestamp either, and the row says which commitment it does carry rather
+      anchor either, and the row says which commitment it does carry rather
       than reporting the anchor's absence as the commitment's.
     """
     try:
@@ -5130,21 +5134,39 @@ def _anchor_claim(
     except sqlite3.OperationalError:
         rows = []
     if rows:
+        schemes = {str(row["scheme"]): int(row["n"]) for row in rows}
         held = "; ".join(
-            f"{int(row['n'])} epoch heads under {row['scheme']}" for row in rows
+            f"{n} epoch heads under {scheme}" for scheme, n in schemes.items()
         )
+        # The Rekor receipts carry everything their check needs — entry,
+        # envelope and pinned log key — so a file holding them supports the
+        # claim from the file alone. The TSA tokens need trust roots the file
+        # does not carry.
+        fully_checkable = "rekor-v2-inclusion-v1" in schemes
+        if fully_checkable:
+            how = (
+                "Checking the Rekor proofs is reg.anchor_rekor.verify_anchors: "
+                "each receipt carries the log entry, the DSSE envelope and "
+                "the TUF-pinned log key, so the whole check is file I/O plus "
+                "crypto."
+            )
+        else:
+            how = (
+                "Checking them is reg.anchor_tsa.verify_anchors, and it needs "
+                "the TSA's trust roots, which this file does not carry: "
+                "without them the tokens are unread, not valid, which is why "
+                "this row is not CHECKABLE from the file alone."
+            )
         return ColdReadClaim(
             claim=CLAIM_ANCHOR,
             question=COLD_READ_QUESTIONS[CLAIM_ANCHOR],
-            state=CHECKABLE_WITH_A_KEY,
+            state=CHECKABLE if fully_checkable else CHECKABLE_WITH_A_KEY,
             detail=(
-                f"this artifact carries timestamp tokens — {held}. The tokens "
-                "assert each epoch head existed by the token's instant, to a "
-                "party with no relationship to the operator. Checking them is "
-                "reg.anchor_tsa.verify_anchors, and it needs the TSA's trust "
-                "roots, which this file does not carry: without them the "
-                "tokens are unread, not valid, which is why this row is not "
-                "CHECKABLE from the file alone."
+                f"this artifact carries third-party anchors — {held}. "
+                "The TSA tokens assert each epoch head existed by the token's "
+                "instant; the Rekor proofs assert each epoch head was "
+                "published to a transparency log. "
+                + how
             ),
         )
     commitment = stated.get(_META_COMMITMENT)

@@ -1376,13 +1376,12 @@ the answer in the literature is a tree.
 
 **2. The truncation attack has a structural fix that needs no trusted server at
 write time.** `chain.py`'s header says what defeats truncation is "an external
-commitment to the final chain hash", and §14 repeats it. That is correct and it is
-narrower than what is known: a consistency proof against **any** previously
-published head detects the removal of anything committed before it, and the
-append-only property is *proved* to the verifier rather than assumed from a count
-that carries no MAC. The gap between `reg` and the state of the art here is not the
-commitment — `reg/commit.py` commits both heads at close — it is that the
-commitment supports no inclusion proof and is held by a party the operator chose.
+commitment to the final chain hash", and §14 repeats it. Correct, and narrower
+than what is known: a consistency proof against **any** previously published
+head detects removal of anything committed before it. The gap was that the
+commitment supported no inclusion proof and was held by a party the operator
+chose; the Rekor adapter (`reg/anchor_rekor.py`) closes half of it — the same
+heads anchored to a transparency log, inclusion proofs held by the log.
 
 **3. `--witness` is witness cosigning with one witness, inside the operator.**
 [`docs/limitations.md`](limitations.md) §6 already says the independence is only as
@@ -1390,9 +1389,9 @@ good as the site. This line of work supplies the name for what is missing: a spl
 view is detected by parties who **compare** heads with each other, and a single
 witness on the operator's payroll compares nothing. Stated this way the gap is
 located rather than merely admitted — `reg` was missing a timestamp and a gossip
-set; the timestamp is now an opt-in adapter (`reg/anchor_tsa.py`), so what
-remains missing is the gossip set. The timestamp is the weaker of the two
-things it could adopt, and the one it has.
+set; the timestamp and the transparency log are now opt-in adapters
+(`reg/anchor_tsa.py`, `reg/anchor_rekor.py`), composable in one build, so what
+remains missing is the gossip set.
 
 ### What `reg` does that a transparency log does not
 
@@ -1404,9 +1403,11 @@ things it could adopt, and the one it has.
   enforcement split has no analogue in it.
 - **Offline verification.** Every property CT offers costs a network call: the
   SCT, the monitors, the gossip. `reg`'s claim is a file that verifies years later
-  with no service still running and no call to anyone. That is not a better
-  design — it is the other end of a trade, and CT is what the other end looks
-  like.
+  with no service still running and no call to anyone. The Rekor adapter keeps
+  that shape: the network call happens once, at anchor time, and the receipt
+  carries the entry, the envelope and the pinned log key — verification stays
+  file I/O plus crypto. That is not a better design — it is the other end of a
+  trade, and CT is what the other end looks like.
 - **Three-valued verification**, again, and again as software-engineering
   discipline rather than as a contribution.
 
@@ -1426,8 +1427,10 @@ worth stating carefully because this repository has a sentence that skips it:
 > committed for it, which is an operational arrangement and not a property of the
 > data structure.
 
-That sentence is **not edited here**; issue #104 records the finding and leaves the
-claim to whoever owns §6.
+That sentence is now edited: §6 was rewritten for the Rekor adapter, which
+publishes every epoch head. Issue #104's conditional stands — a withheld
+artifact is detectable to a party who knows the run happened — and the
+lossiness entry moves accordingly.
 
 ### Contribution, or different setting?
 

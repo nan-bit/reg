@@ -314,11 +314,11 @@ sentences. Phase 4 below has the angular half and the held decision;
 
 A third-party timestamp (RFC 3161) proves the chain heads existed by a given
 instant to someone with no relationship to the operator; a transparency log
-would make a *withheld* artifact detectable. The first is an
-opt-in adapter (`reg/anchor_tsa.py`): the timestamp needs a network call at
-close, verification stays file I/O plus crypto years later. The second is
-documented and deliberately unimplemented: it needs the network call *and* a log
-the verifier trusts — the artifact must be checkable with no service still running.
+(Rekor v2) makes a *withheld* artifact detectable. Both are opt-in adapters
+(`reg/anchor_tsa.py`, `reg/anchor_rekor.py`), composable in one build: each
+needs a network call at close, and verification is file I/O plus crypto with
+no service still running — the receipts carry the tokens, proofs and pinned
+log key.
 
 An assessor certifying what happened needs a record whose integrity does not
 rest on infrastructure belonging to the party being assessed, and the telemetry

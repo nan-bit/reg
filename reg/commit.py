@@ -37,14 +37,13 @@ key that signed the records is the author witnessing themself, so
 
 DOCUMENTED AND DELIBERATELY NOT IMPLEMENTED
 -------------------------------------------
-* **Transparency-log inclusion** (a Certificate-Transparency-shaped
-  append-only log; docs/prior-art.md). The witness scheme's shape, the same
-  reason — it needs a network call at artifact close, and the artifact must be
-  checkable with no service still running — and additionally it makes
-  *withholding* an artifact detectable, which nothing here does. It
-  would be a `Committer` returning a `Commitment` with a different `scheme`
-  and a different `token`, and `docs/tamper-evidence-design.md` §3 names it
-  `RekorV2Committer` for issue #317.
+*Nothing in this section any more.* It used to name transparency-log inclusion
+(a Certificate-Transparency-shaped append-only log; docs/prior-art.md) as the
+deliberately-deferred adapter: it needs a network call at artifact close, and
+the artifact must be checkable with no service still running. Issue #317 built
+it — `reg.anchor_rekor.RekorV2Committer`, scheme `rekor-v2-inclusion-v1` —
+which additionally makes *withholding* an artifact detectable, the property the
+deferral once cited as out of reach. The paragraph stays as the record.
 
 IMPLEMENTED ELSEWHERE, ON THIS INTERFACE
 ----------------------------------------
@@ -57,6 +56,13 @@ IMPLEMENTED ELSEWHERE, ON THIS INTERFACE
   the interface above is what makes the TSA an adapter rather than a rewrite.
   Scheme `rfc3161-sha256-v1`; tokens live in `anchor_receipts`, one per closed
   epoch head, and only 32-byte heads ever leave the operator boundary.
+* **Rekor v2 inclusion proofs** (`reg.anchor_rekor`, issue #317). The epoch
+  heads published to a transparency log: each head as an in-toto v1 statement
+  in a DSSE envelope, submitted as a hashedrekord, the signed inclusion proof
+  stored in `anchor_receipts` as canonical JSON beside the envelope and the
+  log's TUF-pinned checkpoint key. Scheme `rekor-v2-inclusion-v1`. Where the
+  TSA attests an instant, the log attests publication — the two compose, and
+  an artifact may carry both.
 
 WHERE THE COMMITMENT LIVES, AND WHY THAT IS SAFE
 -------------------------------------------------
@@ -95,6 +101,8 @@ __all__ = [
     "META_COMMITMENT_STATEMENT",
     "META_COMMITMENT_VERDICT_HEAD",
     "META_COMMITMENT_WITNESS",
+    "REKOR_COMMITMENT_STATEMENT",
+    "REKOR_SCHEME",
     "SCHEMES",
     "TSA_COMMITMENT_STATEMENT",
     "TSA_SCHEME",
@@ -140,11 +148,16 @@ WITNESS_SCHEME = "witness-hmac-sha256-v1"
 #: one home.
 TSA_SCHEME = "rfc3161-sha256-v1"
 
+#: The Rekor v2 inclusion scheme, implemented by `reg.anchor_rekor` (issue
+#: #317). The name carries what the adapter stores: a transparency-log
+#: inclusion proof, versioned like the other schemes.
+REKOR_SCHEME = "rekor-v2-inclusion-v1"
+
 #: Every scheme a reader of this version understands. A `meta[commitment]`
 #: outside this set is a could-not-evaluate — an artifact committed under
 #: something newer, which this reader must say it cannot check rather than
 #: report as uncommitted.
-SCHEMES: tuple[str, ...] = (WITNESS_SCHEME, TSA_SCHEME)
+SCHEMES: tuple[str, ...] = (WITNESS_SCHEME, TSA_SCHEME, REKOR_SCHEME)
 
 #: Where the rest of the commitment lands in `meta`.
 META_COMMITMENT_WITNESS = "commitment_witness_id"
@@ -185,6 +198,29 @@ TSA_COMMITMENT_STATEMENT = (
 )
 
 
+#: What the Rekor scheme proves, in the artifact beside the sentences above.
+#: The mirror image of the TSA's: this one IS third-party witnessing, but of
+#: publication rather than of an instant — the log's checkpoint says the head
+#: is in its Merkle tree, which no party at the operator's site can rewrite
+#: without forking a log the world already saw. What it does not do: it says
+#: nothing about the records' content — only 32-byte heads left the boundary —
+#: and it checks against the log's public key pinned in each receipt, which a
+#: verifier that does not trust this file's word for the key compares against
+#: the published TUF trusted root.
+REKOR_COMMITMENT_STATEMENT = (
+    "The epoch heads were published to {witness_id}, a Rekor v2 transparency "
+    "log, at artifact close. Each inclusion proof asserts its epoch head is in "
+    "the log's Merkle tree under a checkpoint the log signed, which no party "
+    "at the operator's site can backdate or rewrite without forking the log. "
+    "This IS third-party witnessing, of publication rather than of an instant. "
+    "What it does not do: it says nothing about the records' content — only "
+    "32-byte heads left the boundary — and the proofs check against the log's "
+    "public key pinned in each receipt. A verifier that does not trust this "
+    "file's word for that key compares it against the published TUF trusted "
+    "root."
+)
+
+
 def commitment_statement(scheme: str, witness_id: str) -> str:
     """The in-artifact sentence for `scheme`, naming who committed.
 
@@ -203,6 +239,13 @@ def commitment_statement(scheme: str, witness_id: str) -> str:
                 f"{witness_id!r}."
             )
         return TSA_COMMITMENT_STATEMENT.format(witness_id=witness_id)
+    if scheme == REKOR_SCHEME:
+        if not isinstance(witness_id, str) or not witness_id.strip():
+            raise CommitmentError(
+                f"a {REKOR_SCHEME} statement needs the log's name, got "
+                f"{witness_id!r}."
+            )
+        return REKOR_COMMITMENT_STATEMENT.format(witness_id=witness_id)
     raise CommitmentError(
         f"scheme {scheme!r} is not one this version implements; the schemes "
         f"are {list(SCHEMES)}."
@@ -660,125 +703,134 @@ def _recorded_heads(conn: sqlite3.Connection) -> ChainHeads | None:
         return None
 
 
-def verify_commitment(
-    conn: sqlite3.Connection,
-    witness: Witness | None,
-    *,
-    tsa_roots: Sequence[bytes] | None = None,
-) -> CommitmentCheck:
-    """Check an artifact's commitment against the records it actually holds.
+def _scheme_meta(
+    conn: sqlite3.Connection, scheme: str, schemes: list[str], key: str
+) -> str | None:
+    """One scheme's meta value: the per-scheme key, with a legacy fallback.
 
-    Two checks, in this order, and the order is the point:
-
-    1. **The recorded heads against the recomputed ones.** This needs no key at
-       all. An artifact whose records were re-issued after it was closed has
-       heads that no longer match what it committed to, and *anybody* holding
-       the file can see it.
-    2. **The token.** Under the witness scheme this is the HMAC under the
-       witness key, which is what makes the heads themselves unalterable:
-       editing them to match a re-issued chain breaks the signature. Under the
-       TSA scheme it is `reg.anchor_tsa.verify_anchors`: every closed epoch's
-       timestamp token, checked against the epoch heads and — where `tsa_roots`
-       are offered — against the TSA's trust roots.
-
-    Args:
-        conn: an artifact opened with `reg.store.connect`.
-        witness: the witness whose key signed the heads, or `None` for "no
-            witness key available". **Required, with no default**, exactly as
-            `verify_chain`'s keyring is: a caller who did not think about the
-            key would otherwise get a report that looks like a verification and
-            checked no signature. `None` is could-not-evaluate for step 2 and
-            nothing else — step 1 still runs and is still reported. Ignored
-            under the TSA scheme, which has no witness key.
-        tsa_roots: DER-encoded trust roots for the TSA scheme, or `None` for
-            "no roots offered". Without them the tokens' imprints are still
-            checked against the epoch heads, but no signature is, and the
-            check reports COULD-NOT-EVALUATE rather than VALID.
-
-    Returns:
-        A `CommitmentCheck`. `bool()` on it raises.
+    Since issue #317 an artifact that ran several committers records each
+    scheme's witness id, token and statement under `key:<scheme>`. Artifacts
+    written before that — a lone witness or a lone TSA anchor — carry the
+    un-suffixed keys, which new writers still emit for single-scheme builds
+    so old readers keep working. The fallback applies only there: a layered
+    artifact has no un-suffixed keys to fall back to.
     """
-    scheme = store.get_meta(conn, META_COMMITMENT)
-    if scheme is None:
-        return CommitmentCheck(
-            CommitmentState.COULD_NOT_EVALUATE,
-            "this artifact does not state whether its chain heads were "
-            f"committed to anything: it has no meta[{META_COMMITMENT!r}] at all, "
-            "so it was written before the commitment interface existed. That is "
-            "not the same fact as a build that was given no supplier, which "
-            f"records {COMMITMENT_NONE!r} in so many words.",
-        )
-    if scheme == COMMITMENT_NONE:
-        return CommitmentCheck(
-            CommitmentState.COULD_NOT_EVALUATE,
-            "this artifact was closed with no commitment supplier, and says so. "
-            "Its chain deters editing and does not deter re-issuance: the party "
-            "that signed the records could have produced the whole history "
-            "offline, and nothing in the file bears on that.",
-            scheme=COMMITMENT_NONE,
-        )
-    if scheme not in SCHEMES:
-        return CommitmentCheck(
-            CommitmentState.COULD_NOT_EVALUATE,
-            f"this artifact is committed under scheme {scheme!r}, which this "
-            f"version does not implement; it knows {list(SCHEMES)}. Reporting "
-            "unchecked rather than uncommitted — the commitment may be perfectly "
-            "good and this reader cannot tell.",
-            scheme=scheme,
-        )
+    suffixed = store.get_meta(conn, f"{key}:{scheme}")
+    if suffixed is not None:
+        return suffixed
+    if len(schemes) == 1:
+        return store.get_meta(conn, key)
+    return None
 
-    recorded = _recorded_heads(conn)
-    witness_id = store.get_meta(conn, META_COMMITMENT_WITNESS)
-    token = store.get_meta(conn, META_COMMITMENT_SIGNATURE)
-    if recorded is None or witness_id is None or token is None:
+
+def _verify_witness_scheme(
+    conn: sqlite3.Connection,
+    scheme: str,
+    schemes: list[str],
+    witness: Witness | None,
+    recorded: ChainHeads,
+    computed: ChainHeads,
+) -> CommitmentCheck:
+    """The on-site witness scheme's token check, per scheme."""
+    witness_id = _scheme_meta(conn, scheme, schemes, META_COMMITMENT_WITNESS)
+    token = _scheme_meta(conn, scheme, schemes, META_COMMITMENT_SIGNATURE)
+    if witness_id is None or token is None:
         return CommitmentCheck(
             CommitmentState.COULD_NOT_EVALUATE,
             f"meta[{META_COMMITMENT!r}] says {scheme!r} but the commitment is "
-            "incomplete: one of the two heads, the witness id or the signature "
-            "is missing or malformed. A partial commitment is checked against "
-            "nothing, and it must not read as an absent one either.",
+            "incomplete: the witness id or the signature is missing or "
+            "malformed. A partial commitment is checked against nothing, and "
+            "it must not read as an absent one either.",
             scheme=scheme,
             witness_id=witness_id,
             recorded=recorded,
         )
-
-    try:
-        computed = chain_heads(conn)
-    except CommitmentError as exc:
+    if witness is None:
         return CommitmentCheck(
             CommitmentState.COULD_NOT_EVALUATE,
-            f"the chain heads could not be recomputed from this artifact, so "
-            f"the commitment was not checked against anything: {exc}",
-            scheme=scheme,
-            witness_id=witness_id,
-            recorded=recorded,
-        )
-
-    if computed != recorded:
-        moved = [
-            name
-            for name in ("declaration_head", "verdict_head")
-            if getattr(computed, name) != getattr(recorded, name)
-        ]
-        return CommitmentCheck(
-            CommitmentState.INVALID,
-            "the committed heads are not the heads this artifact's records "
-            f"produce ({', '.join(moved)} moved). The record chain was altered "
-            "or re-issued after the commitment was made — which is the one "
-            "thing a chain under the author's own keys cannot notice, and the "
-            "reason this commitment exists.",
+            f"the committed heads match this artifact's records, but no witness "
+            f"key was offered for {witness_id!r}, so the signature over them was "
+            "not checked. The heads could have been rewritten to match a "
+            "re-issued chain; only the witness key rules that out.",
             scheme=scheme,
             witness_id=witness_id,
             recorded=recorded,
             computed=computed,
         )
+    if witness.witness_id != witness_id:
+        return CommitmentCheck(
+            CommitmentState.COULD_NOT_EVALUATE,
+            f"this artifact was committed by witness {witness_id!r} and the "
+            f"witness offered is {witness.witness_id!r}, so there is no key here "
+            "for the signature on it. Not a finding about the artifact: a "
+            "verifier holding the wrong witness has learned nothing.",
+            scheme=scheme,
+            witness_id=witness_id,
+            recorded=recorded,
+            computed=computed,
+        )
+    expected = hmac.new(
+        witness.material,
+        commitment_bytes(scheme, witness_id, recorded),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, str(token)):
+        return CommitmentCheck(
+            CommitmentState.INVALID,
+            f"the commitment signature does not verify under witness "
+            f"{witness_id!r}. The heads, the signature or the key is not the one "
+            "that was committed.",
+            scheme=scheme,
+            witness_id=witness_id,
+            recorded=recorded,
+            computed=computed,
+        )
+    return CommitmentCheck(
+        CommitmentState.VALID,
+        f"the chain heads match this artifact's records and are signed by "
+        f"witness {witness_id!r}. A second on-site party saw these heads; this "
+        "is not a third-party timestamp.",
+        scheme=scheme,
+        witness_id=witness_id,
+        recorded=recorded,
+        computed=computed,
+    )
 
+
+def _verify_anchor_scheme(
+    conn: sqlite3.Connection,
+    scheme: str,
+    schemes: list[str],
+    recorded: ChainHeads,
+    computed: ChainHeads,
+    *,
+    tsa_roots: Sequence[bytes] | None,
+) -> CommitmentCheck:
+    """A third-party anchor scheme's check, per scheme.
+
+    The TSA scheme's tokens are checked against the epoch heads and — where
+    `tsa_roots` are offered — the TSA's trust roots, which is
+    `reg.anchor_tsa`'s job. The Rekor scheme's proofs are checked against the
+    epoch heads and the log key each receipt pins, which is
+    `reg.anchor_rekor`'s job and needs nothing the file does not carry.
+    """
+    witness_id = _scheme_meta(conn, scheme, schemes, META_COMMITMENT_WITNESS)
+    token = _scheme_meta(conn, scheme, schemes, META_COMMITMENT_SIGNATURE)
+    if witness_id is None or token is None:
+        return CommitmentCheck(
+            CommitmentState.COULD_NOT_EVALUATE,
+            f"meta[{META_COMMITMENT!r}] says {scheme!r} but the commitment is "
+            "incomplete: the witness id or the signature is missing or "
+            "malformed. A partial commitment is checked against nothing, and "
+            "it must not read as an absent one either.",
+            scheme=scheme,
+            witness_id=witness_id,
+            recorded=recorded,
+        )
     if scheme == TSA_SCHEME:
-        # The TSA scheme has no witness key: the tokens are checked against
-        # the epoch heads and the trust roots, which is `reg.anchor_tsa`'s
-        # job. Imported here, not at module scope: `reg.anchor_tsa` imports
-        # this module, and `reg.query` must be able to name this function's
-        # type without importing either.
+        # Imported here, not at module scope: `reg.anchor_tsa` imports this
+        # module, and `reg.query` must be able to name this function's type
+        # without importing either.
         from reg import anchor_tsa
 
         try:
@@ -807,55 +859,191 @@ def verify_commitment(
             recorded=recorded,
             computed=computed,
         )
+    # REKOR_SCHEME: the only other anchor scheme this version implements.
+    from reg import anchor_rekor
 
-    if witness is None:
+    try:
+        anchors = anchor_rekor.verify_anchors(conn)
+    except anchor_rekor.RekorError as exc:
         return CommitmentCheck(
             CommitmentState.COULD_NOT_EVALUATE,
-            f"the committed heads match this artifact's records, but no witness "
-            f"key was offered for {witness_id!r}, so the signature over them was "
-            "not checked. The heads could have been rewritten to match a "
-            "re-issued chain; only the witness key rules that out.",
+            f"the Rekor anchors could not be checked: {exc}",
             scheme=scheme,
             witness_id=witness_id,
             recorded=recorded,
             computed=computed,
         )
-    if witness.witness_id != witness_id:
+    state = {
+        anchor_rekor.AnchorState.VALID: CommitmentState.VALID,
+        anchor_rekor.AnchorState.INVALID: CommitmentState.INVALID,
+        anchor_rekor.AnchorState.COULD_NOT_EVALUATE: (
+            CommitmentState.COULD_NOT_EVALUATE
+        ),
+    }[anchors.state]
+    return CommitmentCheck(
+        state,
+        f"Rekor {witness_id!r}: {anchors.reason}",
+        scheme=scheme,
+        witness_id=witness_id,
+        recorded=recorded,
+        computed=computed,
+    )
+
+
+def verify_commitment(
+    conn: sqlite3.Connection,
+    witness: Witness | None,
+    *,
+    tsa_roots: Sequence[bytes] | None = None,
+) -> CommitmentCheck:
+    """Check an artifact's commitment against the records it actually holds.
+
+    Two checks, in this order, and the order is the point:
+
+    1. **The recorded heads against the recomputed ones.** This needs no key at
+       all. An artifact whose records were re-issued after it was closed has
+       heads that no longer match what it committed to, and *anybody* holding
+       the file can see it.
+    2. **The token, per scheme.** Under the witness scheme this is the HMAC
+       under the witness key, which is what makes the heads themselves
+       unalterable: editing them to match a re-issued chain breaks the
+       signature. Under the TSA scheme it is `reg.anchor_tsa.verify_anchors`:
+       every closed epoch's timestamp token, checked against the epoch heads
+       and — where `tsa_roots` are offered — against the TSA's trust roots.
+       Under the Rekor scheme it is `reg.anchor_rekor.verify_anchors`: every
+       closed epoch's inclusion proof, checked against the epoch heads and the
+       log key each receipt pins, with nothing the file does not carry.
+
+    `meta[commitment]` names every scheme that ran at close, comma-separated
+    in `SCHEMES` order — a layered artifact carries several commitments, each
+    checked independently and each reported. One INVALID anywhere is INVALID;
+    otherwise one COULD-NOT-EVALUATE anywhere is COULD-NOT-EVALUATE.
+
+    Args:
+        conn: an artifact opened with `reg.store.connect`.
+        witness: the witness whose key signed the heads, or `None` for "no
+            witness key available". **Required, with no default**, exactly as
+            `verify_chain`'s keyring is: a caller who did not think about the
+            key would otherwise get a report that looks like a verification and
+            checked no signature. `None` is could-not-evaluate for step 2 and
+            nothing else — step 1 still runs and is still reported. Ignored
+            under the anchor schemes, which have no witness key.
+        tsa_roots: DER-encoded trust roots for the TSA scheme, or `None` for
+            "no roots offered". Without them the tokens' imprints are still
+            checked against the epoch heads, but no signature is, and the
+            check reports COULD-NOT-EVALUATE rather than VALID.
+
+    Returns:
+        A `CommitmentCheck`. `bool()` on it raises.
+    """
+    field = store.get_meta(conn, META_COMMITMENT)
+    if field is None:
         return CommitmentCheck(
             CommitmentState.COULD_NOT_EVALUATE,
-            f"this artifact was committed by witness {witness_id!r} and the "
-            f"witness offered is {witness.witness_id!r}, so there is no key here "
-            "for the signature on it. Not a finding about the artifact: a "
-            "verifier holding the wrong witness has learned nothing.",
-            scheme=scheme,
-            witness_id=witness_id,
-            recorded=recorded,
-            computed=computed,
+            "this artifact does not state whether its chain heads were "
+            f"committed to anything: it has no meta[{META_COMMITMENT!r}] at all, "
+            "so it was written before the commitment interface existed. That is "
+            "not the same fact as a build that was given no supplier, which "
+            f"records {COMMITMENT_NONE!r} in so many words.",
+        )
+    if field == COMMITMENT_NONE:
+        return CommitmentCheck(
+            CommitmentState.COULD_NOT_EVALUATE,
+            "this artifact was closed with no commitment supplier, and says so. "
+            "Its chain deters editing and does not deter re-issuance: the party "
+            "that signed the records could have produced the whole history "
+            "offline, and nothing in the file bears on that.",
+            scheme=COMMITMENT_NONE,
+        )
+    schemes = field.split(",")
+    unknown = [s for s in schemes if s not in SCHEMES]
+    if unknown:
+        return CommitmentCheck(
+            CommitmentState.COULD_NOT_EVALUATE,
+            f"this artifact is committed under scheme(s) {unknown!r}, which this "
+            f"version does not implement; it knows {list(SCHEMES)}. Reporting "
+            "unchecked rather than uncommitted — the commitment may be perfectly "
+            "good and this reader cannot tell.",
+            scheme=field,
         )
 
-    expected = hmac.new(
-        witness.material,
-        commitment_bytes(scheme, witness_id, recorded),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(expected, str(token)):
+    recorded = _recorded_heads(conn)
+    if recorded is None:
+        return CommitmentCheck(
+            CommitmentState.COULD_NOT_EVALUATE,
+            f"meta[{META_COMMITMENT!r}] says {field!r} but the commitment is "
+            "incomplete: one of the two heads is missing or malformed. A "
+            "partial commitment is checked against nothing, and it must not "
+            "read as an absent one either.",
+            scheme=field,
+            recorded=recorded,
+        )
+
+    try:
+        computed = chain_heads(conn)
+    except CommitmentError as exc:
+        return CommitmentCheck(
+            CommitmentState.COULD_NOT_EVALUATE,
+            f"the chain heads could not be recomputed from this artifact, so "
+            f"the commitment was not checked against anything: {exc}",
+            scheme=field,
+            recorded=recorded,
+        )
+
+    if computed != recorded:
+        moved = [
+            name
+            for name in ("declaration_head", "verdict_head")
+            if getattr(computed, name) != getattr(recorded, name)
+        ]
         return CommitmentCheck(
             CommitmentState.INVALID,
-            f"the commitment signature does not verify under witness "
-            f"{witness_id!r}. The heads, the signature or the key is not the one "
-            "that was committed.",
-            scheme=scheme,
-            witness_id=witness_id,
+            "the committed heads are not the heads this artifact's records "
+            f"produce ({', '.join(moved)} moved). The record chain was altered "
+            "or re-issued after the commitment was made — which is the one "
+            "thing a chain under the author's own keys cannot notice, and the "
+            "reason this commitment exists.",
+            scheme=field,
+            recorded=recorded,
+            computed=computed,
+        )
+
+    checks = [
+        (
+            _verify_witness_scheme(conn, s, schemes, witness, recorded, computed)
+            if s == WITNESS_SCHEME
+            else _verify_anchor_scheme(
+                conn, s, schemes, recorded, computed, tsa_roots=tsa_roots
+            )
+        )
+        for s in schemes
+    ]
+    if len(checks) == 1:
+        return checks[0]
+    invalid = [c for c in checks if c.state is CommitmentState.INVALID]
+    unknown_state = [
+        c for c in checks if c.state is CommitmentState.COULD_NOT_EVALUATE
+    ]
+    if invalid:
+        return CommitmentCheck(
+            CommitmentState.INVALID,
+            "; ".join(c.reason for c in invalid),
+            scheme=field,
+            recorded=recorded,
+            computed=computed,
+        )
+    if unknown_state:
+        return CommitmentCheck(
+            CommitmentState.COULD_NOT_EVALUATE,
+            "; ".join(c.reason for c in unknown_state),
+            scheme=field,
             recorded=recorded,
             computed=computed,
         )
     return CommitmentCheck(
         CommitmentState.VALID,
-        f"the chain heads match this artifact's records and are signed by "
-        f"witness {witness_id!r}. A second on-site party saw these heads; this "
-        "is not a third-party timestamp.",
-        scheme=scheme,
-        witness_id=witness_id,
+        "; ".join(c.reason for c in checks),
+        scheme=field,
         recorded=recorded,
         computed=computed,
     )

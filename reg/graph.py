@@ -244,6 +244,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from reg import __version__, store
+from reg.anchor_rekor import RekorClient, RekorV2Committer
 from reg.anchor_tsa import Rfc3161Committer, TsaClient
 from reg.chain import (
     CHAIN_FORMAT_V1,
@@ -265,6 +266,7 @@ from reg.commit import (
     META_COMMITMENT_STATEMENT,
     META_COMMITMENT_VERDICT_HEAD,
     META_COMMITMENT_WITNESS,
+    SCHEMES,
     ChainHeads,
     Commitment,
     CommitmentError,
@@ -2415,6 +2417,8 @@ def build(
     commitment: Callable[[ChainHeads], Commitment] | None = None,
     tsa_client: TsaClient | None = None,
     tsa_name: str | None = None,
+    rekor_client: RekorClient | None = None,
+    rekor_name: str | None = None,
 ) -> BuildResult:
     """Turn a raw CSV stream into a SQLite evidence graph. Overwrites `out_path`.
 
@@ -2486,6 +2490,16 @@ def build(
             refused: `meta[commitment]` holds one scheme, and two suppliers
             would be two. `tsa_name` without `tsa_client` is refused as well —
             a name with nothing behind it.
+        rekor_client: a `reg.anchor_rekor.RekorClient` — the Rekor v2
+            transparency log the epoch heads are published to at close — or
+            `None`. When given, the build constructs a
+            `reg.anchor_rekor.RekorV2Committer` around the live artifact
+            connection at close time, and `rekor_name` names the log in the
+            artifact. The two anchor adapters compose: `tsa_client` and
+            `rekor_client` may both be given, and `meta[commitment]` then
+            names both schemes, each independently verifiable. Giving
+            `commitment` with either anchor client is refused — the witness
+            is a different kind of claim and does not layer here.
 
     Returns:
         A `BuildResult` with the row counts and the artifact's size.
@@ -2546,11 +2560,12 @@ def build(
             "and the RFC 3161 and transparency-log adapters that interface "
             "exists to make cheap."
         )
-    if commitment is not None and tsa_client is not None:
+    if commitment is not None and (tsa_client is not None or rekor_client is not None):
         raise GraphBuildError(
-            "commitment and tsa_client were both given. meta[commitment] holds "
-            "one scheme, so one build takes one supplier — pass the witness "
-            "committer *or* the TSA client, not both."
+            "commitment was given with tsa_client or rekor_client. "
+            "meta[commitment] names the schemes that ran, and the witness is "
+            "a different kind of claim from the anchor adapters — pass the "
+            "witness committer *or* the anchor clients, not both."
         )
     if tsa_client is not None and records is None:
         raise GraphBuildError(
@@ -2575,6 +2590,30 @@ def build(
             f"a TSA-anchored build needs tsa_name, got {tsa_name!r}. The "
             "whole content of the scheme is *which third party* witnessed "
             "the heads."
+        )
+    if rekor_client is not None and records is None:
+        raise GraphBuildError(
+            "a Rekor client was given and no record stream was. There is no "
+            "chain in this build to anchor, and anchoring two genesis hashes "
+            "would produce proofs that verify and say nothing."
+        )
+    if rekor_client is not None and not isinstance(rekor_client, RekorClient):
+        raise GraphBuildError(
+            f"rekor_client must be a reg.anchor_rekor.RekorClient, got "
+            f"{type(rekor_client).__name__}."
+        )
+    if rekor_name is not None and rekor_client is None:
+        raise GraphBuildError(
+            "rekor_name was given and no Rekor client was. A name with "
+            "nothing behind it commits nothing anybody can check."
+        )
+    if rekor_client is not None and (
+        not isinstance(rekor_name, str) or not rekor_name.strip()
+    ):
+        raise GraphBuildError(
+            f"a Rekor-anchored build needs rekor_name, got {rekor_name!r}. "
+            "The whole content of the scheme is *which transparency log* "
+            "the heads were published to."
         )
     frames = tuple(read_frames(csv_path))
     # Whether this run's base pose is recorded, and a refusal if the stream
@@ -2861,15 +2900,25 @@ def build(
 
         # Last, because a commitment is made at artifact *close*: the heads it
         # signs are recomputed from the records this file actually holds, so
-        # every record has to be in it first. The TSA committer is built here
-        # and not by the caller because it reads the epoch heads it anchors
-        # from this connection — a committer built before build() cannot have
-        # it, and one built after cannot affect the file.
-        supplier = commitment
-        if supplier is None and tsa_client is not None:
+        # every record has to be in it first. The anchor committers are built
+        # here and not by the caller because they read the epoch heads they
+        # anchor from this connection — a committer built before build()
+        # cannot have it, and one built after cannot affect the file. The
+        # anchor adapters compose: each runs in turn, in SCHEMES order so the
+        # recorded scheme list is deterministic, and each persists its own
+        # receipts.
+        suppliers: list[Callable[[ChainHeads], Commitment]] = []
+        if commitment is not None:
+            suppliers.append(commitment)
+        if tsa_client is not None:
             assert isinstance(tsa_name, str) and tsa_name.strip()
-            supplier = Rfc3161Committer(tsa_client, conn, tsa_name=tsa_name)
-        _write_commitment(conn, supplier)
+            suppliers.append(Rfc3161Committer(tsa_client, conn, tsa_name=tsa_name))
+        if rekor_client is not None:
+            assert isinstance(rekor_name, str) and rekor_name.strip()
+            suppliers.append(
+                RekorV2Committer(rekor_client, conn, rekor_name=rekor_name)
+            )
+        _write_commitment(conn, suppliers)
 
         conn.commit()
         result = _summarize(
@@ -3293,9 +3342,9 @@ def _write_provenance(
     if comments:
         store.put_meta(conn, "source_provenance", "\n".join(comments))
 
-
 def _write_commitment(
-    conn, commitment: Callable[[ChainHeads], Commitment] | None
+    conn: sqlite3.Connection,
+    suppliers: list[Callable[[ChainHeads], Commitment]],
 ) -> None:
     """Commit the two chain heads at artifact close, or record that nobody did.
 
@@ -3306,19 +3355,28 @@ def _write_commitment(
     "this build had no witness" apart from "this file predates the interface",
     which are different things to say to an assessor.
 
+    With several suppliers — the layered anchor adapters — each runs in turn
+    and `meta[commitment]` names every scheme that ran, comma-separated in
+    `SCHEMES` order so the recorded list is deterministic. Each scheme's
+    witness id, token and statement go under per-scheme keys
+    (`commitment_witness_id:<scheme>` and siblings); a lone supplier
+    additionally writes the historical un-suffixed keys, so readers written
+    before the per-scheme keys existed keep working on single-scheme
+    artifacts.
+
     The heads are recomputed from the records the file holds rather than tracked
     as the build writes them: what a commitment is *for* is being compared
     against the artifact afterwards, and a head carried forward from the writer
     would commit to what the build believed it stored.
 
     Raises:
-        GraphBuildError: the heads could not be computed, or the supplier did
+        GraphBuildError: the heads could not be computed, or a supplier did
             not return a `Commitment` over the heads it was given. All three are
             refusals that unlink the artifact — an artifact carrying a
             commitment nobody can check is worse than one carrying none, because
             only the second says so.
     """
-    if commitment is None:
+    if not suppliers:
         store.put_meta(conn, META_COMMITMENT, COMMITMENT_NONE)
         return
 
@@ -3330,32 +3388,60 @@ def _write_commitment(
             f"to commit to: {exc}"
         ) from None
 
-    made = commitment(heads)
-    if not isinstance(made, Commitment):
-        raise GraphBuildError(
-            f"the commitment supplier returned a {type(made).__name__}, not a "
-            "Commitment. The interface is `(ChainHeads) -> Commitment`."
-        )
-    if made.heads != heads:
-        raise GraphBuildError(
-            "the commitment supplier returned a commitment over different heads "
-            "than it was given. Refusing to record it: a commitment to heads "
-            "that are not this artifact's would verify against itself and fail "
-            "against the file it is in."
-        )
+    made: list[Commitment] = []
+    for supplier in suppliers:
+        commitment = supplier(heads)
+        if not isinstance(commitment, Commitment):
+            raise GraphBuildError(
+                f"the commitment supplier returned a {type(commitment).__name__}, "
+                "not a Commitment. The interface is `(ChainHeads) -> Commitment`."
+            )
+        if commitment.heads != heads:
+            raise GraphBuildError(
+                "the commitment supplier returned a commitment over different heads "
+                "than it was given. Refusing to record it: a commitment to heads "
+                "that are not this artifact's would verify against itself and fail "
+                "against the file it is in."
+            )
+        made.append(commitment)
+    # Canonical order, not call order: the recorded scheme list must not depend
+    # on which keyword the caller passed first.
+    made.sort(key=lambda c: SCHEMES.index(c.scheme))
 
-    store.put_meta(conn, META_COMMITMENT, made.scheme)
+    store.put_meta(conn, META_COMMITMENT, ",".join(c.scheme for c in made))
     store.put_meta(
-        conn,
-        META_COMMITMENT_STATEMENT,
-        commitment_statement(made.scheme, made.witness_id),
+        conn, META_COMMITMENT_DECLARATION_HEAD, heads.declaration_head
     )
-    store.put_meta(conn, META_COMMITMENT_WITNESS, made.witness_id)
-    store.put_meta(
-        conn, META_COMMITMENT_DECLARATION_HEAD, made.heads.declaration_head
-    )
-    store.put_meta(conn, META_COMMITMENT_VERDICT_HEAD, made.heads.verdict_head)
-    store.put_meta(conn, META_COMMITMENT_SIGNATURE, made.token)
+    store.put_meta(conn, META_COMMITMENT_VERDICT_HEAD, heads.verdict_head)
+    for commitment in made:
+        store.put_meta(
+            conn,
+            f"{META_COMMITMENT_WITNESS}:{commitment.scheme}",
+            commitment.witness_id,
+        )
+        store.put_meta(
+            conn,
+            f"{META_COMMITMENT_SIGNATURE}:{commitment.scheme}",
+            commitment.token,
+        )
+        store.put_meta(
+            conn,
+            f"{META_COMMITMENT_STATEMENT}:{commitment.scheme}",
+            commitment_statement(commitment.scheme, commitment.witness_id),
+        )
+    if len(made) == 1:
+        # The historical un-suffixed keys, for readers written before the
+        # per-scheme keys existed. A layered artifact has no un-suffixed keys;
+        # an old reader reports its scheme list as an unknown scheme rather
+        # than misreading one of them.
+        only = made[0]
+        store.put_meta(conn, META_COMMITMENT_WITNESS, only.witness_id)
+        store.put_meta(conn, META_COMMITMENT_SIGNATURE, only.token)
+        store.put_meta(
+            conn,
+            META_COMMITMENT_STATEMENT,
+            commitment_statement(only.scheme, only.witness_id),
+        )
 
 
 def _summarize(conn, path: Path, frames: int, *, instants: int) -> BuildResult:

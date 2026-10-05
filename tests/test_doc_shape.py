@@ -141,11 +141,11 @@ CODE_COUPLED: dict[str, str] = {
         "describes."
     ),
     "docs/tamper-evidence-design.md": (
-        "A design document for the tamper-evidence hardening epic: the "
-        "threat model, the epoch and anchor schema, and the dependency "
-        "picks. It describes what the package will carry rather than "
-        "arguing a claim, so it is classified beside mobile-base.md and "
-        "self-describing.md for the same reason."
+        "The as-built record of the tamper-evidence hardening epic: the "
+        "threat model that drove the shape, what landed, and what remains. "
+        "It describes what the package carries rather than arguing a claim, "
+        "so it is classified beside mobile-base.md and self-describing.md "
+        "for the same reason."
     ),
 }
 
@@ -507,7 +507,16 @@ EXEMPT: dict[str, str] = {
 #         paragraphs; the design-doc sigstore re-check note). Code-coupled
 #         words 14,864 -> 14,908; 14,908 / 365 = 40.844, rounded up to the
 #         next tenth. Measured, no headroom.
-RATE = 40.9
+#   37.8  today, 2026-10-04, after #318: `reg/query.py` gains the anchor
+#         surface — `SchemeAnchor`, `AnchoredEpoch`, `AnchorStatus`,
+#         `anchor_status` and `render_anchor_status`: 5 new public symbols.
+#         The docs move is net -949 words (the design doc condensed to an
+#         as-built record, the docs index tightened, the README honesty note
+#         retired and compressed — all paid for within the group). #318's
+#         net-zero rule lands the epic at 13,961: code-coupled words
+#         14,908 -> 13,959; 13,959 / 370 = 37.727, rounded up to the next
+#         tenth. Measured, no headroom.
+RATE = 37.8
 
 # ARGUMENT_MAX — a flat ceiling, in words, on argument and reference prose.
 #

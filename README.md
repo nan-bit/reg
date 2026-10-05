@@ -90,17 +90,13 @@ The number is an identifier, not a rank; the **order** is the argument
 
 ## The honesty note: this is the structure of non-repudiation, not non-repudiation
 
-Every `Declaration` is signed with a policy key and linked to its predecessor by
-a SHA-256 chain, and every `Verdict` is signed with a separate enforcement key. **In this prototype both keys live in the same process.** That demonstrates
-the *structure* of non-repudiation — two parties, two keys, a record neither can
-rewrite without it showing — and not non-repudiation itself, because a process
-holding both keys can forge either side of the exchange.
-
-A real deployment needs the enforcement key in hardware the policy vendor cannot
-reach. That is the same independence argument as the Layer A / Layer B
-separation, one level down: a signature from a key the signer's counterparty also
-holds has common-cause failure with the thing it is supposed to attest, exactly
-as a constraint layer supplied by the policy vendor does.
+Every `Declaration` is signed with a policy key and every `Verdict` with a
+separate enforcement key, each linked to its predecessor by a SHA-256 chain —
+**in this prototype both keys live in the same process.** That demonstrates the
+*structure* of non-repudiation, not the thing itself: a real deployment needs
+the enforcement key in hardware the policy vendor cannot reach, because a
+signature from a key the signer's counterparty also holds has common-cause
+failure with the thing it is supposed to attest.
 
 **The chain itself is not this project's invention.** A per-record MAC plus a
 per-record hash link to the predecessor is Schneier and Kelsey's 1998
@@ -108,12 +104,12 @@ construction for secure logs on untrusted machines (USENIX Security 1998; ACM
 TISSEC, 1999), implemented here **with its forward security, per epoch**:
 `k_{i+1} = SHA-256(k_i)` every 1,024 records, each predecessor erased.
 
-Anyone holding the keyring can still re-sign the whole history, and deleting the
-*last* records of a chain breaks no link — Ma and Tsudik's truncation attack,
-named against exactly this construction. Both are deliberate absences rather
-than oversights, and what this project adds to the ancestor is not
-cryptographic ([`docs/limitations.md` §7](docs/limitations.md),
-[`docs/prior-art.md` §14 and §18](docs/prior-art.md)).
+The construction's two known gaps are closed per epoch: the ratchet defeats
+re-signing before the compromise epoch, and opt-in anchors defeat re-issuance
+and tail truncation. Both are opt-in at close ([`docs/limitations.md`
+§§6–7](docs/limitations.md)); what this project adds to the ancestor is still
+not cryptographic ([`docs/prior-art.md` §14 and
+§18](docs/prior-art.md)).
 
 **The chain alone deters editing, not re-issuance**, and the two are different
 faults. A chain under keys held by the record's own author cannot notice the
@@ -122,25 +118,19 @@ verifies perfectly. Two things bear on that:
 
 - `--run-start` is a **required, no-default** UTC instant, and `meta` names the
   unit and the operator, so the artifact says which robot and which shift.
-  Determinism is untouched, because the start is *declared* rather than read
-  from a clock: same seed **and** same declared start, same bytes.
 - `--witness` commits both chain heads at artifact close, signed by a second
   on-site keyholder whose key signed no record in the file. Half of that check
   needs no key at all, which the demonstration below makes concrete.
 
-**An on-site witness is not a third-party timestamp.** It proves a second party
-at the same site saw these heads, not that they existed by any instant to someone
-with no relationship to the operator. Two opt-in adapters do more, and they
-compose in one build: an RFC 3161 adapter timestamps each epoch head, and a
-Rekor v2 adapter publishes each epoch head to a transparency log as an in-toto
-statement.
-
-One token or one inclusion proof per epoch head, stored in the artifact,
-verifiable years later with no service still running. The log adapter
-additionally makes a *withheld* artifact detectable: the heads are public. Both
-need a network call at close ([`docs/limitations.md` §6](docs/limitations.md)). An artifact closed
-without a commitment records `commitment: none` in so many words — silence never
-reads as commitment.
+**An on-site witness is not a third-party timestamp.** It proves a second
+on-site party saw these heads — not that they existed by any instant to a
+stranger. Two opt-in adapters compose: an RFC 3161 adapter
+timestamps each epoch head, and a Rekor v2 adapter publishes each head to a
+transparency log as an in-toto statement — one token or inclusion proof per
+head, stored in the artifact and verifiable years later with no service still running. The log adapter makes a *withheld* artifact detectable: the heads are
+public. Both need a network call at close ([`docs/limitations.md`
+§6](docs/limitations.md)); without one the artifact records `commitment: none`
+in so many words.
 
 **The artifact contains personal data.** Per shift it records the robot's
 proximity to an entity whose `kind` is `human` — contact and closest-approach
@@ -160,11 +150,10 @@ the repository states them:
   resolution and not below it.
 
 Intent attestation of this shape is **not a new idea and this project does not
-claim it as one** — there is a 2026 line of work on cryptographic runtime
-governance in which software agents declare intent before acting and receive
-signed authority tokens. This applies that pattern to a physical control policy
-under machinery-safety precedent, which is second in a field and first in a
-domain; what is still distinct, stated carefully, is
+claim it as one** — software agents that declare intent before acting and
+receive signed authority tokens are a 2026 line of work. This applies that
+pattern to a physical control policy under machinery-safety precedent; what is
+still distinct, stated carefully, is
 [`docs/prior-art.md` §10](docs/prior-art.md).
 
 ## Standards baseline
@@ -203,10 +192,10 @@ The CLI entry points that exist are `python -m reg.sim`, `python -m reg.graph`,
 ## Reading an incident
 
 The demo sentence of [`docs/plan.md`](docs/plan.md) Phase 7, answered end to end
-as one query. Reproduce it with a keyring of your own — key material is the one
-thing in this project that is deliberately **not** derivable from a seed. The run
-start is the same kind of required, no-default input, and the build below is
-still byte-reproducible for the reason the note above gives.
+as one query. Bring a keyring of your own — key material is deliberately **not**
+derivable from a seed. The run start is the same kind of required, no-default
+input; the build below is still byte-reproducible for the reason the note above
+gives.
 
 ```bash
 python -c "from reg.chain import generate_keyring, write_keyring; write_keyring(generate_keyring(), 'keyring.json')"
@@ -251,14 +240,12 @@ Chain verified: 262 records, 0 breaks
 
 Three things about that output are the point rather than decoration. It carries
 **GSN-compatible field names** (`goal`, `strategy`, `solution`, `assumption`,
-`justification`) beside the prose, per
-[`docs/prior-art.md` §7](docs/prior-art.md), so it drops into a UL 4600 safety
-case rather than needing transcription — field names only, no diagram. It
-**populates `assumption` exactly when it cites a Layer B fact**, so a report that
-rests on perception says so and one that does not is not made to look
-conditional. And if the chain does not verify it says so **first**: every other
-line is a claim about a record whose integrity is then in question. Tamper with a
-copy and watch it —
+`justification`) per [`docs/prior-art.md` §7](docs/prior-art.md) — field names
+only, no diagram — so it drops into a UL 4600 safety case without
+transcription. It **populates `assumption` exactly when it cites a Layer B
+fact**, so a report resting on perception says so. And if the chain does not
+verify it says so **first**: every other line is a claim about a record whose
+integrity is then in question. Tamper with a copy and watch it —
 
 ```bash
 python -m reg.query dv.sqlite --verify-chain --keyring keyring.json \

@@ -37,6 +37,15 @@ Nothing about that softens the claim: chain verification reads the artifact and
 a keyring file, and no scene query can reach the deferred module either, because
 it is bound inside a call and never at module scope.
 
+The anchor modules are deferred for the same reason and by the same mechanism.
+`anchor_status` (issue #318) calls `reg.anchor_tsa.verify_anchors` and
+`reg.anchor_rekor.verify_anchors`, and `reg.anchor_tsa` reaches `reg.commit`
+for the scheme registry — which reaches `reg.chain`, which reaches `reg.stream`.
+So those imports are **inside the function that needs them** too. An anchor
+check reads the artifact and, for the TSA scheme, trust roots the caller offers;
+no scene query can reach either module, because both are bound inside a call
+and never at module scope.
+
 WHAT A QUERY RETURNS, AND WHY IT IS NOT PROSE
 ---------------------------------------------
 Every function here returns an `Answer`: a verdict, the layer it was read from,
@@ -247,6 +256,8 @@ __all__ = [
     "READABLE_NOT_CHECKABLE",
     "Acknowledged",
     "Adjudication",
+    "AnchorStatus",
+    "AnchoredEpoch",
     "Answer",
     "Clause",
     "ColdRead",
@@ -268,6 +279,7 @@ __all__ = [
     "ReachedPoint",
     "RiskInterval",
     "SceneVisit",
+    "SchemeAnchor",
     "SeparationTimeline",
     "ViolatingAction",
     "Violations",
@@ -277,6 +289,7 @@ __all__ = [
     "WORKER_NOTICE_NOT_GIVEN",
     "WORKER_NOTICE_STATUSES",
     "acknowledgments",
+    "anchor_status",
     "attestation_state",
     "available_layers",
     "cold_read",
@@ -295,6 +308,7 @@ __all__ = [
     "reachable_entities",
     "reached_point",
     "render",
+    "render_anchor_status",
     "render_chain_report",
     "render_cold_read",
     "render_commitment_check",
@@ -1376,6 +1390,182 @@ CLAUSES: tuple[str, ...] = (
 )
 
 
+# --------------------------------------------------------------------------
+# Anchor status — per-epoch, per-scheme, as checked (issue #318)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SchemeAnchor:
+    """One anchor scheme's finding for one closed epoch.
+
+    `state` is the anchor module's `AnchorState` value — `"VALID"`, `"INVALID"`
+    or `"COULD-NOT-EVALUATE"` — as a string. This module does not import the
+    anchor modules at module level (see the module header), so the spelling is
+    asserted, not assumed, by `tests/test_query.py`.
+    """
+
+    scheme: str
+    state: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class AnchoredEpoch:
+    """One closed epoch's anchor findings, one per anchor scheme the artifact uses.
+
+    Every closed epoch is reported under every scheme holding at least one
+    receipt in the artifact — an epoch with no receipt under a scheme the
+    artifact otherwise uses gets a COULD-NOT-EVALUATE finding saying so,
+    because "this epoch was not witnessed" is a finding about the artifact,
+    not silence about it.
+    """
+
+    chain: str
+    epoch: int
+    schemes: tuple[SchemeAnchor, ...]
+
+
+@dataclass(frozen=True)
+class AnchorStatus:
+    """The artifact's anchor posture: per-epoch findings and the artifact-level roll-up.
+
+    `state` follows `reg.commit.verify_commitment`'s rule — one INVALID anywhere
+    is INVALID, else one COULD-NOT-EVALUATE anywhere is COULD-NOT-EVALUATE —
+    because the two answer the same question at different granularity and must
+    not disagree about what "anywhere" means. An artifact with no anchor
+    receipts at all is COULD-NOT-EVALUATE, never VALID: nothing was checked.
+    """
+
+    epochs: tuple[AnchoredEpoch, ...]
+    state: str
+    reason: str
+
+
+def anchor_status(
+    conn: sqlite3.Connection, tsa_roots: Sequence[bytes] = ()
+) -> AnchorStatus:
+    """Which closed epochs are anchored, under which schemes, and whether the anchors check out.
+
+    For every `(chain, epoch)` in `epoch_heads`, each anchor scheme holding a
+    receipt contributes its `verify_anchors` finding. Only schemes with at least
+    one receipt are checked — a scheme the artifact never used is absent from
+    the file, not a failed check. A scheme the artifact *did* use but this
+    reader does not implement is COULD-NOT-EVALUATE: the receipts may be
+    perfectly good and this reader cannot tell.
+
+    Args:
+        conn: an artifact opened with `reg.store.connect`.
+        tsa_roots: DER-encoded trust roots for the TSA scheme, or `()` for "no
+            roots offered". The file does not carry them, so the default is the
+            file's own truth, not an invented one: imprints are still checked
+            against the epoch heads, no signature is, and a TSA epoch reports
+            COULD-NOT-EVALUATE at best. The Rekor scheme needs nothing the
+            file does not carry — each receipt pins its log key.
+
+    The anchor modules are imported inside this function: the module header
+    forbids them at module level, and the chain import's deferral is the
+    precedent.
+    """
+    from reg import anchor_rekor, anchor_tsa
+
+    try:
+        present = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT scheme FROM anchor_receipts"
+            ).fetchall()
+        }
+    except sqlite3.OperationalError:
+        # An artifact from before the table existed holds no receipts, which
+        # is a fact about the file and not a fault in it.
+        present = set()
+    known = {anchor_tsa.TSA_SCHEME, anchor_rekor.REKOR_SCHEME}
+    unknown = sorted(present - known)
+
+    per_epoch: dict[tuple[str, int], list[SchemeAnchor]] = {}
+    order: list[tuple[str, int]] = []
+    if anchor_tsa.TSA_SCHEME in present:
+        check = anchor_tsa.verify_anchors(conn, tsa_roots)
+        for finding in check.epochs:
+            key = (finding.chain, finding.epoch)
+            if key not in per_epoch:
+                per_epoch[key] = []
+                order.append(key)
+            per_epoch[key].append(
+                SchemeAnchor(
+                    scheme=anchor_tsa.TSA_SCHEME,
+                    state=finding.state.value,
+                    reason=finding.reason,
+                )
+            )
+    if anchor_rekor.REKOR_SCHEME in present:
+        check = anchor_rekor.verify_anchors(conn)
+        for finding in check.epochs:
+            key = (finding.chain, finding.epoch)
+            if key not in per_epoch:
+                per_epoch[key] = []
+                order.append(key)
+            per_epoch[key].append(
+                SchemeAnchor(
+                    scheme=anchor_rekor.REKOR_SCHEME,
+                    state=finding.state.value,
+                    reason=finding.reason,
+                )
+            )
+    epochs = tuple(
+        AnchoredEpoch(chain=chain, epoch=epoch, schemes=tuple(per_epoch[(chain, epoch)]))
+        for chain, epoch in order
+    )
+    states = [finding.state for epoch in epochs for finding in epoch.schemes]
+    if any(state == "INVALID" for state in states):
+        state = "INVALID"
+    elif not states or unknown or any(state == "COULD-NOT-EVALUATE" for state in states):
+        state = "COULD-NOT-EVALUATE"
+    else:
+        state = "VALID"
+    if not present:
+        reason = (
+            "this artifact holds no anchor receipts. Its chain deters editing "
+            "and does not deter re-issuance: the party that signed the "
+            "records could have produced the whole history offline, and no "
+            "third party witnessed any of it."
+        )
+    else:
+        parts = [f"{len(epochs)} closed epoch(s)"]
+        if states:
+            counts: dict[str, int] = {}
+            for finding_state in states:
+                counts[finding_state] = counts.get(finding_state, 0) + 1
+            tally = ", ".join(
+                f"{n} {finding_state}" for finding_state, n in sorted(counts.items())
+            )
+            parts.append(f"with anchor findings ({tally})")
+        parts.append(f"across {len(present)} scheme(s): {', '.join(sorted(present))}.")
+        reason = " ".join(parts)
+        if unknown:
+            reason += (
+                f" Scheme(s) {', '.join(unknown)} hold receipts this reader "
+                "does not implement; reported could-not-evaluate rather than "
+                "unanchored."
+            )
+    return AnchorStatus(epochs=epochs, state=state, reason=reason)
+
+
+def _anchor_status_if_any(conn: sqlite3.Connection) -> AnchorStatus | None:
+    """`anchor_status` where the artifact holds receipts, else `None`.
+
+    `incident_report` includes anchoring where present (issue #318): an
+    artifact closed with no anchors reports no anchor posture rather than a
+    could-not-evaluate about nothing.
+    """
+    try:
+        receipts = conn.execute("SELECT COUNT(*) FROM anchor_receipts").fetchone()[0]
+    except sqlite3.OperationalError:
+        return None
+    return anchor_status(conn) if receipts else None
+
+
 @dataclass(frozen=True)
 class Evidence:
     """A GSN **solution**: one evidence item, and the layer it is read from.
@@ -1476,6 +1666,13 @@ class IncidentReport:
     first_refusal: ViolatingAction | None = None
     bounds: tuple[DeclaredBound, ...] = ()
     scene: tuple[SceneVisit, ...] = ()
+
+    #: The artifact's anchor posture — per closed epoch, per anchor scheme, as
+    #: checked — or `None` where the artifact carries no anchor receipts at
+    #: all. `None` is "no anchors", not "anchors unchecked": an artifact with
+    #: receipts always gets a status, even when the status is
+    #: COULD-NOT-EVALUATE. Populated by `anchor_status` (issue #318).
+    anchoring: AnchorStatus | None = None
 
     @property
     def answered(self) -> bool:
@@ -3454,6 +3651,7 @@ def incident_report(
     """
     t_incident = _finite(t_incident, "t_incident")
     integrity, chain_state = _integrity_clause(verify_chain(conn, keyring))
+    anchoring = _anchor_status_if_any(conn)
 
     bound_answer = declared_bound(conn, t_incident)
     if not bound_answer.answered:
@@ -3472,6 +3670,7 @@ def incident_report(
             verdict=COULD_NOT_EVALUATE,
             reason=bound_answer.reason,
             integrity=chain_state,
+            anchoring=anchoring,
             clauses=_ordered_clauses({CLAUSE_DECLARED: declared}, integrity),
             goal=(
                 f"the policy stayed inside the bound it declared and had in "
@@ -3698,6 +3897,7 @@ def incident_report(
             f"t={t_incident}; {violation_answer.reason}"
         ),
         integrity=chain_state,
+        anchoring=anchoring,
         clauses=ordered,
         goal=(
             f"the policy stayed inside the bound it declared and had in force at "
@@ -5103,8 +5303,9 @@ def _anchor_claim(
     `reg.anchor_tsa.verify_anchors` and `reg.anchor_rekor.verify_anchors`.
     What this reads is what the *file* holds towards the question: whether
     `anchor_receipts` carries anchors, for which schemes, over how many epoch
-    heads — and, where it carries none, what the artifact states in
-    `meta[commitment]`.
+    heads, and which epochs those are — and, where it carries none, what the
+    artifact states in `meta[commitment]`. Per-epoch *checking* is
+    `anchor_status`.
 
     Three states:
 
@@ -5138,6 +5339,21 @@ def _anchor_claim(
         held = "; ".join(
             f"{n} epoch heads under {scheme}" for scheme, n in schemes.items()
         )
+        # Per-epoch presence, not verification — this row reports what the
+        # file holds, and `anchor_status` is the query that checks it.
+        per_epoch_rows = conn.execute(
+            "SELECT chain, epoch, scheme FROM anchor_receipts "
+            "ORDER BY chain, epoch, scheme"
+        ).fetchall()
+        by_epoch: dict[tuple[str, int], list[str]] = {}
+        for row in per_epoch_rows:
+            by_epoch.setdefault((str(row["chain"]), int(row["epoch"])), []).append(
+                str(row["scheme"])
+            )
+        per_epoch = "; ".join(
+            f"epoch {epoch} of the {chain!r} chain: {', '.join(epoch_schemes)}"
+            for (chain, epoch), epoch_schemes in by_epoch.items()
+        )
         # The Rekor receipts carry everything their check needs — entry,
         # envelope and pinned log key — so a file holding them supports the
         # claim from the file alone. The TSA tokens need trust roots the file
@@ -5163,6 +5379,7 @@ def _anchor_claim(
             state=CHECKABLE if fully_checkable else CHECKABLE_WITH_A_KEY,
             detail=(
                 f"this artifact carries third-party anchors — {held}. "
+                f"Per epoch: {per_epoch}. "
                 "The TSA tokens assert each epoch head existed by the token's "
                 "instant; the Rekor proofs assert each epoch head was "
                 "published to a transparency log. "
@@ -5424,6 +5641,24 @@ def render_commitment_check(check: object) -> str:
     return "\n".join(lines)
 
 
+def render_anchor_status(status: AnchorStatus) -> str:
+    """An `AnchorStatus` as text. Reads nothing but the status.
+
+    One line per (epoch, scheme) naming what was found and why — an assessor's
+    next question after "is it anchored" is *which epochs, under what, and
+    what did the check say*, and the status already knows. "COULD-NOT-EVALUATE"
+    here is never abbreviated away: it is the difference between "the anchor
+    failed" and "nobody could tell".
+    """
+    lines = [f"anchor status: {status.state}", f"  reason: {status.reason}", ""]
+    for epoch in status.epochs:
+        lines.append(f"  epoch {epoch.epoch} of the {epoch.chain!r} chain:")
+        for finding in epoch.schemes:
+            lines.append(f"    {finding.scheme}: {finding.state}")
+            lines.append(f"      {finding.reason}")
+    return "\n".join(lines).rstrip()
+
+
 def render_cold_read(report: ColdRead) -> str:
     """A `ColdRead` as text. Reads nothing but the report.
 
@@ -5632,10 +5867,16 @@ def render_incident(report: IncidentReport) -> str:
         f"incident report: t={report.t_incident:.4f} s",
         f"verdict:    {report.verdict}",
         f"integrity:  {report.integrity}",
-        f"incident:   {'yes' if report.incident else 'no'}",
-        f"note:       {report.reason}",
-        "",
     ]
+    if report.anchoring is not None:
+        lines.append(f"anchoring:  {report.anchoring.state} — {report.anchoring.reason}")
+    lines.extend(
+        [
+            f"incident:   {'yes' if report.incident else 'no'}",
+            f"note:       {report.reason}",
+            "",
+        ]
+    )
     for clause in report.clauses:
         lines.append(f"[{clause.name}] {clause.verdict} (evidence layer {clause.layer})")
         lines.extend(clause.text.splitlines())

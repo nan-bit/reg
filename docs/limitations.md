@@ -511,10 +511,10 @@ with no trusted server.
 boundary — the difference between "this artifact is worthless" and "this
 artifact is trustworthy up to a knowable instant". But the auditor is still not
 a safe place to put the keyring: whoever is given the keys to check the artifact
-is given the ability to produce a different one. Truncation — deleting the
+can produce a different one. Truncation — deleting the
 newest records, which breaks no link — is not defeated by the ratchet; that is
-what the external anchoring in `docs/tamper-evidence-design.md` §§3–4 is for
-(issues #316/#317).
+what external anchoring (§6; #316/#317) defeats — where taken; without it, the
+tail is trimmable.
 
 **What is *not* limited.** The half of the commitment check that catches a
 re-issued chain needs **no key at all** — `verify_commitment` recomputes both

@@ -892,7 +892,7 @@ META_CHAIN_FORMAT = "chain_format"
 META_EPOCH_RECORDS = "epoch_records"
 
 #: The epoch head of the first epoch commits to thirty-two zero bytes, stated
-#: in the artifact (design doc `docs/tamper-evidence-design.md` §2). A
+#: in the artifact (design doc `docs/tamper-evidence-design.md`). A
 #: definition, like GENESIS_HASH: the first epoch has no predecessor, and the
 #: verifier must be able to tell that apart from an epoch that claims one.
 GENESIS_EPOCH_HEAD = bytes(32)

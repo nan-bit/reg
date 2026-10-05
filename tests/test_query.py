@@ -50,15 +50,17 @@ Envelope parameters are coarse throughout (`_FAST`), copied from
 from __future__ import annotations
 
 import ast
+import hashlib
 import math
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from reg import bench, chain, graph, identity, query, store
+from reg import anchor_rekor, anchor_tsa, bench, chain, commit, graph, identity, query, store
 from reg.bench import AGREE, COULD_NOT_EVALUATE, DISAGREE, run_scenario
 from reg.envelope import outer_radius
 from reg.identity import DPIA_NONE, Disclosures, RunIdentity
@@ -5602,3 +5604,195 @@ def test_the_help_state_check_says_no_to_the_string_this_repo_shipped() -> None:
     # present. A check that said no to everything once one row was gone would be
     # no more useful than one that never said no.
     assert _states_missing_from(stale) == (query.CHECKABLE_WITH_A_KEY,)
+
+
+# ---------------------------------------------------------------------------
+# Anchor status — per-epoch, per-scheme, as checked (issue #318)
+# ---------------------------------------------------------------------------
+#
+# The TSA fixture is the committed openssl-minted token in tests/fixtures: its
+# messageImprint is SHA-256 over _TSA_FIXTURE_HEAD, so a receipt stored against
+# that head is a genuine anchor and a receipt stored against any other head is
+# a tampered one. No network anywhere in these tests.
+
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+_TSA_FIXTURE_HEAD = hashlib.sha256(b"reg-anchor-tsa-fixture-v1").digest()
+
+
+def _anchor_epoch_db(
+    tmp_path: Path, heads: dict[tuple[chain.Role, int], bytes]
+) -> sqlite3.Connection:
+    """An artifact-shaped DB holding exactly the given epoch heads."""
+    conn = store.create(tmp_path / "anchor.db", record_tables=True)
+    for (role, epoch), head in sorted(heads.items()):
+        store.insert_epoch_head(
+            conn,
+            chain.EpochHead(
+                chain=role,
+                epoch=epoch,
+                merkle_root=b"\x11" * 32,
+                checkpoint_sig=b"\x22" * 64,
+                key_id="33" * 32,
+                head=head,
+            ),
+        )
+    conn.commit()
+    return conn
+
+
+def _store_tsa_receipt(
+    conn: sqlite3.Connection,
+    role: str = "policy",
+    epoch: int = 0,
+    receipt: bytes | None = None,
+) -> None:
+    store.store_anchor_receipt(
+        conn,
+        role,
+        epoch,
+        commit.TSA_SCHEME,
+        receipt if receipt is not None else (_FIXTURES / "tsa_response.der").read_bytes(),
+    )
+    conn.commit()
+
+
+def _tsa_ca_der() -> bytes:
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from cryptography.x509 import load_pem_x509_certificate
+
+    pem = (_FIXTURES / "tsa_ca.crt").read_bytes()
+    return load_pem_x509_certificate(pem).public_bytes(Encoding.DER)
+
+
+def test_anchor_status_anchored_reports_valid(tmp_path: Path) -> None:
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): _TSA_FIXTURE_HEAD})
+    _store_tsa_receipt(conn)
+    status = query.anchor_status(conn, tsa_roots=[_tsa_ca_der()])
+    assert status.state == "VALID"
+    assert len(status.epochs) == 1
+    (epoch,) = status.epochs
+    assert (epoch.chain, epoch.epoch) == ("policy", 0)
+    (finding,) = epoch.schemes
+    assert finding.scheme == commit.TSA_SCHEME
+    assert finding.state == "VALID"
+
+
+def test_anchor_status_without_roots_is_could_not_evaluate(tmp_path: Path) -> None:
+    """The receipt is genuine and names this artifact's head, but the file
+    does not carry the TSA's trust roots and none were offered: the imprint
+    is checked, the signature is not, and the epoch reports
+    COULD-NOT-EVALUATE rather than VALID."""
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): _TSA_FIXTURE_HEAD})
+    _store_tsa_receipt(conn)
+    status = query.anchor_status(conn)
+    assert status.state == "COULD-NOT-EVALUATE"
+    (epoch,) = status.epochs
+    (finding,) = epoch.schemes
+    assert finding.state == "COULD-NOT-EVALUATE"
+    assert "no TSA trust roots were offered" in finding.reason
+
+
+def test_anchor_status_unanchored(tmp_path: Path) -> None:
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): _TSA_FIXTURE_HEAD})
+    status = query.anchor_status(conn)
+    assert status.state == "COULD-NOT-EVALUATE"
+    assert status.epochs == ()
+    assert "no anchor receipts" in status.reason
+
+
+def test_anchor_status_tampered_receipt_is_invalid(tmp_path: Path) -> None:
+    """The receipt is the fixture's, but the epoch head is not the fixture's:
+    the imprint check needs no trust roots, so tampering reads as INVALID."""
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): b"\x99" * 32})
+    _store_tsa_receipt(conn)
+    status = query.anchor_status(conn)
+    assert status.state == "INVALID"
+    (epoch,) = status.epochs
+    (finding,) = epoch.schemes
+    assert finding.state == "INVALID"
+    assert "does not name this artifact's epoch head" in finding.reason
+
+
+def test_anchor_status_unknown_scheme_is_could_not_evaluate(
+    tmp_path: Path,
+) -> None:
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): _TSA_FIXTURE_HEAD})
+    store.store_anchor_receipt(conn, "policy", 0, "future-scheme-v9", b"\x00")
+    conn.commit()
+    status = query.anchor_status(conn)
+    assert status.state == "COULD-NOT-EVALUATE"
+    assert "future-scheme-v9" in status.reason
+    assert "does not implement" in status.reason
+
+
+def test_anchor_status_state_spelling_matches_the_anchor_modules() -> None:
+    """The three states are spelled once, in the anchor modules. This module
+    carries them as strings because it cannot import the modules at module
+    level — so the spelling is asserted here, not assumed."""
+    expected = {"VALID", "INVALID", "COULD-NOT-EVALUATE"}
+    assert {s.value for s in anchor_tsa.AnchorState} == expected
+    assert {s.value for s in anchor_rekor.AnchorState} == expected
+    assert set(query.AnchorStatus.__dataclass_fields__) >= {"epochs", "state", "reason"}
+
+
+def test_anchor_status_reports_per_epoch_presence(tmp_path: Path) -> None:
+    """Two epochs, one anchored: the status names which epoch is which, and
+    the unanchored epoch reports COULD-NOT-EVALUATE rather than disappearing."""
+    conn = _anchor_epoch_db(
+        tmp_path,
+        {("policy", 0): _TSA_FIXTURE_HEAD, ("policy", 1): b"\x88" * 32},
+    )
+    _store_tsa_receipt(conn, epoch=0)
+    status = query.anchor_status(conn)
+    by_epoch = {(e.chain, e.epoch): e for e in status.epochs}
+    assert set(by_epoch) == {("policy", 0), ("policy", 1)}
+    assert by_epoch[("policy", 0)].schemes[0].state == "COULD-NOT-EVALUATE"
+    assert by_epoch[("policy", 1)].schemes[0].state == "COULD-NOT-EVALUATE"
+    assert "no anchor receipt" in by_epoch[("policy", 1)].schemes[0].reason
+    assert status.state == "COULD-NOT-EVALUATE"
+
+
+def test_render_anchor_status_names_epochs_schemes_and_states(
+    tmp_path: Path,
+) -> None:
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): _TSA_FIXTURE_HEAD})
+    _store_tsa_receipt(conn)
+    text = query.render_anchor_status(query.anchor_status(conn))
+    assert "anchor status: COULD-NOT-EVALUATE" in text
+    assert "epoch 0 of the 'policy' chain" in text
+    assert commit.TSA_SCHEME in text
+
+
+def test_incident_report_includes_anchoring_where_present(
+    tmp_path: Path,
+) -> None:
+    """An artifact with receipts gets an anchor posture on the incident
+    report — here via the early could-not-evaluate path, since the fixture DB
+    holds no declarations."""
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): _TSA_FIXTURE_HEAD})
+    _store_tsa_receipt(conn)
+    report = query.incident_report(conn, 0.0, None)
+    assert report.anchoring is not None
+    assert report.anchoring.state == "COULD-NOT-EVALUATE"
+    assert "anchoring:" in query.render_incident(report)
+
+
+def test_incident_report_omits_anchoring_where_absent(tmp_path: Path) -> None:
+    conn = _anchor_epoch_db(tmp_path, {("policy", 0): _TSA_FIXTURE_HEAD})
+    report = query.incident_report(conn, 0.0, None)
+    assert report.anchoring is None
+    assert "anchoring:" not in query.render_incident(report)
+
+
+def test_cold_read_anchor_row_reports_per_epoch(tmp_path: Path) -> None:
+    conn = _anchor_epoch_db(
+        tmp_path,
+        {("policy", 0): _TSA_FIXTURE_HEAD, ("policy", 1): _TSA_FIXTURE_HEAD},
+    )
+    _store_tsa_receipt(conn, epoch=0)
+    _store_tsa_receipt(conn, epoch=1)
+    row = query.cold_read(conn)[query.CLAIM_ANCHOR]
+    assert "2 epoch heads" in row.detail
+    assert "epoch 0 of the 'policy' chain" in row.detail
+    assert "epoch 1 of the 'policy' chain" in row.detail

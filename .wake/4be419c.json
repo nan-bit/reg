@@ -1,0 +1,79 @@
+{
+    "_type": "https://in-toto.io/Statement/v1",
+    "subject": [
+        {
+            "name": "auto/issue-318",
+            "digest": {
+                "sha1": "4be419c"
+            }
+        }
+    ],
+    "predicate": {
+        "attempt_id": "318-manual-20261004",
+        "authored_by": {
+            "agent": "muse",
+            "harness": "manual",
+            "model": "muse-spark"
+        },
+        "base": "origin/main",
+        "commit": "4be419c",
+        "concluded": {
+            "analyzer": "manual",
+            "changed": [
+                "README.md",
+                "docs/README.md",
+                "docs/limitations.md",
+                "docs/tamper-evidence-design.md",
+                "reg/chain.py",
+                "reg/query.py",
+                "tests/test_doc_shape.py",
+                "tests/test_query.py"
+            ]
+        },
+        "coverage": "full pytest: 3043 passed, 0 failed",
+        "declared": [
+            "reg/query.py",
+            "reg/chain.py",
+            "README.md",
+            "docs/limitations.md",
+            "docs/tamper-evidence-design.md",
+            "docs/README.md",
+            "tests/test_query.py",
+            "tests/test_doc_shape.py"
+        ],
+        "identity_mode": "agent",
+        "issue": 318,
+        "out_of_scope": [],
+        "preceding": null,
+        "prev": null,
+        "produced": [
+            "draft PR"
+        ],
+        "repository": "nan-bit/reg",
+        "verdict": "in-scope",
+        "verification": "pytest -q: 3043 passed, 0 failed",
+        "chain": {
+            "field_digests": {
+                "attempt_id": "8652383e21cbac10a9df645b4efa96c3e56be92129deb87670e7f1ec3d75c8e6",
+                "authored_by": "a45feef0b550b6e0baa6b50787ce61e4431230c373f260317a3b44626176334f",
+                "base": "cdf98792602b3509a217f1cf664cd79d5ad9958863560e3e864ef3930017c884",
+                "commit": "faaa53d36bd332ca07d883641587407df18d25295ce92d98344d0fefe3ebe375",
+                "concluded": "6487bcc7ca3153191b525c1e573f872a1b6e9d2eac41cfe05f36baf97105dc63",
+                "coverage": "545841be869a4e05897536c85f99484718a9213e9a774db15c4e68f64ddcb867",
+                "declared": "6c21cb6167fb014f9260dc0437a61a10e89de8711823fe67c5cdb044c2972d0c",
+                "identity_mode": "7649b444a37e5ea51af536af65bdde29d549803a064bdd0707db6a00c9285673",
+                "issue": "aae02129362d611717b6c00ad8d73bf820a0f6d88fca8e515cafe78d3a335965",
+                "out_of_scope": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                "preceding": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "prev": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "produced": "595e7f67215dd0d584256c1cd7d089b7a6fae9d7913f35cf7d05bed98d3bb1d3",
+                "repository": "e34cb59b23a488d332827ea8c1b8d9acfa7665bb9f81c3ba6dd7d58e7c5ded84",
+                "verdict": "286e06199ea2870d49fe46d4cc3c4e738b587756cb2a00372d0eb7aff1df0f9f",
+                "verification": "a5aa526044a0ce01757207def2cd48b5d36fa717c38c8e75be2d3bf2e905c1a6"
+            },
+            "head": "4b430e4d7c73ab95743492b78f3f3aa040c1d45c1660913613fd78d596fa5041",
+            "prev_heads": [],
+            "scheme": "wake-chain-sha256-v1"
+        }
+    }
+}
